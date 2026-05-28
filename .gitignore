@@ -60,3 +60,6 @@ go-backend/eval
 go-backend/eval-report.json
 eval/golden/multi-hop.jsonl
 eval/golden/production.jsonl.stale-backup
+eval/golden/multi-hop.jsonl
+eval/golden/multi-kb.jsonl
+
