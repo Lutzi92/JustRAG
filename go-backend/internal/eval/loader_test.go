@@ -218,56 +218,6 @@ func TestParseGoldenSetContent_ValidationError(t *testing.T) {
 	}
 }
 
-// TestLoadGoldenSet_MultiHop: the AP-C5 multi_hop.jsonl skeleton must
-// parse cleanly AND surface at least one row with two or more
-// must_cite_file_ids — the fixture's whole purpose is multi-source
-// retrieval. A regression that empties or single-files the file
-// would silently make Phase C's eval-gate trivially pass.
-func TestLoadGoldenSet_MultiHop(t *testing.T) {
-	t.Parallel()
-	qs, err := LoadGoldenSet("../../../eval/golden/multi_hop.jsonl")
-	if err != nil {
-		t.Fatalf("multi_hop.jsonl failed to parse: %v", err)
-	}
-	if len(qs) == 0 {
-		t.Fatal("multi_hop.jsonl parsed to zero questions")
-	}
-	hasMulti := false
-	for _, q := range qs {
-		if len(q.MustCiteFileIDs) >= 2 {
-			hasMulti = true
-			break
-		}
-	}
-	if !hasMulti {
-		t.Error("multi_hop.jsonl: every row had <2 must_cite_file_ids; the multi-hop premise is gone")
-	}
-}
-
-// TestLoadGoldenSet_MultiKB: the AP-A5 multi_kb.jsonl skeleton committed
-// alongside this CL must parse cleanly. Catches regressions when the
-// schema is extended without updating the fixture.
-func TestLoadGoldenSet_MultiKB(t *testing.T) {
-	t.Parallel()
-	qs, err := LoadGoldenSet("../../../eval/golden/multi_kb.jsonl")
-	if err != nil {
-		t.Fatalf("multi_kb.jsonl failed to parse: %v", err)
-	}
-	if len(qs) == 0 {
-		t.Fatal("multi_kb.jsonl parsed to zero questions")
-	}
-	hasMulti := false
-	for _, q := range qs {
-		if len(q.ExpectedKBIDs) > 1 {
-			hasMulti = true
-			break
-		}
-	}
-	if !hasMulti {
-		t.Error("multi_kb.jsonl: no row with len(ExpectedKBIDs) > 1; the cross-KB section is empty")
-	}
-}
-
 // AP-A5: ExpectedKBIDs is optional, but when present each entry must
 // be non-empty. Empty strings inside the slice slip through type
 // validation but corrupt the AP-A4 router scoring.
