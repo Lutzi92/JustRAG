@@ -17,6 +17,8 @@ e2e/.auth/
 .vscode
 /docs/plans
 /docs
+.playwright-mcp
+.tmp/
 
 # OS files
 .DS_Store
