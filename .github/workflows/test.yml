@@ -1,0 +1,31 @@
+name: Test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+defaults:
+  run:
+    working-directory: go-backend
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-backend/go.mod
+          cache-dependency-path: go-backend/go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      # -count=1 bypasses the test cache so the race detector actually runs
+      # rather than replaying a cached pass. DB/Redis-backed integration tests
+      # self-skip when their *_DSN / DB_* env vars are unset (see t.Skip guards),
+      # so the unit suite runs green without provisioning services here.
+      - name: Test (race)
+        run: go test -race -count=1 ./...

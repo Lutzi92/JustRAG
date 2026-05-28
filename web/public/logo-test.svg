@@ -1,0 +1,19 @@
+<svg width="145" height="38" viewBox="0 0 170 44" version="1.1" xmlns="http://www.w3.org/2000/svg" xml:space="preserve">
+    <defs>
+        <style type="text/css">
+            @font-face {
+                font-family: 'Arial Bold';
+                src: local('Arial Bold'), local('Arial-BoldMT');
+            }
+            .text-style { font-family: 'Arial Bold', Arial, Helvetica, sans-serif; font-weight: bold; }
+        </style>
+    </defs>
+    <g>
+        <text x="0" y="22" dominant-baseline="central" fill="#003366" font-size="32" class="text-style">Just</text>
+
+        <g transform="translate(70, 2)">
+            <rect x="0" y="0" width="95" height="40" rx="10" ry="10" style="fill:#0056b3;"/>
+            <text x="47.5" y="20" dominant-baseline="central" text-anchor="middle" style="fill:#ffffff; font-size:26px;" class="text-style">RAG</text>
+        </g>
+    </g>
+</svg>

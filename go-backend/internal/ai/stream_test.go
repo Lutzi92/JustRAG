@@ -1,0 +1,476 @@
+package ai
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// sseServer creates a test HTTP server that streams SSE chunks and then [DONE].
+// chunks is a slice of (content, reasoningContent) pairs.
+func sseServer(t *testing.T, chunks []struct{ content, reasoning string }) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("ResponseWriter does not implement http.Flusher")
+			return
+		}
+
+		for _, ch := range chunks {
+			delta := map[string]string{}
+			if ch.content != "" {
+				delta["content"] = ch.content
+			}
+			if ch.reasoning != "" {
+				delta["reasoning_content"] = ch.reasoning
+			}
+			payload := map[string]any{
+				"choices": []map[string]any{
+					{"index": 0, "delta": delta},
+				},
+			}
+			b, _ := json.Marshal(payload)
+			fmt.Fprintf(w, "data: %s\n\n", b)
+			flusher.Flush()
+		}
+
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+}
+
+// collectStream drains a StreamChunk channel and returns all non-Done chunks
+// plus a bool confirming Done was received.
+func collectStream(ch <-chan StreamChunk) ([]StreamChunk, bool) {
+	var chunks []StreamChunk
+	doneSeen := false
+	for c := range ch {
+		if c.Done {
+			doneSeen = true
+		} else {
+			chunks = append(chunks, c)
+		}
+	}
+	return chunks, doneSeen
+}
+
+// collectEvents drains a StreamEvent channel and returns all non-Done events
+// plus a bool confirming Done was received.
+func collectEvents(ch <-chan StreamEvent) ([]StreamEvent, bool) {
+	var events []StreamEvent
+	doneSeen := false
+	for e := range ch {
+		if e.Done {
+			doneSeen = true
+		} else {
+			events = append(events, e)
+		}
+	}
+	return events, doneSeen
+}
+
+// mockResolver returns a ConfigResolver backed by a stub store that always
+// returns a config pointing at baseURL with the given model.
+func mockResolver(baseURL, model string) *ConfigResolver {
+	store := &stubStore{
+		provider: &AIProviderInfo{ID: "p1", Name: "test", APIKey: "k", BaseURL: baseURL},
+		models:   []AIModelInfo{{Name: model}},
+	}
+	return NewConfigResolver(store)
+}
+
+// stubStore is a minimal ConfigStore for testing.
+type stubStore struct {
+	provider *AIProviderInfo
+	models   []AIModelInfo
+}
+
+func (s *stubStore) GetActiveAIProvider(_ context.Context) (*AIProviderInfo, error) {
+	return s.provider, nil
+}
+func (s *stubStore) GetAIProviderByID(_ context.Context, _ string) (*AIProviderInfo, error) {
+	return s.provider, nil
+}
+func (s *stubStore) GetAIModelsByProvider(_ context.Context, _ string) ([]AIModelInfo, error) {
+	return s.models, nil
+}
+func (s *stubStore) GetKBModelOverrides(_ context.Context, _ string) (*KBModelOverrides, error) {
+	return nil, nil
+}
+
+// ---------------------------------------------------------------------------
+// Client.StreamChatCompletion tests
+// ---------------------------------------------------------------------------
+
+func TestStreamChatCompletion_ThreeChunksThenDone(t *testing.T) {
+	srv := sseServer(t, []struct{ content, reasoning string }{
+		{"Hello", ""},
+		{" world", ""},
+		{"!", ""},
+	})
+	defer srv.Close()
+
+	client := NewClient(srv.URL+"/v1/", "test-key")
+	req := ChatRequest{Model: "gpt-4", Messages: []ChatMessage{{Role: "user", Content: "hi"}}}
+
+	ch, err := client.StreamChatCompletion(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	chunks, done := collectStream(ch)
+	if !done {
+		t.Error("expected Done chunk")
+	}
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(chunks))
+	}
+	want := []string{"Hello", " world", "!"}
+	for i, c := range chunks {
+		if c.Content != want[i] {
+			t.Errorf("chunk %d: got %q, want %q", i, c.Content, want[i])
+		}
+	}
+}
+
+func TestStreamChatCompletion_ContextCancelled(t *testing.T) {
+	// Server that blocks indefinitely — context should cancel cleanly.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		flusher.Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	client := NewClient(srv.URL+"/v1/", "")
+	req := ChatRequest{Model: "gpt-4", Messages: []ChatMessage{{Role: "user", Content: "hi"}}}
+
+	ch, err := client.StreamChatCompletion(ctx, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Drain — should not block forever.
+	for range ch {
+	}
+}
+
+func TestStreamChatCompletion_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL+"/v1/", "bad-key")
+	req := ChatRequest{Model: "gpt-4", Messages: []ChatMessage{{Role: "user", Content: "hi"}}}
+
+	_, err := client.StreamChatCompletion(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", apiErr.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// StreamCompletion tests
+// ---------------------------------------------------------------------------
+
+func TestStreamCompletion_ContentOnly(t *testing.T) {
+	srv := sseServer(t, []struct{ content, reasoning string }{
+		{"Hello", ""},
+		{" there", ""},
+	})
+	defer srv.Close()
+
+	resolver := mockResolver(srv.URL+"/v1/", "gpt-4")
+	ch, err := StreamCompletion(context.Background(), resolver, "hi", "", "", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events, done := collectEvents(ch)
+	if !done {
+		t.Error("expected Done event")
+	}
+
+	var sb strings.Builder
+	for _, e := range events {
+		sb.WriteString(e.Content)
+		if e.Reasoning != "" {
+			t.Errorf("unexpected reasoning: %q", e.Reasoning)
+		}
+	}
+	if got := sb.String(); got != "Hello there" {
+		t.Errorf("content: got %q, want %q", got, "Hello there")
+	}
+}
+
+func TestStreamCompletion_ReasoningContent(t *testing.T) {
+	srv := sseServer(t, []struct{ content, reasoning string }{
+		{"", "step 1"},
+		{"", "step 2"},
+		{"answer", ""},
+	})
+	defer srv.Close()
+
+	resolver := mockResolver(srv.URL+"/v1/", "deepseek-r1")
+	ch, err := StreamCompletion(context.Background(), resolver, "solve", "", "", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events, done := collectEvents(ch)
+	if !done {
+		t.Error("expected Done event")
+	}
+
+	var content, reasoning strings.Builder
+	for _, e := range events {
+		content.WriteString(e.Content)
+		reasoning.WriteString(e.Reasoning)
+	}
+	if got := reasoning.String(); got != "step 1step 2" {
+		t.Errorf("reasoning: got %q, want %q", got, "step 1step 2")
+	}
+	if got := content.String(); got != "answer" {
+		t.Errorf("content: got %q, want %q", got, "answer")
+	}
+}
+
+func TestStreamCompletion_ThinkTagsInContent(t *testing.T) {
+	// Single chunk that contains a full <think> block.
+	srv := sseServer(t, []struct{ content, reasoning string }{
+		{"<think>internal thought</think>the answer", ""},
+	})
+	defer srv.Close()
+
+	resolver := mockResolver(srv.URL+"/v1/", "qwen")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events, done := collectEvents(ch)
+	if !done {
+		t.Error("expected Done event")
+	}
+
+	var content, reasoning strings.Builder
+	for _, e := range events {
+		content.WriteString(e.Content)
+		reasoning.WriteString(e.Reasoning)
+	}
+	if got := reasoning.String(); got != "internal thought" {
+		t.Errorf("reasoning: got %q, want %q", got, "internal thought")
+	}
+	if got := content.String(); got != "the answer" {
+		t.Errorf("content: got %q, want %q", got, "the answer")
+	}
+}
+
+func TestStreamCompletion_ThinkTagSplitAcrossChunks(t *testing.T) {
+	// The closing tag </think> is split across two chunks.
+	srv := sseServer(t, []struct{ content, reasoning string }{
+		{"<think>thought</thi", ""},
+		{"nk>result", ""},
+	})
+	defer srv.Close()
+
+	resolver := mockResolver(srv.URL+"/v1/", "qwen")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events, done := collectEvents(ch)
+	if !done {
+		t.Error("expected Done event")
+	}
+
+	var content, reasoning strings.Builder
+	for _, e := range events {
+		content.WriteString(e.Content)
+		reasoning.WriteString(e.Reasoning)
+	}
+	if got := reasoning.String(); got != "thought" {
+		t.Errorf("reasoning: got %q, want %q", got, "thought")
+	}
+	if got := content.String(); got != "result" {
+		t.Errorf("content: got %q, want %q", got, "result")
+	}
+}
+
+func TestStreamCompletion_OpenTagSplitAcrossChunks(t *testing.T) {
+	// The opening tag <think> is split across two chunks.
+	srv := sseServer(t, []struct{ content, reasoning string }{
+		{"before<thi", ""},
+		{"nk>reasoning</think>after", ""},
+	})
+	defer srv.Close()
+
+	resolver := mockResolver(srv.URL+"/v1/", "qwen")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events, done := collectEvents(ch)
+	if !done {
+		t.Error("expected Done event")
+	}
+
+	var content, reasoning strings.Builder
+	for _, e := range events {
+		content.WriteString(e.Content)
+		reasoning.WriteString(e.Reasoning)
+	}
+	if got := reasoning.String(); got != "reasoning" {
+		t.Errorf("reasoning: got %q, want %q", got, "reasoning")
+	}
+	if got := content.String(); got != "beforeafter" {
+		t.Errorf("content: got %q, want %q", got, "beforeafter")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Regression guard: non-blocking send in panic recovery path
+// ---------------------------------------------------------------------------
+
+// TestPanicRecoveryNonBlockingSend models the shape of the goroutine in
+// stream.go and asserts that the recovery-path send does NOT block when the
+// receiver has exited. This guards against regressing to a blocking send.
+func TestPanicRecoveryNonBlockingSend(t *testing.T) {
+	out := make(chan struct{}) // unbuffered — nobody will ever read
+	done := make(chan struct{})
+
+	var panicked atomic.Bool
+
+	go func() {
+		defer close(done)
+		defer close(out)
+		defer func() {
+			if r := recover(); r != nil {
+				panicked.Store(true)
+				// This MUST be non-blocking — the receiver is gone.
+				select {
+				case out <- struct{}{}:
+				default:
+				}
+			}
+		}()
+		panic("boom")
+	}()
+
+	select {
+	case <-done:
+		// Producer goroutine returned cleanly.
+	case <-time.After(2 * time.Second):
+		runtime.Gosched()
+		t.Fatal("producer goroutine blocked on recovery-path send — deadlock regression")
+	}
+
+	if !panicked.Load() {
+		t.Fatal("panic recovery did not fire")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tool-call delta streaming
+// ---------------------------------------------------------------------------
+
+// TestStreamChatCompletion_AssemblesToolCallDeltas exercises the streaming
+// tool-call path. The fake provider emits four SSE chunks:
+//  1. {delta:{role:"assistant"}}                          — preamble
+//  2. {delta:{tool_calls:[{index:0,id:"c1",type:"function",
+//     function:{name:"calculator",arguments:"{\"e"}}]}}
+//  3. {delta:{tool_calls:[{index:0,function:{arguments:"xpression\":\"2+2\"}"}}]}}
+//  4. {finish_reason:"tool_calls"} [DONE]
+//
+// The client must pass each tool_call delta through verbatim (caller
+// assembles), and the chunk carrying finish_reason must surface it.
+func TestStreamChatCompletion_AssemblesToolCallDeltas(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"choices":[{"delta":{"role":"assistant"}}]}`,
+		``,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"calculator","arguments":"{\"e"}}]}}]}`,
+		``,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"xpression\":\"2+2\"}"}}]}}]}`,
+		``,
+		`data: {"choices":[{"finish_reason":"tool_calls"}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL+"/v1/", "test-key")
+	ch, err := c.StreamChatCompletion(context.Background(), ChatRequest{
+		Model:    "m",
+		Messages: []ChatMessage{{Role: "user", Content: "2+2"}},
+		Tools: []ChatTool{{Type: "function", Function: ChatToolFunction{
+			Name: "calculator", Description: "math", Parameters: json.RawMessage(`{}`),
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	var deltas []ToolCallDelta
+	var finish string
+	var done bool
+	for chunk := range ch {
+		deltas = append(deltas, chunk.ToolCallDeltas...)
+		if chunk.FinishReason != "" {
+			finish = chunk.FinishReason
+		}
+		if chunk.Done {
+			done = true
+		}
+	}
+	if !done {
+		t.Fatalf("stream ended without Done chunk")
+	}
+	if finish != "tool_calls" {
+		t.Fatalf("finish_reason: got %q, want tool_calls", finish)
+	}
+	if len(deltas) != 2 {
+		t.Fatalf("want 2 deltas, got %d (%+v)", len(deltas), deltas)
+	}
+	if deltas[0].Index != 0 || deltas[0].ID != "c1" || deltas[0].Name != "calculator" {
+		t.Fatalf("delta 0: %+v", deltas[0])
+	}
+	if deltas[0].Arguments != `{"e` || deltas[1].Arguments != `xpression":"2+2"}` {
+		t.Fatalf("arg fragments wrong: %q | %q", deltas[0].Arguments, deltas[1].Arguments)
+	}
+}

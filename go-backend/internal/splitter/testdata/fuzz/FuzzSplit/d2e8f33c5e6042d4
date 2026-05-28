@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\xcea\xd0!\xff\xe3~  \xd9\xd9")

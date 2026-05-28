@@ -1,0 +1,155 @@
+# Production overrides for Go backend — use with docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
+#
+# Budget: 8 CPUs / 12 GB RAM total
+#   go-server:   2 CPU / 1G    (2 replicas × 1.0 CPU / 512M)
+#   worker-quick: 2 CPU / 2G   (4 replicas × 0.5 CPU / 512M)  — OCR, confluence
+#   worker-heavy: 3 CPU / 3G   (3 replicas × 1.0 CPU / 1G)    — imports, crawls, research
+#   worker-batch: 1 CPU / 1G   (1 replica  × 1.0 CPU / 1G)    — re-embedding
+#   ──────────────────────
+#   Total:  8 CPU / 7G    (leaves ~5G headroom for DB/Redis/OS)
+
+services:
+  # Scale Go server for concurrent user requests
+  go-server:
+    environment:
+      # Cap Go heap below the container memory limit so the GC starts collecting
+      # before cgroup OOM kicks in (~90% of 512M).
+      - GOMEMLIMIT=460MiB
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+    healthcheck:
+      start_period: 10s
+
+  # Disable the default worker in production (use specialized workers instead)
+  go-worker:
+    deploy:
+      replicas: 0
+
+  # Specialized Workers - Scale independently based on load
+  # Per-process concurrency is set via WORKER_CONCURRENCY env var.
+
+  worker-quick:
+    image: ghcr.io/lutzi92/justrag:latest
+    restart: unless-stopped
+    command: ["/app/worker"]
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - WORKER_QUEUES=rag-quick
+      - WORKER_CONCURRENCY=3
+      - WORKER_MAINTENANCE=false
+      # ~90% of the 512M container limit; keeps the Go GC ahead of cgroup OOM.
+      - GOMEMLIMIT=460MiB
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      vectordb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - rag-app-data:/app/data
+      - rag-uploads:/app/uploads
+    deploy:
+      replicas: 4
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker-heavy:
+    image: ghcr.io/lutzi92/justrag:latest
+    restart: unless-stopped
+    command: ["/app/worker"]
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - WORKER_QUEUES=rag-heavy
+      - WORKER_CONCURRENCY=2
+      - WORKER_MAINTENANCE=false
+      # ~90% of the 1G container limit; keeps the Go GC ahead of cgroup OOM.
+      - GOMEMLIMIT=920MiB
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      vectordb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - rag-app-data:/app/data
+      - rag-uploads:/app/uploads
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker-batch:
+    image: ghcr.io/lutzi92/justrag:latest
+    restart: unless-stopped
+    command: ["/app/worker"]
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - WORKER_QUEUES=rag-batch
+      - WORKER_CONCURRENCY=1
+      - WORKER_MAINTENANCE=true
+      # ~90% of the 1G container limit; keeps the Go GC ahead of cgroup OOM.
+      - GOMEMLIMIT=920MiB
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      vectordb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - rag-app-data:/app/data
+      - rag-uploads:/app/uploads
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  rag-app-data:
+  rag-uploads:

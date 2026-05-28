@@ -1,0 +1,5 @@
+# Example golden set — replace ids with real KB/file UUIDs before running.
+# query_type is optional; allowed values: lookup | enumeration | global_synthesis | complex_reasoning.
+{"id":"example-q001","question":"What are the prerequisites for Databases II?","kb_id":"00000000-0000-0000-0000-000000000000","language":"en","must_cite_file_ids":["00000000-0000-0000-0000-000000000001"],"query_type":"lookup","notes":"placeholder — replace with a real kb_id and file id"}
+{"id":"example-q002","question":"Welche Voraussetzungen hat die Vorlesung Datenbanken II?","kb_id":"00000000-0000-0000-0000-000000000000","language":"de","must_cite_file_ids":["00000000-0000-0000-0000-000000000001"],"query_type":"lookup","notes":"placeholder — replace with a real kb_id and file id"}
+{"id":"example-q003","question":"Welche Projekte arbeiten mit Embedded Systems?","kb_id":"00000000-0000-0000-0000-000000000000","language":"de","must_cite_file_ids":["00000000-0000-0000-0000-000000000001","00000000-0000-0000-0000-000000000002"],"query_type":"enumeration","notes":"placeholder — enumeration example"}

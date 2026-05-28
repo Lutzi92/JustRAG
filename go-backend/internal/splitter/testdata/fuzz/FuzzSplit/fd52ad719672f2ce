@@ -1,0 +1,2 @@
+go test fuzz v1
+string("0a bab  Cha aa Ab\x88ace sa!")

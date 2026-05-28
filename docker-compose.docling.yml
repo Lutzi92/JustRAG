@@ -1,0 +1,37 @@
+# Opt-in overlay that adds Docling Serve as a sidecar PDF parser.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.docling.yml up -d
+#
+# Then in the JustRAG admin Agent panel, set:
+#   docling_enabled = true
+#   docling_base_url = http://docling:5001
+#
+# The first cold start downloads ~3 GB of models — be patient.
+
+services:
+  docling:
+    image: quay.io/docling-project/docling-serve:latest
+    container_name: justrag-docling
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      DOCLING_SERVE_ENABLE_UI: "false"
+    volumes:
+      - docling-cache:/.cache
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+
+  go-server:
+    depends_on:
+      - docling
+
+  go-worker:
+    depends_on:
+      - docling
+
+volumes:
+  docling-cache:

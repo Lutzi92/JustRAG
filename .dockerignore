@@ -1,0 +1,13 @@
+node_modules
+web/node_modules
+dist
+web/dist
+# .git is intentionally NOT excluded — a lightweight stage extracts
+# the commit hash for build versioning. Multi-stage build ensures
+# .git never reaches the final image. Use shallow clones (--depth=1)
+# to minimize build context size.
+.env
+.env.docker
+*.log
+uploads
+data

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("! \xe3AԿ\xa0A\xcb0 0\xf4A\x96\x980A\xd3")

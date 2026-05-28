@@ -1,0 +1,2 @@
+go test fuzz v1
+string("AA`\xf7!a!\x9dA|ЇA!0\xa00A\x02\xb4")

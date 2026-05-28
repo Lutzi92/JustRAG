@@ -1,0 +1,562 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "JustRAG Public API",
+    "description": "API for interacting with JustRAG knowledge bases. Authenticate using API keys generated from your user profile.\n\n## Authentication\nAll endpoints require a Bearer token (API key with `jrag_` prefix) in the `Authorization` header.\n\n## Streaming\nChat endpoints support Server-Sent Events (SSE) streaming by default. Set `?stream=false` to receive a synchronous JSON response instead.\n\n### SSE Format\n```\ndata: {\"type\": \"...\", ...}\n\ndata: [DONE]\n```",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/api/v1",
+      "description": "Public API"
+    },
+    {
+      "url": "/openai/v1",
+      "description": "OpenAI Compatible"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Knowledge Bases",
+      "description": "Manage and list knowledge bases"
+    },
+    {
+      "name": "Chat",
+      "description": "Send messages and retrieve chat history"
+    },
+    {
+      "name": "OpenAI Compatible",
+      "description": "OpenAI-compatible endpoints for using knowledge bases as models in external tools"
+    }
+  ],
+  "security": [
+    {
+      "ApiKeyAuth": []
+    }
+  ],
+  "paths": {
+    "/kb": {
+      "get": {
+        "tags": ["Knowledge Bases"],
+        "summary": "List knowledge bases",
+        "description": "Returns all knowledge bases accessible to the authenticated user.",
+        "operationId": "listKnowledgeBases",
+        "servers": [{ "url": "/api/v1" }],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "default": 50 },
+            "description": "Maximum number of results to return"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": { "type": "integer", "default": 0 },
+            "description": "Number of results to skip"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of knowledge bases",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/KnowledgeBase" }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/kb/{id}/chats": {
+      "get": {
+        "tags": ["Chat"],
+        "summary": "List chats",
+        "description": "Returns all chats for a knowledge base.",
+        "operationId": "listChats",
+        "servers": [{ "url": "/api/v1" }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Knowledge base ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of chats",
+            "headers": {
+              "Cache-Control": {
+                "schema": { "type": "string", "example": "no-cache" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Chat" }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/kb/{id}/chats/{chatId}/messages": {
+      "get": {
+        "tags": ["Chat"],
+        "summary": "Get messages",
+        "description": "Returns all messages for a chat, ordered by creation time. Messages form a tree structure via parentMessageId.",
+        "operationId": "getChatMessages",
+        "servers": [{ "url": "/api/v1" }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Knowledge base ID"
+          },
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Chat ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of messages",
+            "headers": {
+              "Cache-Control": {
+                "schema": { "type": "string", "example": "no-cache" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Message" }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/kb/{id}/chat": {
+      "post": {
+        "tags": ["Chat"],
+        "summary": "Send a message",
+        "description": "Send a message to a knowledge base and receive an AI-generated response with source citations. Supports both streaming (SSE) and synchronous responses.",
+        "operationId": "sendMessage",
+        "servers": [{ "url": "/api/v1" }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Knowledge base ID"
+          },
+          {
+            "name": "stream",
+            "in": "query",
+            "schema": { "type": "string", "default": "true", "enum": ["true", "false"] },
+            "description": "Enable SSE streaming (default: true)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChatRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Synchronous response (when stream=false) or SSE stream (when stream=true)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ChatResponseSync" }
+              },
+              "text/event-stream": {
+                "schema": { "$ref": "#/components/schemas/SSEEvent" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/models": {
+      "get": {
+        "tags": ["OpenAI Compatible"],
+        "summary": "List models",
+        "description": "Lists all accessible knowledge bases as OpenAI-compatible models. Each knowledge base is exposed as a model with ID in the format `kb-<uuid>`.",
+        "operationId": "listModels",
+        "servers": [{ "url": "/openai/v1" }],
+        "responses": {
+          "200": {
+            "description": "List of models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "object": { "type": "string", "enum": ["list"] },
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Model" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OpenAIError" }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OpenAIError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/completions": {
+      "post": {
+        "tags": ["OpenAI Compatible"],
+        "summary": "Chat completions",
+        "description": "Create a chat completion using a knowledge base as the backing model. Compatible with the OpenAI chat completions API. Only the last user message is used as the query; conversation history is not used for retrieval.",
+        "operationId": "chatCompletions",
+        "servers": [{ "url": "/openai/v1" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChatCompletionRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chat completion response (sync) or SSE stream of chunks (when stream=true)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ChatCompletionResponse" }
+              },
+              "text/event-stream": {
+                "schema": { "$ref": "#/components/schemas/ChatCompletionChunk" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OpenAIError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OpenAIError" }
+              }
+            }
+          },
+          "403": {
+            "description": "No access to this knowledge base",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OpenAIError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Model not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OpenAIError" }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OpenAIError" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key with `jrag_` prefix. Pass as `Authorization: Bearer jrag_...`"
+      }
+    },
+    "schemas": {
+      "KnowledgeBase": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "userId": { "type": "string", "format": "uuid", "nullable": true },
+          "description": { "type": "string", "nullable": true },
+          "isGlobal": { "type": "boolean" },
+          "isPublished": { "type": "boolean" },
+          "language": { "type": "string" },
+          "systemPrompt": { "type": "string", "nullable": true },
+          "aiConfigId": { "type": "string", "format": "uuid", "nullable": true },
+          "chatModel": { "type": "string", "nullable": true },
+          "embeddingModel": { "type": "string", "nullable": true },
+          "rerankModel": { "type": "string", "nullable": true },
+          "chunkSize": { "type": "integer", "nullable": true },
+          "chunkOverlap": { "type": "integer", "nullable": true },
+          "studioConfig": { "type": "object", "nullable": true },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Chat": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "kbId": { "type": "string", "format": "uuid" },
+          "userId": { "type": "string", "format": "uuid" },
+          "title": { "type": "string" },
+          "type": { "type": "string", "enum": ["chat", "research"] },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "chatId": { "type": "string", "format": "uuid" },
+          "parentMessageId": { "type": "string", "format": "uuid", "nullable": true },
+          "role": { "type": "string", "enum": ["user", "ai"] },
+          "content": { "type": "string" },
+          "sources": { "type": "array", "nullable": true, "items": { "$ref": "#/components/schemas/Source" } },
+          "isEnhanced": { "type": "boolean" },
+          "enhancedQuery": { "type": "string", "nullable": true },
+          "reasoning": { "type": "string", "nullable": true },
+          "feedback": { "type": "string", "nullable": true, "enum": ["positive", "negative", null] },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Source": {
+        "type": "object",
+        "properties": {
+          "fileName": { "type": "string" },
+          "pageNumber": { "type": "integer", "nullable": true },
+          "score": { "type": "number", "nullable": true },
+          "content": { "type": "string" }
+        }
+      },
+      "ChatRequest": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": { "type": "string", "maxLength": 32000, "description": "The user message" },
+          "chatId": { "type": "string", "format": "uuid", "description": "Continue an existing chat" },
+          "parentMessageId": { "type": "string", "format": "uuid", "nullable": true, "description": "Parent message for branching" },
+          "language": { "type": "string", "enum": ["de", "en"], "description": "Response language (default: de)" },
+          "enhance": { "type": "string", "nullable": true, "description": "Enhancement prompt" },
+          "reasoningEnabled": { "type": "boolean", "nullable": true, "description": "Enable extended thinking" },
+          "reasoningLevel": { "type": "string", "enum": ["low", "medium", "high"], "nullable": true, "description": "Reasoning depth level (default: medium)" },
+          "selectedFileIds": { "type": "array", "items": { "type": "string", "format": "uuid" }, "description": "Restrict context to specific files" }
+        }
+      },
+      "ChatResponseSync": {
+        "type": "object",
+        "properties": {
+          "answer": { "type": "string" },
+          "reasoning": { "type": "string", "nullable": true },
+          "sources": { "type": "array", "nullable": true, "items": { "$ref": "#/components/schemas/Source" } },
+          "enhancedQuery": { "type": "string" },
+          "chatId": { "type": "string", "format": "uuid" },
+          "userMessageId": { "type": "string", "format": "uuid" },
+          "aiMessageId": { "type": "string", "format": "uuid" },
+          "followUpQuestions": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "SSEEvent": {
+        "type": "object",
+        "description": "Server-Sent Event payload. Each event is sent as `data: {JSON}\\n\\n`. The stream ends with `data: [DONE]\\n\\n`. Events include: initial metadata (sources, enhancedQuery, chatId, userMessageId), content chunks ({content}), reasoning chunks ({reasoning}), AI message ID ({aiMessageId}), follow-up questions ({followUpQuestions}), errors ({error})."
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string", "description": "Error message" }
+        }
+      },
+      "Model": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "example": "kb-550e8400-e29b-41d4-a716-446655440000" },
+          "object": { "type": "string", "enum": ["model"] },
+          "created": { "type": "integer" },
+          "owned_by": { "type": "string", "enum": ["justrag"] },
+          "name": { "type": "string" }
+        }
+      },
+      "ChatCompletionRequest": {
+        "type": "object",
+        "required": ["model", "messages"],
+        "properties": {
+          "model": { "type": "string", "description": "Knowledge base ID in format kb-<uuid>" },
+          "messages": { "type": "array", "items": { "$ref": "#/components/schemas/ChatCompletionMessage" } },
+          "stream": { "type": "boolean", "default": false }
+        }
+      },
+      "ChatCompletionMessage": {
+        "type": "object",
+        "required": ["role", "content"],
+        "properties": {
+          "role": { "type": "string", "enum": ["system", "user", "assistant"] },
+          "content": { "type": "string" }
+        }
+      },
+      "ChatCompletionResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "object": { "type": "string", "enum": ["chat.completion"] },
+          "created": { "type": "integer" },
+          "model": { "type": "string" },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer" },
+                "message": { "$ref": "#/components/schemas/ChatCompletionMessage" },
+                "finish_reason": { "type": "string", "enum": ["stop"] }
+              }
+            }
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "prompt_tokens": { "type": "integer" },
+              "completion_tokens": { "type": "integer" },
+              "total_tokens": { "type": "integer" }
+            }
+          }
+        }
+      },
+      "ChatCompletionChunk": {
+        "type": "object",
+        "description": "Streaming chunk in OpenAI format.",
+        "properties": {
+          "id": { "type": "string" },
+          "object": { "type": "string", "enum": ["chat.completion.chunk"] },
+          "created": { "type": "integer" },
+          "model": { "type": "string" },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer" },
+                "delta": {
+                  "type": "object",
+                  "properties": {
+                    "role": { "type": "string", "enum": ["assistant"] },
+                    "content": { "type": "string" }
+                  }
+                },
+                "finish_reason": { "type": "string", "nullable": true, "enum": ["stop", null] }
+              }
+            }
+          }
+        }
+      },
+      "OpenAIError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "message": { "type": "string" },
+              "type": { "type": "string", "enum": ["invalid_request_error"] },
+              "code": { "type": "string", "enum": ["invalid_request"] }
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Invalid or missing API key",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "No access to this knowledge base",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource not found",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Rate limit exceeded",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      }
+    }
+  }
+}

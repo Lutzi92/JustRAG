@@ -1,0 +1,207 @@
+# Local development compose — builds Go backend from source.
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up --build
+
+services:
+  # One-shot: runs goose migrations, vector table setup, and admin seed.
+  migrate:
+    build: .
+    image: justrag:local
+    command: ["/app/migrate"]
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      vectordb:
+        condition: service_healthy
+
+  go-server:
+    build: .
+    image: justrag:local
+    restart: unless-stopped
+    expose:
+      - "3000"
+    env_file:
+      - .env
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      vectordb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - rag-app-data:/app/data
+      - rag-uploads:/app/uploads
+      # Each service gets its own Chromium profile to avoid corruption
+      # from concurrent rod access (two processes sharing one profile
+      # directory causes lock contention and data races).
+      - rag-justfind-profile-server:/app/data/justfind-profile
+
+  go-worker:
+    image: justrag:local
+    restart: unless-stopped
+    command: ["/app/worker"]
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    tmpfs:
+      - /tmp:size=512m
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      vectordb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - rag-app-data:/app/data
+      - rag-uploads:/app/uploads
+      - rag-justfind-profile-worker:/app/data/justfind-profile
+
+  nginx:
+    image: nginx:1.29.5-alpine
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      go-server:
+        condition: service_healthy
+
+  db:
+    image: pgvector/pgvector:0.8.2-pg18
+    restart: unless-stopped
+    ports:
+      - "${WORKER_BIND_IP:-127.0.0.1}:5432:5432"
+    environment:
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+      - POSTGRES_DB=${DB_NAME:-rag_db}
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "effective_cache_size=1GB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-rag_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - rag-db-data-v18:/var/lib/postgresql
+
+  vectordb:
+    image: pgvector/pgvector:0.8.2-pg18
+    restart: unless-stopped
+    shm_size: 2g
+    ports:
+      - "${WORKER_BIND_IP:-127.0.0.1}:5433:5432"
+    environment:
+      - POSTGRES_USER=${VECTOR_DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${VECTOR_DB_PASSWORD:-postgres}
+      - POSTGRES_DB=${VECTOR_DB_NAME:-rag_vector_db}
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=1536MB"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      - "-c"
+      - "work_mem=64MB"
+      - "-c"
+      - "max_parallel_maintenance_workers=4"
+      - "-c"
+      - "max_parallel_workers_per_gather=2"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${VECTOR_DB_USER:-postgres} -d ${VECTOR_DB_NAME:-rag_vector_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - rag-vector-data:/var/lib/postgresql
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    ports:
+      - "${WORKER_BIND_IP:-127.0.0.1}:6379:6379"
+    # maxmemory-policy=volatile-lru: under memory pressure, evict least-recently-used
+    # keys *with a TTL* rather than erroring on new writes. The embedding cache sets
+    # a TTL on every entry (see internal/ai/embedding_cache.go), so cache entries are
+    # eligible for eviction while Asynq's non-TTL'd task/queue keys are protected.
+    # `allkeys-lru` risks silent Asynq task loss; `noeviction` causes task-lease-renewal
+    # failures when the cache fills up.
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy volatile-lru --requirepass ${REDIS_PASSWORD:-changeme}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "--no-auth-warning", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - rag-redis-data:/data
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY:-minioadmin}
+    ports:
+      - "${MINIO_BIND_IP:-127.0.0.1}:9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - rag-minio-data:/data
+
+
+volumes:
+  rag-db-data-v18:
+  rag-vector-data:
+  rag-redis-data:
+  rag-minio-data:
+  rag-app-data:
+  rag-uploads:
+  rag-justfind-profile-server:
+  rag-justfind-profile-worker:

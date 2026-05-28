@@ -1,0 +1,1 @@
+ALTER TABLE "files" ADD COLUMN "progress_updated_at" timestamp;

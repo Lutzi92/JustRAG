@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: worker-config
+  namespace: justrag
+data:
+  # -- Connection to host services --
+  # For local k3s: use the host gateway IP (host.k3s.internal or 10.43.0.1)
+  # For production: use the IP of the second NIC on the shared network
+  DB_HOST: "10.60.3.25"
+  DB_PORT: "5432"
+  DB_USER: "postgres"
+  DB_NAME: "rag_db"
+  DB_POOL_MAX: "20"
+  DB_IDLE_TIMEOUT: "30000"
+  DB_CONNECTION_TIMEOUT: "10000"
+
+  VECTOR_DB_HOST: "10.60.3.25"
+  VECTOR_DB_PORT: "5433"
+  VECTOR_DB_USER: "postgres"
+  VECTOR_DB_NAME: "rag_vector_db"
+
+  # Redis: externally managed instance.
+  # IMPORTANT: the Redis instance MUST be configured with
+  #   maxmemory-policy=volatile-lru
+  # JustRAG stores Asynq task state AND the embedding cache in the same Redis.
+  # The embedding cache sets a TTL on every entry (see
+  # internal/ai/embedding_cache.go); Asynq's task/queue keys do NOT have TTLs.
+  # `volatile-lru` evicts least-recently-used TTL'd (cache) entries under
+  # memory pressure while protecting Asynq keys — `allkeys-lru` risks silent
+  # task loss and `noeviction` causes lease-renewal failures when the cache
+  # fills up. Recommended maxmemory ≥ 2gb for production corpora.
+  REDIS_HOST: "10.60.3.25"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+
+  S3_ENDPOINT: "http://10.60.3.25:9000"
+  S3_BUCKET: "rag-files"
+  S3_REGION: "us-east-1"
+
+  # -- Worker settings --
+  NODE_ENV: "production"
+  WORKER_HEALTH_PORT: "8081"

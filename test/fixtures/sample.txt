@@ -1,0 +1,3 @@
+Hello world!
+This is a test file for the file processor integration test.
+It works.

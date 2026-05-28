@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-quick
+  namespace: justrag
+  labels:
+    app: justrag
+    component: worker-quick
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: justrag
+      component: worker-quick
+  template:
+    metadata:
+      labels:
+        app: justrag
+        component: worker-quick
+    spec:
+      terminationGracePeriodSeconds: 120
+      # Uncomment if your repo is private:
+      # imagePullSecrets:
+      # - name: ghcr-secret
+      containers:
+        - name: worker
+          image: ghcr.io/lutzi92/justrag:latest
+          command: ["/app/worker"]
+          envFrom:
+            - configMapRef:
+                name: worker-config
+            - secretRef:
+                name: worker-secrets
+          env:
+            - name: WORKER_QUEUES
+              value: "rag-quick"
+            - name: WORKER_CONCURRENCY
+              value: "6"
+            - name: WORKER_MAINTENANCE
+              value: "false"
+          resources:
+            # Sized for a Chromium browser pool. worker-quick now runs
+            # crawl jobs (TypeCrawl, moved off go-server), which spin up a
+            # rod browser with BrowserPoolSize=6 incognito sessions. Each
+            # incognito ~50MB plus a ~150MB Chromium parent process, plus
+            # the Go worker, plus the in-memory tmpfs that backs /tmp,
+            # plus tesseract OCR during file processing. 512Mi was OOM
+            # territory the moment Tier 2 fired; 2Gi gives consistent
+            # headroom. CPU bumped because Chromium is multi-process.
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            # Chromium (fetcher Tier 2 auto-escalation during crawl + URL
+            # ingestion, and Tier 3 for academic research) writes cache
+            # and crash dumps to /tmp. An in-memory emptyDir keeps it off
+            # the node disk and bounds the usage.
+            - name: chromium-tmp
+              mountPath: /tmp
+            # Rod profile for the JustFind Tier 3 path. Both academic
+            # research jobs (sserelay enqueues onto rag-quick) AND any
+            # future crawl-style consumer of the persistent profile run
+            # here, so the quick workers — not worker-heavy — own this
+            # mount. Emptied on pod restart; promote to a ReadWriteMany
+            # PVC if your cluster supports it and you want the Anubis
+            # cookie to survive restarts and be shared across replicas.
+            - name: justfind-profile
+              mountPath: /app/data/justfind-profile
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: chromium-tmp
+          emptyDir:
+            medium: Memory
+            # tmpfs counts against the container's memory cgroup; keep
+            # well below resources.limits.memory (2Gi) so Chromium and
+            # the Go worker still have plenty of headroom.
+            sizeLimit: 512Mi
+        - name: justfind-profile
+          emptyDir:
+            sizeLimit: 256Mi
+      restartPolicy: Always
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker-quick-hpa
+  namespace: justrag
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker-quick
+  minReplicas: 4
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

@@ -1,0 +1,60 @@
+data/
+uv.lock
+cache/
+lib/__pycache__
+.env
+.env.*
+!.env.example
+!.env.docker
+node_modules
+dist
+uploads
+*.tsbuildinfo
+build-info.json
+playwright-report/
+test-results/
+e2e/.auth/
+.vscode
+/docs/plans
+/docs
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.idea/
+*.sw?
+
+# Logs
+*.log
+
+# Security - private keys/certs
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+
+# Claude Code local files
+.claude/
+
+# Git worktrees
+.worktrees/
+
+go-backend/worker
+go-backend/server
+go-backend/migrate
+go-backend/eval
+
+# Eval golden data — JLU-internal, not privacy-cleared for public commit.
+# See eval/golden/README.md §Sampling methodology #7 for the privacy escape hatch.
+/eval/golden/production-dryrun.jsonl
+/eval/golden/production-q032fix.jsonl
+/eval/golden/production.jsonl
+/eval/golden/*.xlsx
+/eval/golden/*.zip
+/eval/golden/snapshots/*.json
+go-backend/eval-report.json
+eval/golden/multi-hop.jsonl
+eval/golden/production.jsonl.stale-backup

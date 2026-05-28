@@ -1,0 +1,2 @@
+go test fuzz v1
+string("!!ʉ!A!#妢!#BZ!A!A")

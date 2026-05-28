@@ -1,0 +1,2 @@
+go test fuzz v1
+string("!#Ԡ!#BZۣ0BBA!A \x1d")

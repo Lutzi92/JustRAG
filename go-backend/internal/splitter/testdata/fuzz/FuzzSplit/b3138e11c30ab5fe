@@ -1,0 +1,2 @@
+go test fuzz v1
+string("! 00000a00000000a00000000A! \x92\x92Aaaaa0A00000")

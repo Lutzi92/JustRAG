@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-batch
+  namespace: justrag
+  labels:
+    app: justrag
+    component: worker-batch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: justrag
+      component: worker-batch
+  template:
+    metadata:
+      labels:
+        app: justrag
+        component: worker-batch
+    spec:
+      terminationGracePeriodSeconds: 600
+      # Uncomment if your repo is private:
+      # imagePullSecrets:
+      # - name: ghcr-secret
+      containers:
+      - name: worker
+        image: ghcr.io/lutzi92/justrag:latest
+        command: ["/app/worker"]
+        envFrom:
+        - configMapRef:
+            name: worker-config
+        - secretRef:
+            name: worker-secrets
+        env:
+        - name: WORKER_QUEUES
+          value: "rag-batch"
+        - name: WORKER_CONCURRENCY
+          value: "2"
+        # Maintenance runs only on batch worker (single replica) to avoid
+        # duplicate stuck-file checks and orphaned vector cleanup.
+        - name: WORKER_MAINTENANCE
+          value: "true"
+        resources:
+          requests:
+            cpu: 250m
+            memory: 128Mi
+          limits:
+            cpu: "1"
+            memory: 512Mi
+        volumeMounts:
+          # rag-batch currently has no enqueued job types in the codebase
+          # (RSS poll → rag-quick, URL processing → rag-heavy, crawl →
+          # rag-quick, academic → rag-quick). worker-batch only runs the
+          # in-process maintenance loop. The chromium-tmp mount is kept
+          # as harmless future-proofing in case a job type lands on
+          # rag-batch later — Chromium can fall back to /tmp without
+          # exploding the node disk.
+          - name: chromium-tmp
+            mountPath: /tmp
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 3
+          periodSeconds: 10
+      volumes:
+        - name: chromium-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+      restartPolicy: Always

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\xe2\x93\xd2\xdc!#A\x96\x8e0")

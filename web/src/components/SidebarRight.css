@@ -1,0 +1,122 @@
+.sidebar-right {
+  border-right: none;
+  border-left: none;
+  background: var(--bg-secondary);
+}
+
+.sidebar-right__collapsed-item-icon {
+  padding: 8px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--tag-bg);
+}
+
+.sidebar-right__studio,
+.sidebar-right__history {
+  flex: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem;
+}
+
+.sidebar-right__header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.sidebar-right__workspace-btn {
+  height: 32px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--accent-primary);
+  background: var(--tag-bg);
+  border-color: var(--accent-primary);
+}
+
+.sidebar-right__workspace-btn:disabled {
+  opacity: 0.5;
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
+.sidebar-right__collapse-btn {
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.sidebar-right__studio-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 1rem;
+}
+
+.sidebar-right__item-card {
+  cursor: default;
+}
+
+.sidebar-right__generating-card {
+  opacity: 0.7;
+}
+
+.sidebar-right__generating-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-right__generating-text {
+  font-size: 0.875rem;
+}
+
+.sidebar-right__history-main {
+  overflow: hidden;
+}
+
+.sidebar-right__item-title {
+  white-space: normal;
+  overflow: visible;
+}
+
+.sidebar-right__item-title--with-icon,
+.sidebar-right__history-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-right__history-title-icon {
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.sidebar-right__empty-row {
+  font-size: 0.8rem;
+  padding: 1rem;
+}
+
+.sidebar-right__new-chat-btn {
+  width: 32px;
+  height: 32px;
+}
+
+.sidebar-right--mobile {
+  border-left: none;
+  overflow-y: auto;
+}
+
+@media (max-width: 1023px) {
+  .sidebar-right__workspace-btn {
+    min-height: 44px;
+  }
+
+  .sidebar-right__new-chat-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

@@ -1,0 +1,124 @@
+.skeleton {
+  background: var(--border-color);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.15) 50%,
+    transparent 100%
+  );
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+[data-theme='dark'] .skeleton::after {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.06) 50%,
+    transparent 100%
+  );
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton--circle {
+  border-radius: 50%;
+}
+
+.skeleton--text {
+  border-radius: 4px;
+  height: 0.875rem;
+}
+
+.skeleton--card {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  padding: 1rem;
+}
+
+.skeleton--card .skeleton {
+  background: var(--border-color);
+}
+
+/* KB card skeleton layout */
+.skeleton-kb-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.skeleton-kb-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Sidebar file skeleton layout */
+.skeleton-file-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+}
+
+.skeleton-file-row__text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+/* Chat message skeleton layout */
+.skeleton-message {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 70%;
+  padding: 1rem 1.25rem;
+  border-radius: 4px 20px 20px 20px;
+  background: var(--msg-ai-bg);
+}
+
+.skeleton-message--user {
+  align-self: flex-end;
+  border-radius: 20px 20px 4px 20px;
+  background: var(--msg-user-bg);
+  max-width: 50%;
+}
+
+.skeleton-message--ai {
+  align-self: flex-start;
+  border-radius: 0;
+}
+
+/* Fade-in for content replacing skeletons */
+@keyframes content-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.content-fade-in {
+  animation: content-fade-in 200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    animation: none;
+  }
+}

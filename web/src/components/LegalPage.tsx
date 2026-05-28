@@ -1,0 +1,97 @@
+import { useState, useEffect } from 'react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
+import DOMPurify from 'dompurify';
+import { useTheme } from '../contexts/ThemeContext';
+import { useToast } from '../contexts/ToastContext';
+import type { Language } from '../translations';
+
+type LegalPageType = 'privacy' | 'accessibility';
+
+interface LegalPageProps {
+  page: LegalPageType;
+  onBack: () => void;
+}
+
+const titleKeys: Record<LegalPageType, string> = {
+  privacy: 'privacyPolicyTitle',
+  accessibility: 'accessibilityTitle',
+};
+
+const htmlFiles: Record<LegalPageType, Record<Language, string>> = {
+  privacy: { de: '/legal/privacy-de.html', en: '/legal/privacy-en.html' },
+  accessibility: { de: '/legal/accessibility-de.html', en: '/legal/accessibility-en.html' },
+};
+
+export function LegalPage({ page, onBack }: LegalPageProps) {
+  const { t, language } = useTheme();
+  const toast = useToast();
+  const [html, setHtml] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(htmlFiles[page][language])
+      .then(res => res.text())
+      .then(text => { setHtml(text); setLoading(false); })
+      .catch(() => { setHtml(''); setLoading(false); toast.error(t('pageLoadError')); });
+  }, [page, language]);
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      background: 'var(--bg-primary)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      padding: '2rem 1rem',
+    }}>
+      <div style={{
+        width: '100%',
+        maxWidth: '720px',
+      }}>
+        <button
+          onClick={onBack}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            background: 'none',
+            border: 'none',
+            color: 'var(--accent-primary)',
+            cursor: 'pointer',
+            fontSize: '0.875rem',
+            padding: '0.5rem 0',
+            marginBottom: '1.5rem',
+          }}
+        >
+          <ArrowLeft size={16} />
+          {t('backToHome')}
+        </button>
+
+        <h1 style={{
+          fontSize: '1.75rem',
+          color: 'var(--text-primary)',
+          marginBottom: '1.5rem',
+        }}>
+          {t(titleKeys[page])}
+        </h1>
+
+        {loading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
+            <Loader2 className="animate-spin" size={24} color="var(--text-secondary)" />
+          </div>
+        ) : (
+          <div
+            className="content-fade-in"
+            style={{
+              color: 'var(--text-secondary)',
+              fontSize: '0.9375rem',
+              lineHeight: '1.7',
+            }}
+            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}

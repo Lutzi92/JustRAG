@@ -1,0 +1,66 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosimple
+    - bodyclose
+    - noctx
+    - copyloopvar
+    # Size + complexity gates. Thresholds picked so the current
+    # codebase passes; tightening them later is a follow-up. The
+    # purpose is to flag NEW functions that grow unboundedly, which
+    # is exactly what happened to SendMessage before the 2026-05-12
+    # refactor.
+    - funlen
+    - gocyclo
+    # Test discipline. thelper flags helper funcs (that call t.Error/t.Fatal)
+    # without t.Helper() — failures otherwise point at the helper line, not
+    # the actual call site. tparallel flags subtests that miss t.Parallel()
+    # under a parallel parent.
+    - thelper
+    - tparallel
+
+linters-settings:
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment  # too noisy for a migration project
+      - shadow          # common pattern in error handling
+
+  funlen:
+    # Maximum non-blank, non-comment lines per function. The current
+    # outlier is tryDeepChat (~250 lines); 200 keeps it inside the
+    # threshold while flagging anything new that creeps over.
+    lines: 200
+    statements: 80
+
+  gocyclo:
+    # Cyclomatic complexity ceiling. 20 accommodates the existing
+    # switch-heavy orchestrator dispatch code without false alarms;
+    # new code that exceeds it almost always wants a sub-function.
+    min-complexity: 20
+
+  errcheck:
+    exclude-functions:
+      # Fire-and-forget writes to HTTP response writers.
+      - (net/http.ResponseWriter).Write
+      # Deferred rollbacks — error is expected when commit already ran.
+      - (*github.com/jackc/pgx/v5.Tx).Rollback
+      # Crypto rand — panics on failure anyway.
+      - crypto/rand.Read
+
+issues:
+  exclude-rules:
+    # Test files can be more relaxed.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - noctx
+        - funlen
+        - gocyclo

@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-heavy
+  namespace: justrag
+  labels:
+    app: justrag
+    component: worker-heavy
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: justrag
+      component: worker-heavy
+  template:
+    metadata:
+      labels:
+        app: justrag
+        component: worker-heavy
+    spec:
+      terminationGracePeriodSeconds: 300
+      # Uncomment if your repo is private:
+      # imagePullSecrets:
+      # - name: ghcr-secret
+      containers:
+        - name: worker
+          image: ghcr.io/lutzi92/justrag:latest
+          command: ["/app/worker"]
+          envFrom:
+            - configMapRef:
+                name: worker-config
+            - secretRef:
+                name: worker-secrets
+          env:
+            - name: WORKER_QUEUES
+              value: "rag-heavy"
+            - name: WORKER_CONCURRENCY
+              value: "4"
+            - name: WORKER_MAINTENANCE
+              value: "false"
+          resources:
+            requests:
+              cpu: "1"
+              memory: 256Mi
+            limits:
+              cpu: "4"        # Tesseract OCR is CPU-bound (2 threads x 2 concurrent)
+              memory: 1Gi
+          volumeMounts:
+            # Chromium (fetcher Tier 2 auto-escalation during URL
+            # processing — TypeURLProcessing is enqueued onto rag-heavy
+            # — and during research execution) writes cache/crash dumps
+            # to /tmp aggressively. An in-memory emptyDir keeps it off
+            # the node disk and bounds the usage.
+            #
+            # Note: JustFind Tier 3 (academic research) and TypeCrawl run
+            # on worker-quick, not here, because both are enqueued onto
+            # rag-quick. The JustFind profile mount lives on worker-quick
+            # accordingly.
+            - name: chromium-tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: chromium-tmp
+          emptyDir:
+            medium: Memory
+            # tmpfs counts against the container's memory cgroup; keep
+            # below resources.limits.memory so Chromium + Tesseract have
+            # headroom and don't get OOMKilled.
+            sizeLimit: 256Mi
+      restartPolicy: Always
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker-heavy-hpa
+  namespace: justrag
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker-heavy
+  minReplicas: 4
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
