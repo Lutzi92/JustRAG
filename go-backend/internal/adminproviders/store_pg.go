@@ -109,32 +109,24 @@ func (s *PGStore) CreateAuthProvider(ctx context.Context, data AuthProviderCreat
 // UpdateAuthProvider applies the non-nil fields in data to the auth provider with the given ID
 // and returns the updated row. Returns nil if no row with that ID exists.
 func (s *PGStore) UpdateAuthProvider(ctx context.Context, id string, data AuthProviderUpdate) (*AuthProviderRow, error) {
-	var setClauses []string
-	var args []any
-	param := 2 // $1 is reserved for the WHERE id clause
+	// base=1: $1 is reserved for the WHERE id clause, so the first SET
+	// assignment binds $2.
+	b := pgxutil.NewClauseBuilder(1)
 
 	if data.Type != nil {
-		setClauses = append(setClauses, fmt.Sprintf("type = $%d", param))
-		args = append(args, *data.Type)
-		param++
+		b.Add("type = $%d", *data.Type)
 	}
 	if data.Name != nil {
-		setClauses = append(setClauses, fmt.Sprintf("name = $%d", param))
-		args = append(args, *data.Name)
-		param++
+		b.Add("name = $%d", *data.Name)
 	}
 	if data.Config != nil {
-		setClauses = append(setClauses, fmt.Sprintf("config = $%d", param))
-		args = append(args, *data.Config)
-		param++
+		b.Add("config = $%d", *data.Config)
 	}
 	if data.IsActive != nil {
-		setClauses = append(setClauses, fmt.Sprintf("is_active = $%d", param))
-		args = append(args, *data.IsActive)
-		param++
+		b.Add("is_active = $%d", *data.IsActive)
 	}
 
-	if len(setClauses) == 0 {
+	if b.Len() == 0 {
 		// Nothing to update — return the current row unchanged.
 		rows, err := pgxutil.QueryRows[authProviderDBRow](ctx, s.pool,
 			`SELECT `+authProviderSelectCols+` FROM auth_providers WHERE id = $1`, id)
@@ -150,10 +142,10 @@ func (s *PGStore) UpdateAuthProvider(ctx context.Context, id string, data AuthPr
 
 	updateSQL := fmt.Sprintf(
 		`UPDATE auth_providers SET %s WHERE id = $1 RETURNING `+authProviderSelectCols,
-		strings.Join(setClauses, ", "),
+		strings.Join(b.Clauses(), ", "),
 	)
 	// Prepend id as $1
-	allArgs := append([]any{id}, args...)
+	allArgs := append([]any{id}, b.Args()...)
 
 	rows, err := pgxutil.QueryRows[authProviderDBRow](ctx, s.pool, updateSQL, allArgs...)
 	if err != nil {

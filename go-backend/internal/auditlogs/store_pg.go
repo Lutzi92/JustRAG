@@ -3,6 +3,7 @@ package auditlogs
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -41,39 +42,32 @@ func (s *PGStore) GetAuditLogs(ctx context.Context, f AuditLogFilters) ([]AuditL
 FROM admin_audit_logs
 WHERE 1=1`
 
-	var args []any
-	param := 1
+	b := pgxutil.NewClauseBuilder(0)
 
 	if f.OperatorID != "" {
-		base += fmt.Sprintf(" AND operator_id = $%d", param)
-		args = append(args, f.OperatorID)
-		param++
+		b.Add("operator_id = $%d", f.OperatorID)
 	}
 	if f.Action != "" {
-		base += fmt.Sprintf(" AND action = $%d", param)
-		args = append(args, f.Action)
-		param++
+		b.Add("action = $%d", f.Action)
 	}
 	if f.TargetType != "" {
-		base += fmt.Sprintf(" AND target_type = $%d", param)
-		args = append(args, f.TargetType)
-		param++
+		b.Add("target_type = $%d", f.TargetType)
 	}
 	if f.From != nil {
-		base += fmt.Sprintf(" AND created_at >= $%d", param)
-		args = append(args, *f.From)
-		param++
+		b.Add("created_at >= $%d", *f.From)
 	}
 	if f.To != nil {
-		base += fmt.Sprintf(" AND created_at <= $%d", param)
-		args = append(args, *f.To)
-		param++
+		b.Add("created_at <= $%d", *f.To)
+	}
+	if b.Len() > 0 {
+		base += " AND " + strings.Join(b.Clauses(), " AND ")
 	}
 
-	base += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", param, param+1)
-	args = append(args, f.Limit, f.Offset)
+	limitParam := b.Bind(f.Limit)
+	offsetParam := b.Bind(f.Offset)
+	base += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", limitParam, offsetParam)
 
-	rows, err := pgxutil.QueryRows[auditLogRow](ctx, s.pool, base, args...)
+	rows, err := pgxutil.QueryRows[auditLogRow](ctx, s.pool, base, b.Args()...)
 	if err != nil {
 		return nil, err
 	}

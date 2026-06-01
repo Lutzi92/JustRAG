@@ -27,6 +27,7 @@ package pgxutil
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"regexp"
 	"strings"
@@ -233,6 +234,61 @@ var likePatternEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 func EscapeLike(s string) string {
 	return likePatternEscaper.Replace(s)
 }
+
+// ClauseBuilder accumulates parameterized SQL fragments (WHERE conditions or
+// SET assignments) together with their bind arguments. Each fragment's $N
+// placeholder is derived from the running argument count, so the placeholder
+// index can never drift out of sync with the args slice — the failure mode of
+// hand-threaded `param` counters that increment separately from the args
+// append.
+//
+// base is the number of bind arguments that precede this builder's own args in
+// the final query. Pass 0 for a self-contained WHERE filter (first fragment
+// binds $1); pass 1 when the caller prepends an id as $1 ahead of a SET list
+// (first fragment binds $2).
+type ClauseBuilder struct {
+	base    int
+	clauses []string
+	args    []any
+}
+
+// NewClauseBuilder returns a ClauseBuilder whose first bound argument is
+// $(base+1). See ClauseBuilder for the meaning of base.
+func NewClauseBuilder(base int) *ClauseBuilder {
+	return &ClauseBuilder{base: base}
+}
+
+// Add binds val and appends a fragment. format must contain exactly one %d
+// verb, which receives val's placeholder index (e.g. "operator_id = $%d" or
+// "name = $%d").
+func (b *ClauseBuilder) Add(format string, val any) {
+	b.args = append(b.args, val)
+	b.clauses = append(b.clauses, fmt.Sprintf(format, b.base+len(b.args)))
+}
+
+// AddRaw appends a literal fragment that binds no argument, such as
+// "col = NULL" or "col IS NOT NULL". It must contain no $N placeholder.
+func (b *ClauseBuilder) AddRaw(clause string) {
+	b.clauses = append(b.clauses, clause)
+}
+
+// Bind binds val without emitting a clause and returns its placeholder index.
+// Use for placeholders that are not part of the joined clause list, such as a
+// trailing LIMIT/OFFSET appended to the query by hand.
+func (b *ClauseBuilder) Bind(val any) int {
+	b.args = append(b.args, val)
+	return b.base + len(b.args)
+}
+
+// Clauses returns the accumulated fragments in the order they were added.
+func (b *ClauseBuilder) Clauses() []string { return b.clauses }
+
+// Args returns the accumulated bind arguments in placeholder order. Prepend
+// any base args (e.g. a leading id) before passing to the query.
+func (b *ClauseBuilder) Args() []any { return b.args }
+
+// Len reports how many clauses have been added (excludes Bind-only args).
+func (b *ClauseBuilder) Len() int { return len(b.clauses) }
 
 // limitOrReturningRE matches a LIMIT or RETURNING keyword as a standalone
 // SQL token (whitespace/punctuation/string boundaries on both sides) so

@@ -138,3 +138,76 @@ func TestIsSerializationFailure(t *testing.T) {
 		t.Fatalf("unique violation must not match serialization-failure check")
 	}
 }
+
+func TestClauseBuilderWhereFilter(t *testing.T) {
+	// base=0: a self-contained WHERE filter. First clause binds $1.
+	b := NewClauseBuilder(0)
+	b.Add("operator_id = $%d", "op-1")
+	b.Add("action = $%d", "delete")
+	limitParam := b.Bind(50)
+	offsetParam := b.Bind(100)
+
+	if got, want := b.Clauses(), []string{"operator_id = $1", "action = $2"}; !equalStrings(got, want) {
+		t.Fatalf("clauses = %v, want %v", got, want)
+	}
+	if limitParam != 3 || offsetParam != 4 {
+		t.Fatalf("limit/offset params = %d/%d, want 3/4", limitParam, offsetParam)
+	}
+	if got, want := b.Args(), []any{"op-1", "delete", 50, 100}; !equalArgs(got, want) {
+		t.Fatalf("args = %v, want %v", got, want)
+	}
+	if b.Len() != 2 {
+		t.Fatalf("Len = %d, want 2 (Bind args excluded)", b.Len())
+	}
+}
+
+func TestClauseBuilderSetListWithBaseOffset(t *testing.T) {
+	// base=1: an id is prepended as $1, so the first SET assignment binds $2.
+	b := NewClauseBuilder(1)
+	b.Add("name = $%d", "alice")
+	b.AddRaw("description = NULL")
+	b.Add("email = $%d", "a@example.com")
+
+	want := []string{"name = $2", "description = NULL", "email = $3"}
+	if got := b.Clauses(); !equalStrings(got, want) {
+		t.Fatalf("clauses = %v, want %v", got, want)
+	}
+	// AddRaw binds no argument: placeholder numbering must skip it.
+	if got, want := b.Args(), []any{"alice", "a@example.com"}; !equalArgs(got, want) {
+		t.Fatalf("args = %v, want %v", got, want)
+	}
+}
+
+func TestClauseBuilderEmpty(t *testing.T) {
+	b := NewClauseBuilder(0)
+	if b.Len() != 0 {
+		t.Fatalf("Len = %d, want 0", b.Len())
+	}
+	if len(b.Args()) != 0 {
+		t.Fatalf("Args len = %d, want 0", len(b.Args()))
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalArgs(a, b []any) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

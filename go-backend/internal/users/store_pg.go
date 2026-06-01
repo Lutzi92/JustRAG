@@ -101,42 +101,34 @@ WHERE LOWER(username) LIKE $1 ESCAPE '\'
 // UpdateUser applies the non-nil fields in data to the user with the given ID and returns
 // the updated row.
 func (s *PGStore) UpdateUser(ctx context.Context, id string, data UserUpdate) (*UserRow, error) {
-	var setClauses []string
-	var args []any
-	param := 2 // $1 is reserved for the WHERE id clause
+	// base=1: $1 is reserved for the WHERE id clause, so the first SET
+	// assignment binds $2.
+	b := pgxutil.NewClauseBuilder(1)
 
 	if data.FirstName != nil {
-		setClauses = append(setClauses, fmt.Sprintf("first_name = $%d", param))
-		args = append(args, *data.FirstName)
-		param++
+		b.Add("first_name = $%d", *data.FirstName)
 	}
 	if data.LastName != nil {
-		setClauses = append(setClauses, fmt.Sprintf("last_name = $%d", param))
-		args = append(args, *data.LastName)
-		param++
+		b.Add("last_name = $%d", *data.LastName)
 	}
 	if data.Email != nil {
-		setClauses = append(setClauses, fmt.Sprintf("email = $%d", param))
-		args = append(args, *data.Email)
-		param++
+		b.Add("email = $%d", *data.Email)
 	}
 	if data.PasswordHash != nil {
-		setClauses = append(setClauses, fmt.Sprintf("password_hash = $%d", param))
-		args = append(args, *data.PasswordHash)
-		param++
+		b.Add("password_hash = $%d", *data.PasswordHash)
 	}
 
-	if len(setClauses) == 0 {
+	if b.Len() == 0 {
 		// Nothing to update — return the current row unchanged.
 		return s.GetUserByID(ctx, id)
 	}
 
 	updateSQL := fmt.Sprintf(
 		`UPDATE users SET %s WHERE id = $1 RETURNING id, username, password_hash, auth_method, first_name, last_name, email, role, external_id, created_at`,
-		strings.Join(setClauses, ", "),
+		strings.Join(b.Clauses(), ", "),
 	)
 	// Prepend id as $1
-	allArgs := append([]any{id}, args...)
+	allArgs := append([]any{id}, b.Args()...)
 
 	row, err := pgxutil.QueryOne[userDBRow](ctx, s.pool, updateSQL, allArgs...)
 	if err != nil {

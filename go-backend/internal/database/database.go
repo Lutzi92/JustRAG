@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -213,7 +214,14 @@ func ConnectReadOnly(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse read-only DSN: %w", err)
 	}
-	poolCfg.MaxConns = 4
+	// Default the pool small (low-frequency meta-query surface), but let an
+	// operator override it via `pool_max_conns` in the DSN — ParseConfig has
+	// already applied that value, so only clamp to our default when the DSN
+	// did not specify one. Without this guard the override is silently
+	// discarded.
+	if !strings.Contains(dsn, "pool_max_conns") {
+		poolCfg.MaxConns = 4
+	}
 	poolCfg.MinConns = 0
 	poolCfg.HealthCheckPeriod = 30 * time.Second
 

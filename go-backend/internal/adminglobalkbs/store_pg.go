@@ -134,15 +134,13 @@ func (s *PGStore) CreateGlobalKB(ctx context.Context, data GlobalKBCreate) (*Glo
 // is_global row exists. Supports explicit nulls via data.NullFields so
 // admins can clear header_text / example_prompts / etc. from the UI.
 func (s *PGStore) UpdateGlobalKB(ctx context.Context, id string, data GlobalKBUpdate) (*GlobalKBRow, error) {
-	var setClauses []string
-	var args []any
-	param := 2 // $1 is reserved for WHERE id = $1
+	// base=1: $1 is reserved for WHERE id = $1, so the first SET assignment
+	// binds $2.
+	b := pgxutil.NewClauseBuilder(1)
 
 	// setVal: non-null value update.
 	setVal := func(col string, val any) {
-		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", col, param))
-		args = append(args, val)
-		param++
+		b.Add(col+" = $%d", val)
 	}
 	// setOrNull: nullable pointer field that tolerates explicit JSON nulls.
 	setOrNull := func(col, jsonKey string, val *string) {
@@ -150,7 +148,7 @@ func (s *PGStore) UpdateGlobalKB(ctx context.Context, id string, data GlobalKBUp
 		case val != nil:
 			setVal(col, *val)
 		case data.NullFields[jsonKey]:
-			setClauses = append(setClauses, col+" = NULL")
+			b.AddRaw(col + " = NULL")
 		}
 	}
 
@@ -194,14 +192,14 @@ func (s *PGStore) UpdateGlobalKB(ctx context.Context, id string, data GlobalKBUp
 		setOrNull("stt_model", "sttModel", data.SttModel)
 	}
 	if data.StudioConfig != nil {
-		b, err := json.Marshal(data.StudioConfig)
+		raw, err := json.Marshal(data.StudioConfig)
 		if err != nil {
 			return nil, fmt.Errorf("UpdateGlobalKB: marshal studio_config: %w", err)
 		}
-		setVal("studio_config", b)
+		setVal("studio_config", raw)
 	}
 
-	if len(setClauses) == 0 {
+	if b.Len() == 0 {
 		// Nothing to update — return the current row unchanged.
 		rows, err := pgxutil.QueryRows[globalKBDBRow](ctx, s.pool,
 			`SELECT `+globalKBSelectCols+`
@@ -219,9 +217,9 @@ func (s *PGStore) UpdateGlobalKB(ctx context.Context, id string, data GlobalKBUp
 	updateSQL := fmt.Sprintf(
 		`UPDATE knowledge_bases SET %s WHERE id = $1 AND is_global = true
 		 RETURNING `+globalKBSelectCols,
-		strings.Join(setClauses, ", "),
+		strings.Join(b.Clauses(), ", "),
 	)
-	allArgs := append([]any{id}, args...)
+	allArgs := append([]any{id}, b.Args()...)
 
 	rows, err := pgxutil.QueryRows[globalKBDBRow](ctx, s.pool, updateSQL, allArgs...)
 	if err != nil {
