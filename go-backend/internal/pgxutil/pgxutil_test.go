@@ -71,6 +71,16 @@ func TestWithLimitOne(t *testing.T) {
 			in:   `SELECT id FROM users LIMIT(5)`,
 			want: `SELECT id FROM users LIMIT(5)`,
 		},
+		// Documented known edge case (see withLimitOne doc comment): a LIMIT
+		// inside a subquery suppresses the outer LIMIT 1. Not a correctness
+		// bug for QueryOne (pgx.CollectOneRow stops after the first row), but
+		// the behaviour is locked in here so a future regex change can't
+		// silently "fix" it into appending a malformed outer LIMIT.
+		{
+			name: "subquery LIMIT suppresses outer LIMIT 1",
+			in:   `SELECT id FROM users WHERE id IN (SELECT id FROM bar LIMIT 5)`,
+			want: `SELECT id FROM users WHERE id IN (SELECT id FROM bar LIMIT 5)`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

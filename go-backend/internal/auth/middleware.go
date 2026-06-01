@@ -70,7 +70,11 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 		// the access-log wrapper) that runs before this handler returns
 		// but after the inner chain finishes — see logctx.UserIDCapture.
 		logctx.SetCapturedUserID(ctx, claims.ID)
-		logctx.From(ctx).Info("auth.jwt_validated", "user_id", claims.ID, "jti", claims.JTI)
+		// Debug, not Info: this fires on every authenticated request. The access
+		// log already records the (now-captured) user ID per request, so emitting
+		// a successful-validation line at Info is pure low-signal volume in prod.
+		// Failures stay at Warn below — those are the lines worth alerting on.
+		logctx.From(ctx).Debug("auth.jwt_validated", "user_id", claims.ID, "jti", claims.JTI)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
