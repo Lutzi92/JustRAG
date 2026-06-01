@@ -406,7 +406,7 @@ Subsystem index — pair a knob with the doc section that explains it:
 | (no knob — always on) | BM25-floor reinsertion at the end of search | BM25 floor |
 | (runtime, T0-1) | `hnsw.iterative_scan = relaxed_order` set per connection — required for filtered ANN recall | (not yet documented in `docs/retrieval.md`) |
 | (reranker config) | Reranker model + serving caveats (jina-v3 prod; Qwen3 antipattern) | Reranker deployment |
-| (admin `embedding_model`) | Production embedder (Octen-Embedding-8B, 4096-dim) | Embedder choice (production default) / Historical: Qwen3 4B vs 8B |
+| (admin `embedding_model`) | Production embedder (qwen3-embedding-8b, 4096-dim) | Embedder choice (production default) / Historical: Octen-8B, Qwen3 4B vs 8B |
 | `query_instruction` | Qwen3 asymmetric prefix (keep empty under calibrated reranker) | Query-side embedding instruction |
 | `crag_enabled` + `adaptive_routing_enabled` + `crag_grader_model` + `crag_min_relevant_chunks` | Corrective-RAG grading + lookup/enum skip rule | Corrective RAG (CRAG) |
 | `chat_context_compression_enabled` + `_min_chunks` + `_threshold` + `_model` (T2-3) | ECoRAG evidentiality-based post-rerank filter (1 fast-tier LLM call) | ECoRAG evidentiality compression |
