@@ -1166,6 +1166,10 @@ func (s *SearchService) runPrimarySearches(
 	bm25SimpleArm, bm25TieredBoost bool,
 	nodeKindFilter string,
 ) (vector []rawRow, keyword []rawRow, err error) {
+	// Each goroutine below writes exactly one of these (vectorRows vs
+	// keywordRows) and never the other, so the concurrent writes target
+	// disjoint memory; g.Wait() establishes the happens-before before either
+	// is read at the return. Race-free despite looking like shared state.
 	var vectorRows, keywordRows []rawRow
 
 	// Vector search is fatal on failure; keyword search is non-fatal (we

@@ -223,6 +223,14 @@ func ExecuteDAG(ctx context.Context, params DAGExecuteParams, run runNodeFn) (DA
 		if kind := budget.CheckExceeded(ctx, "plan_execute"); kind != "" {
 			break
 		}
+		// Fail-fast at the level boundary: errgroup.WithContext cancels
+		// gctx as soon as any node returns a non-nil error, so sibling
+		// nodes still in flight on this level observe context.Canceled and
+		// abort early. That's intentional — a level is treated as failed
+		// the moment one node fails, and finalize() below still returns the
+		// partial results accumulated so far. If per-node best-effort
+		// (run every sibling to completion regardless of peers) is ever
+		// wanted, swap errgroup for a sync.WaitGroup + per-node error slice.
 		g, gctx := errgroup.WithContext(ctx)
 		for _, node := range lvl {
 			// Build the dependent-node interpolation. Deterministic — no

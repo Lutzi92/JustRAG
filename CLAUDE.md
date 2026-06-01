@@ -188,7 +188,7 @@ chat_plan_execute_tool_aware     = true        # planner sees tool catalog
 chat_code_exec_enabled           = false       # keep off until gVisor is verified
 ```
 
-Migration **0043** for tool-mix telemetry. `code_exec` requires docker `--runtime=runsc` registered in `/etc/docker/daemon.json`; before flipping it on a production KB run `/security-review` over `internal/mcp/builtin/code_exec.go`. Tool-aware planner falls back gracefully if the registry is unwired (LLM-error → legacy DAG planner → flat planner).
+Migration **0043** (tool-mix telemetry). `code_exec` requires docker `--runtime=runsc` in `/etc/docker/daemon.json`; security-review `internal/mcp/builtin/code_exec.go` before flipping on prod. Tool-aware planner falls back LLM-error → legacy DAG → flat. Mechanism: `docs/agent-orchestration.md`.
 
 **Answer-time tool calling**
 
@@ -197,7 +197,7 @@ chat_answer_tools_enabled        = true        # gate; default false
 chat_answer_tools_max_rounds     = 5           # valid range [1,10]
 ```
 
-Lets the answer LLM call MCP tools (except `code_exec`) mid-stream. Orthogonal to and composable with `chat_plan_execute_tool_aware` — planner-time picks tools up-front, answer-time fires during drafting. Migration **0043** for tool-mix telemetry (auto via the existing `MCPDispatcher.Dispatch` recorder). KB chat model MUST support native `tools` + `tool_calls` (verified on gemma-4-26b-A4B-it). **Known limitation:** path relies on the provider emitting reasoning via `reasoning_content`; models that emit `<think>` tags inline leak them into the visible answer. Mechanism, orchestrator coverage, and metrics in `docs/agent-orchestration.md` → "Answer-time tool calling".
+Migration **0043** (auto telemetry via `MCPDispatcher.Dispatch`). Orthogonal to and composable with `chat_plan_execute_tool_aware`. KB chat model MUST support native `tools` + `tool_calls` (verified on gemma-4-26b-A4B-it). **Known limit:** models emitting `<think>` tags inline (vs `reasoning_content`) leak reasoning into the visible answer. Mechanism: `docs/agent-orchestration.md` → "Answer-time tool calling".
 
 **Per-user long-term memory + Self-RAG**
 
@@ -216,9 +216,9 @@ chat_plan_execute_dag_iterative    = true        # inter-level critic; needs cha
 chat_plan_execute_dag_iterative_model = <small>  # critic LLM override
 ```
 
-Migration **0045** required (`user_memory` table). **Privacy gate (satisfied):** the "My Memory" drawer (per-entry delete + bulk clear + JSON export per Art. 20) ships in `Profile.tsx`, backed by `/api/user/memory` (`GET` list, `DELETE /{id}`, `DELETE` bulk, `GET /export`) via the `internal/memory` handler package. Available to every user regardless of `chat_longmem_enabled`.
+Migration **0045**. "My Memory" drawer (per-entry delete + bulk clear + JSON export per GDPR Art. 20) ships in `Profile.tsx` regardless of `chat_longmem_enabled`, backed by `/api/user/memory` via the `internal/memory` handler.
 
-**T1-2 dim (resolved):** `user_memory.embedding` is widened at startup to the active embedder's dimension by `migrate.EnsureUserMemoryEmbedding` (runs in `cmd/migrate` + worker startup; DROP INDEX → ALTER → CREATE INDEX, with halfvec for 2000–4000 dims and no HNSW index above 4000 — mirroring `vector/schema.go`, so the 4096-dim prod case relies on a filtered seq scan over the small per-user row set). The Go store self-discovers the column width at runtime (`longmem.embeddingDim`), so no hardcoded dim remains. **Note:** the ensure runs at `cmd/migrate` + worker startup, **not** server startup — the server reads whatever width the column already has. After an embedder change, re-run `cmd/migrate` (or restart the worker) so the column is re-dimensioned **before** triggering the admin **`POST /api/admin/reembed-user-memory`** maintenance action, which repopulates existing rows' embeddings (the ALTER discards old vectors). Once that completes, `chat_longmem_recall_semantic` and `chat_longmem_conflict_resolution` are safe to enable.
+**T1-2 dim — ops sequence after embedder change:** the `user_memory.embedding` column is re-widened by `migrate.EnsureUserMemoryEmbedding` at `cmd/migrate` + worker startup (**not** server startup; DROP INDEX → ALTER → CREATE INDEX; halfvec for 2000–4000 dims, no HNSW index above 4000 — mirrors `vector/schema.go`). Run `cmd/migrate` (or restart the worker) → trigger `POST /api/admin/reembed-user-memory` (the ALTER discards old vectors) → only then enable `chat_longmem_recall_semantic` + `_conflict_resolution`.
 
 **Knowledge-graph routing**
 
@@ -238,13 +238,9 @@ chat_graph_routing_paths_max_len     = 3           # only used when path_mode=pa
 chat_graph_routing_paths_max_paths   = 5           # only used when path_mode=paths
 ```
 
-Migration **0044** required (kg_entities + kg_edges). Without `kg_extraction_enabled` having actually run on the KB's files, `chat_graph_routing_enabled` always lands in the `db_error` outcome bucket — the heuristic has nothing to match against. Re-ingest at least one file after enabling extraction before validating the routing heuristic.
+Migration **0044**. `chat_graph_routing_enabled` is a no-op until `kg_extraction_enabled` has actually run on the KB's files — re-ingest at least one file after enabling extraction (otherwise lands in the `db_error` outcome bucket). `chat_graph_routing_inject_chunks` is a separate sub-flag — existing deployments keep diagnostic-only behaviour on upgrade. Plan-Execute and Agentic only inject into the **initial** search (sub-query / hop-2 stays focused). `path_mode` defaults to `neighbors` and all three modes fail open to `neighbors`. Mechanism, injection wiring, and traversal-mode tuning: `docs/agent-orchestration.md` → "Graph-routing …".
 
-`chat_graph_routing_inject_chunks` is a **separate** sub-flag: existing deployments running graph routing in diagnostic mode keep their behaviour on upgrade. When both flags are on AND the heuristic fires, subgraph chunks are bulk-fetched and folded into the RRF candidate pool via `extraLists` (same path used by SubQueries / MultiQuery / StepBack). Injection is wired through every orchestrator (Supervisor / Plan-Execute / Agentic / DeepChat / standard `PrepareChatContext`); each one's `Params` struct carries a `GraphChunkIDs` field that http_send.go fills once via `ResolveGraphChunksIfEnabled`. Plan-Execute and Agentic only inject into the **initial** search (sub-query / hop-2 searches stay focused). Telemetry: `rag_graph_routing_chunks_injected_total{outcome}` + `rag_graph_routing_chunks_injected_size` histogram.
-
-**T1-4 / T1-5 traversal modes:** `chat_graph_routing_path_mode` picks `neighbors` (default, depth-1 BFS — cheapest), `ppr` (Personalized PageRank — wins on 2+ hop queries), or `paths` (PathRAG enumeration of relational paths between matched entity pairs). All three fail open to `neighbors`. Per-mode tuning, implementation entry points, and telemetry in `docs/agent-orchestration.md` → "Graph-routing traversal modes (T1-4 / T1-5)".
-
-**Cross-feature ordering:** the refine gates are independent of the tool tier and graph routing. The tool-aware planner benefits from the `graph_search` tool being registered (the planner sees it in the catalog), so enable KG ingestion + tool-aware planner together when chasing the multi-hop eval gain.
+**Cross-feature ordering:** refine gates are independent of tool tier and graph routing; enable KG ingestion + tool-aware planner together for the multi-hop eval gain (planner sees `graph_search` in the catalog).
 
 **Sub-question decomposition (DecomposeRAG, T1-1)**
 
@@ -253,7 +249,7 @@ query_decompose_enabled          = true        # adds 1 fast-tier LLM call on co
 query_decompose_model            = <small>     # falls through to model_tier_fast
 ```
 
-When the gate is on AND `params.QueryType == complex_reasoning` AND `opts.SubQueries` is empty (so Plan-Execute's own decomposition doesn't double-fire), the LLM produces 2-4 *semantically distinct* sub-questions (NOT paraphrases — that's `MultiQuery`'s job). Sub-questions fold into the RRF pool via the existing `runMultiQuerySearches` + `runMultiQueryBM25Searches` paths. Plan-Execute orchestrator is unaffected (it has its own structured decomposition); the standard fallback path is the primary beneficiary. Output capped at 4 strings; the prompt instructs single-aspect queries to return an empty array (handled as "no decomposition fired"). Telemetry: `rag_query_decompose_decision_total{outcome}`, `rag_query_decompose_seconds`, `rag_query_decompose_subqueries`.
+Fires only when `params.QueryType == complex_reasoning` AND `opts.SubQueries` is empty (so Plan-Execute's own decomposition doesn't double-fire — standard fallback path is the primary beneficiary). Produces 2–4 *semantically distinct* sub-questions (NOT paraphrases — that's `MultiQuery`); folds into the RRF pool via the existing MultiQuery search path. Output capped at 4; single-aspect queries return an empty array. Mechanism: `docs/agent-orchestration.md` (stub).
 
 **Tiered BM25 boost (T0-3) and per-query-type cache thresholds (T0-4)**
 
@@ -264,7 +260,7 @@ query_cache_similarity_threshold_enumeration           = 0.94        # mid
 query_cache_similarity_threshold_complex_reasoning     = 0.98        # paraphrase-sensitive
 ```
 
-Both are pure-config tweaks (no migration, no LLM call). Tiered boost multiplies the language-stemmer ts_rank by 100 when the chunk matches the AND-required websearch form, 10 when it only matches the OR-of-tokens recall floor — boosts exact-identifier queries (error codes, version strings) while preserving recall for paraphrase queries. Single-token queries are a no-op (uniform scaling). The simple-arm contribution stays unboosted. Per-query-type cache thresholds override the global `query_cache_similarity_threshold` per route; sentinel `0` inherits the base. External validation: tiered boost +7.5% NDCG; per-route thresholds eliminate subtle wrong-answer cache hits on complex queries while preserving lookup hit rate.
+Pure-config tweaks (no migration, no LLM). Tiered boost: language-stemmer ts_rank ×100 on strict-form AND-required match, ×10 on OR-tokens floor; simple-arm unboosted; single-token queries are a no-op. Cache thresholds: sentinel `0` inherits the global. External validation: +7.5% NDCG on tiered boost; per-route thresholds kill subtle wrong-answer cache hits on complex queries while preserving lookup hit rate.
 
 **Dynamic alpha (T2-4)**
 
@@ -273,7 +269,7 @@ hybrid_dynamic_alpha_enabled        = true        # per-query α shift from BPE-
 hybrid_dynamic_alpha_sensitivity    = 0.3         # caps shift magnitude; [0, 1]; 0 disables
 ```
 
-Shifts the effective `rerank_blend_alpha` per query by the mean cl100k_base BPE ID of the query tokens. Rare-token queries (named entities, error codes, technical jargon — mean ID well above ~6 000) shift α *down* (more BM25 weight); common-token queries (everyday English/German — mean ID under ~6 000) shift α *up* (more reranker weight). Composes with the per-route + entity overrides — those resolve first, this heuristic shifts the resulting base. Empirical calibration: `bpeMaxIDForRarity=30000`, `rarityNeutral=0.2`; see `internal/vector/dynamic_alpha.go` for the formula. Telemetry: `rerank_alpha_base` and `rerank_alpha_effective` in the per-turn stage log when the shift fires.
+Shifts effective `rerank_blend_alpha` per query by mean cl100k_base BPE-token ID — rare tokens (named entities, error codes; mean ID ≫6000) → α down (more BM25); common tokens → α up (more reranker). Composes with per-route/entity overrides (resolved first, then shifted). Formula + calibration constants: `internal/vector/dynamic_alpha.go`.
 
 **ECoRAG evidentiality compression (T2-3)**
 
@@ -284,7 +280,7 @@ chat_context_compression_threshold  = 0.3         # drop chunks scoring below
 chat_context_compression_model      = <small>     # falls through to model_tier_fast
 ```
 
-Drops post-rerank chunks an LLM judges as having no DIRECT evidence to answer (distinct from topical relevance, which the reranker already captured). Defensive "never drop everything" fallback. Skipped under long-context mode (T2-1) to preserve the wide pool. Mechanism, fallback behaviour, and telemetry in `docs/retrieval.md` → "ECoRAG evidentiality compression".
+One fast-tier LLM call between rerank and prompt; drops chunks judged to lack DIRECT evidence (distinct from the reranker's topical relevance). Defensive "never drop everything" fallback. Skipped under long-context mode (T2-1). Mechanism: `docs/retrieval.md` → "ECoRAG evidentiality compression".
 
 **Long-context routing (System 2, T2-1)**
 
@@ -293,7 +289,7 @@ chat_longcontext_enabled         = true          # CAUTION: per-turn LLM cost up
 chat_longcontext_max_tokens      = 100000        # 10k..500k; chat-layer truncation budget for the wide pool
 ```
 
-Fires on complex_reasoning + a keyword classifier (`IsGlobalSynthesisQuery` — EN+DE "summarise all", "Fasse alle … zusammen"). When fired: top-k raised to 200, MMR + score-drop + parent-child + ECoRAG + multipass extraction skipped. **Scope:** still relevance-ranks against the query (not a retrieval bypass). Watch `rag_longcontext_route_total{outcome=fired}` vs traffic before broad rollout. Mechanism + classifier scope note in `docs/agent-orchestration.md` → "Long-context (System 2) routing".
+Fires on `complex_reasoning` + the `IsGlobalSynthesisQuery` keyword classifier (EN+DE "summarise all" / "Fasse alle … zusammen"). When fired: top-k → 200, MMR + score-drop + parent-child + ECoRAG + multipass skipped. Still relevance-ranks (NOT a retrieval bypass). Watch `rag_longcontext_route_total{outcome=fired}` vs traffic before broad rollout. Mechanism + classifier scope: `docs/agent-orchestration.md`.
 
 **Late chunking (Jina-style)**
 
@@ -302,7 +298,7 @@ late_chunking_enabled             = true        # provider must understand the `
 late_chunking_max_input_tokens    = 8192        # cl100k_base estimate; documents split into windows at this cap
 ```
 
-Ingestion-side only (no DB migration). Embedding cache is bypassed on this path (vectors depend on document context, so the `(model, text)` key would conflate files). Re-ingest existing files to benefit. Orthogonal to `contextual_enrichment` — the prefix still feeds BM25 + chat-time prompts but is NOT concatenated into the late-chunked embedding input. **Provider gotcha:** most OpenAI-compatible servers silently ignore the `late_chunking` field and return standard embeddings; verify before flipping in production (Jina `/v1/embeddings` is the reference). Mechanism in `docs/retrieval.md` → "Late chunking (Jina-style)".
+Ingestion-side only (no DB migration). Embedding cache bypassed (vectors depend on document context). Re-ingest to benefit. Orthogonal to `contextual_enrichment` — prefix still feeds BM25 + chat-time prompts but is NOT concatenated into the late-chunked embedding input. **Provider gotcha:** most OpenAI-compatible servers silently ignore the `late_chunking` field and return standard embeddings — verify before prod (Jina `/v1/embeddings` is the reference). Mechanism: `docs/retrieval.md`.
 
 **RAPTOR hierarchical indexing**
 
@@ -316,49 +312,35 @@ raptor_clustering_algorithm      = leiden      # T2-2: kmeans (default) | leiden
 raptor_leiden_resolution         = 1.0         # γ for modularity; only used when algorithm=leiden
 ```
 
-Migration **0046**. Ingest-only LLM cost (~31% extra rows at branching=5 on a 1000-chunk file); zero query-time cost — leaves and summaries compete in the same BM25 + vector + reranker pool. Eval ablation: `./cmd/eval/eval --node-kind leaf` vs `summary` vs `""` (both). Backfill an existing KB by re-ingesting (lazy-build is a follow-up). Leiden vs. K-means trade-off, citation-validator recursive CTE on `raptor_parent_id`, and telemetry in `docs/retrieval.md` → "RAPTOR hierarchical indexing".
+Migration **0046**. Mutually exclusive with `parent_child_enabled` (skipped at ingest if both on). Ingest-only LLM cost (~31% extra rows at branching=5 on 1000-chunk files); zero query-time cost — leaves and summaries compete in the same pool. Backfill by re-ingest. Eval ablation: `./cmd/eval/eval --node-kind leaf|summary|""`. Leiden vs. K-means trade-off + citation-validator recursive CTE on `raptor_parent_id`: `docs/retrieval.md`.
 
 **Structured spreadsheet Q&A (table_query)**
 
 ```
-chat_tabular_query_enabled = true     # gates ingest-time materializer AND the table_query tool
+chat_tabular_query_enabled            = true     # Phase 1: ingest-time materializer + table_query tool
+chat_tabular_semantic_columns_enabled = true     # Phase 2: embed free-text columns for fuzzy search (orthogonal)
+tabular_semantic_min_avg_len          = 32       # Phase 2: min mean cell length to treat TEXT as free text
+tabular_semantic_min_distinct_ratio   = 0.6      # Phase 2: min distinct-value ratio (skips categoricals)
+chat_tabular_charts_enabled           = true     # Phase 3: chart prompt-guidance (no new tool/migration)
 ```
 
-Migration **0048** required (`tabular` schema + `tabular_catalog`). Spreadsheets (`.xlsx`/`.xls`/`.csv`) ingested while this flag is on are materialized into native-typed tables in the `tabular` Postgres schema; only a per-sheet summary card is embedded into the vector store (divert, not hybrid — raw rows live exclusively in the tabular store). The `table_query` MCP tool discovers the active KB's sheet schemas from the catalog and runs read-only SELECTs through the existing `JUSTRAG_DB_URL_READONLY` pool, with the per-request table allowlist derived from the catalog scoped to the orchestrator-injected `kb_id`.
+Migration **0048** (`tabular` schema + `tabular_catalog`). Phase 1 materializes `.xlsx`/`.xls`/`.csv` into native-typed tables; only a per-sheet summary card is vector-embedded (divert, not hybrid). The `table_query` MCP tool runs read-only SELECTs through `JUSTRAG_DB_URL_READONLY` with the per-KB allowlist from the catalog. Re-ingest spreadsheets after enabling.
 
-**OPERATOR PREREQUISITE** — run once as the DB owner / superuser after applying migration 0048, substituting the actual role names:
+**OPERATOR PREREQUISITE** — run once as DB owner/superuser after migration 0048:
 
 ```sql
-GRANT SELECT ON tabular_catalog TO <readonly_role>;          -- discovery + allowlist build
+GRANT SELECT ON tabular_catalog TO <readonly_role>;          -- required: tool reads catalog through readonly pool
 GRANT USAGE ON SCHEMA tabular TO <readonly_role>;
 GRANT SELECT ON ALL TABLES IN SCHEMA tabular TO <readonly_role>;
 ALTER DEFAULT PRIVILEGES FOR ROLE <db_user> IN SCHEMA tabular
-    GRANT SELECT ON TABLES TO <readonly_role>;
+    GRANT SELECT ON TABLES TO <readonly_role>;               -- required: per-sheet tables created on every ingest
 ```
 
-The `GRANT SELECT ON tabular_catalog` is required because the tool reads the catalog through the read-only pool to discover sheets and build the per-KB allowlist — without it every `table_query` call fails. The `ALTER DEFAULT PRIVILEGES` line is required so per-sheet tables created **after** this point (i.e. on every new file ingest) are immediately readable by the tool's role. `<db_user>` is the role the Go worker/server connects as (`DB_USER`), since it creates the per-sheet tables. `<readonly_role>` is the role behind `JUSTRAG_DB_URL_READONLY`.
+`<db_user>` = `DB_USER` (Go worker/server role that creates the per-sheet tables). `<readonly_role>` = role behind `JUSTRAG_DB_URL_READONLY`.
 
-**SECURITY:** the read-only role's `search_path` must **NOT** include `tabular`. Per-KB isolation depends on the tool requiring schema-qualified `tabular.<name>` references in every query; an unqualified table name must fail to resolve so a prompt-injected bare name cannot bypass the catalog allowlist.
+**SECURITY:** the read-only role's `search_path` must **NOT** include `tabular`. Per-KB isolation depends on schema-qualified `tabular.<name>` references — unqualified table names must fail to resolve so a prompt-injected bare name cannot bypass the catalog allowlist.
 
-Re-ingest spreadsheets after enabling. **Known limits (Phase 1):** first row is taken as the header; multi-row headers and merged cells degrade to plain text ingestion; legacy BIFF `.xls` (excelize reads OOXML `.xlsx`) falls back to text; the materializer buffers each sheet in memory before `COPY` (multi-hundred-MB spike at 1M rows — true streaming is a follow-up); pivots/charts and fuzzy free-text-cell search are Phase 2/3. Design spec: `docs/superpowers/specs/2026-05-28-tabular-data-qa-design.md`.
-
-**Phase 2 — fuzzy free-text-cell search (opt-in, separate flag):**
-
-```
-chat_tabular_semantic_columns_enabled = true   # embed free-text columns for fuzzy search
-tabular_semantic_min_avg_len          = 32      # min mean cell length to treat a TEXT column as free text
-tabular_semantic_min_distinct_ratio   = 0.6     # min distinct-value ratio (skips categoricals); 0 disables a filter
-```
-
-Orthogonal to `chat_tabular_query_enabled` (Phase 1). When both are on, each materialized sheet gets a synthetic `_rowid bigint` column, and TEXT columns the heuristic judges "free text" (long + high-cardinality) are embedded one chunk per row into the normal vector store, with a `[tabular.<table> row <id>]` source header. Fuzzy queries hit those via kb_search; the agent then pivots to `table_query WHERE _rowid IN (...)` for exact aggregation over the matched rows. Ingest-time cost only (no row cap — bounded by the heuristic + embedding cache); re-ingest to backfill. Known limit: fuzzy->aggregate is bounded by kb_search top-k (exact over retrieved rows, not the whole column). Design spec: `docs/superpowers/specs/2026-05-28-tabular-qa-phase2-design.md`.
-
-**Phase 3 — pivots & charts (opt-in, separate flag):**
-
-```
-chat_tabular_charts_enabled = true   # inject chart guidance into the answer prompt
-```
-
-Prompt-guidance only — no new tool, migration, or frontend. When on AND the active KB has tabular data, the answer prompt gains a snippet teaching the model to emit a ` ```chart ` fenced block (Recharts JSON: `{type,config,series,title}`), which the existing frontend ChartRenderer renders in chat. Pivots/aggregations use table_query SQL GROUP BY; non-SQL reshapes use plan-time code_exec (unchanged, still gated by `chat_code_exec_enabled`). Chart emission is LLM-reliability-bound (ChartRenderer shows a graceful fallback on malformed JSON); verify manually. Design spec: `docs/superpowers/specs/2026-05-28-tabular-qa-phase3-design.md`.
+**Phase 1 limits:** first row = header; multi-row headers / merged cells / legacy BIFF `.xls` fall back to text; materializer buffers each sheet in memory before `COPY` (multi-hundred-MB spike at 1M rows). **Phase 2** adds a synthetic `_rowid bigint` to each sheet and per-row embeddings for heuristic-selected TEXT columns; fuzzy hit → pivot to `table_query WHERE _rowid IN (...)`; fuzzy→aggregate is bounded by kb_search top-k. **Phase 3** is prompt-guidance only: answer prompt teaches Recharts JSON in a ` ```chart ` fenced block rendered by the existing frontend ChartRenderer; aggregations use SQL GROUP BY, non-SQL reshapes use plan-time code_exec (still gated by `chat_code_exec_enabled`); LLM-reliability-bound. Design specs: `docs/superpowers/specs/2026-05-28-tabular-data-qa-design.md`, `…-phase2-design.md`, `…-phase3-design.md`.
 
 ## Model tier resolution
 
@@ -368,7 +350,7 @@ Cost-optimization knob orthogonal to the feature recipes above. Each fast-tier t
 2. `model_tier_fast` — deployment-wide fast-tier default
 3. The KB's default chat model (legacy fallback)
 
-Set `model_tier_fast` once to point every fast-tier task at a smaller model in one configuration change. Per-task overrides keep working for the cases where one task needs a different model than the rest. Helper: `chat.ResolveFastTierModel(ctx, reader, perTaskKey)` is the single resolution function — call it from any package that has a `SiteConfigReader`. Reasoning-heavy tasks (answer generation, plan decomposition, refine path) intentionally don't go through this chain; they use the KB chat model directly.
+Helper: `chat.ResolveFastTierModel(ctx, reader, perTaskKey)` — the single resolution function, callable from any package with a `SiteConfigReader`. Reasoning-heavy tasks (answer generation, plan decomposition, refine path) intentionally bypass this chain and use the KB chat model directly.
 
 ## Current Runtime Notes
 

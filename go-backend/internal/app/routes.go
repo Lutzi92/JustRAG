@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -57,6 +58,7 @@ import (
 	"github.com/justrag/go-backend/internal/publicconfigs"
 	"github.com/justrag/go-backend/internal/research"
 	"github.com/justrag/go-backend/internal/rss"
+	"github.com/justrag/go-backend/internal/safego"
 	"github.com/justrag/go-backend/internal/sessionmem"
 	"github.com/justrag/go-backend/internal/siteconfig"
 	"github.com/justrag/go-backend/internal/sserelay"
@@ -122,7 +124,20 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	chatStore := chat.NewStore(infra.db.Main)
 	queryCache := vector.NewQueryCache(infra.db.Vector)
 	queryCache.StartWriter(ctx)
-	go runQueryCacheSweeper(ctx, queryCache)
+	// Track the sweeper goroutine so routeCleanup can drain it before the
+	// infra cleanup() closes the vector pool — mirrors the schedulerWg /
+	// sigWg shutdown discipline in RunServer. Its own cancelable context
+	// lets routeCleanup stop it deterministically without depending on the
+	// outer ctx (which, on a startup error path, is canceled only by the
+	// final LIFO defer — after routeCleanup has already run). safego.Go
+	// adds panic recovery, matching StartWriter and the schedulers.
+	sweeperCtx, sweeperCancel := context.WithCancel(ctx)
+	var sweeperWg sync.WaitGroup
+	sweeperWg.Add(1)
+	safego.Go(func() {
+		defer sweeperWg.Done()
+		runQueryCacheSweeper(sweeperCtx, queryCache)
+	})
 	searchService := vector.NewSearchService(infra.db.Vector, infra.db.Main, aiResolver,
 		vector.WithEmbeddingCache(embeddingCache),
 		vector.WithSiteConfigReader(chatStore),
@@ -244,6 +259,11 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	// nothing to stop. The standalone in-memory apiLimiter created in
 	// RunServer is shut down via its own defer there.
 	cleanup := func() {
+		// Stop the query-cache sweeper and wait for any in-flight
+		// SweepExpired to unwind before the caller's infra cleanup closes
+		// the vector pool — avoids a pool-close race / log noise on shutdown.
+		sweeperCancel()
+		sweeperWg.Wait()
 		loginLimiter.Shutdown()
 	}
 
