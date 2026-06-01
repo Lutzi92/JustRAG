@@ -16,7 +16,7 @@ const STORAGE_KEY = 'admin-agent-sections-open-v1';
 
 const SECTION_CONFIGS = [
     { id: 'general', titleKey: 'agentSectionGeneral', i18nKeys: ['defaultTopK', 'scoreDropThreshold', 'contextWindowSize'], settingKeys: ['default_top_k', 'score_drop_threshold', 'context_window_size'] },
-    { id: 'hybrid', titleKey: 'agentSectionHybridSearch', i18nKeys: ['minSimilarityThreshold', 'mmrLambda', 'rrfWeightVector', 'rrfWeightBM25', 'bm25SimpleArmEnabled', 'bm25TieredBoostEnabled', 'hnswEfSearch', 'mrlTwoPassEnabled', 'queryInstruction'], settingKeys: ['min_similarity_threshold', 'mmr_lambda', 'rrf_weight_vector', 'rrf_weight_bm25', 'bm25_simple_arm_enabled', 'bm25_tiered_boost_enabled', 'hnsw_ef_search', 'mrl_two_pass_enabled', 'query_instruction'] },
+    { id: 'hybrid', titleKey: 'agentSectionHybridSearch', i18nKeys: ['minSimilarityThreshold', 'mmrLambda', 'rrfWeightVector', 'rrfWeightBM25', 'bm25SimpleArmEnabled', 'bm25TieredBoostEnabled', 'hnswEfSearch', 'mrlTwoPassEnabled', 'queryInstruction', 'hyPESearchEnabled'], settingKeys: ['min_similarity_threshold', 'mmr_lambda', 'rrf_weight_vector', 'rrf_weight_bm25', 'bm25_simple_arm_enabled', 'bm25_tiered_boost_enabled', 'hnsw_ef_search', 'mrl_two_pass_enabled', 'query_instruction', 'hype_search_enabled'] },
     { id: 'reranker', titleKey: 'agentSectionReranker', i18nKeys: ['rerankBlendAlpha', 'rerankBlendAlphaLookup', 'rerankBlendAlphaEnumeration', 'rerankBlendAlphaComplexReasoning', 'rerankBlendAlphaEntity', 'hybridDynamicAlphaEnabled', 'hybridDynamicAlphaSensitivity', 'rerankUseChatTemplate', 'rerankInstruction'], settingKeys: ['rerank_blend_alpha', 'rerank_blend_alpha_lookup', 'rerank_blend_alpha_enumeration', 'rerank_blend_alpha_complex_reasoning', 'rerank_blend_alpha_entity', 'hybrid_dynamic_alpha_enabled', 'hybrid_dynamic_alpha_sensitivity', 'rerank_use_chat_template', 'rerank_instruction'] },
     { id: 'topn', titleKey: 'agentSectionPerRouteTopN', i18nKeys: ['topNLookup', 'topNEnumeration', 'topNComplexReasoning'], settingKeys: ['top_n_lookup', 'top_n_enumeration', 'top_n_complex_reasoning'] },
     { id: 'compression', titleKey: 'agentSectionCompression', i18nKeys: ['chatContextCompressionEnabled', 'chatContextCompressionMinChunks', 'chatContextCompressionThreshold', 'chatContextCompressionModel'], settingKeys: ['chat_context_compression_enabled', 'chat_context_compression_min_chunks', 'chat_context_compression_threshold', 'chat_context_compression_model'] },
@@ -26,7 +26,7 @@ const SECTION_CONFIGS = [
     { id: 'multistep', titleKey: 'agentSectionMultiStep', i18nKeys: ['chatKBRouterEnabled', 'chatKBRouterMinConfidence', 'chatTurnBudgetSeconds', 'chatTurnBudgetTokens', 'chatTurnBudgetToolCalls', 'chatAgenticEnabled', 'chatAgenticMaxHops', 'chatPlanExecuteEnabled', 'chatPlanExecuteMaxSubQueries', 'chatPlanExecuteMaxIterations', 'chatPlanExecuteTokenBudget', 'chatPlanExecuteToolAware', 'chatPlanExecuteDAGIterative', 'chatAnswerToolsEnabled', 'chatAnswerToolsMaxRounds', 'chatSupervisorEnabled', 'chatSupervisorMultiSpecialist'], settingKeys: ['chat_kb_router_enabled', 'chat_kb_router_min_confidence', 'chat_turn_budget_seconds', 'chat_turn_budget_tokens', 'chat_turn_budget_tool_calls', 'chat_agentic_enabled', 'chat_agentic_max_hops', 'chat_plan_execute_enabled', 'chat_plan_execute_max_sub_queries', 'chat_plan_execute_max_iterations', 'chat_plan_execute_token_budget', 'chat_plan_execute_tool_aware', 'chat_plan_execute_dag_iterative', 'chat_answer_tools_enabled', 'chat_answer_tools_max_rounds', 'chat_supervisor_enabled', 'chat_supervisor_multi_specialist'] },
     { id: 'longmem', titleKey: 'agentSectionLongmem', i18nKeys: ['chatLongmemEnabled', 'chatLongmemMinSalience', 'chatLongmemRecallTopK', 'chatLongmemDecayDays', 'chatLongmemRecallSemantic', 'chatLongmemConflictResolution', 'chatLongmemConflictModel', 'chatLongmemConflictCandidates'], settingKeys: ['chat_longmem_enabled', 'chat_longmem_min_salience', 'chat_longmem_recall_top_k', 'chat_longmem_decay_days', 'chat_longmem_recall_semantic', 'chat_longmem_conflict_resolution', 'chat_longmem_conflict_model', 'chat_longmem_conflict_candidates'] },
     { id: 'validation', titleKey: 'agentSectionValidation', i18nKeys: ['factcheckInChat', 'citationValidationEnabled', 'citationValidationSemanticThreshold', 'chatFactualityGateEnabled', 'chatFactualityGateMaxRefines', 'chatSelfRAGEnabled', 'ragasSamplingEnabled', 'ragasSamplingRate'], settingKeys: ['factcheck_in_chat', 'citation_validation_enabled', 'citation_validation_semantic_threshold', 'chat_factuality_gate_enabled', 'chat_factuality_gate_max_refines', 'chat_self_rag_enabled', 'ragas_sampling_enabled', 'ragas_sampling_rate'] },
-    { id: 'ingestion', titleKey: 'agentSectionIngestion', i18nKeys: ['doclingEnabled', 'doclingBaseUrl', 'contextualEnrichment', 'lateChunkingEnabled', 'lateChunkingMaxInputTokens', 'parentChildEnabled', 'parentChunkSize', 'childChunkSize', 'raptorEnabled', 'raptorMinChunks', 'raptorMaxLevels', 'raptorBranchingFactor', 'raptorClusteringAlgorithm', 'raptorLeidenResolution'], settingKeys: ['docling_enabled', 'docling_base_url', 'contextual_enrichment', 'late_chunking_enabled', 'late_chunking_max_input_tokens', 'parent_child_enabled', 'parent_chunk_size', 'child_chunk_size', 'raptor_enabled', 'raptor_min_chunks', 'raptor_max_levels', 'raptor_branching_factor', 'raptor_clustering_algorithm', 'raptor_leiden_resolution'] },
+    { id: 'ingestion', titleKey: 'agentSectionIngestion', i18nKeys: ['doclingEnabled', 'doclingBaseUrl', 'contextualEnrichment', 'lateChunkingEnabled', 'lateChunkingMaxInputTokens', 'parentChildEnabled', 'parentChunkSize', 'childChunkSize', 'raptorEnabled', 'raptorMinChunks', 'raptorMaxLevels', 'raptorBranchingFactor', 'raptorClusteringAlgorithm', 'raptorLeidenResolution', 'hyPEEnabled', 'hyPEQuestionsPerChunk', 'hyPEModel'], settingKeys: ['docling_enabled', 'docling_base_url', 'contextual_enrichment', 'late_chunking_enabled', 'late_chunking_max_input_tokens', 'parent_child_enabled', 'parent_chunk_size', 'child_chunk_size', 'raptor_enabled', 'raptor_min_chunks', 'raptor_max_levels', 'raptor_branching_factor', 'raptor_clustering_algorithm', 'raptor_leiden_resolution', 'hype_enabled', 'hype_questions_per_chunk', 'hype_model'] },
     { id: 'observability', titleKey: 'agentSectionObservability', i18nKeys: ['langfuseBaseUrl'], settingKeys: ['langfuse_base_url'] },
     { id: 'tools', titleKey: 'agentSectionTools', i18nKeys: ['chatCodeExecEnabled'], settingKeys: ['mcp_servers', 'chat_use_mcp_tools', 'chat_code_exec_enabled'] },
     { id: 'tabular', titleKey: 'agentSectionTabular', i18nKeys: ['chatTabularQueryEnabled', 'chatTabularSemanticColumnsEnabled', 'tabularSemanticMinAvgLen', 'tabularSemanticMinDistinctRatio', 'chatTabularChartsEnabled'], settingKeys: ['chat_tabular_query_enabled', 'chat_tabular_semantic_columns_enabled', 'tabular_semantic_min_avg_len', 'tabular_semantic_min_distinct_ratio', 'chat_tabular_charts_enabled'] },
@@ -330,6 +330,19 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
                         />
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('queryInstructionHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="hype-search-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="hype-search-enabled"
+                                type="checkbox"
+                                checked={siteConfigs.hype_search_enabled === 'true'}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, hype_search_enabled: e.target.checked ? 'true' : 'false' }))}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('hyPESearchEnabled')}
+                        </label>
                     </div>
                 </Section>
 
@@ -1662,6 +1675,47 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
                         />
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('raptorLeidenResolutionHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="hype-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="hype-enabled"
+                                type="checkbox"
+                                checked={siteConfigs.hype_enabled === 'true'}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, hype_enabled: e.target.checked ? 'true' : 'false' }))}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('hyPEEnabled')}
+                        </label>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="hype-questions-per-chunk">{t('hyPEQuestionsPerChunk')}</label>
+                        <input
+                            id="hype-questions-per-chunk"
+                            type="number"
+                            min={1}
+                            max={20}
+                            step={1}
+                            value={siteConfigs.hype_questions_per_chunk ?? '3'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, hype_questions_per_chunk: e.target.value }))}
+                            disabled={siteConfigs.hype_enabled !== 'true'}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="hype-model">{t('hyPEModel')}</label>
+                        <input
+                            id="hype-model"
+                            type="text"
+                            placeholder="(fast-tier default)"
+                            value={siteConfigs.hype_model ?? ''}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, hype_model: e.target.value }))}
+                            disabled={siteConfigs.hype_enabled !== 'true'}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
                     </div>
 
                 </Section>

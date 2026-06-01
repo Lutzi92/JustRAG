@@ -1167,3 +1167,88 @@ func TestChatAnswerToolsMaxRounds_DefaultAndOutOfRange(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// HyPE ingest + search accessor tests
+// ---------------------------------------------------------------------------
+
+func TestHyPEAccessors(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	// --- explicit values ---
+
+	t.Run("hype_enabled true", func(t *testing.T) {
+		t.Parallel()
+		r := &fakeSiteConfigReader{values: map[string]*string{
+			"hype_enabled": strPtr("true"),
+		}}
+		if !HyPEEnabled(ctx, r) {
+			t.Error("hype_enabled=true: want true, got false")
+		}
+	})
+
+	t.Run("hype_search_enabled 1", func(t *testing.T) {
+		t.Parallel()
+		r := &fakeSiteConfigReader{values: map[string]*string{
+			"hype_search_enabled": strPtr("1"),
+		}}
+		if !HyPESearchEnabled(ctx, r) {
+			t.Error("hype_search_enabled=1: want true, got false")
+		}
+	})
+
+	t.Run("hype_questions_per_chunk 5", func(t *testing.T) {
+		t.Parallel()
+		r := &fakeSiteConfigReader{values: map[string]*string{
+			"hype_questions_per_chunk": strPtr("5"),
+		}}
+		if got := HyPEQuestionsPerChunk(ctx, r); got != 5 {
+			t.Errorf("hype_questions_per_chunk=5: want 5, got %d", got)
+		}
+	})
+
+	// --- all-empty reader → defaults ---
+
+	t.Run("empty reader defaults", func(t *testing.T) {
+		t.Parallel()
+		r := &fakeSiteConfigReader{values: map[string]*string{}}
+		if HyPEEnabled(ctx, r) {
+			t.Error("empty reader: HyPEEnabled want false, got true")
+		}
+		if HyPESearchEnabled(ctx, r) {
+			t.Error("empty reader: HyPESearchEnabled want false, got true")
+		}
+		if got := HyPEQuestionsPerChunk(ctx, r); got != 3 {
+			t.Errorf("empty reader: HyPEQuestionsPerChunk want 3, got %d", got)
+		}
+	})
+
+	// --- nil reader → defaults ---
+
+	t.Run("nil reader defaults", func(t *testing.T) {
+		t.Parallel()
+		if HyPEEnabled(ctx, nil) {
+			t.Error("nil reader: HyPEEnabled want false, got true")
+		}
+		if HyPESearchEnabled(ctx, nil) {
+			t.Error("nil reader: HyPESearchEnabled want false, got true")
+		}
+		if got := HyPEQuestionsPerChunk(ctx, nil); got != 3 {
+			t.Errorf("nil reader: HyPEQuestionsPerChunk want 3, got %d", got)
+		}
+	})
+
+	// --- out-of-range clamp → default ---
+
+	t.Run("hype_questions_per_chunk 99 clamps to default", func(t *testing.T) {
+		t.Parallel()
+		r := &fakeSiteConfigReader{values: map[string]*string{
+			"hype_questions_per_chunk": strPtr("99"),
+		}}
+		if got := HyPEQuestionsPerChunk(ctx, r); got != 3 {
+			t.Errorf("hype_questions_per_chunk=99: want default 3, got %d", got)
+		}
+	})
+}

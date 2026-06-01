@@ -35,6 +35,7 @@ type QueryCacheInvalidator interface {
 type Deleter struct {
 	mainDB       *pgxpool.Pool
 	chunkService *vector.ChunkService
+	hype         *vector.HyPEStore
 	storage      storage.Storage
 	queryCache   QueryCacheInvalidator
 }
@@ -44,6 +45,7 @@ func New(mainDB *pgxpool.Pool, vectorDB *pgxpool.Pool, stor storage.Storage) *De
 	return &Deleter{
 		mainDB:       mainDB,
 		chunkService: vector.NewChunkService(vectorDB),
+		hype:         vector.NewHyPEStore(vectorDB),
 		storage:      stor,
 	}
 }
@@ -222,6 +224,15 @@ func (d *Deleter) deleteVectorChunksForFiles(ctx context.Context, files []fileRe
 		observability.RecordCascadeDeletionError(observability.CascadeResourceVector)
 		slog.WarnContext(ctx, "cascade: delete vector chunks (best-effort) — orphan chunks possible",
 			"file_count", len(ids), "error", err)
+	}
+	if d.hype != nil {
+		dims, derr := d.chunkService.ListChunkTableDimensions(ctx)
+		if derr != nil {
+			slog.WarnContext(ctx, "cascade: list dims for hype cleanup failed (best-effort)", "error", derr)
+		} else if err := d.hype.DeleteByFileIDsAllDims(ctx, ids, dims); err != nil {
+			slog.WarnContext(ctx, "cascade: delete hype rows (best-effort) — orphan rows possible",
+				"file_count", len(ids), "error", err)
+		}
 	}
 }
 

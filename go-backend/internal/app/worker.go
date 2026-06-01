@@ -215,6 +215,7 @@ func RunWorker(cfg *config.Config) error {
 	})))
 	proc.SetSiteConfigReader(chatStore)
 	proc.SetMainDB(db.Main)
+	proc.SetVectorPool(db.Vector)
 	proc.SetMaterializer(tabular.NewMaterializer(db.Main))
 	mux.HandleFunc(jobs.TypeResearchExecution, worker.Instrument(worker.NewResearchExecutionHandler(aiResolver, searchService, rdb.Client, chatStore, sharedFetcher)))
 	mux.HandleFunc(jobs.TypeAcademicResearchExecution, worker.Instrument(worker.NewAcademicResearchHandler(aiResolver, rdb.Client, chatStore, sharedFetcher)))

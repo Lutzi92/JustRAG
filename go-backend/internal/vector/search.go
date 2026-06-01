@@ -118,6 +118,14 @@ type SearchOptions struct {
 	// chat_graph_routing_max_chunks, default 15).
 	GraphChunkIDs []string
 
+	// HyPESearch enables the HyPE arm: the query embedding is matched
+	// against ingest-time hypothetical-question embeddings in
+	// chunk_hype_questions_<dim>; matched questions resolve to their
+	// parent chunks, which fold into RRF via the same extraLists path as
+	// GraphChunkIDs. No-op (fail-open) when the HyPE table is missing/empty.
+	// Set by the chat layer from hype_search_enabled; never by users.
+	HyPESearch bool
+
 	// NodeKindFilter is the Phase F (RAPTOR) eval-only retrieval
 	// filter. When non-empty (only "leaf" or "summary" are accepted),
 	// the primary vector + keyword SELECTs add `AND node_kind = $N`
@@ -260,6 +268,11 @@ type SearchService struct {
 	// content (defensive fallback for tests / call sites that haven't
 	// wired the dependency yet).
 	chunkSvc *ChunkService
+	// hype is the HyPEStore used for the query-time HyPE arm. When non-nil
+	// and opts.HyPESearch is set, Search() matches the query embedding
+	// against ingest-time hypothetical-question embeddings and folds the
+	// resolved parent chunks into RRF via the extraLists path.
+	hype *HyPEStore
 	// queryCache is the optional semantic query-result cache. When non-nil
 	// and enabled via site_config (`query_cache_enabled`), Search() consults
 	// it before running the embed/search pipeline and stores the assembled
@@ -370,6 +383,7 @@ func NewSearchService(vectorDB, mainDB *pgxpool.Pool, aiResolver *ai.ConfigResol
 		vectorDB:   vectorDB,
 		mainDB:     mainDB,
 		aiResolver: aiResolver,
+		hype:       NewHyPEStore(vectorDB),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -807,6 +821,18 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		}
 	}
 	timer.Mark("graph_inject")
+
+	// ------------------------------------------------------------------
+	// 7e. HyPE — hypothetical-question embedding arm
+	// ------------------------------------------------------------------
+	if opts.HyPESearch && s.hype != nil {
+		hypeList := s.runHyPESearch(ctx, tableName, embeddingStr, kbID, opts.FileIDs, searchLimit, dimensions)
+		if len(hypeList) > 0 {
+			extraLists = append(extraLists, hypeList)
+			stageLog = append(stageLog, "hype_injected_chunks", len(hypeList))
+		}
+	}
+	timer.Mark("hype")
 
 	// ------------------------------------------------------------------
 	// 8. RRF fusion (weighted)
@@ -1508,6 +1534,32 @@ func (s *SearchService) fetchChunksByIDs(ctx context.Context, tableName, kbID st
 		return nil, fmt.Errorf("fetch chunks by ids: %w", err)
 	}
 	return collectRawRows(rows, len(ids))
+}
+
+// ---------------------------------------------------------------------------
+// runHyPESearch — HyPE query-time arm
+// ---------------------------------------------------------------------------
+
+// runHyPESearch matches the query embedding against the HyPE question
+// table, then maps the matched questions back to their PARENT chunks
+// (returning real chunk content, never question text). Fails open to an
+// empty list on any error — the chat turn must not fail because the HyPE
+// arm hiccupped.
+func (s *SearchService) runHyPESearch(ctx context.Context, tableName, embeddingStr, kbID string, fileIDs []string, limit, dimensions int) []RankedDoc {
+	parentIDs, err := s.hype.Search(ctx, embeddingStr, kbID, fileIDs, limit, dimensions)
+	if err != nil {
+		logctx.From(ctx).Warn("rag.search.hype_failed", "error", err)
+		return nil
+	}
+	if len(parentIDs) == 0 {
+		return nil
+	}
+	rows, err := s.fetchChunksByIDs(ctx, tableName, kbID, parentIDs)
+	if err != nil {
+		logctx.From(ctx).Warn("rag.search.hype_parent_fetch_failed", "error", err, "requested", len(parentIDs))
+		return nil
+	}
+	return toRankedDocs(rows, true)
 }
 
 // ---------------------------------------------------------------------------

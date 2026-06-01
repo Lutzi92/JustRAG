@@ -5,13 +5,17 @@ import (
 	"regexp"
 )
 
-// validVectorTable matches "document_chunks" or "document_chunks_{digits}".
+// validVectorTable matches table names produced by GetVectorTableName and
+// GetHyPETableName:
+//
+//   - "document_chunks" or "document_chunks_{digits}"   (chunk tables)
+//   - "chunk_hype_questions" or "chunk_hype_questions_{digits}" (HyPE tables)
 //
 // Exposed to other packages via IsValidVectorTableName so callers that
 // interpolate a table name into SQL (worker maintenance, future tooling)
 // reuse the same canonical pattern instead of redefining their own regex
-// that could drift out of sync with GetVectorTableName's output format.
-var validVectorTable = regexp.MustCompile(`^document_chunks(?:_\d+)?$`)
+// that could drift out of sync with the table-name generator functions.
+var validVectorTable = regexp.MustCompile(`^(?:document_chunks|chunk_hype_questions)(?:_\d+)?$`)
 
 // IsValidVectorTableName reports whether name matches the format produced
 // by GetVectorTableName: "document_chunks" or "document_chunks_<digits>".

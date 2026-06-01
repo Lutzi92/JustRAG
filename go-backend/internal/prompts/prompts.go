@@ -1045,3 +1045,30 @@ func TabularChartGuidance(lang string) string {
 		"- Produce the numbers with table_query (SQL GROUP BY / SUM / AVG / COUNT); for reshapes SQL can't express, the planner can use code_exec. Never invent values.\n" +
 		"- Emit the chart in addition to a one-sentence text summary."
 }
+
+// HyPEQuestionsSystemPrompt instructs the model to emit hypothetical
+// user questions a chunk answers, as a bare JSON array of strings.
+// lang is the KB's two-letter code ("de"/"en"); branch like the other
+// prompts in this file.
+func HyPEQuestionsSystemPrompt(lang string) string {
+	if lang == "de" {
+		return `Du erzeugst hypothetische Nutzerfragen, die der gegebene Textabschnitt beantwortet. ` +
+			`Gib AUSSCHLIESSLICH ein JSON-Array von Fragen-Strings zurück, z.B. ["Frage 1","Frage 2"]. ` +
+			`Die Fragen müssen eigenständig verständlich sein (keine Pronomen ohne Bezug), konkret, und sich klar voneinander unterscheiden. ` +
+			`Kein Fließtext, keine Nummerierung, keine Erklärungen — nur das JSON-Array.`
+	}
+	return `You generate hypothetical user questions that the given chunk answers. ` +
+		`Return ONLY a JSON array of question strings, e.g. ["Question 1","Question 2"]. ` +
+		`Questions must be self-contained (no dangling pronouns), specific, and clearly distinct from one another. ` +
+		`No prose, no numbering, no explanations — only the JSON array.`
+}
+
+// HyPEQuestionsUserPrompt supplies the (already truncated) document as
+// context and the target chunk. maxQuestions is interpolated so the
+// model knows the cap.
+func HyPEQuestionsUserPrompt(fileName, document, chunk string, maxQuestions int) string {
+	return fmt.Sprintf(
+		"Document: %s\n\n<document>\n%s\n</document>\n\nGenerate up to %d hypothetical questions that the following chunk answers:\n\n<chunk>\n%s\n</chunk>",
+		fileName, document, maxQuestions, chunk,
+	)
+}

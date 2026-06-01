@@ -20,7 +20,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `raptor_*` — per-file RAPTOR hierarchical summary trees (`raptor_clustering_algorithm` selects kmeans vs leiden)
 - `chat_tabular_*`, `tabular_semantic_*` — structured spreadsheet Q&A + fuzzy free-text-cell search + charts/pivots (Phase 1/2/3; `chat_tabular_charts_enabled` is the Phase-3 flag)
 - `ragas_*`, `factcheck_*`, `citation_validation_*`, `langfuse_*` — validation + observability
-- `model_tier_fast` — deployment-wide default for fast-tier tasks (CRAG grader, KG extractor, contextual enricher, factuality / Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer, longmem conflict classifier, evidentiality classifier**); per-task `*_model` keys override
+- `model_tier_fast` — deployment-wide default for fast-tier tasks (CRAG grader, KG extractor, contextual enricher, factuality / Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer, longmem conflict classifier, evidentiality classifier, HyPE question generator**); per-task `*_model` keys override
 
 **Runtime-only knob (no site_config):** `hnsw.iterative_scan = relaxed_order` is set by `BuildPoolConfig`'s `AfterConnect` hook on every new pool connection (T0-1). Required for filtered ANN queries (kb_id, node_kind, GraphChunkIDs, file_id) to expand the HNSW candidate list until the WHERE clause is satisfied. Tolerates pgvector < 0.8 with a one-shot warning; no operator action needed when pgvector ≥ 0.8 is installed.
 
@@ -348,15 +348,26 @@ ALTER DEFAULT PRIVILEGES FOR ROLE <db_user> IN SCHEMA tabular
 
 `<db_user>` = `DB_USER` (Go worker/server role that creates the per-sheet tables). `<readonly_role>` = role behind `JUSTRAG_DB_URL_READONLY`.
 
+**HyPE — hypothetical prompt embeddings (ingest + retrieval)**
+
+```
+hype_enabled              = true     # ingest: generate+embed N hypothetical questions per chunk into chunk_hype_questions_<dim>
+hype_questions_per_chunk  = 3        # [1,20]
+hype_model                = <small>  # falls through to model_tier_fast
+hype_search_enabled       = true     # query-time arm: match query against question embeddings, fold parent chunks into RRF
+```
+
+No migration (programmatic dim-keyed table `chunk_hype_questions_<dim>`, created at startup by `EnsureHyPETable` alongside the chunk tables — same halfvec/HNSW rules). Re-ingest is the only backfill path. Build the index first (`hype_enabled`, re-ingest a KB), then enable `hype_search_enabled` and validate with `cmd/eval` before broad use — treat external headline gains as illustrative, gate on your own golden-set numbers. Vector-only (does NOT feed BM25); orthogonal to and composable with `contextual_enrichment` (which owns the BM25 side). Fail-open at ingest and query. **Coverage caveat:** `hype_search_enabled` is currently wired into the standard `PrepareChatContext` retrieval path only; the Supervisor / Plan-Execute / Agentic orchestrators do not yet carry the HyPE arm (follow-up). Design: `docs/superpowers/specs/2026-06-01-hype-design.md`.
+
 **SECURITY:** the read-only role's `search_path` must **NOT** include `tabular`. Per-KB isolation depends on schema-qualified `tabular.<name>` references — unqualified table names must fail to resolve so a prompt-injected bare name cannot bypass the catalog allowlist.
 
 **Phase 1 limits:** first row = header; multi-row headers / merged cells / legacy BIFF `.xls` fall back to text; materializer buffers each sheet in memory before `COPY` (multi-hundred-MB spike at 1M rows). **Phase 2** adds a synthetic `_rowid bigint` to each sheet and per-row embeddings for heuristic-selected TEXT columns; fuzzy hit → pivot to `table_query WHERE _rowid IN (...)`; fuzzy→aggregate is bounded by kb_search top-k. **Phase 3** is prompt-guidance only: answer prompt teaches Recharts JSON in a ` ```chart ` fenced block rendered by the existing frontend ChartRenderer; aggregations use SQL GROUP BY, non-SQL reshapes use plan-time code_exec (still gated by `chat_code_exec_enabled`); LLM-reliability-bound. Design specs: `docs/superpowers/specs/2026-05-28-tabular-data-qa-design.md`, `…-phase2-design.md`, `…-phase3-design.md`.
 
 ## Model tier resolution
 
-Cost-optimization knob orthogonal to the feature recipes above. Each fast-tier task (CRAG grader, KG extractor, contextual enricher, factuality verifier, Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer (T1-1), longmem conflict classifier (T1-3), evidentiality classifier (T2-3)**) resolves its model in this chain (first non-empty wins):
+Cost-optimization knob orthogonal to the feature recipes above. Each fast-tier task (CRAG grader, KG extractor, contextual enricher, factuality verifier, Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer (T1-1), longmem conflict classifier (T1-3), evidentiality classifier (T2-3), HyPE question generator**) resolves its model in this chain (first non-empty wins):
 
-1. The task's per-task site_config key (e.g. `crag_grader_model`, `kg_extraction_model`, `query_decompose_model`, `chat_longmem_conflict_model`, `chat_context_compression_model`)
+1. The task's per-task site_config key (e.g. `crag_grader_model`, `kg_extraction_model`, `query_decompose_model`, `chat_longmem_conflict_model`, `chat_context_compression_model`, `hype_model`)
 2. `model_tier_fast` — deployment-wide fast-tier default
 3. The KB's default chat model (legacy fallback)
 

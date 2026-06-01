@@ -79,12 +79,18 @@ func EnsureVectorTables(ctx context.Context, mainCfg, vectorCfg config.DBConfig)
 	if err := vector.EnsureChunkTable(ctx, exec, 1536); err != nil {
 		return fmt.Errorf("create required default vector table: %w", err)
 	}
+	if err := vector.EnsureHyPETable(ctx, exec, 1536); err != nil {
+		return fmt.Errorf("create required default HyPE table: %w", err)
+	}
 	delete(dimSet, 1536)
 
 	// Create remaining tables — log errors but continue.
 	for d := range dimSet {
 		if err := vector.EnsureChunkTable(ctx, exec, d); err != nil {
 			slog.Error("failed to create vector table", "dimensions", d, "error", err)
+		}
+		if err := vector.EnsureHyPETable(ctx, exec, d); err != nil {
+			slog.Error("failed to create HyPE table", "dimensions", d, "error", err)
 		}
 	}
 

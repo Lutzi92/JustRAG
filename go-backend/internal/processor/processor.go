@@ -166,6 +166,10 @@ type Processor struct {
 	// spreadsheet files into the structured tabular store and replaces the
 	// embedded body with a per-sheet summary card. nil disables the path.
 	materializer *tabular.Materializer
+	// hype is the HyPE question store, backed by the vector pool. nil when
+	// the vector pool was not injected (e.g. server-side processor, tests).
+	// runHyPEGenerationStage guards on non-nil.
+	hype *vector.HyPEStore
 }
 
 // indexedChunk pairs a chunk's text with its source page number.
@@ -207,6 +211,13 @@ func (p *Processor) SetMainDB(pool *pgxpool.Pool) {
 
 // SetMaterializer attaches the tabular materializer (worker-side wiring).
 func (p *Processor) SetMaterializer(m *tabular.Materializer) { p.materializer = m }
+
+// SetVectorPool attaches the vector Postgres pool used by the HyPE generation
+// stage. Without it, HyPE ingest is silently skipped even when the feature
+// flag is on. Call this on the worker side alongside SetMainDB.
+func (p *Processor) SetVectorPool(pool *pgxpool.Pool) {
+	p.hype = vector.NewHyPEStore(pool)
+}
 
 // resolveKBLanguages does a single SELECT and returns both forms of the KB
 // language that the ingest pipeline needs: the raw two-letter code
@@ -432,6 +443,20 @@ func resolveKGExtractionModel(ctx context.Context, reader SiteConfigReader) stri
 // `model_tier_fast` → empty.
 func resolveEnrichmentModel(ctx context.Context, reader SiteConfigReader) string {
 	return chat.ResolveFastTierModel(ctx, reader, "contextual_enrichment_model")
+}
+
+// resolveHyPEEnabled reports whether the HyPE ingest stage is active.
+// Reads the "hype_enabled" site_config key via the chat package helper.
+func resolveHyPEEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return chat.HyPEEnabled(ctx, reader)
+}
+
+// resolveHyPEModel returns the model override used by the HyPE question
+// generator. Empty falls back to the KB's default chat model. Resolves
+// through the P7 fast-tier chain: per-task `hype_model` →
+// `model_tier_fast` → empty.
+func resolveHyPEModel(ctx context.Context, reader SiteConfigReader) string {
+	return chat.ResolveFastTierModel(ctx, reader, "hype_model")
 }
 
 // resolveLateChunkingEnabled gates Jina-style late chunking at ingest:
@@ -985,6 +1010,15 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		}
 	}
 
+	// HyPE: generate + embed hypothetical questions per chunk. Best-effort,
+	// post-ingest, gated independently from KG. Re-ingest is the only backfill.
+	if resolveHyPEEnabled(ctx, p.siteConfigReader) {
+		if hErr := p.runHyPEGenerationStage(ctx, fileID, kbID, fileName, result.Text, rawLang); hErr != nil {
+			logctx.From(ctx).Warn("processor: hype generation stage failed",
+				"fileId", fileID, "error", hErr)
+		}
+	}
+
 	// Phase F: RAPTOR summary-tree build. Best-effort, post-ingest,
 	// gated independently from KG. Mutually exclusive with parent-child
 	// (the two stripe document_chunks differently and re-running RAPTOR
@@ -1114,6 +1148,70 @@ func (p *Processor) runKGExtractionStage(ctx context.Context, fileID, kbID, file
 		"entities_deduped", totalDeduped,
 		"edges", totalEdges,
 	)
+	return nil
+}
+
+// runHyPEGenerationStage generates + embeds hypothetical questions for
+// each of the file's chunks and stores them in chunk_hype_questions_<dim>.
+// Best-effort: per-chunk failures log and skip; never blocks ingestion.
+// Re-ingest is the only backfill path. document is the full file text
+// (cacheable prefix); lang is the KB's raw two-letter code.
+func (p *Processor) runHyPEGenerationStage(ctx context.Context, fileID, kbID, fileName, document, lang string) error {
+	if p.chunkSvc == nil || p.hype == nil {
+		return fmt.Errorf("hype: missing dependencies (chunkSvc / hype)")
+	}
+	dims, err := p.chunkSvc.ListChunkTableDimensions(ctx)
+	if err != nil {
+		return fmt.Errorf("hype: list dims: %w", err)
+	}
+	var chunks []vector.FileChunkRow
+	var chunkDim int
+	for _, d := range dims {
+		rows, err := p.chunkSvc.GetChunksByFileID(ctx, kbID, fileID, d)
+		if err != nil {
+			continue
+		}
+		if len(rows) > 0 {
+			chunks = rows
+			chunkDim = d
+			break
+		}
+	}
+	if len(chunks) == 0 {
+		return nil
+	}
+	model := resolveHyPEModel(ctx, p.siteConfigReader)
+	maxQ := chat.HyPEQuestionsPerChunk(ctx, p.siteConfigReader)
+
+	totalQuestions := 0
+	for _, c := range chunks {
+		if ctx.Err() != nil {
+			break
+		}
+		questions, err := ai.GenerateHypotheticalQuestions(ctx, p.aiResolver, fileName, document, c.Content, kbID, maxQ, lang, model)
+		if err != nil {
+			logctx.From(ctx).Warn("hype: question generation failed; skipping chunk",
+				"fileId", fileID, "chunkId", c.ID, "error", err)
+			continue
+		}
+		if len(questions) == 0 {
+			continue
+		}
+		embs, err := ai.GenerateEmbeddings(ctx, p.aiResolver, questions, kbID, p.embeddingCache)
+		if err != nil || len(embs) != len(questions) {
+			logctx.From(ctx).Warn("hype: question embedding failed; skipping chunk",
+				"fileId", fileID, "chunkId", c.ID, "error", err)
+			continue
+		}
+		if err := p.hype.Insert(ctx, kbID, fileID, c.ID, questions, embs, chunkDim); err != nil {
+			logctx.From(ctx).Warn("hype: insert failed; skipping chunk",
+				"fileId", fileID, "chunkId", c.ID, "error", err)
+			continue
+		}
+		totalQuestions += len(questions)
+	}
+	logctx.From(ctx).Info("processor: hype generation stage finished",
+		"fileId", fileID, "chunks", len(chunks), "questions", totalQuestions)
 	return nil
 }
 

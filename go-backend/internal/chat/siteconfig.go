@@ -1144,3 +1144,25 @@ func RaptorClusteringAlgorithm(ctx context.Context, reader SiteConfigReader) str
 func RaptorLeidenResolution(ctx context.Context, reader SiteConfigReader) float64 {
 	return readFloat(ctx, reader, "raptor_leiden_resolution", 1.0, 0.01, 10.0)
 }
+
+// HyPEEnabled gates ingest-time generation of hypothetical questions
+// per chunk (the HyPE index build). Default false. Orthogonal to
+// HyPESearchEnabled — build the index first, then turn on retrieval.
+// Tunable via "hype_enabled".
+func HyPEEnabled(ctx context.Context, r SiteConfigReader) bool {
+	return readBool(ctx, r, "hype_enabled", false)
+}
+
+// HyPESearchEnabled gates the query-time HyPE search arm. Default
+// false. A no-op (fails open to empty) when the HyPE table is missing
+// or unpopulated. Tunable via "hype_search_enabled".
+func HyPESearchEnabled(ctx context.Context, r SiteConfigReader) bool {
+	return readBool(ctx, r, "hype_search_enabled", false)
+}
+
+// HyPEQuestionsPerChunk caps how many hypothetical questions are
+// generated per chunk at ingest. Default 3, range [1,20].
+// Tunable via "hype_questions_per_chunk".
+func HyPEQuestionsPerChunk(ctx context.Context, r SiteConfigReader) int {
+	return readInt(ctx, r, "hype_questions_per_chunk", 3, 1, 20)
+}

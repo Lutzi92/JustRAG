@@ -859,6 +859,7 @@ func PrepareChatContext(
 		GraderModel:   cragCfg.graderModel,
 		QueryType:     params.QueryType,
 		GraphChunkIDs: params.GraphSubgraphChunkIDs,
+		HyPESearch:    HyPESearchEnabled(ctx, siteConfig),
 	}
 
 	// T2-1 long-context routing: keyword-classifier-gated wide

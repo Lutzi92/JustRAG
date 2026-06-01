@@ -1467,6 +1467,14 @@ export const translations = {
     },
 
     // ---------------------------------------------------------------
+    // HyPE (Hypothetical Prompt Embeddings)
+    // ---------------------------------------------------------------
+    hyPEEnabled: { de: 'HyPE: hypothetische Fragen beim Ingest erzeugen', en: 'HyPE: generate hypothetical questions at ingest' },
+    hyPEQuestionsPerChunk: { de: 'HyPE-Fragen pro Chunk', en: 'HyPE questions per chunk' },
+    hyPEModel: { de: 'HyPE-Modell (Fast-Tier-Standard)', en: 'HyPE model (fast-tier default)' },
+    hyPESearchEnabled: { de: 'HyPE: Frage-Embeddings bei der Suche nutzen', en: 'HyPE: use question embeddings at query time' },
+
+    // ---------------------------------------------------------------
     // T2-3 ECoRAG evidentiality compression
     // ---------------------------------------------------------------
     agentSectionCompression: { de: 'Kontext-Kompression', en: 'Context compression' },
