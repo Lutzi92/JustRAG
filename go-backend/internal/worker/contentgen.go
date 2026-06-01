@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -35,9 +34,9 @@ type PodcastDeps struct {
 	TTSHTTPClient *http.Client
 }
 
-var reUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_\-]`)
-
-func sanitize(s string) string { return reUnsafe.ReplaceAllString(s, "_") }
+// sanitize delegates to contentgen.SanitizeFilename so the worker and the
+// contentgen HTTP tier share one compiled regex instead of drifting apart.
+func sanitize(s string) string { return contentgen.SanitizeFilename(s) }
 
 // NewPodcastHandler returns an Asynq handler for podcast generation
 // (script + TTS audio).

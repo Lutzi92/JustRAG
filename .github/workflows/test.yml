@@ -29,3 +29,11 @@ jobs:
       # so the unit suite runs green without provisioning services here.
       - name: Test (race)
         run: go test -race -count=1 ./...
+
+      # Run every benchmark for a single iteration. This is a correctness smoke
+      # test, not a performance gate: GitHub-hosted runners are too noisy for a
+      # benchstat threshold, but -benchtime=1x deterministically exercises each
+      # bench body so a benchmark that panics or no longer runs fails CI. The
+      # -run='^$' skips the normal tests (already covered by the race step).
+      - name: Benchmarks (smoke)
+        run: go test -run='^$' -bench=. -benchtime=1x -benchmem ./...

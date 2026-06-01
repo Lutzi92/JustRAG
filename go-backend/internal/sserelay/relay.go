@@ -7,6 +7,7 @@ package sserelay
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -150,9 +151,21 @@ func (r *Relay) Run(ctx context.Context, w http.ResponseWriter, opts Options) er
 	}
 }
 
+// SSE frame delimiters, kept as package-level byte slices so each frame write
+// avoids re-allocating the constant prefix/suffix.
+var (
+	sseDataPrefix = []byte("data: ")
+	sseFrameEnd   = []byte("\n\n")
+)
+
 // writeSSEEvent writes a single SSE data frame and flushes the response writer.
+// Direct writes avoid the per-frame allocation fmt.Fprintf incurs boxing the
+// payload into an `any` and running the format machinery — at 30-60 frames/s
+// per stream that is measurable GC pressure.
 func writeSSEEvent(w http.ResponseWriter, data string) {
-	fmt.Fprintf(w, "data: %s\n\n", data)
+	w.Write(sseDataPrefix)
+	io.WriteString(w, data)
+	w.Write(sseFrameEnd)
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}

@@ -68,6 +68,16 @@ CLAUDE.md is the operational reference (commands, env, architecture, toggle reci
 - `cd go-backend && ./cmd/eval/eval --golden ../eval/golden/<set>.jsonl --depth-buckets [--depth-buckets-min-chunks 4]` — position-aware retrieval analysis. Adds a `depth_buckets` section to the JSON report (and a stdout summary line) with per-quartile counts of relevant vs non-relevant chunks (chunkIndex/totalChunks bucketed into 0-25/25-50/50-75/75-100). Surfaces position bias: a heavy skew toward early buckets is evidence that retrieval favours the start of long files. NOT a true RULER needle-in-haystack test (which would need controlled ingestion); a synthetic-needle eval is a separate follow-up.
 - `cd go-backend && go test ./...`
 
+**Profile-Guided Optimization (optional, ~5-15% CPU on hot paths):** the build is PGO-ready (`-pgo=auto` is the Go default since 1.21 and auto-detects `default.pgo` in the main package dir). To enable, capture a 30s CPU profile under prod-representative load from the always-on pprof endpoint (`PPROF_ENABLED=1`), drop it next to the entrypoint, and rebuild:
+
+```bash
+curl "http://<internal-host>:6060/debug/pprof/profile?seconds=30" -o default.pgo
+mv default.pgo go-backend/cmd/server/default.pgo   # committed → picked up by -pgo=auto
+cd go-backend && go build ./cmd/server
+```
+
+Re-capture every few weeks as the hot-path profile drifts. No `default.pgo` is committed yet (it needs a real prod profile, not a synthetic one).
+
 ### Frontend
 
 - `npm run web`

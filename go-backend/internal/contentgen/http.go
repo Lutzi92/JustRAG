@@ -219,10 +219,12 @@ type presentationData struct {
 	} `json:"slides"`
 }
 
-// sanitizeFilename removes characters unsafe for filenames.
+// SanitizeFilename removes characters unsafe for filenames, replacing each
+// with an underscore. Exported so the worker tier reuses the same pattern
+// rather than compiling a second identical regex (drift hazard).
 var reUnsafeFilename = regexp.MustCompile(`[^a-zA-Z0-9_\-]`)
 
-func sanitizeFilename(s string) string {
+func SanitizeFilename(s string) string {
 	return reUnsafeFilename.ReplaceAllString(s, "_")
 }
 
@@ -298,11 +300,11 @@ func (h *Handler) GeneratePresentation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write PPTX file to disk
-	safeUser := sanitizeFilename(caller.Username)
+	safeUser := SanitizeFilename(caller.Username)
 	if safeUser == "" {
 		safeUser = "anonymous"
 	}
-	safeTopic := sanitizeFilename(req.Topic)
+	safeTopic := SanitizeFilename(req.Topic)
 	if len(safeTopic) > 50 {
 		safeTopic = safeTopic[:50]
 	}
