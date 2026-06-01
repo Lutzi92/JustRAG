@@ -36,6 +36,9 @@ type AgenticChatParams struct {
 	// against a smaller scope, so they intentionally don't carry the
 	// graph injection — the contribution belongs to the initial pool.
 	GraphChunkIDs []string
+	// HyPESearch enables the HyPE query-time arm on this orchestrator's
+	// initial search (resolved from hype_search_enabled at dispatch).
+	HyPESearch bool
 }
 
 // searchInvoker is the minimal vector.SearchService surface RunAgenticChat
@@ -105,6 +108,7 @@ func runAgenticChatTestable(
 		ModelOverride: params.PlanningModel,
 		QueryType:     vector.QueryTypeComplexReasoning,
 		GraphChunkIDs: params.GraphChunkIDs,
+		HyPESearch:    params.HyPESearch,
 	}
 	result1, err := searcher.Search(ctx, params.KbID, params.Query, 0, opts1)
 	if err != nil {

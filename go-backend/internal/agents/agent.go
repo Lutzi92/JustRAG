@@ -32,6 +32,9 @@ type Input struct {
 	// from chat.SupervisorChatParams.GraphChunkIDs when the
 	// chat_graph_routing_inject_chunks gate is on.
 	GraphChunkIDs []string
+	// HyPESearch enables the HyPE query-time arm on this agent's
+	// initial search (resolved from hype_search_enabled at dispatch).
+	HyPESearch bool
 }
 
 // Output captures everything one specialist produced for one Input.

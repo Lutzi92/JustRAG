@@ -97,6 +97,9 @@ type PlanExecuteParams struct {
 	// the same graph chunks into every sub-search would dilute the
 	// per-query relevance signal.
 	GraphChunkIDs []string
+	// HyPESearch enables the HyPE query-time arm on this orchestrator's
+	// initial search (resolved from hype_search_enabled at dispatch).
+	HyPESearch bool
 }
 
 // planFn / iterateFn are injectable function shapes for the LLM calls.
@@ -293,6 +296,7 @@ func runPlanExecuteChatTestable(
 		ModelOverride: params.PlanningModel,
 		QueryType:     vector.QueryTypeComplexReasoning,
 		GraphChunkIDs: params.GraphChunkIDs,
+		HyPESearch:    params.HyPESearch,
 	}
 	if !dagUsed && (planErr != nil || len(subQueries) == 0) {
 		planFailed = true

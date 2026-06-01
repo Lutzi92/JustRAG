@@ -48,6 +48,7 @@ func (r *RetrieverAgent) Execute(ctx context.Context, in Input) (Output, error) 
 		ModelOverride: r.PlanningModel,
 		QueryType:     vector.QueryTypeComplexReasoning,
 		GraphChunkIDs: in.GraphChunkIDs,
+		HyPESearch:    in.HyPESearch,
 	}
 	res, err := r.Searcher.Search(ctx, in.KbID, in.Query, 0, opts)
 	if err != nil {

@@ -315,6 +315,7 @@ func (h *Handler) tryDeepChat(
 		PlanningModel:  EnrichmentModel(ctx, h.siteConfigReader),
 		QueryType:      queryType,
 		GraphChunkIDs:  graphChunkIDs,
+		HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
 	}
 
 	// We need to save the user message before starting SSE, because SSE
@@ -410,6 +411,7 @@ func (h *Handler) tryDeepChat(
 			KbSystemPrompt:  kbSystemPrompt,
 			PlanningModel:   EnrichmentModel(ctx, h.siteConfigReader),
 			GraphChunkIDs:   graphChunkIDs,
+			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
 			MultiSpecialist: ChatSupervisorMultiSpecialist(ctx, h.siteConfigReader),
 		}
 		chatCtx, err = RunSupervisorChat(ctx, h.aiResolver, h.searchService, supervisorParams, collectEmit)
@@ -435,6 +437,7 @@ func (h *Handler) tryDeepChat(
 			MaxDAGDepth:    ChatPlanExecuteMaxDAGDepth(ctx, h.siteConfigReader),
 			MaxDAGNodes:    ChatPlanExecuteMaxDAGNodes(ctx, h.siteConfigReader),
 			GraphChunkIDs:  graphChunkIDs,
+			HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
 		}
 		// AP-B3: tool-aware planner. Only meaningful when DAG is on
 		// AND a dispatcher is wired AND the gate is set. Catalog is
@@ -475,6 +478,7 @@ func (h *Handler) tryDeepChat(
 			MaxHops:        ChatAgenticMaxHops(ctx, h.siteConfigReader),
 			Plateau:        plateau,
 			GraphChunkIDs:  graphChunkIDs,
+			HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
 		}
 		chatCtx, err = RunAgenticChat(ctx, h.aiResolver, h.searchService, agenticParams, collectEmit)
 

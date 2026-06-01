@@ -65,6 +65,7 @@ func (e *EnumeratorAgent) Execute(ctx context.Context, in Input) (Output, error)
 		ModelOverride: e.PlanningModel,
 		QueryType:     vector.QueryTypeEnumeration,
 		GraphChunkIDs: in.GraphChunkIDs,
+		HyPESearch:    in.HyPESearch,
 	}
 	res, err := e.Searcher.Search(ctx, in.KbID, in.Query, 0, opts)
 	if err != nil {

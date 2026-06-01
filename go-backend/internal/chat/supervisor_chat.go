@@ -28,6 +28,9 @@ type SupervisorChatParams struct {
 	// them into its single SearchOptions call. Empty (default)
 	// preserves legacy behaviour.
 	GraphChunkIDs []string
+	// HyPESearch enables the HyPE query-time arm on this orchestrator's
+	// initial search (resolved from hype_search_enabled at dispatch).
+	HyPESearch bool
 	// MultiSpecialist routes through Supervisor.RunMulti instead of the
 	// single-specialist Run: on enumeration intent the retriever and
 	// enumerator dispatch in parallel and their results merge via RRF.
@@ -89,6 +92,7 @@ func runSupervisorChatTestable(
 		Language:      params.Language,
 		FileIDs:       params.FileIDs,
 		GraphChunkIDs: params.GraphChunkIDs,
+		HyPESearch:    params.HyPESearch,
 	}
 	var (
 		res agents.SupervisorResult

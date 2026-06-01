@@ -42,6 +42,9 @@ type DeepChatParams struct {
 	// behaviour. Same field on every orchestrator's params struct so
 	// the http_send.go dispatcher can compute it once and forward.
 	GraphChunkIDs []string
+	// HyPESearch enables the HyPE query-time arm on this orchestrator's
+	// initial search (resolved from hype_search_enabled at dispatch).
+	HyPESearch bool
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +86,7 @@ func RunDeepChat(
 		ModelOverride: params.PlanningModel,
 		QueryType:     params.QueryType,
 		GraphChunkIDs: params.GraphChunkIDs,
+		HyPESearch:    params.HyPESearch,
 	}
 	result1, err := searchSvc.Search(ctx, params.KbID, params.Query, 0, opts1)
 	if err != nil {
@@ -120,6 +124,7 @@ func RunDeepChat(
 		ModelOverride: params.PlanningModel,
 		QueryType:     params.QueryType,
 		GraphChunkIDs: params.GraphChunkIDs,
+		HyPESearch:    params.HyPESearch,
 	}
 	result2, err := searchSvc.Search(ctx, params.KbID, rewrittenQuery, 0, opts2)
 	if err != nil {
