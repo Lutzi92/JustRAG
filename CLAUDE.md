@@ -20,7 +20,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `raptor_*` — per-file RAPTOR hierarchical summary trees (`raptor_clustering_algorithm` selects kmeans vs leiden)
 - `chat_tabular_*`, `tabular_semantic_*` — structured spreadsheet Q&A + fuzzy free-text-cell search + charts/pivots (Phase 1/2/3; `chat_tabular_charts_enabled` is the Phase-3 flag)
 - `ragas_*`, `factcheck_*`, `citation_validation_*`, `langfuse_*` — validation + observability
-- `model_tier_fast` — deployment-wide default for fast-tier tasks (CRAG grader, KG extractor, contextual enricher, factuality / Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer, longmem conflict classifier, evidentiality classifier, HyPE question generator**); per-task `*_model` keys override
+- `model_tier_fast` — deployment-wide default for fast-tier tasks (CRAG grader, KG extractor, contextual enricher, factuality / Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer, longmem conflict classifier, evidentiality classifier, HyPE question generator, golden-set question generator**); per-task `*_model` keys override
 
 **Runtime-only knob (no site_config):** `hnsw.iterative_scan = relaxed_order` is set by `BuildPoolConfig`'s `AfterConnect` hook on every new pool connection (T0-1). Required for filtered ANN queries (kb_id, node_kind, GraphChunkIDs, file_id) to expand the HNSW candidate list until the WHERE clause is satisfied. Tolerates pgvector < 0.8 with a one-shot warning; no operator action needed when pgvector ≥ 0.8 is installed.
 
@@ -37,6 +37,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 | 0046 | `node_kind`, `tree_level`, `raptor_parent_id` (RAPTOR hierarchical indexing) |
 | 0047 | `users.external_id` + unique partial index (OIDC `sub` linkage; legacy LDAP rows stay NULL) |
 | 0048 | tabular schema + `tabular_catalog` (structured spreadsheet Q&A) |
+| 0049 | `eval_golden_set_jobs` (async corpus → golden-set generation status) |
 
 **Vector tables** are dim-keyed (`document_chunks_2560`, `document_chunks_4096`, …); switching the embedder requires a re-ingest.
 
@@ -66,6 +67,8 @@ CLAUDE.md is the operational reference (commands, env, architecture, toggle reci
 - `cd go-backend && ./cmd/eval/eval --golden ../eval/golden/<set>.jsonl --production-context [--enhance …] [--hyde] [--multi-query] [--crag on|off] [--enumeration on|off] [--orchestrator-dispatch=true|false]` — eval through the production chat pipeline (CRAG, enumeration, contextual prefix, sandwich order). `--orchestrator-dispatch` defaults **true** (each question routes through the production orchestrator predicate; report records per-question `agent` + per-orchestrator aggregates); set `=false` for byte-stable diffs against pre-2026-05 retrieval-only runs.
 - `cd go-backend && ./cmd/eval/eval --golden ../eval/golden/<set>.jsonl --trajectory --orchestrator off|agentic|plan_execute|plan_execute_dag|supervisor|all [--judge]` — trajectory eval: per (question, orchestrator) emits the full agent decision sequence to `eval-trajectory.jsonl` + `.aggregate.json`. `--judge` adds four LLM judges (decomposition coverage, decision correctness, rewrite utility, tool-call correctness).
 - `cd go-backend && ./cmd/eval/eval --golden ../eval/golden/<set>.jsonl --depth-buckets [--depth-buckets-min-chunks 4]` — position-aware analysis: adds a `depth_buckets` section (per-quartile relevant vs non-relevant counts, bucketed by chunkIndex/totalChunks) to surface position bias toward the start of long files. NOT a true RULER needle test.
+- `cd go-backend && go build ./cmd/eval-gen`
+- `cd go-backend && ./cmd/eval-gen --kb-id <uuid> [--lookup 20] [--complex 10] [--enumeration 5] [--multihop 5] [--lang de|en] [--out <path>] [--model <m>]` — synthesize a **draft** golden set from a KB's ingested chunks (lookup / complex / enumeration / multi-hop via semantic-neighbor pairing; emits both `must_cite_file_ids` and `must_cite_file_names`). Output is a curation draft — review before use. Also available async from the admin Eval tab ("Generate from corpus"), which saves the result into `eval_golden_sets` (migration 0049 `eval_golden_set_jobs` tracks job status; description prefix `auto-generated from corpus`).
 - `cd go-backend && go test ./...`
 
 **Profile-Guided Optimization (optional, ~5-15% CPU):** build is PGO-ready (`-pgo=auto` auto-detects `default.pgo` in the main package dir). Capture a 30s CPU profile under prod load (`PPROF_ENABLED=1`), drop it next to the entrypoint, rebuild. Re-capture every few weeks as the profile drifts; none committed yet (needs a real prod profile).
@@ -363,7 +366,7 @@ No migration (dim-keyed `chunk_hype_questions_<dim>`, created at startup by `Ens
 
 ## Model tier resolution
 
-Cost-optimization knob orthogonal to the feature recipes above. Each fast-tier task (CRAG grader, KG extractor, contextual enricher, factuality verifier, Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer (T1-1), longmem conflict classifier (T1-3), evidentiality classifier (T2-3), HyPE question generator**) resolves its model in this chain (first non-empty wins):
+Cost-optimization knob orthogonal to the feature recipes above. Each fast-tier task (CRAG grader, KG extractor, contextual enricher, factuality verifier, Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer (T1-1), longmem conflict classifier (T1-3), evidentiality classifier (T2-3), HyPE question generator, golden-set question generator**) resolves its model in this chain (first non-empty wins):
 
 1. The task's per-task site_config key (e.g. `crag_grader_model`, `kg_extraction_model`, `query_decompose_model`, `chat_longmem_conflict_model`, `chat_context_compression_model`, `hype_model`)
 2. `model_tier_fast` — deployment-wide fast-tier default

@@ -72,3 +72,9 @@ type RAGASSampleChunk struct {
 type ReEmbedUserMemoryPayload struct {
 	UserID string `json:"userId"`
 }
+
+// GenerateGoldenSetPayload carries the eval_golden_set_jobs row id for the
+// async corpus-based golden-set generator.
+type GenerateGoldenSetPayload struct {
+	JobID string `json:"jobId"`
+}

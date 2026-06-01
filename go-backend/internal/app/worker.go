@@ -19,6 +19,7 @@ import (
 	"github.com/justrag/go-backend/internal/confluence"
 	"github.com/justrag/go-backend/internal/database"
 	"github.com/justrag/go-backend/internal/eval"
+	"github.com/justrag/go-backend/internal/eval/gen"
 	"github.com/justrag/go-backend/internal/fetcher"
 	"github.com/justrag/go-backend/internal/files"
 	"github.com/justrag/go-backend/internal/gencontent"
@@ -312,6 +313,19 @@ func RunWorker(cfg *config.Config) error {
 		return eval.RunInProcessFromRecord(ctx, r, evalDeps)
 	})
 	mux.HandleFunc(jobs.TypeEvalRun, worker.Instrument(evalWorker.HandleRun))
+
+	// Corpus-based golden-set generation.
+	genJobStore := eval.NewGenJobStore(db.Main)
+	genGoldenSetStore := eval.NewGoldenSetStore(db.Main)
+	genWorker := admineval.NewGenWorker(genJobStore, genGoldenSetStore, func(kbID, lang, model string) *gen.Generator {
+		return gen.New(
+			gen.NewDBCorpus(db.Main, chunkService),
+			gen.NewAIQGen(aiResolver, kbID, lang, model),
+			gen.NewSearchNeighbors(searchService, 5),
+			0.5,
+		)
+	})
+	mux.HandleFunc(jobs.TypeGenerateGoldenSet, worker.Instrument(genWorker.HandleGenerate))
 
 	// Per-user memory re-embedding: recomputes embeddings for all live
 	// user_memory rows after the embedding dim has changed.

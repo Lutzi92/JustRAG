@@ -63,3 +63,4 @@ eval/golden/production.jsonl.stale-backup
 eval/golden/multi-hop.jsonl
 eval/golden/multi-kb.jsonl
 
+go-backend/eval-gen

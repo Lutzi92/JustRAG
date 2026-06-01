@@ -462,12 +462,14 @@ func registerAdminEvalRoutes(rc *routeCtx) {
 
 	evalStore := eval.NewStore(rc.infra.db.Main)
 	goldenSetStore := eval.NewGoldenSetStore(rc.infra.db.Main)
+	genJobStore := eval.NewGenJobStore(rc.infra.db.Main)
 	h := admineval.NewHandler(
 		evalStore,
 		rc.kbStore,
 		rc.chatStore,
 		rc.infra.asynqClient,
 		goldenSetStore,
+		genJobStore,
 	)
 
 	rc.mux.Handle("POST /api/admin/eval/runs", rc.adminChain(h.CreateRun))
@@ -479,6 +481,10 @@ func registerAdminEvalRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/admin/eval/golden-sets", rc.adminChain(h.CreateGoldenSet))
 	rc.mux.Handle("GET /api/admin/eval/golden-sets", rc.adminChain(h.ListGoldenSets))
 	rc.mux.Handle("DELETE /api/admin/eval/golden-sets/{id}", rc.adminChain(h.DeleteGoldenSet))
+
+	rc.mux.Handle("POST /api/admin/eval/golden-sets/generate", rc.adminChain(h.GenerateGoldenSet))
+	rc.mux.Handle("GET /api/admin/eval/golden-sets/jobs", rc.adminChain(h.ListGenJobs))
+	rc.mux.Handle("GET /api/admin/eval/golden-sets/{id}", rc.adminChain(h.GetGoldenSet))
 }
 
 func registerKBRoutes(rc *routeCtx) {

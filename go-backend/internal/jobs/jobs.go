@@ -26,4 +26,5 @@ const (
 	TypeEvalRun                   = "eval-run"
 	TypeRAGASSample               = "ragas-sample"
 	TypeReEmbedUserMemory         = "re-embed-user-memory"
+	TypeGenerateGoldenSet         = "generate-golden-set"
 )

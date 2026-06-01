@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type FormEvent } from 'react';
 import axios from 'axios';
 import { motion } from 'framer-motion';
 import { Play, RefreshCw, Download, Copy, Trash2, BarChart3, X, AlertCircle, Check, Upload } from 'lucide-react';
@@ -77,6 +77,16 @@ export default function AdminEvalTab() {
     const [uploadLoading, setUploadLoading] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // State: generate from corpus
+    const [genKbId, setGenKbId] = useState('');
+    const [genName, setGenName] = useState('');
+    const [genLang, setGenLang] = useState<'de' | 'en'>('de');
+    const [genLookup, setGenLookup] = useState(20);
+    const [genComplex, setGenComplex] = useState(10);
+    const [genEnum, setGenEnum] = useState(5);
+    const [genMultihop, setGenMultihop] = useState(5);
+    const [genJobs, setGenJobs] = useState<Array<{ id: string; status: string; error?: string; golden_set_id?: string }>>([]);
+
     // State: history + pagination
     const [runs, setRuns] = useState<RunSummary[]>([]);
     const [total, setTotal] = useState(0);
@@ -105,6 +115,54 @@ export default function AdminEvalTab() {
     useEffect(() => {
         fetchGoldenSets();
     }, [fetchGoldenSets]);
+
+    // Fetch generation jobs
+    const fetchGenJobs = useCallback(async () => {
+        try {
+            const res = await axios.get<{ jobs: Array<{ id: string; status: string; error?: string; golden_set_id?: string }> }>(
+                `${API_BASE_URL}/api/admin/eval/golden-sets/jobs`
+            );
+            setGenJobs(res.data.jobs || []);
+        } catch { /* non-fatal */ }
+    }, []);
+
+    const genInFlight = useMemo(() => genJobs.some(j => j.status === 'queued' || j.status === 'running'), [genJobs]);
+
+    useEffect(() => {
+        fetchGenJobs();
+        if (!genInFlight) return;
+        const iv = setInterval(() => { fetchGenJobs(); fetchGoldenSets(); }, 5000);
+        return () => clearInterval(iv);
+    }, [fetchGenJobs, fetchGoldenSets, genInFlight]);
+
+    const handleGenerate = async (e: FormEvent) => {
+        e.preventDefault();
+        if (!genKbId.trim() || !genName.trim()) { toast.error(t('evalGenFailed')); return; }
+        try {
+            await axios.post(`${API_BASE_URL}/api/admin/eval/golden-sets/generate`, {
+                kb_id: genKbId.trim(), name: genName.trim(), lang: genLang,
+                counts: { lookup: genLookup, complex: genComplex, enumeration: genEnum, multihop: genMultihop },
+            });
+            toast.success(t('evalGenQueued'));
+            fetchGenJobs();
+        } catch (err) {
+            toast.error(getApiErrorMessage(err, t('evalGenFailed')));
+        }
+    };
+
+    const handleDownloadGoldenSet = async (id: string, name: string) => {
+        try {
+            const res = await axios.get<{ content?: unknown[] }>(`${API_BASE_URL}/api/admin/eval/golden-sets/${id}`);
+            const lines = (res.data.content || []).map(q => JSON.stringify(q)).join('\n');
+            const blob = new Blob([lines], { type: 'application/x-ndjson' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = `${name}.jsonl`; a.click();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            toast.error(getApiErrorMessage(err, t('evalGoldenSetsFetchFailed')));
+        }
+    };
 
     // Fetch list — axios has a global Authorization header set by App.tsx; no per-call header needed.
     const fetchRuns = useCallback(async () => {
@@ -297,13 +355,21 @@ export default function AdminEvalTab() {
                             {goldenSets.map(gs => (
                                 <tr key={gs.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                                     <td style={{ padding: '0.3rem 0.5rem' }}>
-                                        <div>{gs.name}</div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                            {gs.name}
+                                            {(gs.description || '').startsWith('auto-generated from corpus') && (
+                                                <span style={{ padding: '0.1rem 0.4rem', borderRadius: '3px', fontSize: '0.7rem', background: 'var(--accent-primary)', color: 'white', opacity: 0.8 }}>{t('evalGenDraftBadge')}</span>
+                                            )}
+                                        </div>
                                         {gs.description && <div style={{ fontSize: '0.75rem', opacity: 0.6 }}>{gs.description}</div>}
                                     </td>
                                     <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>{gs.question_count}</td>
                                     <td style={{ padding: '0.3rem 0.5rem', fontSize: '0.85rem' }}>{new Date(gs.created_at).toLocaleString()}</td>
                                     <td style={{ padding: '0.3rem 0.5rem', fontFamily: 'monospace', fontSize: '0.75rem', opacity: 0.7 }}>{gs.content_hash.slice(0, 12)}</td>
                                     <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>
+                                        <button type="button" onClick={() => handleDownloadGoldenSet(gs.id, gs.name)} title={t('evalDownload')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0.2rem', color: 'var(--text-primary)' }}>
+                                            <Download size={14} />
+                                        </button>
                                         <button type="button" onClick={() => handleDeleteGoldenSet(gs.id, gs.name)} title={t('delete')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#d93535', padding: '0.2rem' }}>
                                             <Trash2 size={14} />
                                         </button>
@@ -313,6 +379,69 @@ export default function AdminEvalTab() {
                         </tbody>
                     </table>
                 )}
+
+                {/* Generate from corpus */}
+                <form onSubmit={handleGenerate} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', marginBottom: '1rem' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{t('evalGenerateTitle')}</div>
+                    <div style={{ fontSize: '0.85rem', opacity: 0.7 }}>{t('evalGenerateHint')}</div>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <input
+                            type="text"
+                            id="gen-kb-id"
+                            value={genKbId}
+                            onChange={e => setGenKbId(e.target.value)}
+                            placeholder="kb_id"
+                            style={{ flex: 1, minWidth: '200px', padding: '0.4rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontFamily: 'monospace' }}
+                        />
+                        <input
+                            type="text"
+                            id="gen-name"
+                            value={genName}
+                            onChange={e => setGenName(e.target.value)}
+                            placeholder={t('evalGenName')}
+                            style={{ flex: 2, minWidth: '200px', padding: '0.4rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                        />
+                        <select
+                            id="gen-lang"
+                            value={genLang}
+                            onChange={e => setGenLang(e.target.value as 'de' | 'en')}
+                            style={{ padding: '0.4rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                        >
+                            <option value="de">de</option>
+                            <option value="en">en</option>
+                        </select>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', fontSize: '0.85rem' }}>
+                            {t('evalGenLookup')}
+                            <input type="number" min={0} max={200} value={genLookup} onChange={e => setGenLookup(Number(e.target.value))} style={{ width: '80px', padding: '0.3rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }} />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', fontSize: '0.85rem' }}>
+                            {t('evalGenComplex')}
+                            <input type="number" min={0} max={200} value={genComplex} onChange={e => setGenComplex(Number(e.target.value))} style={{ width: '80px', padding: '0.3rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }} />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', fontSize: '0.85rem' }}>
+                            {t('evalGenEnumeration')}
+                            <input type="number" min={0} max={200} value={genEnum} onChange={e => setGenEnum(Number(e.target.value))} style={{ width: '80px', padding: '0.3rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }} />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', fontSize: '0.85rem' }}>
+                            {t('evalGenMultiHop')}
+                            <input type="number" min={0} max={200} value={genMultihop} onChange={e => setGenMultihop(Number(e.target.value))} style={{ width: '80px', padding: '0.3rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }} />
+                        </label>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <button type="submit" disabled={genInFlight} style={{ padding: '0.4rem 1rem', background: 'var(--accent-primary)', color: 'white', border: 'none', borderRadius: '4px', cursor: genInFlight ? 'not-allowed' : 'pointer', opacity: genInFlight ? 0.5 : 1 }}>
+                            {genInFlight ? t('evalGenRunning') : t('evalGenButton')}
+                        </button>
+                    </div>
+                    {genJobs.length > 0 && (
+                        <ul style={{ margin: '0.5rem 0 0 0', padding: '0 0 0 1rem', fontSize: '0.85rem', opacity: 0.8 }}>
+                            {genJobs.slice(0, 5).map(j => (
+                                <li key={j.id}>{j.status}{j.error ? ` — ${j.error}` : ''}</li>
+                            ))}
+                        </ul>
+                    )}
+                </form>
 
                 {/* Upload form */}
                 <form onSubmit={handleUpload} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px' }}>

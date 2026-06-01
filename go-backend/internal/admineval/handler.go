@@ -148,6 +148,7 @@ type Handler struct {
 	cfgReader      siteConfigReader
 	asynqClient    enqueuer
 	goldenSetStore goldenSetStore
+	genJobStore    *eval.GenJobStore
 }
 
 // NewHandler creates an eval Handler.
@@ -157,6 +158,7 @@ func NewHandler(
 	cfgReader siteConfigReader,
 	asynqClient enqueuer,
 	goldenSetStore goldenSetStore,
+	genJobStore *eval.GenJobStore,
 ) *Handler {
 	return &Handler{
 		store:          store,
@@ -164,6 +166,7 @@ func NewHandler(
 		cfgReader:      cfgReader,
 		asynqClient:    asynqClient,
 		goldenSetStore: goldenSetStore,
+		genJobStore:    genJobStore,
 	}
 }
 

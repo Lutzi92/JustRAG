@@ -238,7 +238,7 @@ func TestCreateRun_Valid_201(t *testing.T) {
 	eq := &mockEnqueuer{}
 	gsStore := &mockGoldenSetStore{getGoldenSet: defaultGoldenSet()}
 
-	h := NewHandler(store, kbStore, cfg, eq, gsStore)
+	h := NewHandler(store, kbStore, cfg, eq, gsStore, nil)
 
 	body, _ := json.Marshal(CreateRunRequest{})
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/eval/runs", bytes.NewReader(body))
@@ -290,7 +290,7 @@ func TestCreateRun_UnknownGoldenSet(t *testing.T) {
 	eq := &mockEnqueuer{}
 	gsStore := &mockGoldenSetStore{getErr: storepkg.ErrNotFound}
 
-	h := NewHandler(store, kbStore, cfg, eq, gsStore)
+	h := NewHandler(store, kbStore, cfg, eq, gsStore, nil)
 
 	body, _ := json.Marshal(CreateRunRequest{})
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/eval/runs", bytes.NewReader(body))
@@ -311,7 +311,7 @@ func TestCreateRun_UnknownKB(t *testing.T) {
 	eq := &mockEnqueuer{}
 	gsStore := &mockGoldenSetStore{} // KB check runs before golden set lookup
 
-	h := NewHandler(store, kbStore, cfg, eq, gsStore)
+	h := NewHandler(store, kbStore, cfg, eq, gsStore, nil)
 
 	body, _ := json.Marshal(CreateRunRequest{})
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/eval/runs", bytes.NewReader(body))
@@ -331,7 +331,7 @@ func TestCreateRun_InvalidJSON(t *testing.T) {
 	cfg := defaultSiteConfig()
 	eq := &mockEnqueuer{}
 
-	h := NewHandler(store, kbStore, cfg, eq, &mockGoldenSetStore{})
+	h := NewHandler(store, kbStore, cfg, eq, &mockGoldenSetStore{}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/eval/runs", bytes.NewReader([]byte("not-json")))
 	req.ContentLength = 8 // non-zero so the decoder runs
@@ -354,7 +354,7 @@ func TestCreateRun_InsertFailure(t *testing.T) {
 	eq := &mockEnqueuer{}
 	gsStore := &mockGoldenSetStore{getGoldenSet: defaultGoldenSet()}
 
-	h := NewHandler(store, kbStore, cfg, eq, gsStore)
+	h := NewHandler(store, kbStore, cfg, eq, gsStore, nil)
 
 	body, _ := json.Marshal(CreateRunRequest{})
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/eval/runs", bytes.NewReader(body))
@@ -381,7 +381,7 @@ func TestCreateRun_EnqueueFailure(t *testing.T) {
 	eq := &mockEnqueuer{err: errors.New("redis unavailable")}
 	gsStore := &mockGoldenSetStore{getGoldenSet: defaultGoldenSet()}
 
-	h := NewHandler(store, kbStore, cfg, eq, gsStore)
+	h := NewHandler(store, kbStore, cfg, eq, gsStore, nil)
 
 	body, _ := json.Marshal(CreateRunRequest{})
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/eval/runs", bytes.NewReader(body))
@@ -432,7 +432,7 @@ func TestListRuns_Pagination(t *testing.T) {
 		listTotal: 75,
 	}
 	kbStore := &mockKBReader{name: "Test KB", found: true}
-	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs?limit=50&offset=0", nil)
 	rec := httptest.NewRecorder()
@@ -470,7 +470,7 @@ func TestListRuns_StatusFilter(t *testing.T) {
 		listTotal: 3,
 	}
 	kbStore := &mockKBReader{name: "Test KB", found: true}
-	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs?status=running", nil)
 	rec := httptest.NewRecorder()
@@ -513,7 +513,7 @@ func TestListRuns_FlattenedAggregate(t *testing.T) {
 		listTotal: 1,
 	}
 	kbStore := &mockKBReader{name: "Test KB", found: true}
-	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs", nil)
 	rec := httptest.NewRecorder()
@@ -562,7 +562,7 @@ func TestListRuns_LimitCap(t *testing.T) {
 		listTotal: 0,
 	}
 	kbStore := &mockKBReader{name: "Test KB", found: true}
-	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs?limit=500", nil)
 	rec := httptest.NewRecorder()
@@ -585,7 +585,7 @@ func TestListRuns_KBIDFilter(t *testing.T) {
 		listTotal: 0,
 	}
 	kbStore := &mockKBReader{name: "Test KB", found: true}
-	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs?kb_id="+filterKBID.String(), nil)
 	rec := httptest.NewRecorder()
@@ -625,7 +625,7 @@ func TestGetRun_ReturnsFullReport(t *testing.T) {
 		Report: reportJSON,
 	}
 	store := &mockRunStore{getRun: run}
-	h := NewHandler(store, &mockKBReader{name: "KB", found: true}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{name: "KB", found: true}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newGetRunRequest(testRunID.String())
 	rec := httptest.NewRecorder()
@@ -654,7 +654,7 @@ func TestGetRun_ReturnsFullReport(t *testing.T) {
 // TestGetRun_404 verifies that a store returning store.ErrNotFound yields 404.
 func TestGetRun_404(t *testing.T) {
 	store := &mockRunStore{getErr: storepkg.ErrNotFound}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newGetRunRequest(testRunID.String())
 	rec := httptest.NewRecorder()
@@ -668,7 +668,7 @@ func TestGetRun_404(t *testing.T) {
 // TestGetRun_InvalidUUID verifies that a non-UUID path value returns 400.
 func TestGetRun_InvalidUUID(t *testing.T) {
 	store := &mockRunStore{}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newGetRunRequest("not-a-uuid")
 	rec := httptest.NewRecorder()
@@ -682,7 +682,7 @@ func TestGetRun_InvalidUUID(t *testing.T) {
 // TestGetRun_StoreError verifies that a generic store error returns 500.
 func TestGetRun_StoreError(t *testing.T) {
 	store := &mockRunStore{getErr: errors.New("db exploded")}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newGetRunRequest(testRunID.String())
 	rec := httptest.NewRecorder()
@@ -707,7 +707,7 @@ func newDeleteRunRequest(id string) *http.Request {
 // TestDeleteRun_OK verifies that a successful delete returns 204.
 func TestDeleteRun_OK(t *testing.T) {
 	store := &mockRunStore{deleteDeleted: true, deleteRunning: false}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newDeleteRunRequest(testRunID.String())
 	rec := httptest.NewRecorder()
@@ -721,7 +721,7 @@ func TestDeleteRun_OK(t *testing.T) {
 // TestDeleteRun_NotFound verifies that (false, false, nil) yields 404.
 func TestDeleteRun_NotFound(t *testing.T) {
 	store := &mockRunStore{deleteDeleted: false, deleteRunning: false}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newDeleteRunRequest(testRunID.String())
 	rec := httptest.NewRecorder()
@@ -736,7 +736,7 @@ func TestDeleteRun_NotFound(t *testing.T) {
 // the expected message.
 func TestDeleteRun_RunningConflict(t *testing.T) {
 	store := &mockRunStore{deleteDeleted: false, deleteRunning: true}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newDeleteRunRequest(testRunID.String())
 	rec := httptest.NewRecorder()
@@ -754,7 +754,7 @@ func TestDeleteRun_RunningConflict(t *testing.T) {
 // TestDeleteRun_InvalidUUID verifies that a non-UUID path value returns 400.
 func TestDeleteRun_InvalidUUID(t *testing.T) {
 	store := &mockRunStore{}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newDeleteRunRequest("not-a-uuid")
 	rec := httptest.NewRecorder()
@@ -768,7 +768,7 @@ func TestDeleteRun_InvalidUUID(t *testing.T) {
 // TestDeleteRun_StoreError verifies that a store error returns 500.
 func TestDeleteRun_StoreError(t *testing.T) {
 	store := &mockRunStore{deleteErr: errors.New("db exploded")}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newDeleteRunRequest(testRunID.String())
 	rec := httptest.NewRecorder()
@@ -833,7 +833,7 @@ func makeCompletedRun(id uuid.UUID, label string) eval.Run {
 func TestExportRun_SingleRun(t *testing.T) {
 	run := makeCompletedRun(testRunID, "my-baseline")
 	store := &mockRunStore{getRun: &run}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newExportRunRequest(testRunID.String(), "")
 	rec := httptest.NewRecorder()
@@ -872,7 +872,7 @@ func TestExportRun_Compare(t *testing.T) {
 			otherID:   &runB,
 		},
 	}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newExportRunRequest(testRunID.String(), otherID.String())
 	rec := httptest.NewRecorder()
@@ -897,7 +897,7 @@ func TestExportRun_Compare(t *testing.T) {
 // TestExportRun_NotFound verifies that a missing run returns 404.
 func TestExportRun_NotFound(t *testing.T) {
 	store := &mockRunStore{getErr: storepkg.ErrNotFound}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newExportRunRequest(testRunID.String(), "")
 	rec := httptest.NewRecorder()
@@ -913,7 +913,7 @@ func TestExportRun_NotFound(t *testing.T) {
 func TestExportRun_CompareInvalidUUID(t *testing.T) {
 	run := makeCompletedRun(testRunID, "baseline")
 	store := &mockRunStore{getRun: &run}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newExportRunRequest(testRunID.String(), "not-a-uuid")
 	rec := httptest.NewRecorder()
@@ -937,7 +937,7 @@ func TestExportRun_CompareRunNotFound(t *testing.T) {
 			otherID: storepkg.ErrNotFound,
 		},
 	}
-	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{})
+	h := NewHandler(store, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil)
 
 	req := newExportRunRequest(testRunID.String(), otherID.String())
 	rec := httptest.NewRecorder()
@@ -986,7 +986,7 @@ func TestCreateGoldenSet_Valid_201(t *testing.T) {
 		createID:        testGoldenSetID,
 		createCreatedAt: created,
 	}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := buildUploadRequest("my-set", minimalJSONL())
 	rec := httptest.NewRecorder()
@@ -1017,7 +1017,7 @@ func TestCreateGoldenSet_Valid_201(t *testing.T) {
 // TestCreateGoldenSet_MissingName verifies that an empty name field returns 400.
 func TestCreateGoldenSet_MissingName(t *testing.T) {
 	gsStore := &mockGoldenSetStore{}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := buildUploadRequest("", minimalJSONL())
 	rec := httptest.NewRecorder()
@@ -1031,7 +1031,7 @@ func TestCreateGoldenSet_MissingName(t *testing.T) {
 // TestCreateGoldenSet_NoFile verifies that a missing file field returns 400.
 func TestCreateGoldenSet_NoFile(t *testing.T) {
 	gsStore := &mockGoldenSetStore{}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := buildUploadRequest("my-set", nil)
 	rec := httptest.NewRecorder()
@@ -1045,7 +1045,7 @@ func TestCreateGoldenSet_NoFile(t *testing.T) {
 // TestCreateGoldenSet_ParseError verifies that invalid JSONL returns 400.
 func TestCreateGoldenSet_ParseError(t *testing.T) {
 	gsStore := &mockGoldenSetStore{}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := buildUploadRequest("my-set", []byte("not valid jsonl\n"))
 	rec := httptest.NewRecorder()
@@ -1059,7 +1059,7 @@ func TestCreateGoldenSet_ParseError(t *testing.T) {
 // TestCreateGoldenSet_DuplicateName verifies that a duplicate name returns 409.
 func TestCreateGoldenSet_DuplicateName(t *testing.T) {
 	gsStore := &mockGoldenSetStore{createErr: eval.ErrGoldenSetNameTaken}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := buildUploadRequest("existing-set", minimalJSONL())
 	rec := httptest.NewRecorder()
@@ -1079,7 +1079,7 @@ func TestListGoldenSets(t *testing.T) {
 		{ID: uuid.New(), Name: "set-c", ContentHash: "hash3", QuestionCount: 1, CreatedAt: now.Add(-2 * time.Hour)},
 	}
 	gsStore := &mockGoldenSetStore{listSets: sets}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/golden-sets", nil)
 	rec := httptest.NewRecorder()
@@ -1116,7 +1116,7 @@ func newDeleteGoldenSetRequest(id string) *http.Request {
 // TestDeleteGoldenSet_OK verifies that a successful delete returns 204.
 func TestDeleteGoldenSet_OK(t *testing.T) {
 	gsStore := &mockGoldenSetStore{deleteDeleted: true}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := newDeleteGoldenSetRequest(testGoldenSetID.String())
 	rec := httptest.NewRecorder()
@@ -1130,7 +1130,7 @@ func TestDeleteGoldenSet_OK(t *testing.T) {
 // TestDeleteGoldenSet_NotFound verifies that (false, nil) yields 404.
 func TestDeleteGoldenSet_NotFound(t *testing.T) {
 	gsStore := &mockGoldenSetStore{deleteDeleted: false}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := newDeleteGoldenSetRequest(testGoldenSetID.String())
 	rec := httptest.NewRecorder()
@@ -1144,7 +1144,7 @@ func TestDeleteGoldenSet_NotFound(t *testing.T) {
 // TestDeleteGoldenSet_InvalidUUID verifies that a non-UUID path value returns 400.
 func TestDeleteGoldenSet_InvalidUUID(t *testing.T) {
 	gsStore := &mockGoldenSetStore{}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := newDeleteGoldenSetRequest("not-a-uuid")
 	rec := httptest.NewRecorder()

@@ -1072,3 +1072,65 @@ func HyPEQuestionsUserPrompt(fileName, document, chunk string, maxQuestions int)
 		fileName, document, maxQuestions, chunk,
 	)
 }
+
+// --- Golden-set generation prompts (corpus → eval questions) ---
+
+// GenComplexSystemPrompt instructs the model to generate one challenging
+// comprehension/reasoning question that the supplied chunk answers. The
+// question must be self-contained and require genuine multi-step reasoning,
+// not a single-fact lookup.
+func GenComplexSystemPrompt(lang string) string {
+	if lang == "de" {
+		return `Du erzeugst EINE anspruchsvolle Verständnis-/Schlussfolgerungsfrage, die der gegebene Textabschnitt beantwortet. ` +
+			`Gib AUSSCHLIESSLICH die Frage als reinen Text zurück (keine Anführungszeichen, keine Nummerierung, keine Erklärung). ` +
+			`Die Frage muss eigenständig verständlich sein und echtes Schlussfolgern erfordern, nicht nur ein Faktum.`
+	}
+	return `You generate ONE challenging comprehension/reasoning question that the given chunk answers. ` +
+		`Return ONLY the question as plain text (no quotes, no numbering, no explanation). ` +
+		`It must be self-contained and require genuine reasoning, not a single-fact lookup.`
+}
+
+// GenComplexUserPrompt builds the user message for complex question generation.
+// fileName identifies the source document; chunk is the passage the question
+// must be answerable from.
+func GenComplexUserPrompt(fileName, chunk string) string {
+	return fmt.Sprintf("Document: %s\n\n<chunk>\n%s\n</chunk>", fileName, chunk)
+}
+
+// GenEnumerationSystemPrompt instructs the model to generate one enumeration
+// question (e.g. "List all …", "What … are there") whose answer spans multiple
+// items stated in the document.
+func GenEnumerationSystemPrompt(lang string) string {
+	if lang == "de" {
+		return `Du erzeugst EINE Aufzählungsfrage (z.B. „Liste alle …", „Welche … gibt es"), deren Antwort mehrere im Dokument genannte Punkte umfasst. ` +
+			`Gib AUSSCHLIESSLICH die Frage als reinen Text zurück. Die Frage muss durch das Dokument beantwortbar sein.`
+	}
+	return `You generate ONE enumeration question (e.g. "List all …", "What … are there") whose answer spans multiple items stated in the document. ` +
+		`Return ONLY the question as plain text. It must be answerable from the document.`
+}
+
+// GenEnumerationUserPrompt builds the user message for enumeration question
+// generation. fileName identifies the source document; joinedChunks contains
+// the concatenated passage text the question must be answerable from.
+func GenEnumerationUserPrompt(fileName, joinedChunks string) string {
+	return fmt.Sprintf("Document: %s\n\n<content>\n%s\n</content>", fileName, joinedChunks)
+}
+
+// GenBridgeSystemPrompt instructs the model to generate one multi-hop question
+// that requires BOTH supplied passages (from different documents) to answer.
+// When the passages cannot be meaningfully linked, the model returns an empty
+// line — callers should discard empty output.
+func GenBridgeSystemPrompt(lang string) string {
+	if lang == "de" {
+		return `Du erzeugst EINE Frage, die BEIDE folgenden Passagen (aus verschiedenen Dokumenten) zur Beantwortung benötigt — eine echte Mehr-Schritt-Frage. ` +
+			`Gib AUSSCHLIESSLICH die Frage als reinen Text zurück. Wenn die Passagen inhaltlich nicht sinnvoll verknüpfbar sind, gib eine leere Zeile zurück.`
+	}
+	return `You generate ONE question that requires BOTH of the following passages (from different documents) to answer — a genuine multi-hop question. ` +
+		`Return ONLY the question as plain text. If the passages cannot be meaningfully linked, return an empty line.`
+}
+
+// GenBridgeUserPrompt builds the user message for bridge question generation.
+// aName/aText and bName/bText are the names and text of the two source passages.
+func GenBridgeUserPrompt(aName, aText, bName, bText string) string {
+	return fmt.Sprintf("<passage source=%q>\n%s\n</passage>\n\n<passage source=%q>\n%s\n</passage>", aName, aText, bName, bText)
+}
