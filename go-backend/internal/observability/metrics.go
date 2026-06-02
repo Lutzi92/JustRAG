@@ -317,6 +317,50 @@ func RecordRateLimitFallback(category string) {
 	rateLimitFallbackTotal.WithLabelValues(category).Inc()
 }
 
+var rateLimitRejectedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_rate_limit_rejected_total",
+		Help: "429s issued by the rate limiters, labeled by limiter source " +
+			"(e.g. redis:chat, redis:login, memory). A rising per-source rate " +
+			"is the abuse-detection / capacity-planning signal that the " +
+			"existing fail-open counter (rag_rate_limit_fallback_total) and " +
+			"per-rejection warn log don't surface as a time series. Cardinality " +
+			"is bounded by the fixed per-deployment limiter list.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"limiter"},
+)
+
+// RecordRateLimitRejected increments the per-limiter 429 counter. limiter is
+// the same source string the rejection log carries (e.g. "redis:chat",
+// "memory_check_only"); empty input normalizes to "unknown".
+func RecordRateLimitRejected(limiter string) {
+	if limiter == "" {
+		limiter = "unknown"
+	}
+	rateLimitRejectedTotal.WithLabelValues(limiter).Inc()
+}
+
+var xffUntrustedTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "rag_xff_untrusted_total",
+		Help: "Requests that carried an X-Forwarded-For / X-Real-IP header " +
+			"while TRUSTED_PROXY_HOP_COUNT=0, so the header was ignored and the " +
+			"rate-limit / audit key fell back to the TCP peer. A non-zero rate " +
+			"means the server is behind a proxy but not configured for it — rate " +
+			"limiting and audit logs are recording the proxy IP, not the client. " +
+			"Surfaces the misconfiguration the one-shot startup warning can miss.",
+		ConstLabels: commonLabels,
+	},
+)
+
+// RecordXFFUntrusted increments the untrusted-forwarding counter. Called from
+// the IP extractor when a forwarding header is present but no proxy hops are
+// trusted.
+func RecordXFFUntrusted() {
+	xffUntrustedTotal.Inc()
+}
+
 // --- Vector search (MRL two-pass) -------------------------------------------
 
 var (

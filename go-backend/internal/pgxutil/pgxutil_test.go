@@ -149,6 +149,25 @@ func TestIsSerializationFailure(t *testing.T) {
 	}
 }
 
+func TestIsUndefinedTable(t *testing.T) {
+	if IsUndefinedTable(nil) {
+		t.Fatalf("nil error must not be an undefined-table error")
+	}
+	if IsUndefinedTable(errors.New("relation does not exist")) {
+		t.Fatalf("plain error matching the English text must not match the code check")
+	}
+	if !IsUndefinedTable(&pgconn.PgError{Code: "42P01"}) {
+		t.Fatalf("42P01 must match")
+	}
+	if IsUndefinedTable(&pgconn.PgError{Code: "42703"}) {
+		t.Fatalf("undefined-column 42703 must not match undefined-table check")
+	}
+	wrapped := fmt.Errorf("hype search chunk_hype_questions_4096: %w", &pgconn.PgError{Code: "42P01"})
+	if !IsUndefinedTable(wrapped) {
+		t.Fatalf("wrapped 42P01 must match via errors.As")
+	}
+}
+
 func TestClauseBuilderWhereFilter(t *testing.T) {
 	// base=0: a self-contained WHERE filter. First clause binds $1.
 	b := NewClauseBuilder(0)

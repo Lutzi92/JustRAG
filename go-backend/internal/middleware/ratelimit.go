@@ -13,6 +13,7 @@ import (
 
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/logctx"
+	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/safego"
 )
 
@@ -242,9 +243,12 @@ func writeMemoryRateLimit429(w http.ResponseWriter, retryAfter time.Duration) {
 }
 
 // logRateLimitRejection emits a single warn line per 429 so operators can
-// correlate misbehaving IPs with the path/category they're hitting. Pulled
-// out so both the in-memory and Redis limiters share the same log shape.
+// correlate misbehaving IPs with the path/category they're hitting, and bumps
+// the per-limiter rejection counter so the same signal is queryable as a time
+// series for abuse detection / capacity planning. Pulled out so both the
+// in-memory and Redis limiters share the same log + metric shape.
 func logRateLimitRejection(r *http.Request, ip, source string, count, max int) {
+	observability.RecordRateLimitRejected(source)
 	logctx.From(r.Context()).Warn("middleware.ratelimit.rejected",
 		slog.String("ip", ip),
 		slog.String("source", source),
@@ -329,7 +333,16 @@ func (e *IPExtractor) ExtractIP(r *http.Request) string {
 
 	// When no proxies are trusted, XFF / X-Real-IP are client-controlled
 	// and must be ignored — using them would let any client spoof the
-	// rate-limit key. Fall straight through to the TCP peer.
+	// rate-limit key. Fall straight through to the TCP peer. If a forwarding
+	// header is nonetheless present, the server is likely behind a proxy it
+	// hasn't been told about, so the rate-limit / audit key is the proxy IP,
+	// not the client — bump a counter so that silent misconfiguration shows
+	// up on the dashboard instead of only in the one-shot startup warning.
+	if hops <= 0 {
+		if r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Real-IP") != "" {
+			observability.RecordXFFUntrusted()
+		}
+	}
 	if hops > 0 {
 		// X-Forwarded-For is appended-to by each proxy, so the rightmost
 		// `hops` entries were inserted by trusted intermediaries. The

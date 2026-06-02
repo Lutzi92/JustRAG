@@ -224,6 +224,16 @@ func IsSerializationFailure(err error) bool {
 	return pgErr.Code == "40001" || pgErr.Code == "40P01"
 }
 
+// IsUndefinedTable reports whether err is a PostgreSQL undefined-table error
+// (SQLSTATE 42P01). Use this instead of strings.Contains(err.Error(), "does
+// not exist") when a query targets a dim-keyed / optional table that may not
+// have been created yet (HyPE, RAPTOR, etc.) so the caller can fail open
+// without coupling to the driver's English error text.
+func IsUndefinedTable(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
+}
+
 // likePatternEscaper escapes the three LIKE wildcards `%`, `_`, and the
 // escape character `\` itself so user-supplied input is treated as a literal
 // substring. Defined as a package-level Replacer so the (small) construction

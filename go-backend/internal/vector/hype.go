@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/justrag/go-backend/internal/pgxutil"
 )
 
 // GetHyPETableName returns the dim-keyed HyPE question table name,
@@ -179,7 +181,7 @@ func (h *HyPEStore) Search(ctx context.Context, embStr, kbID string, fileIDs []s
 		LIMIT %d`, opExpr, table, fileFilter, limit)
 	rows, err := h.pool.Query(ctx, sql, args...)
 	if err != nil {
-		if strings.Contains(err.Error(), "does not exist") {
+		if pgxutil.IsUndefinedTable(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("hype search %s: %w", table, err)
@@ -210,7 +212,7 @@ func (h *HyPEStore) DeleteByFileIDsAllDims(ctx context.Context, fileIDs []string
 		}
 		sql := fmt.Sprintf(`DELETE FROM "%s" WHERE file_id = ANY($1::uuid[])`, table)
 		if _, err := h.pool.Exec(ctx, sql, fileIDs); err != nil {
-			if !strings.Contains(err.Error(), "does not exist") {
+			if !pgxutil.IsUndefinedTable(err) {
 				return fmt.Errorf("hype delete from %s: %w", table, err)
 			}
 		}

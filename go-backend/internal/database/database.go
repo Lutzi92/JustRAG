@@ -114,14 +114,16 @@ func setHNSWIterativeScan(ctx context.Context, conn *pgx.Conn) error {
 	return nil
 }
 
-// connectAttempts is the number of times Connect retries an initial Ping
-// before giving up. The loop sleeps BETWEEN attempts only (no sleep after
-// the final attempt), so five attempts with exponential backoff produce
-// four waits of 1, 2, 4, 8s totaling ~15 s — enough to ride out a Docker
-// Compose / Kubernetes pod startup race where the DB process is up but
-// not yet accepting connections, without making operator failure feedback
-// feel sluggish. Size pod init / readiness-probe budgets against this 15s.
-const connectAttempts = 5
+// defaultConnectAttempts is the number of times Connect retries an initial
+// Ping before giving up when cfg.ConnectAttempts is unset. The loop sleeps
+// BETWEEN attempts only (no sleep after the final attempt), so five attempts
+// with exponential backoff produce four waits of 1, 2, 4, 8s totaling ~15 s —
+// enough to ride out a Docker Compose / Kubernetes pod startup race where the
+// DB process is up but not yet accepting connections, without making operator
+// failure feedback feel sluggish. Raise via DB_CONNECT_ATTEMPTS (cfg.ConnectAttempts)
+// for clusters where a post-migration init container delays readiness past 15s;
+// size pod init / readiness-probe budgets against the resulting total.
+const defaultConnectAttempts = 5
 
 // connectWithRetry opens a pool and pings until either the ping succeeds or
 // the attempt budget is exhausted. The returned pool is alive (Ping ok).
@@ -132,8 +134,13 @@ func connectWithRetry(ctx context.Context, label string, cfg config.DBConfig) (*
 		return nil, fmt.Errorf("%s DB config: %w", label, err)
 	}
 
+	attempts := cfg.ConnectAttempts
+	if attempts <= 0 {
+		attempts = defaultConnectAttempts
+	}
+
 	var lastErr error
-	for attempt := 0; attempt < connectAttempts; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		pool, openErr := pgxpool.NewWithConfig(ctx, poolCfg)
 		if openErr == nil {
 			if pingErr := pool.Ping(ctx); pingErr == nil {
@@ -146,7 +153,7 @@ func connectWithRetry(ctx context.Context, label string, cfg config.DBConfig) (*
 			lastErr = openErr
 		}
 
-		if attempt == connectAttempts-1 {
+		if attempt == attempts-1 {
 			break
 		}
 		wait := time.Duration(1<<attempt) * time.Second
@@ -165,7 +172,7 @@ func connectWithRetry(ctx context.Context, label string, cfg config.DBConfig) (*
 			return nil, ctx.Err()
 		}
 	}
-	return nil, fmt.Errorf("connecting to %s DB after %d attempts: %w", label, connectAttempts, lastErr)
+	return nil, fmt.Errorf("connecting to %s DB after %d attempts: %w", label, attempts, lastErr)
 }
 
 func Connect(ctx context.Context, mainCfg, vectorCfg config.DBConfig) (*DB, error) {

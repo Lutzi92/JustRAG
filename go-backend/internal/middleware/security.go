@@ -9,6 +9,17 @@ import "net/http"
 // server-side signal of the mismatch. Override via the csp argument to
 // SecurityHeaders (wired through the CSP_HEADER env var in internal/config)
 // so a hash drift can be fixed at deploy time without a rebuild.
+//
+// To regenerate the hash after a frontend build, extract the inline script
+// body from web/dist/index.html and sha256/base64 it, e.g.:
+//
+//	# grab the text between the inline <script>…</script> tags, no tags, no
+//	# surrounding whitespace trimming beyond what the browser hashes:
+//	openssl dgst -sha256 -binary inline-script.js | openssl base64
+//
+// then splice the result into the 'sha256-…' token below. The browser
+// console logs the expected hash on a CSP violation, which is the quickest
+// source of truth when the two disagree.
 const DefaultCSP = "default-src 'self'; script-src 'self' 'sha256-ieoeWczDHkReVBsRBqaal5AFMlBtNjMzgwKvLqi/tSU='; style-src 'self' 'unsafe-inline'; frame-src 'self' blob:; media-src 'self' blob:"
 
 // SecurityHeaders sets the standard security response headers. emitHSTS

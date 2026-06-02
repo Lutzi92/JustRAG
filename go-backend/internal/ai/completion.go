@@ -209,14 +209,31 @@ func extractReasoning(choice ChatChoice) (reasoning, content string) {
 func stripThinkTags(text string) (reasoning, content string) {
 	matches := thinkTagRe.FindAllStringSubmatch(text, -1)
 
-	parts := make([]string, 0, len(matches))
+	parts := make([]string, 0, len(matches)+1)
 	for _, m := range matches {
 		parts = append(parts, strings.TrimSpace(m[1]))
 	}
-	reasoning = strings.Join(parts, "\n")
 
-	// Replace each think block with a newline so surrounding text doesn't merge.
+	// Replace each *closed* think block with a newline so surrounding text
+	// doesn't merge.
 	content = thinkTagRe.ReplaceAllString(text, "\n")
+
+	// An unclosed <think> (the model opened a reasoning block but the
+	// completion ended — or was truncated by the token limit — before
+	// </think>) is not matched by the paired regex above, so the opening tag
+	// and every reasoning token after it would otherwise leak into the
+	// user-facing answer. The streaming ThinkTagFilter already routes such a
+	// tail to reasoning; mirror that here for the non-streaming path: treat
+	// everything from the orphaned <think> onward as reasoning and drop it
+	// from content.
+	if idx := strings.Index(content, "<think>"); idx >= 0 {
+		if orphan := strings.TrimSpace(content[idx+len("<think>"):]); orphan != "" {
+			parts = append(parts, orphan)
+		}
+		content = content[:idx]
+	}
+
+	reasoning = strings.Join(parts, "\n")
 	// Collapse runs of whitespace-only lines and trim edges.
 	content = strings.TrimSpace(content)
 

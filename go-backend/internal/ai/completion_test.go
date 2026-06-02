@@ -464,6 +464,35 @@ func TestStripThinkTags_MultipleTags(t *testing.T) {
 	}
 }
 
+func TestStripThinkTags_UnclosedTagDoesNotLeak(t *testing.T) {
+	t.Parallel()
+	// Model opened a reasoning block but the completion was truncated before
+	// </think>. The orphaned tag + reasoning must NOT leak into content.
+	input := "Prefix.<think>I am still reasoning when the stream ends"
+	reasoning, content := stripThinkTags(input)
+	if content != "Prefix." {
+		t.Errorf("unclosed <think> leaked into content: %q", content)
+	}
+	if reasoning != "I am still reasoning when the stream ends" {
+		t.Errorf("unexpected reasoning: %q", reasoning)
+	}
+}
+
+func TestStripThinkTags_ClosedThenUnclosed(t *testing.T) {
+	t.Parallel()
+	// A complete block followed by a second, unterminated one: the closed
+	// reasoning is captured, the trailing orphan is routed to reasoning too,
+	// and neither tag survives in the answer.
+	input := "<think>first</think>Answer.<think>truncated tail"
+	reasoning, content := stripThinkTags(input)
+	if content != "Answer." {
+		t.Errorf("unexpected content: %q", content)
+	}
+	if reasoning != "first\ntruncated tail" {
+		t.Errorf("unexpected reasoning: %q", reasoning)
+	}
+}
+
 // TestChatUsage_CachedTokens verifies the OpenAI / DeepSeek precedence: nested
 // prompt_tokens_details.cached_tokens wins, with fallback to top-level
 // prompt_cache_hit_tokens.

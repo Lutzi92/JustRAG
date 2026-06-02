@@ -33,6 +33,14 @@ type DBConfig struct {
 	// "unexpected EOF" on the first query. Set via DB_HEALTH_CHECK_PERIOD_MS;
 	// default 30s matches pgx's documented default.
 	HealthCheckPeriod time.Duration
+	// ConnectAttempts is how many times Connect pings the DB on startup
+	// before giving up. The loop sleeps between attempts with exponential
+	// backoff (1,2,4,8,… s), so N attempts ride out roughly (2^(N-1)-1)s of
+	// DB-not-ready. Default 5 (~15s) suits Docker Compose; raise via
+	// DB_CONNECT_ATTEMPTS for Kubernetes where a post-migration init
+	// container can delay Postgres readiness past 15s. Zero/negative falls
+	// back to the built-in default so test fixtures that bypass Load still work.
+	ConnectAttempts int
 }
 
 type RedisConfig struct {
@@ -238,6 +246,7 @@ func Load() (*Config, error) {
 			// is worth surfacing. Set DB_SLOW_QUERY_THRESHOLD_MS=0 to disable.
 			SlowQueryThreshold: mustDurationMs("DB_SLOW_QUERY_THRESHOLD_MS", 200*time.Millisecond),
 			HealthCheckPeriod:  mustDurationMs("DB_HEALTH_CHECK_PERIOD_MS", 30*time.Second),
+			ConnectAttempts:    mustInt("DB_CONNECT_ATTEMPTS", 5),
 		},
 		Redis: RedisConfig{
 			Host:     envOr("REDIS_HOST", "localhost"),
@@ -320,6 +329,7 @@ func Load() (*Config, error) {
 		StatementTimeout:   time.Duration(vectorStatementTimeoutMs) * time.Millisecond,
 		SlowQueryThreshold: cfg.DB.SlowQueryThreshold,
 		HealthCheckPeriod:  cfg.DB.HealthCheckPeriod,
+		ConnectAttempts:    cfg.DB.ConnectAttempts,
 	}
 
 	// Worker settings
