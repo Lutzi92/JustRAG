@@ -1190,6 +1190,24 @@ func TestFeedbackBoostConfig(t *testing.T) {
 // HyPE ingest + search accessor tests
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// describe-image config readers
+// ---------------------------------------------------------------------------
+
+func TestDescribeImageConfig(t *testing.T) {
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"describe_image_enabled": strPtr("true"),
+		"describe_image_model":   strPtr("qwen2-vl-7b"),
+	}}
+	ctx := context.Background()
+	if !DescribeImageEnabled(ctx, r) {
+		t.Fatal("expected enabled")
+	}
+	if got := DescribeImageModel(ctx, r); got != "qwen2-vl-7b" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestHyPEAccessors(t *testing.T) {
 	t.Parallel()
 

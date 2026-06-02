@@ -2,9 +2,96 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 )
+
+// fakeBucketAPI is a stand-in for the S3 client used by ensureBucket, so the
+// startup preflight can be exercised without a live endpoint.
+type fakeBucketAPI struct {
+	headErr      error
+	createErr    error
+	createCalled bool
+}
+
+func (f *fakeBucketAPI) HeadBucket(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+	return &s3.HeadBucketOutput{}, f.headErr
+}
+
+func (f *fakeBucketAPI) CreateBucket(_ context.Context, _ *s3.CreateBucketInput, _ ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+	f.createCalled = true
+	return &s3.CreateBucketOutput{}, f.createErr
+}
+
+func TestEnsureBucketHeadOK(t *testing.T) {
+	api := &fakeBucketAPI{}
+	if err := ensureBucket(context.Background(), api, "rag-files", "us-east-1"); err != nil {
+		t.Fatalf("ensureBucket: %v", err)
+	}
+	if api.createCalled {
+		t.Error("CreateBucket called when bucket already exists")
+	}
+}
+
+func TestEnsureBucketNotFoundCreates(t *testing.T) {
+	api := &fakeBucketAPI{headErr: &types.NotFound{}}
+	if err := ensureBucket(context.Background(), api, "rag-files", "eu-central-1"); err != nil {
+		t.Fatalf("ensureBucket: %v", err)
+	}
+	if !api.createCalled {
+		t.Error("CreateBucket not called for a genuinely missing (404) bucket")
+	}
+}
+
+// A 403 from HeadBucket means the bucket is reachable but the credentials can't
+// introspect it (e.g. a least-privilege key without s3:ListBucket). The worker's
+// real job — object read/write — may be fine, so the startup preflight must fail
+// open rather than crash-loop the process.
+func TestEnsureBucketForbiddenFailsOpen(t *testing.T) {
+	api := &fakeBucketAPI{headErr: &smithy.GenericAPIError{Code: "AccessDenied", Message: "forbidden"}}
+	if err := ensureBucket(context.Background(), api, "rag-files", "us-east-1"); err != nil {
+		t.Fatalf("ensureBucket should fail open on 403, got: %v", err)
+	}
+	if api.createCalled {
+		t.Error("CreateBucket must not be called on a 403 (bucket is not missing)")
+	}
+}
+
+// HeadBucket is an HTTP HEAD request, so a 403 response carries no body and thus
+// no parseable S3 error code. ensureBucket must still fail open in that case.
+func TestEnsureBucketForbiddenNoCodeFailsOpen(t *testing.T) {
+	api := &fakeBucketAPI{headErr: errors.New("https response error StatusCode: 403, RequestID: ABC")}
+	if err := ensureBucket(context.Background(), api, "rag-files", "us-east-1"); err != nil {
+		t.Fatalf("ensureBucket should fail open on a code-less 403, got: %v", err)
+	}
+	if api.createCalled {
+		t.Error("CreateBucket must not be called on a code-less 403")
+	}
+}
+
+// A fresh install against bundled MinIO: HeadBucket says 404, but CreateBucket
+// races with the server's concurrent boot and reports the bucket already owned.
+// That must still succeed.
+func TestEnsureBucketCreateAlreadyOwnedSucceeds(t *testing.T) {
+	api := &fakeBucketAPI{headErr: &types.NotFound{}, createErr: &types.BucketAlreadyOwnedByYou{}}
+	if err := ensureBucket(context.Background(), api, "rag-files", "us-east-1"); err != nil {
+		t.Fatalf("ensureBucket: %v", err)
+	}
+}
+
+// A genuine CreateBucket failure on a missing bucket is still fatal — we can't
+// store anything if creation truly fails.
+func TestEnsureBucketCreateFailsIsFatal(t *testing.T) {
+	api := &fakeBucketAPI{headErr: &types.NotFound{}, createErr: errors.New("boom")}
+	if err := ensureBucket(context.Background(), api, "rag-files", "us-east-1"); err == nil {
+		t.Fatal("ensureBucket: expected error when CreateBucket fails, got nil")
+	}
+}
 
 func newTestLocalStorage(t *testing.T) *localStorage {
 	t.Helper()

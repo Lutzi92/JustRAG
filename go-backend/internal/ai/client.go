@@ -125,6 +125,11 @@ type ChatMessage struct {
 	Name       string     `json:"name,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	// MultiContent, when non-empty, replaces Content with an OpenAI-style
+	// multimodal content-part array (text + image_url). Marshaled via the
+	// custom MarshalJSON in content.go. Leave nil for text-only messages so
+	// request bytes stay identical to the pre-vision path.
+	MultiContent []ChatContentPart `json:"-"`
 }
 
 // ChatTool is one entry in the OpenAI-compatible tools catalog. Type is

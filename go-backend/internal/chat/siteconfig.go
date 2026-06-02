@@ -1184,3 +1184,16 @@ func HyPESearchEnabled(ctx context.Context, r SiteConfigReader) bool {
 func HyPEQuestionsPerChunk(ctx context.Context, r SiteConfigReader) int {
 	return readInt(ctx, r, "hype_questions_per_chunk", 3, 1, 20)
 }
+
+// DescribeImageEnabled gates the POST /api/describe-image endpoint. Default off.
+// Tunable via "describe_image_enabled".
+func DescribeImageEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "describe_image_enabled", false)
+}
+
+// DescribeImageModel resolves the vision model for image description:
+// describe_image_model → model_tier_fast → "" (caller errors when empty,
+// since the KB chat model is not assumed vision-capable).
+func DescribeImageModel(ctx context.Context, reader SiteConfigReader) string {
+	return ResolveFastTierModel(ctx, reader, "describe_image_model")
+}

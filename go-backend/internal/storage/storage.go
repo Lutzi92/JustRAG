@@ -277,10 +277,18 @@ func newS3Storage(cfg Config) (*s3Storage, error) {
 	// context.Background() here and above is intentional: newS3Storage runs
 	// once at process startup (from New), not inside a request or worker task,
 	// so there is no parent context to cancel.
-	if err := s.ensureBucket(context.Background(), cfg.S3Region); err != nil {
+	if err := ensureBucket(context.Background(), s.client, s.bucket, cfg.S3Region); err != nil {
 		return nil, fmt.Errorf("storage: ensure bucket %q: %w", cfg.S3Bucket, err)
 	}
 	return s, nil
+}
+
+// bucketEnsurer is the subset of the S3 client used by ensureBucket, extracted
+// as an interface so the startup preflight logic can be unit-tested without a
+// live S3 endpoint.
+type bucketEnsurer interface {
+	HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+	CreateBucket(ctx context.Context, params *s3.CreateBucketInput, optFns ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
 }
 
 // ensureBucket creates the configured bucket if it doesn't exist. Required for
@@ -289,18 +297,30 @@ func newS3Storage(cfg Config) (*s3Storage, error) {
 // circuits when the bucket already exists, and BucketAlreadyOwnedByYou /
 // BucketAlreadyExists are treated as success to tolerate concurrent boots of
 // the server and worker.
-func (s *s3Storage) ensureBucket(ctx context.Context, region string) error {
-	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(s.bucket)})
+//
+// The preflight fails OPEN on any non-404 HeadBucket error (e.g. a 403). A 403
+// means the bucket is reachable but the credentials can't introspect it — most
+// often a least-privilege key that holds object permissions (Get/Put/Delete)
+// but not the bucket-level s3:ListBucket that HeadBucket requires. In that case
+// the worker's actual job is fine, so crash-looping the process at startup is
+// the wrong call; we log a warning and let the first real object operation
+// surface any genuine permission problem. (HeadBucket is also an HTTP HEAD with
+// no response body, so a 403 carries no S3 error code to inspect anyway.)
+// Only a definitive 404/NotFound triggers bucket creation.
+func ensureBucket(ctx context.Context, api bucketEnsurer, bucket, region string) error {
+	_, err := api.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)})
 	if err == nil {
 		return nil
 	}
 
 	if !isNotFoundErr(err) {
-		return fmt.Errorf("head bucket: %w", err)
+		slog.Warn("S3 bucket preflight (HeadBucket) failed; assuming the bucket is provisioned out of band and continuing",
+			"bucket", bucket, "error", err)
+		return nil
 	}
 
-	slog.Info("creating missing S3 bucket", "bucket", s.bucket, "region", region)
-	input := &s3.CreateBucketInput{Bucket: aws.String(s.bucket)}
+	slog.Info("creating missing S3 bucket", "bucket", bucket, "region", region)
+	input := &s3.CreateBucketInput{Bucket: aws.String(bucket)}
 	// us-east-1 is the SDK default and rejects an explicit LocationConstraint;
 	// MinIO accepts either form, so we only set the constraint for other regions.
 	if region != "" && region != "us-east-1" {
@@ -308,7 +328,7 @@ func (s *s3Storage) ensureBucket(ctx context.Context, region string) error {
 			LocationConstraint: types.BucketLocationConstraint(region),
 		}
 	}
-	if _, err := s.client.CreateBucket(ctx, input); err != nil {
+	if _, err := api.CreateBucket(ctx, input); err != nil {
 		if isAlreadyExistsErr(err) {
 			return nil
 		}
