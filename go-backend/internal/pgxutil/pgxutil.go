@@ -138,7 +138,14 @@ func WithTxOptions(ctx context.Context, pool *pgxpool.Pool, opts pgx.TxOptions, 
 	if err := fn(tx); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	// Wrap the commit error so a failed Commit (e.g. a network drop after
+	// fn succeeded) is distinguishable in logs from an error returned by fn
+	// itself — both would otherwise surface as a bare pgx error at the call
+	// site with no indication of which phase failed.
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 // maxSerializableRetries is the attempt budget for WithSerializableRetry.

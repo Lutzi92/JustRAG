@@ -127,6 +127,9 @@ func NewPgStore(pool *pgxpool.Pool) *PgStore {
 	return &PgStore{pool: pool}
 }
 
+// Compile-time assertion that PgStore satisfies Store.
+var _ Store = (*PgStore)(nil)
+
 // Record satisfies chat.DecisionRecorder. The kb_id arrives as a string
 // from the chat handler so the chat package doesn't need a uuid dep; the
 // store parses it here. Parse failures log via context-attached slog

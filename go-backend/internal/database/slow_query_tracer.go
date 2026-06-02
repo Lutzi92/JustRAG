@@ -18,6 +18,12 @@ import (
 // Output goes through logctx so the request_id / trace_id from the active
 // context attaches automatically — that's what makes a slow-query line
 // joinable to the rest of the request's log timeline.
+//
+// Data-governance note: the logged "sql" / "sample_sql" field is pgx's
+// parameterized statement template ($1, $2, …), NOT the resolved query.
+// pgx uses the extended protocol and carries bound argument values out of
+// band (data.SQL never has them interpolated), so no parameter values —
+// emails, search terms, PII — are ever written to the slow-query log.
 type slowQueryTracer struct {
 	threshold time.Duration
 }

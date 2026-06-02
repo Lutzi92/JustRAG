@@ -93,6 +93,14 @@ type Store interface {
 	Delete(ctx context.Context, chatID string) error
 }
 
+// Compile-time assertions that both store implementations satisfy Store —
+// a missing method on either would otherwise surface only when the concrete
+// type is passed to a function expecting the interface.
+var (
+	_ Store = (*RedisStore)(nil)
+	_ Store = (*InMemoryStore)(nil)
+)
+
 // ----- Redis-backed store ------------------------------------------------
 
 // RedisStore is the production Store. It uses GET/SET with EXPIRE so

@@ -95,6 +95,9 @@ func NewPgStore(pool *pgxpool.Pool) *PgStore {
 	return &PgStore{pool: pool}
 }
 
+// Compile-time assertion that PgStore satisfies the read-side Store surface.
+var _ Store = (*PgStore)(nil)
+
 // LookupEntityByName resolves a user-supplied entity name to one or
 // more kg_entities rows. Match priority:
 //  1. exact canonical_name (case-insensitive) match
