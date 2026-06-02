@@ -1210,6 +1210,16 @@ export const translations = {
         de: 'HTTP-URL des Docling-Sidecars. Beispiel: http://docling:5001 (innerhalb von docker compose).',
         en: 'HTTP URL of the Docling sidecar. Example: http://docling:5001 (inside docker compose).',
     },
+    describeImageEnabled: { de: 'Bildbeschreibung aktivieren', en: 'Enable image description' },
+    describeImageEnabledHelp: {
+        de: 'Aktiviert den Endpunkt POST /api/describe-image. Erfordert ein bildfähiges Modell (siehe unten). Standard: aus.',
+        en: 'Enables the POST /api/describe-image endpoint. Requires a vision-capable model (below). Default: off.',
+    },
+    describeImageModel: { de: 'Bildbeschreibungs-Modell', en: 'Image description model' },
+    describeImageModelHelp: {
+        de: 'Bildfähiges Modell für die Beschreibung. Leer → model_tier_fast. Das Standard-Chatmodell wird NICHT als bildfähig angenommen.',
+        en: 'Vision-capable model for description. Empty → model_tier_fast. The default chat model is NOT assumed vision-capable.',
+    },
     langfuseBaseUrl: { de: 'Langfuse Basis-URL', en: 'Langfuse base URL' },
     langfuseBaseUrlHelp: {
         de: 'Wenn gesetzt, blendet JustRAG für Admins einen "Trace anzeigen"-Button neben jeder KI-Antwort ein, der direkt zur entsprechenden Langfuse-Trace führt. Beispiel: https://langfuse.example.local oder https://cloud.langfuse.com/project/abc123/traces',

@@ -17,6 +17,7 @@ import (
 
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/auth"
+	"github.com/justrag/go-backend/internal/chat"
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/research"
 )
@@ -58,12 +59,17 @@ type AcademicPaper struct {
 // Handler holds the dependencies for the misc endpoints.
 type Handler struct {
 	aiResolver *ai.ConfigResolver
+	siteConfig chat.SiteConfigReader // nil disables describe-image
 }
 
 // NewHandler creates a new Handler.
 func NewHandler(aiResolver *ai.ConfigResolver) *Handler {
 	return &Handler{aiResolver: aiResolver}
 }
+
+// SetSiteConfig attaches the site_config reader used to gate and configure the
+// describe-image endpoint. Without it, describe-image stays disabled.
+func (h *Handler) SetSiteConfig(scr chat.SiteConfigReader) { h.siteConfig = scr }
 
 // ---------------------------------------------------------------------------
 // Internal helpers

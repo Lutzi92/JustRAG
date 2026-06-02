@@ -842,6 +842,8 @@ func registerResearchRoutes(rc *routeCtx, researchRL *middleware.RedisRateLimite
 	// Misc endpoints — enhance, export (auth required)
 	miscHandler := misc.NewHandler(rc.aiResolver)
 	rc.mux.Handle("POST /api/enhance", rc.authMw.Authenticate(http.HandlerFunc(miscHandler.Enhance)))
+	miscHandler.SetSiteConfig(rc.chatStore)
+	rc.mux.Handle("POST /api/describe-image", rc.authMw.Authenticate(http.HandlerFunc(miscHandler.DescribeImage)))
 	// Export endpoints matching the frontend contract (POST /api/kb/{id}/export/...).
 	rc.mux.Handle("POST /api/kb/{id}/export/docx", rc.kbViewChain(miscHandler.ExportDocx))
 	rc.mux.Handle("POST /api/kb/{id}/export/bibtex", rc.kbViewChain(miscHandler.ResearchBibtex))
@@ -900,11 +902,6 @@ func registerMiscRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/kb/{id}/data-explorer/schema", rc.kbViewChain(dataExplorerDisabled))
 	rc.mux.Handle("POST /api/kb/{id}/data-explorer/query", rc.kbViewChain(dataExplorerDisabled))
 	rc.mux.Handle("POST /api/kb/{id}/data-explorer/export", rc.kbViewChain(dataExplorerDisabled))
-
-	// Image description — not used by frontend, disabled
-	rc.mux.Handle("POST /api/describe-image", rc.authMw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusNotImplemented, "Image description is not available")
-	})))
 }
 
 func registerStaticRoutes(rc *routeCtx) {

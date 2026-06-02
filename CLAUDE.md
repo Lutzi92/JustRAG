@@ -388,12 +388,20 @@ Helper: `chat.ResolveFastTierModel(ctx, reader, perTaskKey)` — the single reso
 ## Current Runtime Notes
 
 - Data Explorer routes exist in the Go server but currently return `501`
-- `POST /api/describe-image` currently returns `501`
 - the default deployment is Go-only
 
 ## Document parsing
 
 Default: `pdftotext` (PDFs) + built-in DOCX/PPTX parsers (flattened tables, dropped footnotes). Opt-in layout-aware parsing via Docling sidecar — see `docs/observability/docling.md`. When enabled (admin Agent panel → `docling_enabled` + `docling_base_url`) and reachable, all newly ingested PDF, DOCX, and PPTX files route through Docling; failures fall back to the built-in parsers (logged with `request_id`).
+
+**Image description (`POST /api/describe-image`)**
+
+```
+describe_image_enabled = true                   # gate; default off (admin Agent panel → ingestion section)
+describe_image_model   = <vision-capable model> # required; falls through model_tier_fast
+```
+
+Multipart `image` field (PNG/JPEG/WEBP/GIF, ≤10 MB) + optional `prompt` form field; returns `{description}`. Sends an OpenAI-style multimodal `content` array (text + `image_url` data-URI) via `ai.DescribeImage` to the resolved provider. Disabled or unconfigured → 503; the default `gemma-4-26b` deployment is **NOT** assumed vision-capable — point `describe_image_model` at a vision model. Toggleable from the admin Agent panel (`describe_image_enabled` + `describe_image_model`). No migration. `internal/misc/describe_image.go`, `internal/ai/vision.go`.
 
 ## Retrieval
 
