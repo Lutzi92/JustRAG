@@ -141,9 +141,13 @@ func (s *Supervisor) RunMulti(ctx context.Context, in Input) (SupervisorResult, 
 	results := make([]dispatchResult, len(specialists))
 
 	var wg sync.WaitGroup
+	// i and sp are per-iteration variables (Go 1.22+ loop-scope semantics,
+	// confirmed by the module's `go 1.26` directive), so the closure captures
+	// each iteration's own values without explicit parameter passing — matching
+	// the convention in chat/multipass.go and ai/rerank_qwen3.go.
 	for i, sp := range specialists {
 		wg.Add(1)
-		go func(i int, sp Agent) {
+		go func() {
 			defer wg.Done()
 			defer safego.RecoverError(&results[i].err)
 
@@ -163,7 +167,7 @@ func (s *Supervisor) RunMulti(ctx context.Context, in Input) (SupervisorResult, 
 				return
 			}
 			observability.RecordAgentDispatch(sp.Name(), "ok")
-		}(i, sp)
+		}()
 	}
 	wg.Wait()
 

@@ -147,7 +147,11 @@ func rerankWithQwen3ChatTemplate(ctx context.Context, cfg *ResolvedConfig, query
 		// is cancelled while every slot is in flight. wg.Add follows the
 		// successful acquire so the counter exactly matches the number of
 		// live goroutines — matches the raptor builder convention and avoids
-		// a manual wg.Done in the cancellation branch.
+		// a manual wg.Done in the cancellation branch. The wg.Add(1) below is
+		// safe despite following the acquire on a separate statement: no
+		// blocking operation or other preemption-forcing point separates the
+		// successful `sem <- struct{}{}` from wg.Add(1), so the slot can never
+		// be acquired-then-leaked before the counter is incremented.
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():

@@ -106,8 +106,19 @@ func RunMultipassExtraction(
 	// slice-element write, no need for an inner shadow var.
 	for i := range chunks {
 		wg.Add(1)
-		safego.GoCtx(ctx, func() {
+		// Plain goroutine + RecoverError (matching rerank_qwen3.go), NOT
+		// safego.GoCtx: a panic inside the LLM call (HTTP/JSON shape surprise
+		// from a third-party endpoint) must become results[i].err so the
+		// post-Wait compaction passes the original chunk through, honouring the
+		// best-effort contract documented above. safego.GoCtx would only LOG
+		// the panic and leave results[i] zero-valued (keep=false, err=nil) —
+		// silently dropping the chunk, the one outcome the docstring promises
+		// never happens. RecoverError is registered right after wg.Done() so it
+		// runs FIRST on unwind, completing its write to results[i].err before
+		// wg.Done() establishes the happens-before edge with wg.Wait() below.
+		go func() {
 			defer wg.Done()
+			defer safego.RecoverError(&results[i].err)
 			// Fast cancellation check before contending for a slot: a free
 			// semaphore makes the select below a coin-flip, so an already-
 			// expired deadline could otherwise still proceed. Drop straight
@@ -163,7 +174,7 @@ func RunMultipassExtraction(
 			}
 			observability.RecordMultipassCall("kept")
 			results[i] = multipassResult{keep: true, extracted: extracted}
-		})
+		}()
 	}
 	wg.Wait()
 

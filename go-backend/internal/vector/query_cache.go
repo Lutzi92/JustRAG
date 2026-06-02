@@ -93,6 +93,13 @@ func (c *QueryCache) writeLoop(ctx context.Context, writeCh chan queryCacheWrite
 			// and writes carry no caller-visible state; the next cache miss
 			// will recompute the embedding. Draining would tie graceful
 			// shutdown to a 5s write timeout per buffered item.
+			//
+			// Log the queued count so a context cancelled unexpectedly early
+			// (leaked cancel, misconfigured test harness) is not silently
+			// invisible — under a clean shutdown the count is usually 0.
+			if n := len(writeCh); n > 0 {
+				logctx.From(ctx).Info("query_cache: writer shutting down, dropping queued writes", "dropped", n)
+			}
 			return
 		case w := <-writeCh:
 			c.processWrite(ctx, w)
