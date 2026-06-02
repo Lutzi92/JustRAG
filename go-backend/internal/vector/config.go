@@ -227,6 +227,13 @@ type KBVectorConfig struct {
 	// Tunable via "hybrid_dynamic_alpha_sensitivity".
 	HybridDynamicAlphaSensitivity float64
 
+	// FeedbackBoostEnabled gates the online-feedback retrieval boost
+	// ("chat_feedback_boost_enabled"). Off by default.
+	FeedbackBoostEnabled bool
+	// FeedbackBoostWeight is the max |score adjustment| from feedback
+	// ("feedback_boost_weight"); 0 falls back to 0.05 at apply time.
+	FeedbackBoostWeight float64
+
 	// BM25TieredBoost gates a multiplicative ranking adjustment in the BM25
 	// keyword arm: chunks matching the strict (AND-required) websearch
 	// form score ×100, chunks matching only the OR-tokens recall floor

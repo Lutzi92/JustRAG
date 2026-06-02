@@ -38,6 +38,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 | 0047 | `users.external_id` + unique partial index (OIDC `sub` linkage; legacy LDAP rows stay NULL) |
 | 0048 | tabular schema + `tabular_catalog` (structured spreadsheet Q&A) |
 | 0049 | `eval_golden_set_jobs` (async corpus → golden-set generation status) |
+| 0052 | `message_chunks` (answer→chunk links for the online feedback loop) |
 
 **Vector tables** are dim-keyed (`document_chunks_2560`, `document_chunks_4096`, …); switching the embedder requires a re-ingest.
 
@@ -283,6 +284,15 @@ hybrid_dynamic_alpha_sensitivity    = 0.3         # caps shift magnitude; [0, 1]
 
 Shifts effective `rerank_blend_alpha` by mean cl100k_base BPE-token ID — rare tokens → α down (more BM25), common → α up (more reranker). Composes with per-route overrides (resolved first, then shifted). Formula: `internal/vector/dynamic_alpha.go`.
 
+**Online feedback loop (retrieval boost + admin review)**
+
+```
+chat_feedback_boost_enabled = true     # gate; default off
+feedback_boost_weight       = 0.05     # max |score adjustment|; clamped [0, 0.5]; 0 → 0.05 at apply
+```
+
+Migration **0052** (`message_chunks` link table). Capture reuses the existing per-message thumbs up/down (`SubmitFeedback` → `messages.feedback` + `message_feedback_events`). At answer time, cited chunk IDs are linked in `message_chunks` (in `AddMessage` — `ChatSource.ChunkID` is `json:"-"`, so this is the only capture point). At search time the net signal (upvotes − downvotes) of candidate chunks applies a bounded `weight·tanh(net/2)` boost right after the rerank blend (before score-filter/MMR/trim), then re-sorts; fail-open. Admin review: `GET /api/admin/feedback/chunks?kb_id=<id>&limit=<n>` lists the most net-negative chunks. Cross-DB: links + feedback live in **main** Postgres, read in Go and applied to the **vector**-DB result by chunk ID. `internal/feedback` (reader), `internal/vector/feedback_boost.go` (scoring), `internal/adminfeedback` (review).
+
 **ECoRAG evidentiality compression (T2-3)**
 
 ```
@@ -465,6 +475,7 @@ Feature index — see `docs/agent-orchestration.md` for the full per-feature rat
 | Iterative DAG critic | `chat_plan_execute_dag_iterative` + `_model` | Iterative DAG critic |
 | CI eval gate | (CI-only, `.github/workflows/eval.yml`) | CI eval gate |
 | Online faithfulness metric | (auto-on whenever factuality verifier or Self-RAG ran) | Online faithfulness metric |
+| Online feedback loop | `chat_feedback_boost_enabled` + `feedback_boost_weight` (migration 0052) | (see feedback-loop recipe above) |
 
 ## Observability
 

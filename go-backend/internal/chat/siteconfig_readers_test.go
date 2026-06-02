@@ -1169,6 +1169,24 @@ func TestChatAnswerToolsMaxRounds_DefaultAndOutOfRange(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Retrieval feedback boost config readers (online user feedback loop)
+// ---------------------------------------------------------------------------
+
+func TestFeedbackBoostConfig(t *testing.T) {
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_feedback_boost_enabled": strPtr("true"),
+		"feedback_boost_weight":       strPtr("0.08"),
+	}}
+	ctx := context.Background()
+	if !ChatFeedbackBoostEnabled(ctx, r) {
+		t.Fatal("expected enabled")
+	}
+	if got := FeedbackBoostWeight(ctx, r); got != 0.08 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // HyPE ingest + search accessor tests
 // ---------------------------------------------------------------------------
 

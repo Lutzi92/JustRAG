@@ -150,6 +150,16 @@ var siteConfigParsers = map[string]siteConfigSetter{
 			cfg.HybridDynamicAlphaSensitivity = f
 		}
 	},
+	"chat_feedback_boost_enabled": func(cfg *KBVectorConfig, v string) {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.FeedbackBoostEnabled = b
+		}
+	},
+	"feedback_boost_weight": func(cfg *KBVectorConfig, v string) {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f <= 0.5 {
+			cfg.FeedbackBoostWeight = f
+		}
+	},
 	"rerank_blend_alpha_entity": func(cfg *KBVectorConfig, v string) {
 		// Sentinel-aware: any value outside [0, 1] keeps the field at -1
 		// (inherit). Same convention as the per-route alpha overrides.

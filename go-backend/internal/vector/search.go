@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -230,6 +231,12 @@ type SiteConfigReader interface {
 	GetSiteConfigValue(ctx context.Context, key string) (*string, error)
 }
 
+// FeedbackReader supplies accumulated per-chunk feedback signals. Implemented
+// by internal/feedback.Reader. Nil disables the retrieval feedback boost.
+type FeedbackReader interface {
+	NetSignals(ctx context.Context, kbID string, chunkIDs []string) (map[string]int, error)
+}
+
 // siteConfigBatchReader aliases the shared siteconfig.BatchReader. Single
 // source of truth — see internal/siteconfig/reader.go. Test fakes satisfy
 // only the single-key interface and fall through to the per-key path.
@@ -322,6 +329,8 @@ type SearchService struct {
 	// the next TTL-driven refresh picks them up.
 	kbLangCachePtr atomic.Pointer[kbLangSnapshot]
 	kbLangSF       singleflight.Group
+
+	feedback FeedbackReader // nil when the feedback loop is unwired/disabled
 }
 
 const (
@@ -359,6 +368,10 @@ func WithEmbeddingCache(c *ai.EmbeddingCache) Option {
 func WithSiteConfigReader(r SiteConfigReader) Option {
 	return func(s *SearchService) { s.siteConfig = r }
 }
+
+// SetFeedbackReader attaches the per-chunk feedback aggregate reader used by
+// the retrieval-time boost. Safe to leave unset (boost stays off).
+func (s *SearchService) SetFeedbackReader(fr FeedbackReader) { s.feedback = fr }
 
 // WithChunkService attaches the ChunkService used for Phase 3 §D
 // retrieval-time parent-content lookup. When omitted the parent swap is
@@ -953,6 +966,29 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		}
 		stageLog = append(stageLog, "rerank_docs", len(fused), "rerank_files", countFilesRanked(fused))
 		timer.Mark("rerank")
+	}
+
+	// ------------------------------------------------------------------
+	// 10b. Online feedback loop: nudge scores by accumulated thumbs
+	// up/down on answers that cited each chunk. Gated; default off.
+	// Fail-open — a feedback read error never fails the search.
+	// ------------------------------------------------------------------
+	if siteCfg.FeedbackBoostEnabled && s.feedback != nil && len(fused) > 0 {
+		ids := make([]string, len(fused))
+		for i := range fused {
+			ids[i] = fused[i].ID
+		}
+		if net, err := s.feedback.NetSignals(ctx, kbID, ids); err != nil {
+			logctx.From(ctx).Warn("feedback boost: net signals", "error", err, "kb_id", kbID)
+		} else if len(net) > 0 {
+			weight := siteCfg.FeedbackBoostWeight
+			if weight <= 0 {
+				weight = 0.05
+			}
+			ApplyFeedbackBoost(fused, net, weight)
+			sort.SliceStable(fused, func(i, j int) bool { return fused[i].Score > fused[j].Score })
+			stageLog = append(stageLog, "feedback_boost_applied", len(net))
+		}
 	}
 
 	// ------------------------------------------------------------------

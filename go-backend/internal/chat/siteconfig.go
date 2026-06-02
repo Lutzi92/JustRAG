@@ -1145,6 +1145,24 @@ func RaptorLeidenResolution(ctx context.Context, reader SiteConfigReader) float6
 	return readFloat(ctx, reader, "raptor_leiden_resolution", 1.0, 0.01, 10.0)
 }
 
+// ChatFeedbackBoostEnabled gates the retrieval-time feedback boost. Default off.
+// When true, retrieval scoring applies a tanh-shaped score adjustment derived
+// from accumulated thumbs-up/thumbs-down signals stored for each chunk. The
+// maximum adjustment magnitude is bounded by FeedbackBoostWeight so feedback
+// can nudge but never dominate relevance. Tunable via
+// "chat_feedback_boost_enabled".
+func ChatFeedbackBoostEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_feedback_boost_enabled", false)
+}
+
+// FeedbackBoostWeight is the maximum absolute score adjustment applied from
+// feedback signals (the bounded tanh is scaled by this). Default 0.05,
+// clamped to [0, 0.5] so feedback can nudge but never dominate relevance.
+// Tunable via "feedback_boost_weight".
+func FeedbackBoostWeight(ctx context.Context, reader SiteConfigReader) float64 {
+	return readFloat(ctx, reader, "feedback_boost_weight", 0.05, 0.0, 0.5)
+}
+
 // HyPEEnabled gates ingest-time generation of hypothetical questions
 // per chunk (the HyPE index build). Default false. Orthogonal to
 // HyPESearchEnabled — build the index first, then turn on retrieval.

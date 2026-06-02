@@ -16,6 +16,7 @@ import (
 	"github.com/justrag/go-backend/internal/adminagentmetrics"
 	"github.com/justrag/go-backend/internal/adminconfigs"
 	"github.com/justrag/go-backend/internal/admineval"
+	"github.com/justrag/go-backend/internal/adminfeedback"
 	"github.com/justrag/go-backend/internal/adminglobalkbs"
 	"github.com/justrag/go-backend/internal/adminkboverview"
 	"github.com/justrag/go-backend/internal/adminmaintenance"
@@ -38,6 +39,7 @@ import (
 	"github.com/justrag/go-backend/internal/crawler"
 	"github.com/justrag/go-backend/internal/eval"
 	"github.com/justrag/go-backend/internal/fetcher"
+	"github.com/justrag/go-backend/internal/feedback"
 	"github.com/justrag/go-backend/internal/files"
 	"github.com/justrag/go-backend/internal/gencontent"
 	"github.com/justrag/go-backend/internal/health"
@@ -99,6 +101,12 @@ type routeCtx struct {
 	// between the graph_search MCP tool and the chat handler's
 	// AP-C4 router heuristic.
 	kgStore kg.Store
+
+	// feedbackReader aggregates per-chunk feedback signals from the main
+	// DB. Shared between the server-side SearchService (retrieval boost,
+	// gated by chat_feedback_boost_enabled) and the admin review endpoint
+	// (GET /api/admin/feedback/chunks).
+	feedbackReader *feedback.Reader
 
 	// Middleware chains
 	superadminChain func(http.HandlerFunc) http.Handler
@@ -178,6 +186,13 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	filesHandler.SetQueryCacheInvalidator(searchService)
 	cascadeDeleter.SetQueryCacheInvalidator(searchService)
 
+	// Online feedback loop: per-chunk feedback aggregate reader (main DB).
+	// Attached to the request-time SearchService for the retrieval boost
+	// (gated by chat_feedback_boost_enabled) and reused by the admin review
+	// endpoint below.
+	feedbackReader := feedback.NewReader(infra.db.Main)
+	searchService.SetFeedbackReader(feedbackReader)
+
 	// Single shared asynq Inspector — each Inspector owns its own Redis
 	// connection, so creating one per route group multiplied connections.
 	asynqInspector := asynq.NewInspector(asynq.RedisClientOpt{
@@ -210,6 +225,7 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 		sharedFetcher:      sharedFetcher,
 		asynqInspector:     asynqInspector,
 		agentDecisionStore: agentDecisionStore,
+		feedbackReader:     feedbackReader,
 		superadminChain:    auth.RoleChain(authMiddleware, auth.RoleSuperAdmin),
 		adminChain:         auth.RoleChain(authMiddleware, auth.RoleAdmin, auth.RoleSuperAdmin),
 		kbViewChain: func(h http.HandlerFunc) http.Handler {
@@ -431,6 +447,12 @@ func registerAdminRoutes(rc *routeCtx) {
 	// recorder share the *PgStore instance constructed in setupRoutes.
 	agentMetricsHandler := adminagentmetrics.NewHandler(rc.agentDecisionStore)
 	rc.mux.Handle("GET /api/admin/agent-metrics", rc.adminChain(agentMetricsHandler.GetMetrics))
+
+	// Online feedback loop: admin review endpoint for the most net-negative
+	// chunks. Backed by the same feedbackReader attached to the SearchService
+	// so the two share a single DB pool and construction path.
+	feedbackHandler := adminfeedback.NewHandler(rc.feedbackReader)
+	rc.mux.Handle("GET /api/admin/feedback/chunks", rc.adminChain(feedbackHandler.GetNegativeChunks))
 
 	// In-app eval runner — guarded by eval_ui_enabled site-config kill switch.
 	registerAdminEvalRoutes(rc)

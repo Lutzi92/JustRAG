@@ -306,6 +306,21 @@ func (s *PGStore) AddMessage(ctx context.Context, p AddMessageParams) (*MessageR
 		if _, err := tx.Exec(ctx, updateChatSQL, p.ChatID); err != nil {
 			return fmt.Errorf("AddMessage update chat: %w", err)
 		}
+		// Persist the chunk -> message links used by the online feedback loop.
+		// kb_id is resolved from the chat in the same tx. ChunkID is in-memory
+		// only (json:"-"), so this is the sole place the link can be recorded.
+		ids, positions := chunkRefsFromSources(p.Sources)
+		if len(ids) > 0 {
+			const insertLinksSQL = `
+				INSERT INTO message_chunks (message_id, chunk_id, kb_id, position)
+				SELECT $1::uuid, c.chunk_id::uuid,
+				       (SELECT kb_id FROM chats WHERE id = $2::uuid), c.ord
+				FROM unnest($3::uuid[], $4::int[]) AS c(chunk_id, ord)
+				ON CONFLICT (message_id, chunk_id) DO NOTHING`
+			if _, err := tx.Exec(ctx, insertLinksSQL, row.ID, p.ChatID, ids, positions); err != nil {
+				return fmt.Errorf("AddMessage insert chunk links: %w", err)
+			}
+		}
 		return nil
 	})
 	if err != nil {
