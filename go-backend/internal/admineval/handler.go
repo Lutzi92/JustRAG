@@ -38,6 +38,7 @@ type runStore interface {
 	MarkRunning(ctx context.Context, id uuid.UUID) error
 	MarkCompleted(ctx context.Context, id uuid.UUID, report json.RawMessage) error
 	MarkFailed(ctx context.Context, id uuid.UUID, errMsg string) error
+	HasActiveRun(ctx context.Context, kbID uuid.UUID) (bool, error)
 }
 
 // kbReader is the minimal knowledge-base interface the handler needs.
@@ -67,6 +68,14 @@ type goldenSetStore interface {
 	Get(ctx context.Context, id uuid.UUID) (*eval.GoldenSet, error)
 	List(ctx context.Context) ([]eval.GoldenSet, error)
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
+	ListByKB(ctx context.Context, kbID uuid.UUID) ([]eval.GoldenSet, error)
+}
+
+// kbOverrideLister loads a KB's per-KB site_config overrides so a KB-scoped run
+// snapshots the KB's effective (override-merged) config. Satisfied by
+// *kbconfig.Store. Optional — when nil, KB runs snapshot global config only.
+type kbOverrideLister interface {
+	ListKBOverrides(ctx context.Context, kbID string) (map[string]*string, error)
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +144,24 @@ var snapshotConfigKeys = []string{
 	// T2-1 long-context (System 2) routing.
 	"chat_longcontext_enabled",
 	"chat_longcontext_max_tokens",
+	// Plan-1 per-KB registry keys (cross-checked by snapshot_registry_test.go).
+	// These keys are per-KB-overridable via the registry in internal/siteconfig;
+	// without them here an eval run would silently not exercise a KB's override.
+	"rerank_blend_alpha_lookup",
+	"rerank_blend_alpha_enumeration",
+	"rerank_blend_alpha_complex_reasoning",
+	"top_n_lookup",
+	"top_n_enumeration",
+	"top_n_complex_reasoning",
+	"step_back_enabled",
+	"adaptive_routing_enabled",
+	"chat_supervisor_enabled",
+	"chat_plan_execute_enabled",
+	"chat_agentic_enabled",
+	"chat_graph_routing_enabled",
+	"chat_graph_routing_inject_chunks",
+	"raptor_enabled",
+	"parent_child_enabled",
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +176,7 @@ type Handler struct {
 	asynqClient    enqueuer
 	goldenSetStore goldenSetStore
 	genJobStore    *eval.GenJobStore
+	kbOverrides    kbOverrideLister
 }
 
 // NewHandler creates an eval Handler.
@@ -168,6 +196,13 @@ func NewHandler(
 		goldenSetStore: goldenSetStore,
 		genJobStore:    genJobStore,
 	}
+}
+
+// WithKBOverrides attaches the per-KB override lister used to merge a KB's
+// kb_site_configs into KB-scoped run snapshots.
+func (h *Handler) WithKBOverrides(l kbOverrideLister) *Handler {
+	h.kbOverrides = l
+	return h
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +671,7 @@ func (h *Handler) DeleteRun(w http.ResponseWriter, r *http.Request) {
 // CreateGoldenSet accepts a multipart/form-data upload of a JSONL fixture file,
 // validates and parses it, and inserts a new eval_golden_sets row. Returns 201
 // on success, 400 on parse/validation errors, 409 on duplicate name.
+// kb_id is required (NOT NULL constraint); supply it as a form field.
 func (h *Handler) CreateGoldenSet(w http.ResponseWriter, r *http.Request) {
 	// 1. Parse multipart form (max 5 MB).
 	if err := r.ParseMultipartForm(5 << 20); err != nil {
@@ -648,6 +684,29 @@ func (h *Handler) CreateGoldenSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	description := strings.TrimSpace(r.FormValue("description"))
+
+	// 1b. Parse and validate the required kb_id form field.
+	kbIDRaw := strings.TrimSpace(r.FormValue("kb_id"))
+	if kbIDRaw == "" {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "kb_id is required")
+		return
+	}
+	kbID, err := uuid.Parse(kbIDRaw)
+	if err != nil {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid kb_id")
+		return
+	}
+	ctx := r.Context()
+	_, found, kbErr := h.kbStore.GetKBInfo(ctx, kbID)
+	if kbErr != nil {
+		logctx.From(ctx).Error("eval.create_golden_set.kb_lookup", "error", kbErr, "kb_id", kbID)
+		httputil.WriteInternalErrorCtx(ctx, w, kbErr)
+		return
+	}
+	if !found {
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "kb not found")
+		return
+	}
 
 	// 2. Read the uploaded file.
 	file, header, err := r.FormFile("file")
@@ -697,6 +756,7 @@ func (h *Handler) CreateGoldenSet(w http.ResponseWriter, r *http.Request) {
 
 	// 6. Insert.
 	id, createdAt, err := h.goldenSetStore.Create(r.Context(), eval.GoldenSet{
+		KBID:          kbID,
 		Name:          name,
 		Description:   description,
 		Content:       contentJSON,

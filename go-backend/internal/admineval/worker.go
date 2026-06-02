@@ -24,11 +24,13 @@ type RunPayload struct {
 	RunID uuid.UUID `json:"run_id"`
 }
 
-// advisoryLockKey is the fixed int64 pg_advisory_lock key. At most one eval
-// run may execute per deployment. Do not change this value after initial
-// deployment — changing it would allow two concurrent runs if the old lock is
-// still held.
-const advisoryLockKey = int64(73847293847293)
+// evalGlobalSlots caps concurrent evals deployment-wide. Implemented as N
+// advisory-lock "slots" (asynq's Concurrency is global, with no per-queue cap,
+// so the cap lives here). evalSlotKeyBase..+N-1 are the slot lock keys.
+const (
+	evalGlobalSlots = 2
+	evalSlotKeyBase = int64(73847293847000)
+)
 
 // Worker executes eval runs dispatched via the asynq queue.
 type Worker struct {
@@ -68,37 +70,6 @@ func (w *Worker) HandleRun(ctx context.Context, t *asynq.Task) error {
 	}
 	log := logctx.From(ctx).With("run_id", p.RunID)
 
-	// 2. Acquire an exclusive pg_advisory_lock so only one eval runs at a time.
-	//    Use a dedicated connection so the lock is released deterministically
-	//    when we call pg_advisory_unlock (or when the connection is returned to
-	//    the pool and the session ends).
-	conn, err := w.pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("eval run: acquire conn: %w", err)
-	}
-	defer conn.Release()
-
-	var gotLock bool
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", advisoryLockKey).Scan(&gotLock); err != nil {
-		return fmt.Errorf("eval run: advisory lock check: %w", err)
-	}
-	if !gotLock {
-		log.Info("eval.run.requeued", "reason", "another run holds the advisory lock")
-		return fmt.Errorf("another eval run is in flight; will retry")
-	}
-	// Release lock on exit even if ctx is cancelled.
-	defer func() {
-		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", advisoryLockKey)
-	}()
-
-	// 3. Mark row running.
-	if err := w.store.MarkRunning(ctx, p.RunID); err != nil {
-		return fmt.Errorf("eval run: mark running: %w", err)
-	}
-	observability.EvalRunActive.Set(1)
-	defer observability.EvalRunActive.Set(0)
-	startedAt := time.Now()
-
 	// detachedWriteCtx returns a fresh context.Background()-derived context with
 	// a short deadline, intended for terminal-status DB writes. Detached so the
 	// request ctx (which can be cancelled by asynq's task timeout once the run
@@ -109,7 +80,7 @@ func (w *Worker) HandleRun(ctx context.Context, t *asynq.Task) error {
 		return context.WithTimeout(context.Background(), 15*time.Second)
 	}
 
-	// 4. Load the full run row (includes ConfigSnapshot, GoldenSetID, etc.).
+	// 2. Load the run row first — we need kb_id to choose the per-KB lock.
 	run, err := w.store.Get(ctx, p.RunID)
 	if err != nil {
 		errMsg := fmt.Sprintf("load run: %v", err)
@@ -121,6 +92,56 @@ func (w *Worker) HandleRun(ctx context.Context, t *asynq.Task) error {
 		log.Error("eval.run.load_failed", "error", err)
 		return nil // do not re-enqueue
 	}
+
+	// 3. Acquire a dedicated connection for the session-scoped advisory locks.
+	conn, err := w.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("eval run: acquire conn: %w", err)
+	}
+	defer conn.Release()
+
+	// 3a. Per-KB lock: serialize evals within a KB (different KBs run in parallel).
+	var gotKB bool
+	kbLockArg := "eval:" + run.KBID.String()
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", kbLockArg).Scan(&gotKB); err != nil {
+		return fmt.Errorf("eval run: kb advisory lock: %w", err)
+	}
+	if !gotKB {
+		log.Info("eval.run.requeued", "reason", "another run holds this KB's lock", "kb_id", run.KBID)
+		return fmt.Errorf("another eval run is in flight for this KB; will retry")
+	}
+	defer func() {
+		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", kbLockArg)
+	}()
+
+	// 3b. Global cap: grab one of N slots; requeue if all are taken.
+	slot := int64(-1)
+	for i := int64(0); i < evalGlobalSlots; i++ {
+		var got bool
+		if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", evalSlotKeyBase+i).Scan(&got); err != nil {
+			return fmt.Errorf("eval run: slot lock: %w", err)
+		}
+		if got {
+			slot = evalSlotKeyBase + i
+			break
+		}
+	}
+	if slot < 0 {
+		log.Info("eval.run.requeued", "reason", "global eval concurrency cap reached", "cap", evalGlobalSlots)
+		return fmt.Errorf("global eval concurrency cap reached; will retry")
+	}
+	defer func() {
+		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", slot)
+	}()
+
+	// 4. Mark running and proceed. (run is already loaded above.)
+	if err := w.store.MarkRunning(ctx, p.RunID); err != nil {
+		return fmt.Errorf("eval run: mark running: %w", err)
+	}
+	observability.EvalRunActive.Set(1)
+	defer observability.EvalRunActive.Set(0)
+	startedAt := time.Now()
+
 	log.Info("eval.run.started",
 		"kb_id", run.KBID,
 		"judge", run.JudgeEnabled,
@@ -171,10 +192,13 @@ func (w *Worker) HandleRun(ctx context.Context, t *asynq.Task) error {
 // after inserting the eval_runs row with status 'queued'.
 //
 // Timeout is 2 h (generous ceiling for judge-mode runs at ~50-60 min). MaxRetry
-// is 0 — eval is too expensive to retry from scratch; the operator re-kicks
-// manually. The advisory-lock retry path (another run in flight) is handled by
-// returning a non-nil error from HandleRun before MarkRunning, which causes
-// asynq's built-in retry to fire as normal for that narrow window.
+// is 25 — but ONLY pre-execution contention paths (per-KB advisory lock not
+// obtained; global slot cap reached; conn acquire failure) return a non-nil
+// error from HandleRun, triggering asynq's exponential-backoff retry. Once
+// MarkRunning succeeds, all subsequent failures call MarkFailed and return nil,
+// so no post-execution retry ever fires. Raising MaxRetry from 0 makes the
+// N-slot global cap functional: a run queued while all slots are busy will be
+// retried automatically rather than stranded in 'queued' forever.
 //
 // client must satisfy the enqueuer interface; *asynq.Client does so automatically.
 func EnqueueRun(ctx context.Context, client enqueuer, runID uuid.UUID) error {
@@ -186,11 +210,12 @@ func EnqueueRun(ctx context.Context, client enqueuer, runID uuid.UUID) error {
 		asynq.NewTask(jobs.TypeEvalRun, payload),
 		asynq.Queue(jobs.QueueHeavy),
 		// Eval runs can take ~50 min in judge mode. 2h ceiling leaves generous
-		// headroom; failures beyond that are investigated manually rather than retried.
+		// headroom; post-execution failures are recorded via MarkFailed (no retry).
 		asynq.Timeout(2*time.Hour),
-		// No automatic retry — eval is too expensive to retry on transient failure,
-		// and retries start question 1 from scratch. Operator re-kicks manually.
-		asynq.MaxRetry(0),
+		// Retries apply only to pre-execution contention (per-KB lock / global
+		// slot cap) and transient errors (conn acquire). Post-execution paths
+		// always return nil so asynq never retries a started run.
+		asynq.MaxRetry(25),
 	)
 	if err != nil {
 		return fmt.Errorf("enqueue eval run: %w", err)

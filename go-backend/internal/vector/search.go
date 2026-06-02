@@ -375,6 +375,30 @@ func WithQueryCache(qc *QueryCache) Option {
 	return func(s *SearchService) { s.queryCache = qc }
 }
 
+// CloneWithSiteConfigReader returns a new SearchService that shares every
+// backing dependency (DB pools, AI resolver, embedding/chunk/hype/query caches)
+// but reads site_config through r instead of the original reader. The clone
+// gets fresh sync primitives (sync.Once, singleflight.Group) and an empty
+// config cache, so it is independent and race-free.
+//
+// Used by the chat handler to apply per-KB config overrides on a request-local
+// instance without mutating the process-wide shared SearchService (mirrors the
+// eval runner's private-SearchService pattern).
+func (s *SearchService) CloneWithSiteConfigReader(r SiteConfigReader) *SearchService {
+	return &SearchService{
+		vectorDB:       s.vectorDB,
+		mainDB:         s.mainDB,
+		aiResolver:     s.aiResolver,
+		siteConfig:     r,
+		embeddingCache: s.embeddingCache,
+		chunkSvc:       s.chunkSvc,
+		hype:           s.hype,
+		queryCache:     s.queryCache,
+		// rerankDefaultNoticeOnce, kbTableCache, siteConfigCache, siteConfigSF,
+		// kbLangCachePtr, kbLangSF: zero values — fresh, independent caches.
+	}
+}
+
 // NewSearchService creates a SearchService backed by the given connection
 // pools and AI config resolver. Production callers should pass both
 // WithEmbeddingCache and WithSiteConfigReader; tests may omit them.

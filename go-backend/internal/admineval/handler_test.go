@@ -102,6 +102,10 @@ func (m *mockRunStore) MarkCompleted(_ context.Context, _ uuid.UUID, _ json.RawM
 	return nil
 }
 
+func (m *mockRunStore) HasActiveRun(_ context.Context, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
+
 // ---------------------------------------------------------------------------
 
 type mockKBReader struct {
@@ -175,6 +179,10 @@ func (m *mockGoldenSetStore) List(_ context.Context) ([]eval.GoldenSet, error) {
 
 func (m *mockGoldenSetStore) Delete(_ context.Context, _ uuid.UUID) (bool, error) {
 	return m.deleteDeleted, m.deleteErr
+}
+
+func (m *mockGoldenSetStore) ListByKB(_ context.Context, _ uuid.UUID) ([]eval.GoldenSet, error) {
+	return m.listSets, m.listErr
 }
 
 // ---------------------------------------------------------------------------
@@ -962,10 +970,20 @@ func minimalJSONL() []byte {
 
 // buildUploadRequest constructs a multipart/form-data request for POST
 // /api/admin/eval/golden-sets. If name is empty, the field is omitted.
-// If content is nil, the file field is omitted.
+// If content is nil, the file field is omitted. kbID is always included when
+// non-empty (CreateGoldenSet requires kb_id after FIX 1).
 func buildUploadRequest(name string, content []byte) *http.Request {
+	return buildUploadRequestWithKBID(name, content, testKBID.String())
+}
+
+// buildUploadRequestWithKBID is like buildUploadRequest but allows controlling
+// the kb_id field. Pass an empty string to omit the field (tests the missing-field path).
+func buildUploadRequestWithKBID(name string, content []byte, kbID string) *http.Request {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
+	if kbID != "" {
+		_ = mw.WriteField("kb_id", kbID)
+	}
 	if name != "" {
 		_ = mw.WriteField("name", name)
 	}
@@ -979,15 +997,18 @@ func buildUploadRequest(name string, content []byte) *http.Request {
 	return injectUser(req, testUserID)
 }
 
-// TestCreateGoldenSet_Valid_201 verifies the happy path: valid name + JSONL → 201.
+// TestCreateGoldenSet_Valid_201 verifies the happy path: valid name + JSONL +
+// kb_id → 201. The kbStore reports the KB as found (required by FIX 1).
 func TestCreateGoldenSet_Valid_201(t *testing.T) {
 	created := time.Now().UTC().Truncate(time.Second)
 	gsStore := &mockGoldenSetStore{
 		createID:        testGoldenSetID,
 		createCreatedAt: created,
 	}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
+	kbStore := &mockKBReader{name: "Test KB", found: true}
+	h := NewHandler(&mockRunStore{}, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
+	// buildUploadRequest now includes testKBID as kb_id by default.
 	req := buildUploadRequest("my-set", minimalJSONL())
 	rec := httptest.NewRecorder()
 	h.CreateGoldenSet(rec, req)
@@ -1014,10 +1035,40 @@ func TestCreateGoldenSet_Valid_201(t *testing.T) {
 	}
 }
 
+// TestCreateGoldenSet_MissingKBID verifies that omitting kb_id returns 400.
+func TestCreateGoldenSet_MissingKBID(t *testing.T) {
+	gsStore := &mockGoldenSetStore{}
+	h := NewHandler(&mockRunStore{}, &mockKBReader{name: "Test KB", found: true}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
+
+	req := buildUploadRequestWithKBID("my-set", minimalJSONL(), "") // no kb_id
+	rec := httptest.NewRecorder()
+	h.CreateGoldenSet(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCreateGoldenSet_KBNotFound verifies that an unknown kb_id returns 400.
+func TestCreateGoldenSet_KBNotFound(t *testing.T) {
+	gsStore := &mockGoldenSetStore{}
+	kbStore := &mockKBReader{found: false} // KB not found
+	h := NewHandler(&mockRunStore{}, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
+
+	req := buildUploadRequest("my-set", minimalJSONL())
+	rec := httptest.NewRecorder()
+	h.CreateGoldenSet(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestCreateGoldenSet_MissingName verifies that an empty name field returns 400.
+// The name check fires before the kb_id check, so kbStore is not reached.
 func TestCreateGoldenSet_MissingName(t *testing.T) {
 	gsStore := &mockGoldenSetStore{}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{name: "Test KB", found: true}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := buildUploadRequest("", minimalJSONL())
 	rec := httptest.NewRecorder()
@@ -1031,7 +1082,7 @@ func TestCreateGoldenSet_MissingName(t *testing.T) {
 // TestCreateGoldenSet_NoFile verifies that a missing file field returns 400.
 func TestCreateGoldenSet_NoFile(t *testing.T) {
 	gsStore := &mockGoldenSetStore{}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{name: "Test KB", found: true}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := buildUploadRequest("my-set", nil)
 	rec := httptest.NewRecorder()
@@ -1045,7 +1096,7 @@ func TestCreateGoldenSet_NoFile(t *testing.T) {
 // TestCreateGoldenSet_ParseError verifies that invalid JSONL returns 400.
 func TestCreateGoldenSet_ParseError(t *testing.T) {
 	gsStore := &mockGoldenSetStore{}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{name: "Test KB", found: true}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := buildUploadRequest("my-set", []byte("not valid jsonl\n"))
 	rec := httptest.NewRecorder()
@@ -1059,7 +1110,7 @@ func TestCreateGoldenSet_ParseError(t *testing.T) {
 // TestCreateGoldenSet_DuplicateName verifies that a duplicate name returns 409.
 func TestCreateGoldenSet_DuplicateName(t *testing.T) {
 	gsStore := &mockGoldenSetStore{createErr: eval.ErrGoldenSetNameTaken}
-	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
+	h := NewHandler(&mockRunStore{}, &mockKBReader{name: "Test KB", found: true}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil)
 
 	req := buildUploadRequest("existing-set", minimalJSONL())
 	rec := httptest.NewRecorder()

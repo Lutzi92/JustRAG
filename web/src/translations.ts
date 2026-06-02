@@ -226,6 +226,7 @@ export const translations = {
     viewPermissionDesc: { de: 'Kann Inhalte ansehen und mit der Knowledge Base chatten', en: 'Can view content and chat with the knowledge base' },
     editPermissionDesc: { de: 'Kann Dateien hochladen, löschen und die Knowledge Base bearbeiten', en: 'Can upload, delete files and edit the knowledge base' },
     shareKb: { de: 'teilen', en: 'Share' },
+    kbTuning: { de: 'RAG-Einstellungen', en: 'RAG settings' },
     enterRecipientUsername: { de: 'Empfänger-Benutzername eingeben', en: 'Enter recipient username' },
     userNotFound: { de: 'Benutzer nicht gefunden', en: 'User not found' },
     confirmShare: { de: 'Teilen bestätigen', en: 'Confirm share' },

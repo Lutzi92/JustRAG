@@ -140,6 +140,7 @@ func (w *GenWorker) HandleGenerate(ctx context.Context, t *asynq.Task) error {
 		ContentHash:   hex.EncodeToString(sum[:]),
 		QuestionCount: len(questions),
 		CreatedBy:     job.CreatedBy,
+		KBID:          job.KBID, // generated set belongs to the corpus KB (strictly per-KB)
 	})
 	if err != nil {
 		wctx, wcancel := detachedWriteCtx()

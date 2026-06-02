@@ -56,14 +56,24 @@ interface CreateGoldenSetResponse {
     created_at: string;
 }
 
-export default function AdminEvalTab() {
+interface AdminEvalTabProps {
+  /** API base for eval endpoints.
+   *  Admin (default): the global admin eval prefix.
+   *  KB-scoped: `/api/kb/${kbId}/eval`. */
+  basePath?: string;
+  /** When set, the tab is KB-scoped: kb_id pickers are hidden and kb_id is
+   *  taken from the path, not the form. */
+  kbId?: string;
+}
+
+export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: AdminEvalTabProps) {
     const reducedMotion = useReducedMotion();
     const { t } = useTheme();
     const toast = useToast();
 
     // State: kick-off form
     const [label, setLabel] = useState('');
-    const [kbId, setKbId] = useState('');
+    const [formKbId, setFormKbId] = useState('');
     const [selectedGoldenSetId, setSelectedGoldenSetId] = useState<string>('');
     const [judgeEnabled, setJudgeEnabled] = useState(true);
     const [topK, setTopK] = useState(10);
@@ -75,6 +85,7 @@ export default function AdminEvalTab() {
     const [uploadDescription, setUploadDescription] = useState('');
     const [uploadFile, setUploadFile] = useState<File | null>(null);
     const [uploadLoading, setUploadLoading] = useState(false);
+    const [uploadKbId, setUploadKbId] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     // State: generate from corpus
@@ -104,13 +115,13 @@ export default function AdminEvalTab() {
     const fetchGoldenSets = useCallback(async () => {
         try {
             const response = await axios.get<ListGoldenSetsResponse>(
-                `${API_BASE_URL}/api/admin/eval/golden-sets`
+                `${API_BASE_URL}${basePath}/golden-sets`
             );
             setGoldenSets(response.data.golden_sets || []);
         } catch (err) {
             toast.error(getApiErrorMessage(err, t('evalGoldenSetsFetchFailed')));
         }
-    }, [t, toast]);
+    }, [basePath, t, toast]);
 
     useEffect(() => {
         fetchGoldenSets();
@@ -120,11 +131,11 @@ export default function AdminEvalTab() {
     const fetchGenJobs = useCallback(async () => {
         try {
             const res = await axios.get<{ jobs: Array<{ id: string; status: string; error?: string; golden_set_id?: string }> }>(
-                `${API_BASE_URL}/api/admin/eval/golden-sets/jobs`
+                `${API_BASE_URL}${basePath}/golden-sets/jobs`
             );
             setGenJobs(res.data.jobs || []);
         } catch { /* non-fatal */ }
-    }, []);
+    }, [basePath]);
 
     const genInFlight = useMemo(() => genJobs.some(j => j.status === 'queued' || j.status === 'running'), [genJobs]);
 
@@ -137,10 +148,11 @@ export default function AdminEvalTab() {
 
     const handleGenerate = async (e: FormEvent) => {
         e.preventDefault();
-        if (!genKbId.trim() || !genName.trim()) { toast.error(t('evalGenFailed')); return; }
+        if ((!kbId && !genKbId.trim()) || !genName.trim()) { toast.error(t('evalGenFailed')); return; }
         try {
-            await axios.post(`${API_BASE_URL}/api/admin/eval/golden-sets/generate`, {
-                kb_id: genKbId.trim(), name: genName.trim(), lang: genLang,
+            await axios.post(`${API_BASE_URL}${basePath}/golden-sets/generate`, {
+                ...(kbId ? {} : { kb_id: genKbId.trim() }),
+                name: genName.trim(), lang: genLang,
                 counts: { lookup: genLookup, complex: genComplex, enumeration: genEnum, multihop: genMultihop },
             });
             toast.success(t('evalGenQueued'));
@@ -152,7 +164,7 @@ export default function AdminEvalTab() {
 
     const handleDownloadGoldenSet = async (id: string, name: string) => {
         try {
-            const res = await axios.get<{ content?: unknown[] }>(`${API_BASE_URL}/api/admin/eval/golden-sets/${id}`);
+            const res = await axios.get<{ content?: unknown[] }>(`${API_BASE_URL}${basePath}/golden-sets/${id}`);
             const lines = (res.data.content || []).map(q => JSON.stringify(q)).join('\n');
             const blob = new Blob([lines], { type: 'application/x-ndjson' });
             const url = URL.createObjectURL(blob);
@@ -173,7 +185,7 @@ export default function AdminEvalTab() {
             params.set('offset', String(offset));
             if (statusFilter) params.set('status', statusFilter);
             const response = await axios.get<ListRunsResponse>(
-                `${API_BASE_URL}/api/admin/eval/runs?${params.toString()}`
+                `${API_BASE_URL}${basePath}/runs?${params.toString()}`
             );
             setRuns(response.data.runs);
             setTotal(response.data.total);
@@ -182,7 +194,7 @@ export default function AdminEvalTab() {
         } finally {
             setListLoading(false);
         }
-    }, [offset, statusFilter, toast, t]);
+    }, [basePath, offset, statusFilter, toast, t]);
 
     // Poll while any run is queued/running
     const hasInFlight = useMemo(() => runs.some(r => r.status === 'queued' || r.status === 'running'), [runs]);
@@ -199,15 +211,23 @@ export default function AdminEvalTab() {
             toast.error(t('evalGoldenSetMissingFields'));
             return;
         }
+        // In admin (non-KB-scoped) mode, kb_id is required.
+        if (!kbId && !uploadKbId.trim()) {
+            toast.error(t('evalGoldenSetMissingFields'));
+            return;
+        }
         setUploadLoading(true);
         try {
             const formData = new FormData();
             formData.append('name', uploadName.trim());
             if (uploadDescription.trim()) formData.append('description', uploadDescription.trim());
             formData.append('file', uploadFile);
+            // KB-scoped mode: kb_id comes from the path (CreateGoldenSetForKB).
+            // Admin mode: must be supplied explicitly.
+            if (!kbId) formData.append('kb_id', uploadKbId.trim());
 
             const response = await axios.post<CreateGoldenSetResponse>(
-                `${API_BASE_URL}/api/admin/eval/golden-sets`,
+                `${API_BASE_URL}${basePath}/golden-sets`,
                 formData,
                 { headers: { 'Content-Type': 'multipart/form-data' } }
             );
@@ -215,6 +235,7 @@ export default function AdminEvalTab() {
             setUploadName('');
             setUploadDescription('');
             setUploadFile(null);
+            setUploadKbId('');
             if (fileInputRef.current) fileInputRef.current.value = '';
             fetchGoldenSets();
             // Auto-select the newly-uploaded set
@@ -229,7 +250,7 @@ export default function AdminEvalTab() {
     const handleDeleteGoldenSet = async (id: string, name: string) => {
         if (!window.confirm(`${t('evalGoldenSetConfirmDelete')} "${name}"?`)) return;
         try {
-            await axios.delete(`${API_BASE_URL}/api/admin/eval/golden-sets/${id}`);
+            await axios.delete(`${API_BASE_URL}${basePath}/golden-sets/${id}`);
             toast.success(t('evalGoldenSetDeleted'));
             if (selectedGoldenSetId === id) setSelectedGoldenSetId('');
             fetchGoldenSets();
@@ -251,9 +272,9 @@ export default function AdminEvalTab() {
                 judge_enabled: judgeEnabled,
                 top_k: topK,
             };
-            if (kbId) body.kb_id = kbId;
+            if (!kbId && formKbId) body.kb_id = formKbId;
             if (selectedGoldenSetId) body.golden_set_id = selectedGoldenSetId;
-            await axios.post(`${API_BASE_URL}/api/admin/eval/runs`, body);
+            await axios.post(`${API_BASE_URL}${basePath}/runs`, body);
             toast.success(t('evalKickedOff'));
             setLabel('');
             fetchRuns();
@@ -271,7 +292,7 @@ export default function AdminEvalTab() {
         }
         if (!window.confirm(t('evalConfirmDelete'))) return;
         try {
-            await axios.delete(`${API_BASE_URL}/api/admin/eval/runs/${id}`);
+            await axios.delete(`${API_BASE_URL}${basePath}/runs/${id}`);
             toast.success(t('evalDeleted'));
             fetchRuns();
         } catch (err) {
@@ -282,8 +303,8 @@ export default function AdminEvalTab() {
     const handleExport = async (id: string, compareWith?: string, download = false) => {
         try {
             const url = compareWith
-                ? `${API_BASE_URL}/api/admin/eval/runs/${id}/export?compare_with=${compareWith}`
-                : `${API_BASE_URL}/api/admin/eval/runs/${id}/export`;
+                ? `${API_BASE_URL}${basePath}/runs/${id}/export?compare_with=${compareWith}`
+                : `${API_BASE_URL}${basePath}/runs/${id}/export`;
             const response = await axios.get<string>(url, {
                 responseType: 'text',
             });
@@ -315,7 +336,7 @@ export default function AdminEvalTab() {
         setCompareLoading(true);
         try {
             const response = await axios.get<string>(
-                `${API_BASE_URL}/api/admin/eval/runs/${compareAId}/export?compare_with=${compareBId}`,
+                `${API_BASE_URL}${basePath}/runs/${compareAId}/export?compare_with=${compareBId}`,
                 { responseType: 'text' }
             );
             setCompareMarkdown(response.data);
@@ -385,6 +406,7 @@ export default function AdminEvalTab() {
                     <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{t('evalGenerateTitle')}</div>
                     <div style={{ fontSize: '0.85rem', opacity: 0.7 }}>{t('evalGenerateHint')}</div>
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        {!kbId && (
                         <input
                             type="text"
                             id="gen-kb-id"
@@ -393,6 +415,7 @@ export default function AdminEvalTab() {
                             placeholder="kb_id"
                             style={{ flex: 1, minWidth: '200px', padding: '0.4rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontFamily: 'monospace' }}
                         />
+                        )}
                         <input
                             type="text"
                             id="gen-name"
@@ -447,6 +470,15 @@ export default function AdminEvalTab() {
                 <form onSubmit={handleUpload} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '1rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
                     <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{t('evalGoldenSetUpload')}</div>
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        {!kbId && (
+                        <input
+                            type="text"
+                            value={uploadKbId}
+                            onChange={e => setUploadKbId(e.target.value)}
+                            placeholder="kb_id"
+                            style={{ flex: 1, minWidth: '200px', padding: '0.4rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontFamily: 'monospace' }}
+                        />
+                        )}
                         <input
                             type="text"
                             value={uploadName}
@@ -487,11 +519,13 @@ export default function AdminEvalTab() {
                     <label htmlFor="eval-label" style={{ fontSize: '0.9rem', opacity: 0.8 }}>{t('evalLabel')}</label>
                     <input id="eval-label" type="text" value={label} onChange={e => setLabel(e.target.value)} maxLength={255} placeholder={t('evalLabelPlaceholder')} style={{ padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-primary)', color: 'var(--text-primary)' }} />
                 </div>
-                {/* KB ID */}
+                {/* KB ID — hidden when the tab is already scoped to a KB */}
+                {!kbId && (
                 <div className="input-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                     <label htmlFor="eval-kb-id" style={{ fontSize: '0.9rem', opacity: 0.8 }}>{t('evalKbId')}</label>
-                    <input id="eval-kb-id" type="text" value={kbId} onChange={e => setKbId(e.target.value)} placeholder={t('evalKbIdPlaceholder')} style={{ padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontFamily: 'monospace' }} />
+                    <input id="eval-kb-id" type="text" value={formKbId} onChange={e => setFormKbId(e.target.value)} placeholder={t('evalKbIdPlaceholder')} style={{ padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontFamily: 'monospace' }} />
                 </div>
+                )}
                 {/* Golden set selector */}
                 <div className="input-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                     <label htmlFor="eval-golden-set" style={{ fontSize: '0.9rem', opacity: 0.8 }}>{t('evalGoldenSet')}</label>

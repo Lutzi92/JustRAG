@@ -165,6 +165,11 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 
 	ctx, kbID = h.maybeRouteKB(ctx, r, user.ID, kbID, body.Message)
 
+	// Per-KB config: once kb_id is final, swap to a request-local handler whose
+	// reader + SearchService overlay this KB's kb_site_configs overrides. No-op
+	// (returns h) when the KB has no overrides.
+	h = h.forKB(ctx, kbID)
+
 	chatID, ok := h.resolveOrCreateChat(ctx, w, body.ChatID, kbID, user.ID, body.Message)
 	if !ok {
 		return

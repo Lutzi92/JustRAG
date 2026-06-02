@@ -17,6 +17,7 @@ import (
 // GoldenSet is a named fixture stored in the DB as a JSON array.
 type GoldenSet struct {
 	ID            uuid.UUID       `json:"id"`
+	KBID          uuid.UUID       `json:"kb_id"`
 	Name          string          `json:"name"`
 	Description   string          `json:"description,omitempty"`
 	Content       json.RawMessage `json:"content,omitempty"`
@@ -43,8 +44,8 @@ var ErrGoldenSetNameTaken = errors.New("golden set name already taken")
 func (s *GoldenSetStore) Create(ctx context.Context, g GoldenSet) (uuid.UUID, time.Time, error) {
 	const q = `
 		INSERT INTO eval_golden_sets
-			(name, description, content, content_hash, question_count, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6)
+			(name, description, content, content_hash, question_count, created_by, kb_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, created_at`
 	var id uuid.UUID
 	var createdAt time.Time
@@ -53,7 +54,7 @@ func (s *GoldenSetStore) Create(ctx context.Context, g GoldenSet) (uuid.UUID, ti
 		d := g.Description
 		desc = &d
 	}
-	err := s.pool.QueryRow(ctx, q, g.Name, desc, g.Content, g.ContentHash, g.QuestionCount, g.CreatedBy).Scan(&id, &createdAt)
+	err := s.pool.QueryRow(ctx, q, g.Name, desc, g.Content, g.ContentHash, g.QuestionCount, g.CreatedBy, g.KBID).Scan(&id, &createdAt)
 	if err != nil {
 		if pgxutil.IsUniqueViolation(err) {
 			return uuid.Nil, time.Time{}, ErrGoldenSetNameTaken
@@ -67,19 +68,27 @@ func (s *GoldenSetStore) Create(ctx context.Context, g GoldenSet) (uuid.UUID, ti
 // Returns store.ErrNotFound if the id is not found.
 func (s *GoldenSetStore) Get(ctx context.Context, id uuid.UUID) (*GoldenSet, error) {
 	const q = `
-		SELECT id, name, description, content, content_hash, question_count, created_at, created_by
+		SELECT id, kb_id, name, description, content, content_hash, question_count, created_at, created_by
 		FROM eval_golden_sets
 		WHERE id = $1`
 	var g GoldenSet
 	var desc *string
+	// kb_id may be NULL for legacy "orphan" rows when the strictly-per-KB
+	// enforcement has been deferred (see migrate.EnsureGoldenSetKBID). Scan
+	// through a NullUUID so such a row doesn't crash the fetch; KBID stays the
+	// zero UUID, which never matches a real KB in the ownership checks.
+	var kb uuid.NullUUID
 	err := s.pool.QueryRow(ctx, q, id).Scan(
-		&g.ID, &g.Name, &desc, &g.Content, &g.ContentHash, &g.QuestionCount, &g.CreatedAt, &g.CreatedBy,
+		&g.ID, &kb, &g.Name, &desc, &g.Content, &g.ContentHash, &g.QuestionCount, &g.CreatedAt, &g.CreatedBy,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, err
+	}
+	if kb.Valid {
+		g.KBID = kb.UUID
 	}
 	if desc != nil {
 		g.Description = *desc
@@ -106,6 +115,33 @@ func (s *GoldenSetStore) List(ctx context.Context) ([]GoldenSet, error) {
 		var g GoldenSet
 		var desc *string
 		if err := rows.Scan(&g.ID, &g.Name, &desc, &g.ContentHash, &g.QuestionCount, &g.CreatedAt, &g.CreatedBy); err != nil {
+			return []GoldenSet{}, err
+		}
+		if desc != nil {
+			g.Description = *desc
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// ListByKB returns golden sets owned by kbID, newest first (content omitted).
+func (s *GoldenSetStore) ListByKB(ctx context.Context, kbID uuid.UUID) ([]GoldenSet, error) {
+	const q = `
+		SELECT id, kb_id, name, description, content_hash, question_count, created_at, created_by
+		FROM eval_golden_sets
+		WHERE kb_id = $1
+		ORDER BY created_at DESC`
+	rows, err := s.pool.Query(ctx, q, kbID)
+	if err != nil {
+		return []GoldenSet{}, err
+	}
+	defer rows.Close()
+	out := []GoldenSet{}
+	for rows.Next() {
+		var g GoldenSet
+		var desc *string
+		if err := rows.Scan(&g.ID, &g.KBID, &g.Name, &desc, &g.ContentHash, &g.QuestionCount, &g.CreatedAt, &g.CreatedBy); err != nil {
 			return []GoldenSet{}, err
 		}
 		if desc != nil {

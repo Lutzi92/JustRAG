@@ -397,3 +397,28 @@ export interface AcademicFinding {
     papers: AcademicPaper[];
     relevanceScore: number;
 }
+
+export type KbConfigFieldType = 'bool' | 'int' | 'float' | 'string' | 'enum';
+
+export interface KbConfigField {
+  key: string;
+  type: KbConfigFieldType;
+  group: string;
+  label: string;
+  help: string;
+  min?: number;
+  max?: number;
+  enum?: string[];
+  requiresReingest?: boolean;
+}
+
+export interface KbConfigValue {
+  override: string | null;
+  global: string | null;
+  effective: string | null;
+}
+
+export interface KbSettingsResponse {
+  registry: KbConfigField[];
+  values: Record<string, KbConfigValue>;
+}

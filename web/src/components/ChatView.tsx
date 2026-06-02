@@ -2,7 +2,7 @@ import { lazy, Suspense, memo, useCallback, useRef, useEffect, useState } from '
 import { Virtuoso } from 'react-virtuoso';
 import {
   ArrowLeft, BookOpen, Brain, Sun, Moon, Send,
-  BarChart2, MessageSquare, UserPlus, X, Search, GitBranch, Settings, Check, Trash2,
+  BarChart2, MessageSquare, UserPlus, X, Search, GitBranch, Settings, Check, Trash2, SlidersHorizontal,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import type { Message } from '../types';
@@ -26,6 +26,7 @@ import { registerJob, unregisterJob } from '../utils/jobRegistry';
 const Dashboard = lazy(() => import('../Dashboard'));
 const ResearchMode = lazy(() => import('./ResearchMode'));
 const AcademicMode = lazy(() => import('./AcademicMode'));
+const KbSettingsPanelLazy = lazy(() => import('./kb-settings/KbSettingsPanel').then(m => ({ default: m.KbSettingsPanel })));
 const StudioWorkspace = lazy(() => import('./Studio/StudioWorkspace').then(module => ({ default: module.StudioWorkspace })));
 const ComparisonView = lazy(() => import('./ComparisonView').then(module => ({ default: module.ComparisonView })));
 
@@ -48,6 +49,12 @@ const ChatViewComp = () => {
 
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   const [systemPromptDraft, setSystemPromptDraft] = useState(currentKb?.systemPrompt || '');
+  const [showKbSettings, setShowKbSettings] = useState(false);
+
+  const canTuneKB =
+    currentKb != null &&
+    (user?.role === 'api-user' || user?.role === 'admin' || user?.role === 'superadmin') &&
+    (currentKb.userId === user?.id || user?.role === 'admin' || user?.role === 'superadmin');
 
   useEffect(() => {
     setSystemPromptDraft(currentKb?.systemPrompt || '');
@@ -164,6 +171,27 @@ const ChatViewComp = () => {
               >
                 {language.toUpperCase()}
               </button>
+              {canTuneKB && (
+                <button
+                  type="button"
+                  onClick={() => setShowKbSettings(true)}
+                  style={{
+                    background: showKbSettings ? 'var(--tag-bg)' : 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    color: showKbSettings ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                    padding: '4px',
+                    borderRadius: '6px',
+                  }}
+                  title={t('kbTuning')}
+                  aria-label={t('kbTuning')}
+                  aria-pressed={showKbSettings}
+                >
+                  <SlidersHorizontal size={20} aria-hidden="true" />
+                </button>
+              )}
             </>
           )}
           {currentKb?.userId === user?.id && (
@@ -753,6 +781,41 @@ const ChatViewComp = () => {
           )
         }
       </main>
+      {showKbSettings && currentKb && (
+        <div
+          className="modal-overlay"
+          style={{ zIndex: 3000 }}
+          onClick={() => setShowKbSettings(false)}
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowKbSettings(false); }}
+          role="presentation"
+        >
+          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="KB settings"
+            className="modal-content"
+            style={{ maxWidth: '640px', maxHeight: '80vh', overflowY: 'auto' }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+              <h3 style={{ margin: 0 }}>KB Settings (RAG Tuning)</h3>
+              <button
+                type="button"
+                onClick={() => setShowKbSettings(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '4px' }}
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <Suspense fallback={<div>Loading…</div>}>
+              <KbSettingsPanelLazy kbId={currentKb.id} />
+            </Suspense>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

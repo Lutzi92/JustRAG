@@ -139,6 +139,22 @@ func (s *Store) Insert(ctx context.Context, r Run) (uuid.UUID, error) {
 }
 
 // ---------------------------------------------------------------------------
+// HasActiveRun
+// ---------------------------------------------------------------------------
+
+// HasActiveRun reports whether kbID already has a queued or running eval. Used
+// by the KB-scoped CreateRun handler to reject (409) a second concurrent
+// submission for the same KB.
+func (s *Store) HasActiveRun(ctx context.Context, kbID uuid.UUID) (bool, error) {
+	var exists bool
+	const q = `SELECT exists(SELECT 1 FROM eval_runs WHERE kb_id = $1 AND status IN ('queued','running'))`
+	if err := s.pool.QueryRow(ctx, q, kbID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("eval has active run: %w", err)
+	}
+	return exists, nil
+}
+
+// ---------------------------------------------------------------------------
 // MarkRunning
 // ---------------------------------------------------------------------------
 

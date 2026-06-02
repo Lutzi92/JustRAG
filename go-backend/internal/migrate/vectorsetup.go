@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/justrag/go-backend/internal/config"
+	"github.com/justrag/go-backend/internal/database"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -98,7 +101,29 @@ func EnsureVectorTables(ctx context.Context, mainCfg, vectorCfg config.DBConfig)
 	// the active embedder dim using the already-open mainDB connection.
 	EnsureUserMemoryEmbedding(ctx, mainDB)
 
+	// eval_golden_sets.kb_id: backfill from provenance and enforce NOT NULL + FK.
+	// Requires a pgxpool (pgx native protocol); open a short-lived one from mainCfg.
+	if err := ensureGoldenSetKBIDFromCfg(ctx, mainCfg); err != nil {
+		return fmt.Errorf("golden set kb_id setup: %w", err)
+	}
+
 	return nil
+}
+
+// ensureGoldenSetKBIDFromCfg opens a short-lived pgxpool from cfg and calls
+// EnsureGoldenSetKBID. It is the bridge between EnsureVectorTables (which uses
+// config.DBConfig) and the pgxpool-based backfill helper.
+func ensureGoldenSetKBIDFromCfg(ctx context.Context, cfg config.DBConfig) error {
+	poolCfg, err := database.BuildPoolConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("build pool config: %w", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		return fmt.Errorf("open pool: %w", err)
+	}
+	defer pool.Close()
+	return EnsureGoldenSetKBID(ctx, pool)
 }
 
 // queryExistingChunkTableDimensions returns the dimension parsed from any

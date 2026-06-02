@@ -44,6 +44,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/kbconfig"
 	"github.com/justrag/go-backend/internal/kg"
 	"github.com/justrag/go-backend/internal/longmem"
 	"github.com/justrag/go-backend/internal/mcp"
@@ -104,8 +105,13 @@ type routeCtx struct {
 	adminChain      func(http.HandlerFunc) http.Handler
 	kbViewChain     func(http.HandlerFunc) http.Handler
 	kbEditChain     func(http.HandlerFunc) http.Handler
+	kbTuningChain   func(http.HandlerFunc) http.Handler
 	analyticsChain  func(http.HandlerFunc) http.Handler
 	apiKeyChain     func(http.HandlerFunc) http.Handler
+
+	// Per-KB settings
+	kbConfigStore   *kbconfig.Store
+	kbConfigHandler *kbconfig.Handler
 }
 
 // setupRoutes registers all HTTP routes on the given mux using the provided
@@ -122,6 +128,8 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	aiResolver := ai.NewConfigResolver(ai.NewStore(infra.db.Main))
 	embeddingCache := ai.NewEmbeddingCache(infra.rdb.Client, cfg.EmbeddingCacheTTL)
 	chatStore := chat.NewStore(infra.db.Main)
+	kbConfigStore := kbconfig.NewStore(infra.db.Main)
+	kbConfigHandler := kbconfig.NewHandler(kbConfigStore, chatStore)
 	queryCache := vector.NewQueryCache(infra.db.Vector)
 	queryCache.StartWriter(ctx)
 	// Track the sweeper goroutine so routeCleanup can drain it before the
@@ -210,6 +218,17 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 		kbEditChain: func(h http.HandlerFunc) http.Handler {
 			return authMiddleware.Authenticate(kbMw.RequireKBPermission("edit")(http.HandlerFunc(h)))
 		},
+		// kbTuningChain gates the per-KB Settings surface: KB edit permission
+		// AND role in {api-user, admin, superadmin}. Order:
+		// Authenticate -> RequireRole -> RequireKBPermission("edit").
+		// Superadmin bypasses RequireRole and is granted edit by the KB check.
+		kbTuningChain: func(h http.HandlerFunc) http.Handler {
+			return authMiddleware.Authenticate(
+				authMiddleware.RequireRole(auth.RoleAPIUser, auth.RoleAdmin)(
+					kbMw.RequireKBPermission("edit")(http.HandlerFunc(h))))
+		},
+		kbConfigStore:   kbConfigStore,
+		kbConfigHandler: kbConfigHandler,
 		analyticsChain: func(h http.HandlerFunc) http.Handler {
 			return authMiddleware.Authenticate(
 				kbMw.RequireKBPermission("view")(
@@ -470,7 +489,7 @@ func registerAdminEvalRoutes(rc *routeCtx) {
 		rc.infra.asynqClient,
 		goldenSetStore,
 		genJobStore,
-	)
+	).WithKBOverrides(rc.kbConfigStore)
 
 	rc.mux.Handle("POST /api/admin/eval/runs", rc.adminChain(h.CreateRun))
 	rc.mux.Handle("GET /api/admin/eval/runs", rc.adminChain(h.ListRuns))
@@ -485,6 +504,19 @@ func registerAdminEvalRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/admin/eval/golden-sets/generate", rc.adminChain(h.GenerateGoldenSet))
 	rc.mux.Handle("GET /api/admin/eval/golden-sets/jobs", rc.adminChain(h.ListGenJobs))
 	rc.mux.Handle("GET /api/admin/eval/golden-sets/{id}", rc.adminChain(h.GetGoldenSet))
+
+	// Per-KB eval surface (api-user/admin/superadmin with KB edit permission).
+	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets", rc.kbTuningChain(h.ListGoldenSetsForKB))
+	rc.mux.Handle("POST /api/kb/{id}/eval/golden-sets", rc.kbTuningChain(h.CreateGoldenSetForKB))
+	rc.mux.Handle("POST /api/kb/{id}/eval/golden-sets/generate", rc.kbTuningChain(h.GenerateGoldenSetForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/jobs", rc.kbTuningChain(h.ListGenJobsForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbTuningChain(h.GetGoldenSetForKB))
+	rc.mux.Handle("DELETE /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbTuningChain(h.DeleteGoldenSetForKB))
+	rc.mux.Handle("POST /api/kb/{id}/eval/runs", rc.kbTuningChain(h.CreateRunForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/runs", rc.kbTuningChain(h.ListRunsForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/runs/{runId}", rc.kbTuningChain(h.GetRunForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/runs/{runId}/export", rc.kbTuningChain(h.ExportRunForKB))
+	rc.mux.Handle("DELETE /api/kb/{id}/eval/runs/{runId}", rc.kbTuningChain(h.DeleteRunForKB))
 }
 
 func registerKBRoutes(rc *routeCtx) {
@@ -497,6 +529,11 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/kb", rc.authMw.Authenticate(http.HandlerFunc(kbHandler.ListKnowledgeBases)))
 	rc.mux.Handle("GET /api/kb/global", rc.authMw.Authenticate(http.HandlerFunc(kbHandler.ListGlobalKnowledgeBases)))
 	rc.mux.Handle("POST /api/kb", rc.authMw.Authenticate(http.HandlerFunc(kbHandler.CreateKnowledgeBase)))
+
+	// Per-KB settings (registry-driven RAG-pipeline overrides)
+	rc.mux.Handle("GET /api/kb/{id}/settings", rc.kbTuningChain(rc.kbConfigHandler.GetSettings))
+	rc.mux.Handle("PUT /api/kb/{id}/settings", rc.kbTuningChain(rc.kbConfigHandler.PutSettings))
+	rc.mux.Handle("DELETE /api/kb/{id}/settings/{key}", rc.kbTuningChain(rc.kbConfigHandler.DeleteSetting))
 
 	// KB operations (need KB permission middleware)
 	rc.mux.Handle("PATCH /api/kb/{id}", rc.kbEditChain(kbUpdateHandler.UpdateKB))
@@ -655,6 +692,7 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 	chatOpts := []chat.HandlerOption{
 		chat.WithRedis(rc.infra.rdb.Client),
 		chat.WithSiteConfigReader(rc.chatStore),
+		chat.WithKBConfigStore(rc.kbConfigStore),
 		chat.WithAsynqClient(rc.infra.asynqClient),
 		chat.WithToolDispatcher(chat.NewMCPDispatcher(mcpRegistry)),
 		chat.WithSessionMemory(sessionMemoryStore),

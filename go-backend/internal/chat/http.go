@@ -49,6 +49,10 @@ type Handler struct {
 	// against summary content alone (legacy n-gram path; the
 	// semantic-similarity fallback still applies).
 	raptorDescendants RaptorDescendantsResolver
+	// kbConfigStore loads per-KB site_config overrides (kb_site_configs).
+	// Optional — when nil, forKB is a no-op and every KB uses the global
+	// reader + shared SearchService (zero added cost).
+	kbConfigStore KBConfigOverrideLister
 }
 
 // RaptorDescendantsResolver is the narrow interface
@@ -208,6 +212,16 @@ func WithTabularCatalog(c TabularCatalogChecker) HandlerOption {
 func WithRaptorDescendantsResolver(r RaptorDescendantsResolver) HandlerOption {
 	return func(h *Handler) {
 		h.raptorDescendants = r
+	}
+}
+
+// WithKBConfigStore attaches the per-KB site_config override lister. When
+// provided, the chat handler overlays a KB's kb_site_configs values onto the
+// global reader for that turn (registry keys only). Optional — when absent,
+// per-KB overrides are inert and all KBs read global config.
+func WithKBConfigStore(s KBConfigOverrideLister) HandlerOption {
+	return func(h *Handler) {
+		h.kbConfigStore = s
 	}
 }
 
