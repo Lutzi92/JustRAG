@@ -1,12 +1,14 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -59,6 +61,10 @@ type sendMessageRequest struct {
 // SSE helpers
 // ---------------------------------------------------------------------------
 
+// sseBufPool reuses encode buffers across writeSSE calls to amortize the
+// per-frame allocation a fresh json.Marshal would incur on a long stream.
+var sseBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
 // writeSSE encodes data as JSON and writes a Server-Sent Events data frame,
 // flushing the response writer if it supports http.Flusher. Marshal can only
 // fail for structurally invalid Go values (channels, functions, cyclic data),
@@ -71,10 +77,20 @@ type sendMessageRequest struct {
 // stop work when the client has gone away; this log is observability, not
 // flow control.
 func writeSSE(w http.ResponseWriter, data any) {
-	b, err := json.Marshal(data)
-	if err != nil {
+	buf := sseBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer sseBufPool.Put(buf)
+	// Pool the encode buffer to cut per-frame GC pressure on long streams
+	// (chat responses emit hundreds of frames). Encoder HTML-escapes the
+	// same as json.Marshal, so the wire bytes are unchanged; it appends a
+	// trailing '\n' which we trim before framing.
+	if err := json.NewEncoder(buf).Encode(data); err != nil {
 		slog.Error("chat: writeSSE marshal failed", "error", err, "type", fmt.Sprintf("%T", data))
 		return
+	}
+	b := buf.Bytes()
+	if n := len(b); n > 0 && b[n-1] == '\n' {
+		b = b[:n-1]
 	}
 	if _, werr := fmt.Fprintf(w, "data: %s\n\n", b); werr != nil {
 		slog.Debug("chat: writeSSE write failed (likely client disconnect)", "error", werr)

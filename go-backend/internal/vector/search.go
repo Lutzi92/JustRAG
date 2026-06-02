@@ -603,9 +603,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	// The instruction prefix nudges the vector toward the query manifold;
 	// dropping it just for HyDE would split the cache/vector space in a way
 	// that the retrained Qwen3 doesn't want.
-	timer := newStageTimer(func(stage string, d time.Duration) {
-		observability.RecordStageDuration(stage, d)
-	})
+	timer := newStageTimer(observability.RecordStageDuration)
 	embedCtx, cancelEmbed := context.WithTimeout(ctx, embedTimeout)
 	queryEmbedding, err := ai.EncodeQuery(embedCtx, s.aiResolver, vectorSearchText, siteCfg.QueryInstruction, kbID, s.embeddingCache)
 	cancelEmbed()

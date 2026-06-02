@@ -220,3 +220,47 @@ func BenchmarkBlendRerankScores(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkDeduplicate guards the near-duplicate filter on the retrieval hot
+// path. It is O(kept^2) in the worst case (every kept doc compared against
+// each survivor), with one sortedUniqueWords tokenization per accepted doc,
+// so a regression in either the merge-join or the tokenizer surfaces here.
+func BenchmarkDeduplicate(b *testing.B) {
+	for _, n := range []int{20, 50, 100, 200} {
+		docs := makeBenchDocs(n)
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				Deduplicate(docs, 0.9)
+			}
+		})
+	}
+}
+
+// BenchmarkSortedUniqueWords isolates the per-doc tokenize+sort+dedup cost
+// that both Deduplicate and ApplyMMR pay once per candidate. The 30-word
+// body mirrors makeBenchDocs so the number is comparable across the suite.
+func BenchmarkSortedUniqueWords(b *testing.B) {
+	text := makeBenchDocs(1)[0].Content
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sortedUniqueWords(text)
+	}
+}
+
+// BenchmarkJaccardSorted measures the zero-allocation merge-join similarity
+// over two pre-tokenized slices — the inner comparison both Deduplicate and
+// ApplyMMR call O(k) times per candidate. Tokenization is hoisted out of the
+// timed loop so this captures the merge-join alone.
+func BenchmarkJaccardSorted(b *testing.B) {
+	docs := makeBenchDocs(2)
+	a := sortedUniqueWords(docs[0].Content)
+	c := sortedUniqueWords(docs[1].Content)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		jaccardSorted(a, c)
+	}
+}

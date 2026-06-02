@@ -611,7 +611,7 @@ func (s *ChunkService) GetRaptorDescendantLeafContentsAcrossDims(ctx context.Con
 	if err != nil {
 		return nil, err
 	}
-	merged := make(map[string][]string)
+	merged := make(map[string][]string, len(summaryIDs))
 	for _, d := range dims {
 		m, err := s.GetRaptorDescendantLeafContents(ctx, summaryIDs, d)
 		if err != nil {
