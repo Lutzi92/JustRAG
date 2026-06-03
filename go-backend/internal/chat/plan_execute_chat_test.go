@@ -68,6 +68,35 @@ func TestRunPlanExecuteChat_PlanThenAnswer(t *testing.T) {
 	}
 }
 
+// TestRunPlanExecuteChat_PopulatesFinalChunks guards the eval-harness
+// contract — see the supervisor test of the same name.
+func TestRunPlanExecuteChat_PopulatesFinalChunks(t *testing.T) {
+	plan := func(ctx context.Context, resolver *ai.ConfigResolver, kbID, q, lang, model string) ([]string, string, error) {
+		return []string{"sub1", "sub2"}, "decomposed", nil
+	}
+	iter := func(ctx context.Context, resolver *ai.ConfigResolver, kbID, q, summaries string, round int, lang, model string) (string, []string, string, error) {
+		return "answer", nil, "sufficient", nil
+	}
+	searcher := &fakeSearcher{
+		resp: func(query string) []vector.SearchChunk {
+			return []vector.SearchChunk{chunk("c1", "f1")}
+		},
+	}
+
+	cctx, err := runPlanExecuteChatTestable(context.Background(), nil, searcher, plan, nil, iter,
+		PlanExecuteParams{
+			KbID: "kb", Query: "Q?", Language: "en",
+			MaxSubQueries: 3, MaxIterations: 3, TokenBudget: 8000,
+		}, func(map[string]any) {})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(cctx.FinalChunks) != len(cctx.Sources) || len(cctx.FinalChunks) == 0 {
+		t.Fatalf("FinalChunks must mirror Sources and be non-empty: got %d chunks vs %d sources",
+			len(cctx.FinalChunks), len(cctx.Sources))
+	}
+}
+
 func TestRunPlanExecuteChat_PlanFailureFallsBackToSingleQuery(t *testing.T) {
 	plan := func(ctx context.Context, resolver *ai.ConfigResolver, kbID, q, lang, model string) ([]string, string, error) {
 		return nil, "", errors.New("LLM down")

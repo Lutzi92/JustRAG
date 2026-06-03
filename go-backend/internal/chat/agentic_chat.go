@@ -300,6 +300,7 @@ func runAgenticChatTestable(
 		SystemPrompt:  sb.String(),
 		Sources:       sources,
 		Context:       contextText,
+		FinalChunks:   accumulated,
 	}, nil
 }
 

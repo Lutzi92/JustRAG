@@ -99,6 +99,27 @@ func TestRunAgenticChat_SufficientAfterFirstHop(t *testing.T) {
 	}
 }
 
+// TestRunAgenticChat_PopulatesFinalChunks guards the eval-harness
+// contract — see the supervisor test of the same name.
+func TestRunAgenticChat_PopulatesFinalChunks(t *testing.T) {
+	searcher := &fakeAgenticSearcher{
+		results: map[string]*vector.SearchResult{
+			"original": {Chunks: []vector.SearchChunk{makeChunk("c1", "f1", "answer is here")}},
+		},
+	}
+	critique := &stubCritiqueQueue{responses: []critiqueDecision{{sufficient: true}}}
+	params := AgenticChatParams{KbID: "kb1", Query: "original", Language: "en", MaxHops: 3}
+
+	ctxResult, err := runAgenticChatTestable(context.Background(), nil, searcher, critique.next, params, func(map[string]any) {})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ctxResult.FinalChunks) != len(ctxResult.Sources) || len(ctxResult.FinalChunks) == 0 {
+		t.Fatalf("FinalChunks must mirror Sources and be non-empty: got %d chunks vs %d sources",
+			len(ctxResult.FinalChunks), len(ctxResult.Sources))
+	}
+}
+
 func TestRunAgenticChat_MaxHopsReached(t *testing.T) {
 	searcher := &fakeAgenticSearcher{
 		results: map[string]*vector.SearchResult{

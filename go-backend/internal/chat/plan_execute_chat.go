@@ -610,6 +610,7 @@ func runPlanExecuteChatTestable(
 		SystemPrompt:  sb.String(),
 		Sources:       sources,
 		Context:       contextText,
+		FinalChunks:   accumulated,
 	}, nil
 }
 

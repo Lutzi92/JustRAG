@@ -68,6 +68,33 @@ func TestRunSupervisorChat_MultiSpecialistMergesBothArms(t *testing.T) {
 	}
 }
 
+// TestRunSupervisorChat_PopulatesFinalChunks guards the eval-harness
+// contract: OrchestratorDispatchAdapter computes retrieval metrics from
+// ChatContext.FinalChunks. When the supervisor omits it, every dispatched
+// question scores recall 0 (regression seen in baseline_pre_0306_v2).
+func TestRunSupervisorChat_PopulatesFinalChunks(t *testing.T) {
+	s := &fakeSupSearcher{byType: map[string][]vector.SearchChunk{
+		vector.QueryTypeComplexReasoning: {supChunk("A", 0.9), supChunk("B", 0.8)},
+	}}
+	classify := func(_, _ string) bool { return false } // retriever arm
+
+	ctxOut, err := runSupervisorChatTestable(
+		context.Background(), nil, s, classify,
+		SupervisorChatParams{KbID: "kb1", Query: "Q", Language: "en"},
+		func(map[string]any) {},
+	)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(ctxOut.FinalChunks) != len(ctxOut.Sources) {
+		t.Fatalf("FinalChunks must mirror Sources: got %d chunks vs %d sources",
+			len(ctxOut.FinalChunks), len(ctxOut.Sources))
+	}
+	if len(ctxOut.FinalChunks) == 0 {
+		t.Fatal("FinalChunks empty: eval harness would report recall 0 for every supervisor question")
+	}
+}
+
 func TestRunSupervisorChat_SingleSpecialistByDefault(t *testing.T) {
 	s := &fakeSupSearcher{byType: map[string][]vector.SearchChunk{
 		vector.QueryTypeComplexReasoning: {supChunk("A", 0.9)},
