@@ -22,6 +22,11 @@ import (
 // RunMain applies pending main-database migrations using goose.
 // It first bootstraps from Drizzle if needed, then runs goose.Up.
 func RunMain(ctx context.Context, cfg config.DBConfig, migrations fs.FS) error {
+	// Phase-boundary marker: RunMain and RunVector do not share a transaction
+	// (DDL is non-transactional in PG for several statements), so a main-ok /
+	// vector-fail run leaves the DB partially upgraded. This line lets an
+	// operator pinpoint which phase was in flight when reading the logs.
+	slog.Info("migrating main database")
 	db, err := openSQL(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("migrate main: open db: %w", err)
@@ -99,6 +104,10 @@ func IsSameDatabase(a, b config.DBConfig) bool {
 // before calling this — several vector migrations drop tables that exist
 // in the main schema (0001_cleanup_unused_tables.sql).
 func RunVector(ctx context.Context, cfg config.DBConfig, migrations fs.FS) error {
+	// Phase-boundary marker — see RunMain. If the logs show this line but no
+	// "vector database is up to date" / "applied migration db=vector" line,
+	// the vector phase failed mid-run and the DB is partially upgraded.
+	slog.Info("migrating vector database")
 	db, err := openSQL(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("migrate vector: open db: %w", err)

@@ -41,6 +41,17 @@ func (s *SearchService) resolveKBChunkTable(ctx context.Context, kbID string) (s
 	}
 	for _, d := range dims {
 		table := GetVectorTableName(d)
+		// Defence-in-depth: the probe below interpolates `table` into SQL.
+		// `table` is produced by GetVectorTableName(int) so it is structurally
+		// safe today, but resolveKBChunkTable is the single chokepoint that
+		// chunk_read / document_outline / count_mentions all rely on (those
+		// callers interpolate the returned name without re-validating). Gate it
+		// on the canonical allowlist — the same regex fetchChunksByIDs / hype /
+		// search use — so the "whitelisted to document_chunks[_<int>]" contract
+		// the callers document is actually enforced here, not merely implied.
+		if !validVectorTable.MatchString(table) {
+			continue
+		}
 		var probe int
 		err := s.vectorDB.QueryRow(ctx,
 			fmt.Sprintf(`SELECT 1 FROM "%s" WHERE kb_id = $1::uuid LIMIT 1`, table),
