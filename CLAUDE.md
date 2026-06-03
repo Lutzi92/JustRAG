@@ -46,8 +46,9 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 
 ## Deep dives
 
-CLAUDE.md is the operational reference (commands, env, architecture, toggle recipes). The two retrieval/orchestration subsystems each have a dedicated mechanism-and-rationale doc — open them when you need the *why* behind a knob or feature:
+CLAUDE.md is the operational reference (commands, env, architecture, feature index). The two retrieval/orchestration subsystems each have a dedicated mechanism-and-rationale doc — open them when you need the *why* behind a knob or feature:
 
+- **`docs/feature-recipes.md`** — full enablement toggle blocks (combined flag lists in dependency order, operator-prerequisite SQL grants, ops sequences, provider caveats, security notes) for every gated feature indexed in the Feature-enablement-recipes table below.
 - **`docs/retrieval.md`** — every retrieval-pipeline subsystem (MMR, query cache, reranker blend, BM25 floor, embedder choice, CRAG, contextual retrieval, enumeration pre-pass, citation validator, ingestion dedup, …) with eval numbers and antipatterns.
 - **`docs/presentation/tuning-knobs.md`** — admin-UI knob reference, oriented toward operations rather than mechanism.
 - **`docs/observability/docling.md`** — opt-in Docling sidecar for layout-aware PDF parsing.
@@ -107,7 +108,7 @@ Required env vars (load via `.env`; docker compose reads it via `env_file`):
 
 - **Postgres (main):** `DB_HOST`, `DB_PORT` (default 5432), `DB_USER`, `DB_PASSWORD`, `DB_NAME`
 - **Postgres (vector):** `VECTOR_DB_HOST` etc. (defaults to `DB_*` when unset — single-DB setups work out of the box)
-- **Postgres (read-only, optional):** `JUSTRAG_DB_URL_READONLY` — raw DSN for a least-privilege SELECT-only role backing the `sql_query` and `table_query` MCP tools. **Required when `chat_tabular_query_enabled = true`** (and recommended whenever the `sql_query` tool is enabled); the tool falls back to a disabled stub when unset. See the tabular Q&A recipe for the SELECT-grant prerequisite.
+- **Postgres (read-only, optional):** `JUSTRAG_DB_URL_READONLY` — raw DSN for a least-privilege SELECT-only role backing the `sql_query` and `table_query` MCP tools. **Required when `chat_tabular_query_enabled = true`** (and recommended whenever the `sql_query` tool is enabled); the tool falls back to a disabled stub when unset. See the Structured spreadsheet Q&A recipe in `docs/feature-recipes.md` for the SELECT-grant prerequisite.
 - **Redis:** `REDIS_HOST`, `REDIS_PORT`, optional `REDIS_PASSWORD`
 - **Auth:** `JWT_SECRET` (required at startup, ≥32 chars; a low-entropy secret — fewer than 3 character classes — logs a startup WARN). `ALLOWED_ORIGINS` (comma-list) is **required in production** — startup fails if unset, because an empty CORS allowlist makes `rs/cors` reflect any origin with credentials. `AUTH_PROVIDER_SECRET_KEY` (base64 32 bytes) encrypts auth-provider secrets at rest — OIDC `client_secret` **and** LDAP `bindCredentials`; required once any OIDC row exists or any LDAP provider is saved with bind credentials (legacy plaintext rows keep working at login until re-saved).
 - **Object storage (optional):** `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_REGION` — when unset, files land on local disk
@@ -179,201 +180,27 @@ Grouped by responsibility — names match directory names exactly. Long-form beh
 
 ## Feature enablement recipes
 
-Most chat-pipeline features default OFF. The combined toggle list to make each feature actually do something on a deployment, in dependency order:
+Most chat-pipeline features default OFF. The **full toggle blocks** (combined flag lists in dependency order, operator-prerequisite SQL grants, post-embedder-change ops sequences, provider caveats, security notes) live in **`docs/feature-recipes.md`**. This table is the index: feature → flags → migration → recipe§.
 
-**Refine gate + KB router + turn budget**
+| Feature | Key flags | Mig | `docs/feature-recipes.md` § |
+|---|---|---|---|
+| Refine gate + KB router + turn budget | `chat_factuality_verifier_enabled`, `chat_factuality_gate_enabled`, `chat_kb_router_enabled` (+ `?route=auto`), `chat_turn_budget_seconds` | 0042 | Refine gate + KB router + turn budget |
+| Tool-aware planner + tool tier | `chat_plan_execute_enabled` (+ `_dag`, `_tool_aware`), `chat_code_exec_enabled` | 0043 | Tool-aware planner + tool tier |
+| Answer-time tool calling | `chat_answer_tools_enabled` + `chat_answer_tools_max_rounds` | 0043 | Answer-time tool calling |
+| Long-term memory + Self-RAG | `chat_longmem_*` (`_recall_semantic`, `_conflict_*`), `chat_self_rag_enabled`, `chat_plan_execute_dag_iterative` | 0045 | Per-user long-term memory + Self-RAG |
+| Knowledge-graph routing | `kg_extraction_enabled`, `chat_graph_routing_enabled` (+ `_inject_chunks`, `_path_mode` ppr/paths) | 0044 | Knowledge-graph routing |
+| Sub-question decomposition (T1-1) | `query_decompose_enabled` + `query_decompose_model` | — | Sub-question decomposition |
+| Tiered BM25 boost (T0-3) + cache thresholds (T0-4) | `bm25_tiered_boost_enabled`, `query_cache_similarity_threshold_*` | — | Tiered BM25 boost + per-query-type cache thresholds |
+| Dynamic alpha (T2-4) | `hybrid_dynamic_alpha_enabled` + `_sensitivity` | — | Dynamic alpha |
+| Online feedback loop | `chat_feedback_boost_enabled` + `feedback_boost_weight` | 0052 | Online feedback loop |
+| ECoRAG compression (T2-3) | `chat_context_compression_enabled` (+ `_min_chunks`, `_threshold`, `_model`) | — | ECoRAG evidentiality compression |
+| Long-context routing (T2-1) | `chat_longcontext_enabled` + `_max_tokens` | — | Long-context routing |
+| Late chunking | `late_chunking_enabled` + `_max_input_tokens` | — | Late chunking |
+| RAPTOR indexing | `raptor_enabled` (+ `_clustering_algorithm`, `_branching_factor`, …) | 0046 | RAPTOR hierarchical indexing |
+| Tabular Q&A (table_query) | `chat_tabular_query_enabled` (+ `_semantic_columns_enabled`, `_charts_enabled`) — **needs OPERATOR PREREQUISITE grants** | 0048 | Structured spreadsheet Q&A |
+| HyPE | `hype_enabled` (ingest) + `hype_search_enabled` (query) | — | HyPE — hypothetical prompt embeddings |
 
-```
-chat_factuality_verifier_enabled = true        # dependency: must run before the gate
-chat_factuality_gate_enabled     = true        # refine when verifier flags ≥1 unsupported/contradicted
-chat_kb_router_enabled           = true        # needs kb.description set on every KB
-chat_turn_budget_seconds         = 90          # typical prod cap; 0 = unlimited
-```
-
-No new migrations beyond 0042. `chat_kb_router_enabled` is a no-op without `?route=auto` on the chat request.
-
-**Tool-aware planner + tool tier**
-
-```
-chat_plan_execute_enabled        = true        # baseline orchestrator
-chat_plan_execute_dag            = true        # DAG-shaped plans
-chat_plan_execute_tool_aware     = true        # planner sees tool catalog
-chat_code_exec_enabled           = false       # keep off until gVisor is verified
-```
-
-Migration **0043**. `code_exec` requires docker `--runtime=runsc` in `/etc/docker/daemon.json`; security-review `internal/mcp/builtin/code_exec.go` before prod. Planner falls back LLM-error → legacy DAG → flat.
-
-**Answer-time tool calling**
-
-```
-chat_answer_tools_enabled        = true        # gate; default false
-chat_answer_tools_max_rounds     = 5           # valid range [1,10]
-```
-
-Migration **0043**. Composable with `chat_plan_execute_tool_aware`. KB chat model MUST support native `tools` + `tool_calls` (verified on gemma-4-26b-A4B-it). **Known limit:** models emitting `<think>` inline (vs `reasoning_content`) leak reasoning into the answer.
-
-**Per-user long-term memory + Self-RAG**
-
-```
-chat_longmem_enabled               = true        # GDPR "My Memory" drawer ships (see note below)
-chat_longmem_min_salience          = 0.5         # filter low-salience extractor output
-chat_longmem_recall_top_k          = 5           # facts prepended per turn
-chat_longmem_decay_days            = 30          # half-life of the recency component
-chat_longmem_recall_semantic       = true        # T1-2: ANN recall via embeddings (see dim caveat below)
-chat_longmem_conflict_resolution   = true        # T1-3: Mem0 {create_new,supersede,skip_redundant} classifier
-chat_longmem_conflict_model        = <small>     # falls through to model_tier_fast
-chat_longmem_conflict_candidates   = 3           # nearest-N pool the classifier sees per insert
-chat_self_rag_enabled              = true        # REPLACES chat_factuality_verifier_enabled (mutually exclusive)
-chat_self_rag_model                = <small>     # LLM override for the unified verifier
-chat_plan_execute_dag_iterative    = true        # inter-level critic; needs chat_plan_execute_dag = true
-chat_plan_execute_dag_iterative_model = <small>  # critic LLM override
-```
-
-Migration **0045**. "My Memory" drawer (per-entry delete + bulk clear + JSON export per GDPR Art. 20) ships in `Profile.tsx` regardless of `chat_longmem_enabled`, backed by `/api/user/memory` via the `internal/memory` handler.
-
-**T1-2 dim — ops sequence after embedder change:** the `user_memory.embedding` column is re-widened by `migrate.EnsureUserMemoryEmbedding` at `cmd/migrate` + worker startup (**not** server startup; DROP INDEX → ALTER → CREATE INDEX; halfvec for 2000–4000 dims, no HNSW index above 4000 — mirrors `vector/schema.go`). Run `cmd/migrate` (or restart the worker) → trigger `POST /api/admin/reembed-user-memory` (the ALTER discards old vectors) → only then enable `chat_longmem_recall_semantic` + `_conflict_resolution`.
-
-**Knowledge-graph routing**
-
-```
-kg_extraction_enabled                = true        # adds 1 LLM call per chunk; provider auto-cache covers ~90%
-kg_extraction_model                  = <small-fast-model>   # optional override
-chat_graph_routing_enabled           = true        # diagnostic gate — emits the trajectory event
-chat_graph_routing_inject_chunks     = true        # chunk injection — folds subgraph chunks into RRF
-chat_graph_routing_max_chunks        = 15          # cap on injected chunks (1..50, default 15)
-
-# T1-4 / T1-5 traversal-mode trichotomy (default neighbors keeps v1 behaviour):
-chat_graph_routing_path_mode         = ppr         # neighbors | ppr | paths
-chat_graph_routing_ppr_damping       = 0.85        # only used when path_mode=ppr
-chat_graph_routing_ppr_max_iter      = 20          # only used when path_mode=ppr
-chat_graph_routing_ppr_top_entities  = 10          # only used when path_mode=ppr
-chat_graph_routing_paths_max_len     = 3           # only used when path_mode=paths
-chat_graph_routing_paths_max_paths   = 5           # only used when path_mode=paths
-```
-
-Migration **0044**. No-op until `kg_extraction_enabled` has run on the KB's files — re-ingest ≥1 file after enabling extraction (else lands in the `db_error` bucket). `_inject_chunks` is a separate sub-flag (upgrades stay diagnostic-only); Plan-Execute/Agentic inject only into the **initial** search. `path_mode` defaults to `neighbors`; all modes fail open to `neighbors`.
-
-**Cross-feature ordering:** refine gates are independent of tool tier and graph routing; enable KG ingestion + tool-aware planner together for the multi-hop eval gain (planner sees `graph_search` in the catalog).
-
-**Sub-question decomposition (DecomposeRAG, T1-1)**
-
-```
-query_decompose_enabled          = true        # adds 1 fast-tier LLM call on complex_reasoning turns
-query_decompose_model            = <small>     # falls through to model_tier_fast
-```
-
-Fires only when `QueryType == complex_reasoning` AND `opts.SubQueries` is empty (so Plan-Execute doesn't double-fire — standard fallback is the primary beneficiary). Produces 2–4 *semantically distinct* sub-questions (NOT paraphrases — that's `MultiQuery`); folds into RRF via the MultiQuery path. Single-aspect queries return empty.
-
-**Tiered BM25 boost (T0-3) and per-query-type cache thresholds (T0-4)**
-
-```
-bm25_tiered_boost_enabled                              = true        # ts_rank × 100 (strict match) or × 10 (OR-fallback)
-query_cache_similarity_threshold_lookup                = 0.92        # paraphrase-tolerant
-query_cache_similarity_threshold_enumeration           = 0.94        # mid
-query_cache_similarity_threshold_complex_reasoning     = 0.98        # paraphrase-sensitive
-```
-
-Pure-config (no migration, no LLM). Tiered boost: ts_rank ×100 on strict AND-match, ×10 on OR-floor; simple-arm unboosted; single-token = no-op. Cache thresholds: sentinel `0` inherits the global.
-
-**Dynamic alpha (T2-4)**
-
-```
-hybrid_dynamic_alpha_enabled        = true        # per-query α shift from BPE-token rarity
-hybrid_dynamic_alpha_sensitivity    = 0.3         # caps shift magnitude; [0, 1]; 0 disables
-```
-
-Shifts effective `rerank_blend_alpha` by mean cl100k_base BPE-token ID — rare tokens → α down (more BM25), common → α up (more reranker). Composes with per-route overrides (resolved first, then shifted). Formula: `internal/vector/dynamic_alpha.go`.
-
-**Online feedback loop (retrieval boost + admin review)**
-
-```
-chat_feedback_boost_enabled = true     # gate; default off
-feedback_boost_weight       = 0.05     # max |score adjustment|; clamped [0, 0.5]; 0 → 0.05 at apply
-```
-
-Migration **0052** (`message_chunks` link table). Capture reuses the existing per-message thumbs up/down (`SubmitFeedback` → `messages.feedback` + `message_feedback_events`). At answer time, cited chunk IDs are linked in `message_chunks` (in `AddMessage` — `ChatSource.ChunkID` is `json:"-"`, so this is the only capture point). At search time the net signal (upvotes − downvotes) of candidate chunks applies a bounded `weight·tanh(net/2)` boost right after the rerank blend (before score-filter/MMR/trim), then re-sorts; fail-open. Admin review: `GET /api/admin/feedback/chunks?kb_id=<id>&limit=<n>` lists the most net-negative chunks. Cross-DB: links + feedback live in **main** Postgres, read in Go and applied to the **vector**-DB result by chunk ID. `internal/feedback` (reader), `internal/vector/feedback_boost.go` (scoring), `internal/adminfeedback` (review).
-
-**ECoRAG evidentiality compression (T2-3)**
-
-```
-chat_context_compression_enabled    = true        # 1 fast-tier LLM call between rerank and prompt
-chat_context_compression_min_chunks = 15          # skip when pool is smaller
-chat_context_compression_threshold  = 0.3         # drop chunks scoring below
-chat_context_compression_model      = <small>     # falls through to model_tier_fast
-```
-
-Drops chunks judged to lack DIRECT evidence (distinct from reranker topicality); "never drop everything" fallback. Skipped under long-context (T2-1).
-
-**Long-context routing (System 2, T2-1)**
-
-```
-chat_longcontext_enabled         = true          # CAUTION: per-turn LLM cost up to ~30× when gate fires
-chat_longcontext_max_tokens      = 100000        # 10k..500k; chat-layer truncation budget for the wide pool
-```
-
-Fires on `complex_reasoning` + the `IsGlobalSynthesisQuery` classifier (EN+DE "summarise all"). When fired: top-k → 200; MMR + score-drop + parent-child + ECoRAG + multipass skipped (still relevance-ranks, NOT a bypass). Watch `rag_longcontext_route_total{outcome=fired}` before broad rollout.
-
-**Late chunking (Jina-style)**
-
-```
-late_chunking_enabled             = true        # provider must understand the `late_chunking: true` field (Jina-compatible)
-late_chunking_max_input_tokens    = 8192        # cl100k_base estimate; documents split into windows at this cap
-```
-
-Ingestion-side only (no migration); embedding cache bypassed; re-ingest to benefit. Orthogonal to `contextual_enrichment` (prefix still feeds BM25, but is NOT concatenated into the late-chunked input). **Provider gotcha:** most OpenAI-compatible servers silently ignore the `late_chunking` field and return standard embeddings — verify before prod (Jina `/v1/embeddings` is the reference).
-
-**RAPTOR hierarchical indexing**
-
-```
-raptor_enabled                   = true        # mutually exclusive with parent_child_enabled (skipped at ingest if both on)
-raptor_min_chunks                = 25          # files with fewer leaves are skipped
-raptor_max_levels                = 4           # hard cap on tree depth
-raptor_branching_factor          = 5           # K-means cluster size target; ignored when algorithm=leiden
-raptor_summary_model             = ""          # falls through to model_tier_fast → KB chat model
-raptor_clustering_algorithm      = leiden      # T2-2: kmeans (default) | leiden
-raptor_leiden_resolution         = 1.0         # γ for modularity; only used when algorithm=leiden
-```
-
-Migration **0046**. Mutually exclusive with `parent_child_enabled` (skipped at ingest if both on). Ingest-only LLM cost (~31% extra rows at branching=5); zero query-time cost. Backfill by re-ingest. Eval ablation: `./cmd/eval/eval --node-kind leaf|summary|""`.
-
-**Structured spreadsheet Q&A (table_query)**
-
-```
-chat_tabular_query_enabled            = true     # Phase 1: ingest-time materializer + table_query tool
-chat_tabular_semantic_columns_enabled = true     # Phase 2: embed free-text columns for fuzzy search (orthogonal)
-tabular_semantic_min_avg_len          = 32       # Phase 2: min mean cell length to treat TEXT as free text
-tabular_semantic_min_distinct_ratio   = 0.6      # Phase 2: min distinct-value ratio (skips categoricals)
-chat_tabular_charts_enabled           = true     # Phase 3: chart prompt-guidance (no new tool/migration)
-```
-
-Migration **0048** (`tabular` schema + `tabular_catalog`). Phase 1 materializes `.xlsx`/`.xls`/`.csv` into native-typed tables; only a per-sheet summary card is vector-embedded (divert, not hybrid). `table_query` runs read-only SELECTs through `JUSTRAG_DB_URL_READONLY` with the per-KB catalog allowlist. Re-ingest spreadsheets after enabling.
-
-**OPERATOR PREREQUISITE** — run once as DB owner/superuser after migration 0048:
-
-```sql
-GRANT SELECT ON tabular_catalog TO <readonly_role>;          -- required: tool reads catalog through readonly pool
-GRANT USAGE ON SCHEMA tabular TO <readonly_role>;
-GRANT SELECT ON ALL TABLES IN SCHEMA tabular TO <readonly_role>;
-ALTER DEFAULT PRIVILEGES FOR ROLE <db_user> IN SCHEMA tabular
-    GRANT SELECT ON TABLES TO <readonly_role>;               -- required: per-sheet tables created on every ingest
-```
-
-`<db_user>` = `DB_USER` (Go worker/server role that creates the per-sheet tables). `<readonly_role>` = role behind `JUSTRAG_DB_URL_READONLY`.
-
-**HyPE — hypothetical prompt embeddings (ingest + retrieval)**
-
-```
-hype_enabled              = true     # ingest: generate+embed N hypothetical questions per chunk into chunk_hype_questions_<dim>
-hype_questions_per_chunk  = 3        # [1,20]
-hype_model                = <small>  # falls through to model_tier_fast
-hype_search_enabled       = true     # query-time arm: match query against question embeddings, fold parent chunks into RRF
-```
-
-No migration (dim-keyed `chunk_hype_questions_<dim>`, created at startup by `EnsureHyPETable`; same halfvec/HNSW rules). Re-ingest is the only backfill. Build the index first (`hype_enabled` + re-ingest), then enable `hype_search_enabled` and validate with `cmd/eval`. Vector-only (does NOT feed BM25); orthogonal to `contextual_enrichment`. Fail-open. `hype_search_enabled` fires on the standard `PrepareChatContext` path AND every orchestrator's **initial** search (Supervisor / Plan-Execute / Agentic / DeepChat) — wired exactly where `GraphChunkIDs` is threaded (initial retrieval only; not sub-query / hop-2+ / DAG-node searches).
-
-**SECURITY:** the read-only role's `search_path` must **NOT** include `tabular`. Per-KB isolation depends on schema-qualified `tabular.<name>` references — unqualified table names must fail to resolve so a prompt-injected bare name cannot bypass the catalog allowlist.
-
-**Phase 1 limits:** first row = header; multi-row headers / merged cells / legacy BIFF `.xls` fall back to text; sheet buffered in memory before `COPY` (multi-hundred-MB spike at 1M rows). **Phase 2:** synthetic `_rowid bigint` + per-row embeddings for heuristic-selected TEXT columns; fuzzy hit → `table_query WHERE _rowid IN (...)`. **Phase 3:** prompt-guidance only — Recharts JSON in a ` ```chart ` block rendered by the frontend ChartRenderer; non-SQL reshapes use code_exec (gated by `chat_code_exec_enabled`). Specs in `docs/superpowers/specs/2026-05-28-tabular-data-qa-design.md` (+phase2/3).
+Mutual exclusions and ordering gotchas (e.g. `chat_self_rag_enabled` REPLACES `chat_factuality_verifier_enabled`; `raptor_enabled` vs `parent_child_enabled`; the T1-2 dim re-embed sequence before `chat_longmem_recall_semantic`) are documented inline in each recipe.
 
 ## Model tier resolution
 
@@ -407,36 +234,7 @@ Multipart `image` field (PNG/JPEG/WEBP/GIF, ≤10 MB) + optional `prompt` form f
 
 Full mechanism, rationale, and operational eval history live in **`docs/retrieval.md`**. The pipeline assembles a top-k chunk list per chat turn from BM25 + vector + cross-encoder reranker, with MMR diversity, BM25-floor reinsertion, optional CRAG grading and rewrite, optional enumeration pre-pass, contextual-prefix prompt assembly, and post-answer citation/factuality validation. Ingest-side chunk dedup (`content_hash`) is documented in the same file under "Ingestion deduplication".
 
-Subsystem index — pair a knob with the doc section that explains it:
-
-| Knob(s) | Role | docs/retrieval.md section |
-|---|---|---|
-| `mmr_lambda` | Top-k diversity vs. relevance | MMR (top-k diversity) |
-| `auto_spell_correct` | Silent query spell-correction | Auto spell correction |
-| `step_back_enabled` | LLM-generated broader query for complex_reasoning | Step-back prompting |
-| `query_decompose_enabled` + `query_decompose_model` (T1-1) | Sub-question decomposition into 2-4 distinct sub-queries; folds into RRF via `SubQueries` | (not yet documented in `docs/retrieval.md`) |
-| `query_cache_enabled` + threshold/TTL | pgvector-backed result cache, exact + semantic tiers | Semantic query cache |
-| `query_cache_similarity_threshold_lookup` / `_enumeration` / `_complex_reasoning` (T0-4) | Per-query-type cache hit thresholds; sentinel 0 inherits the base | (not yet documented in `docs/retrieval.md`) |
-| `rag_fusion_enabled` | RAG-Fusion: per-alt-query BM25 arm folds into RRF alongside the existing per-alt vector arm | RAG-Fusion (per-alt-query BM25) |
-| `rerank_blend_alpha` + `_lookup` / `_enumeration` / `_complex_reasoning` | Reranker vs. RRF blend (prod default 0.8) | Reranker score weighting |
-| `hybrid_dynamic_alpha_enabled` + `_sensitivity` (T2-4) | Per-query α shift from BPE-token rarity; composes with the per-route overrides | (not yet documented in `docs/retrieval.md`) |
-| `top_n_lookup` / `top_n_enumeration` / `top_n_complex_reasoning` | Per-route candidate pool size | Per-query-type top-N overrides |
-| `bm25_simple_arm_enabled` | Second tsvector column with `simple` regconfig (no stemming); recovers chunks the German stemmer destroys | (admin Agent panel) |
-| `bm25_tiered_boost_enabled` (T0-3) | Strict-form match × 100, OR-tokens floor × 10 multiplier on language-stemmer ts_rank | (not yet documented in `docs/retrieval.md`) |
-| (no knob — always on) | BM25-floor reinsertion at the end of search | BM25 floor |
-| (runtime, T0-1) | `hnsw.iterative_scan = relaxed_order` set per connection — required for filtered ANN recall | (not yet documented in `docs/retrieval.md`) |
-| (reranker config) | Reranker model + serving caveats (jina-v3 prod; Qwen3 antipattern) | Reranker deployment |
-| (admin `embedding_model`) | Production embedder (qwen3-embedding-8b, 4096-dim) | Embedder choice (production default) / Historical: Octen-8B, Qwen3 4B vs 8B |
-| `query_instruction` | Qwen3 asymmetric prefix (keep empty under calibrated reranker) | Query-side embedding instruction |
-| `crag_enabled` + `adaptive_routing_enabled` + `crag_grader_model` + `crag_min_relevant_chunks` | Corrective-RAG grading + lookup/enum skip rule | Corrective RAG (CRAG) |
-| `chat_context_compression_enabled` + `_min_chunks` + `_threshold` + `_model` (T2-3) | ECoRAG evidentiality-based post-rerank filter (1 fast-tier LLM call) | ECoRAG evidentiality compression |
-| `chat_longcontext_enabled` + `_max_tokens` (T2-1) | System-2 wide-retrieval routing for global-synthesis queries; skips MMR + score-drop + compression | (see `docs/agent-orchestration.md` → Long-context routing) |
-| `citation_validation_enabled` | Deterministic per-`[N]` n-gram check | Citation validator |
-| `contextual_enrichment` + `contextual_enrichment_model` | Anthropic-style 1-sentence chunk prefix at ingest | Contextual Retrieval (Anthropic-style) |
-| (no knob — auto when prefix is populated) | Surface `contextual_prefix` in the chat-time prompt | Contextual prefix at chat time |
-| (auto-classified, see `IsEnumerationQuery`) | Two-pass pipeline for list-style queries | Enumeration pre-pass / BM25-seeded extraction with deterministic post-processing |
-| (no knob — applied when chunks exceed budget) | Token-budget truncation of retrieved chunks | Context truncation |
-| (no knob — applied when query contains `"..."`) | Required exact-phrase matches in BM25 | Quoted-phrase boosting in keyword search |
+Per-knob subsystem index (each knob → the `docs/retrieval.md` section that explains its mechanism, eval numbers, and antipatterns) lives in **`docs/retrieval.md`**; the T-series tuning knobs (`query_decompose_*`, `query_cache_similarity_threshold_*`, `hybrid_dynamic_alpha_*`, `bm25_tiered_boost_enabled`) are in **`docs/feature-recipes.md`**; the runtime-only `hnsw.iterative_scan` (T0-1) is in the Quick-reference runtime note + `docs/runbooks/hnsw-reindex.md`. Always-on, knob-less stages (BM25-floor reinsertion, context truncation, quoted-phrase boosting, enumeration pre-pass) are documented under their own headings in `docs/retrieval.md`.
 
 ## Agentic chat orchestration
 
@@ -449,41 +247,7 @@ Full mechanism for every orchestrator and chat-pipeline feature lives in **`docs
 | 3 | Agentic | `chat_agentic_enabled` (+ `_plateau_stop`, `_max_hops`) | Hop-1 → critique LLM → optional follow-up hops |
 | 4 | Standard `PrepareChatContext` | (always-on fallback) | CRAG + enumeration pre-pass + contextual prefix + sandwich order |
 
-Feature index — see `docs/agent-orchestration.md` for the full per-feature rationale, metrics, and design decisions:
-
-| Feature | Knob | docs section |
-|---|---|---|
-| Trajectory streaming | (default on) | Trajectory streaming |
-| Admin metrics panel | (always-on) | Admin agent-metrics panel |
-| MCP tool registry | `chat_use_mcp_tools` | MCP tool registry |
-| Session memory | `chat_session_memory_enabled` | Session memory |
-| Factuality verifier | `chat_factuality_verifier_enabled` (+ `_always_run`, `_model`) | Factuality verifier |
-| Refine gate | `chat_factuality_gate_enabled` + `chat_refine_model` | Factuality refine gate |
-| Refine SSE diff | (gated by refine gate) | Refine SSE diff |
-| Turn budget | `chat_turn_budget_seconds` / `_tokens` / `_tool_calls` | Turn budget |
-| KB router | `chat_kb_router_enabled` + `chat_kb_router_min_confidence` + `?route=auto` | Sub-KB router |
-| Retrieval-tier tools (keyword_search, chunk_read, document_outline) | (registered alongside `kb_search`) | Retrieval-tier tools |
-| Non-retrieval tools (calculator, sql_query, code_exec) | `chat_code_exec_enabled` for code_exec | Non-retrieval tools |
-| table_query tool (structured spreadsheet SQL) | `chat_tabular_query_enabled` + migration 0048 + OPERATOR PREREQUISITE grants | (see CLAUDE.md recipe above; design: `docs/superpowers/specs/2026-05-28-tabular-data-qa-design.md`) |
-| Tool-aware DAG planner | `chat_plan_execute_tool_aware` | Tool-aware DAG planner |
-| Tool-mix telemetry | (always-on via dispatcher) | Tool-mix telemetry |
-| Answer-time tool calling | `chat_answer_tools_enabled` + `chat_answer_tools_max_rounds` | Answer-time tool calling |
-| KG extraction | `kg_extraction_enabled` + `kg_extraction_model` | Knowledge-graph extraction |
-| graph_search tool | (registered with MCP) | Graph search tool |
-| Graph-routing heuristic | `chat_graph_routing_enabled` | Graph-routing heuristic |
-| Graph-routing chunk injection | `chat_graph_routing_inject_chunks` + `chat_graph_routing_max_chunks` | Graph-routing chunk injection (RRF extraLists) |
-| Graph-routing traversal mode | `chat_graph_routing_path_mode` (`neighbors`\|`ppr`\|`paths`) + per-mode tuning (T1-4 / T1-5) | Graph-routing traversal modes |
-| Long-term memory | `chat_longmem_enabled` + `_min_salience` + `_recall_top_k` + `_decay_days` | Long-term per-user memory |
-| Long-term memory ANN recall | `chat_longmem_recall_semantic` (T1-2; needs dim migration — see recipe) | (stub in `docs/agent-orchestration.md` — see CLAUDE.md recipe above) |
-| Long-term memory conflict resolution | `chat_longmem_conflict_resolution` + `_model` + `_candidates` (T1-3) | (stub in `docs/agent-orchestration.md` — see CLAUDE.md recipe above) |
-| Sub-question decomposition | `query_decompose_enabled` + `query_decompose_model` (T1-1) | (stub in `docs/agent-orchestration.md` — see CLAUDE.md recipe above) |
-| ECoRAG context compression | `chat_context_compression_enabled` + `_min_chunks` + `_threshold` + `_model` (T2-3) | (see `docs/retrieval.md` → ECoRAG evidentiality compression) |
-| Long-context (System 2) routing | `chat_longcontext_enabled` + `_max_tokens` (T2-1) | Long-context (System 2) routing |
-| Self-RAG verifier | `chat_self_rag_enabled` + `chat_self_rag_model` (mutually exclusive with factuality verifier) | Self-RAG verifier |
-| Iterative DAG critic | `chat_plan_execute_dag_iterative` + `_model` | Iterative DAG critic |
-| CI eval gate | (CI-only, `.github/workflows/eval.yml`) | CI eval gate |
-| Online faithfulness metric | (auto-on whenever factuality verifier or Self-RAG ran) | Online faithfulness metric |
-| Online feedback loop | `chat_feedback_boost_enabled` + `feedback_boost_weight` (migration 0052) | (see feedback-loop recipe above) |
+Per-feature index — each chat-orchestration feature (trajectory streaming, MCP tool registry, session memory, factuality verifier, refine gate, turn budget, KB router, retrieval/non-retrieval tools, tool-aware DAG planner, answer-time tool calling, KG extraction + graph_search + graph-routing modes, long-term memory + ANN recall + conflict resolution, sub-question decomposition, ECoRAG compression, long-context routing, Self-RAG verifier, iterative DAG critic, online faithfulness metric + feedback loop) with its knob, rationale, metrics, and design notes is indexed in **`docs/agent-orchestration.md`**. Enablement toggle blocks for the gated ones are in **`docs/feature-recipes.md`**.
 
 ## Observability
 
