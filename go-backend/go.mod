@@ -37,6 +37,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/extrame/xls v0.0.1
 	github.com/imroc/req/v3 v3.57.0
+	github.com/pgvector/pgvector-go v0.4.0
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sergi/go-diff v1.4.0

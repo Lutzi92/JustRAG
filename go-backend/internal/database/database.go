@@ -94,8 +94,20 @@ func BuildPoolConfig(cfg config.DBConfig) (*pgxpool.Config, error) {
 	// pgvector versions and the main DB (which may not load the extension
 	// at all) by swallowing the "unrecognized configuration parameter"
 	// error — connections stay usable for non-ANN queries.
-	poolCfg.AfterConnect = setHNSWIterativeScan
+	poolCfg.AfterConnect = afterConnect
 	return poolCfg, nil
+}
+
+// afterConnect runs the per-connection setup hooks at pool warm-up: the HNSW
+// iterative-scan GUC and the pgvector binary-codec registration. Both are
+// fail-open on databases without the pgvector extension (e.g. a split main
+// pool), so the same hook is safe on every pool BuildPoolConfig backs.
+func afterConnect(ctx context.Context, conn *pgx.Conn) error {
+	if err := setHNSWIterativeScan(ctx, conn); err != nil {
+		return err
+	}
+	registerPgvectorTypes(ctx, conn)
+	return nil
 }
 
 // iterativeScanWarnLogged ensures the "iterative_scan unavailable" warning

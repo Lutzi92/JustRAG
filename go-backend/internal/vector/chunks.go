@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pgvector/pgvector-go"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -125,6 +126,22 @@ func formatEmbedding(v []float64) string {
 	return out
 }
 
+// vectorArg wraps a float64 embedding as a pgvector.Vector for binding as a
+// binary query parameter (see internal/database/pgvector_codec.go). pgvector
+// columns are float4 on disk and formatEmbedding already emits at float32
+// precision, so the float64→float32 narrowing here is bit-equivalent to the
+// prior text path — identical stored bytes, ~4× smaller wire payload, and no
+// per-component strconv formatting. When the codec is not registered on the
+// connection, pgx falls back to pgvector.Vector's text Valuer, so this is
+// safe regardless of registration.
+func vectorArg(v []float64) pgvector.Vector {
+	f := make([]float32, len(v))
+	for i, x := range v {
+		f[i] = float32(x)
+	}
+	return pgvector.NewVector(f)
+}
+
 // AddDocumentChunks batch-inserts chunks into the dynamic vector table for the given dimensions.
 // Inserts are grouped in batches of 100 to avoid oversized queries.
 //
@@ -215,7 +232,7 @@ func (s *ChunkService) insertBatch(ctx context.Context, table string, chunks []C
 		// still works for it).
 		var embLowArg any
 		if low := L2NormalizeFirst256(chunk.Embedding); low != nil {
-			embLowArg = formatEmbedding(low)
+			embLowArg = vectorArg(low)
 		} else {
 			embLowArg = nil
 		}
@@ -233,7 +250,7 @@ func (s *ChunkService) insertBatch(ctx context.Context, table string, chunks []C
 			sanitizeUTF8(chunk.Content),
 			nullableString(sanitizeUTF8(chunk.ContextualPrefix)),
 			nullableString(chunk.ContentHash),
-			formatEmbedding(chunk.Embedding),
+			vectorArg(chunk.Embedding),
 			embLowArg,
 			chunk.KbID,
 			chunk.FileID,
@@ -475,8 +492,13 @@ func (s *ChunkService) ListLeafEmbeddingsForRaptor(ctx context.Context, kbID, fi
 	// table is derived from GetVectorTableName(dimensions) — formatted from
 	// an integer, never user input. Do NOT copy this Sprintf pattern with
 	// any value that could originate from a request.
+	// embedding is scanned as a binary pgvector value (codec registered in
+	// the pool's AfterConnect hook), not the `embedding::text` literal the
+	// prior implementation parsed with strconv.ParseFloat per component —
+	// 4096 parses per leaf row at full dim. pgx falls back to the text
+	// Scanner when the codec is absent, so this is safe regardless.
 	query := fmt.Sprintf(`
-		SELECT id::text, content, embedding::text
+		SELECT id::text, content, embedding
 		  FROM "%s"
 		 WHERE kb_id = $1::uuid AND file_id = $2::uuid AND node_kind = 'leaf'
 		 ORDER BY id`,
@@ -490,13 +512,17 @@ func (s *ChunkService) ListLeafEmbeddingsForRaptor(ctx context.Context, kbID, fi
 	var out []RaptorLeafRow
 	for rows.Next() {
 		var r RaptorLeafRow
-		var embStr string
-		if err := rows.Scan(&r.ID, &r.Content, &embStr); err != nil {
+		var vec pgvector.Vector
+		if err := rows.Scan(&r.ID, &r.Content, &vec); err != nil {
 			return nil, fmt.Errorf("scan leaf row: %w", err)
 		}
-		emb, err := parseEmbeddingLiteral(embStr)
-		if err != nil {
-			return nil, fmt.Errorf("parse embedding for %s: %w", r.ID, err)
+		// Downstream clustering operates on []float64; widen the float32
+		// wire values (pgvector columns are float4 on disk, so this is
+		// lossless relative to what was stored).
+		f := vec.Slice()
+		emb := make([]float64, len(f))
+		for i, x := range f {
+			emb[i] = float64(x)
 		}
 		r.Embedding = emb
 		out = append(out, r)
@@ -627,15 +653,14 @@ func (s *ChunkService) GetRaptorDescendantLeafContentsAcrossDims(ctx context.Con
 }
 
 // parseEmbeddingLiteral is the inverse of formatEmbedding: it parses
-// pgvector's text format `[1.0,2.0,...]` into a []float64. Used by
-// the RAPTOR ingest path which re-loads level-(L-1) embeddings to
-// cluster them. Not on the hot search path — that one reads vectors
-// out of pgx scanners directly.
+// pgvector's text format `[1.0,2.0,...]` into a []float64. Retained as the
+// inverse of formatEmbedding and exercised by the round-trip test that guards
+// formatEmbedding's text encoding (still used on the search / query-cache /
+// longmem / HyPE paths). The RAPTOR reload now scans vectors as binary
+// pgvector values directly (see ListLeafEmbeddingsForRaptor).
 //
 // Byte-scanning via strings.IndexByte instead of strings.Split avoids
-// allocating an N-element string slice per vector. For a 4096-dim
-// embedding that's 4096 string headers saved per RAPTOR leaf row, which
-// matters during concurrent ingestion (8 workers × thousands of leaves).
+// allocating an N-element string slice per vector.
 func parseEmbeddingLiteral(s string) ([]float64, error) {
 	if len(s) < 2 || s[0] != '[' || s[len(s)-1] != ']' {
 		return nil, fmt.Errorf("not a pgvector literal: %q", s)
