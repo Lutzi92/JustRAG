@@ -289,6 +289,13 @@ func ExecuteDAG(ctx context.Context, params DAGExecuteParams, run runNodeFn) (DA
 				ParallelNodes: parallelNodes,
 			}, werr
 		}
+		// From here on `results` is read without resultsMu (finalize() at
+		// return, and the critic's results[n.ID] reads below). That is safe:
+		// g.Wait() above establishes a happens-before edge with every
+		// goroutine's resultsMu-guarded write, so all writes from this level
+		// are visible to this goroutine. resultsMu is only needed to guard the
+		// concurrent writes *during* a level's execution.
+		//
 		// Mark this level's nodes as completed. Done OUTSIDE g.Wait
 		// because the critic needs the full set, and the goroutine
 		// loop sets results[node.ID] directly without touching this

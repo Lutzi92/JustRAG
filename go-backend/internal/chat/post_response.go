@@ -211,6 +211,14 @@ func (h *Handler) runPostResponseTasks(
 	// supports the cited claim. Failure logs warn + continues —
 	// the validator's semantic-similarity fallback is the last
 	// line of defence.
+	//
+	// CONCURRENCY INVARIANT: the loop below writes sources[i].DescendantContents
+	// in place. Every goroutine launched ABOVE this point (follow-ups, factcheck,
+	// longmem) must NOT read sources — they don't, which is what keeps this
+	// mutation race-free without a lock. The citation validator goroutine is
+	// launched AFTER this mutation precisely so it observes the populated slice.
+	// Do not introduce a sources-reading goroutine between the launches above
+	// and this loop, or you create a silent data race.
 	if h.raptorDescendants != nil {
 		summaryIDs := summaryIDsFromSources(sources)
 		if len(summaryIDs) > 0 {

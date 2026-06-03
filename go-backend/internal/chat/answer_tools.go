@@ -530,12 +530,12 @@ func (r *liveRoundRunner) Run(ctx context.Context, messages []ai.ChatMessage, to
 	out := make(chan roundStreamEvent, 16)
 	// safego.GoCtx wraps the goroutine in the shared panic-recovery handler
 	// that logs through the request-scoped logger (request_id / user_id /
-	// kb_id). The inner defer order is preserved: close(out) is registered
-	// first so it runs LAST, after safego.GoCtx's recover handler has logged
-	// any panic — consumers always see end-of-stream after recovery work
-	// completes. The chunk loop below is a struct copy + channel send, but
-	// the upstream rawCh is fed by an HTTP/SSE pipeline whose panics surface
-	// here; we contain them rather than crashing the process.
+	// kb_id). close(out) runs as fn's last defer before the panic propagates
+	// up to safego.GoCtx's recover handler — so consumers always see
+	// end-of-stream regardless of panic, and the recover handler logs
+	// afterward independently. The chunk loop below is a struct copy + channel
+	// send, but the upstream rawCh is fed by an HTTP/SSE pipeline whose panics
+	// surface here; we contain them rather than crashing the process.
 	safego.GoCtx(ctx, func() {
 		defer close(out)
 		// Per-Run() think-tag filter — provider may emit reasoning either via

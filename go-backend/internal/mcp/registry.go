@@ -106,8 +106,10 @@ type probeResult struct {
 }
 
 // probeServers validates and probes every spec concurrently via
-// safego.Go (panic-isolated; admin path so latency-sensitive but not
-// error-propagating — per-server failures are logged + skipped).
+// safego.GoCtx (panic-isolated; admin path so latency-sensitive but not
+// error-propagating — per-server failures are logged + skipped). GoCtx
+// (not Go) so a recovered panic inside a probe carries the request_id /
+// kb_id of the admin request that triggered it.
 // Built-in collision filtering is applied here so callers can splice
 // the result straight into their tier map.
 //
@@ -140,7 +142,7 @@ func (r *Registry) probeServers(ctx context.Context, specs []ServerSpec, logPref
 		// Probe each server concurrently — ListTools is an HTTP round
 		// trip with `dialTimeout`. Sequentially this would be N×timeout
 		// worst-case (any one slow server stalls the rest).
-		safego.Go(func() {
+		safego.GoCtx(ctx, func() {
 			defer wg.Done()
 			c := NewClient(s.URL, s.Headers)
 			listCtx, cancel := context.WithTimeout(ctx, dialTimeout)
@@ -307,7 +309,7 @@ func (r *Registry) GlobalStatus(ctx context.Context) (builtins []ToolSummary, se
 		s := specsCopy[i]
 		servers[i] = ServerStatus{Name: s.Name, URL: s.URL}
 		wg.Add(1)
-		safego.Go(func() {
+		safego.GoCtx(ctx, func() {
 			defer wg.Done()
 			c := NewClient(s.URL, s.Headers)
 			listCtx, cancel := context.WithTimeout(ctx, dialTimeout)
