@@ -904,6 +904,18 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		fileNames = make(map[string]string)
 	}
 
+	// Per-search scratch maps (reranker score map + BM25-floor snapshot),
+	// pooled to keep their bucket arrays warm across requests. Acquired here
+	// (after the early-error returns above) so the deferred Put covers every
+	// remaining exit path. clear() before each use drops the prior search's
+	// entries; the snapshot is also cleared on Put to release its RankedDoc
+	// references promptly.
+	scratch := searchScratchPool.Get().(*searchScratch)
+	defer func() {
+		clear(scratch.snapshot)
+		searchScratchPool.Put(scratch)
+	}()
+
 	// ------------------------------------------------------------------
 	// 10. Reranking
 	// ------------------------------------------------------------------
@@ -933,7 +945,8 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		})
 		cancelRerank()
 		if err == nil && len(rerankScores) > 0 {
-			scoreMap := make(map[int]float64, len(rerankScores))
+			scoreMap := scratch.rerankScores
+			clear(scoreMap)
 			for _, rs := range rerankScores {
 				scoreMap[rs.Index] = rs.Score
 			}
@@ -1021,7 +1034,8 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	// same chunk can appear in both `fused` (post-blend Score) and
 	// `keywordDocs` (raw BM25 rank in Score) — we want the blended entry
 	// for downstream ranking / truncation.
-	fusedSnapshot := make(map[string]RankedDoc, len(fused))
+	fusedSnapshot := scratch.snapshot
+	clear(fusedSnapshot)
 	for _, d := range fused {
 		fusedSnapshot[d.ID] = d
 	}
@@ -1470,6 +1484,29 @@ func (s *SearchService) runMultiQueryBM25Searches(
 // concat allocation goes away.
 var rerankDocBufPool = sync.Pool{
 	New: func() any { b := make([]byte, 0, 4096); return &b },
+}
+
+// searchScratch bundles the two transient maps Search builds on every call:
+// the reranker index→score map and the post-dedup ID→doc snapshot the BM25
+// floor reinserts from. Both are sized to the candidate-pool count (≈20–100)
+// and were previously freshly allocated per search. Pooling keeps the bucket
+// arrays warm across requests, matching bm25FloorScratchPool. clear() before
+// each use drops stale entries while retaining the buckets; the snapshot is
+// also cleared on return so an idle pooled entry doesn't pin RankedDoc content
+// strings between searches (reinserted docs carry their own references, so the
+// clear is safe).
+type searchScratch struct {
+	rerankScores map[int]float64
+	snapshot     map[string]RankedDoc
+}
+
+var searchScratchPool = sync.Pool{
+	New: func() any {
+		return &searchScratch{
+			rerankScores: make(map[int]float64, 64),
+			snapshot:     make(map[string]RankedDoc, 64),
+		}
+	},
 }
 
 // buildRerankDocs returns one rerank-input string per doc. Docs with a
