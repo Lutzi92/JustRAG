@@ -14,6 +14,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 )
 
@@ -69,16 +70,9 @@ func (r *Relay) Run(ctx context.Context, w http.ResponseWriter, opts Options) er
 		opts.HeartbeatInterval = 15 * time.Second
 	}
 
-	// Set SSE headers before writing any body.
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-
-	// Disable the global server WriteTimeout for this connection — SSE streams
-	// stay open for many minutes; per-handler inactivity / context cancellation
-	// control lifetime instead.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	// Set SSE headers + disable the global server WriteTimeout for this
+	// connection before writing any body.
+	httputil.EnableSSE(w)
 
 	// Subscribe BEFORE enqueuing so we never miss the first event.
 	sub := r.redis.Subscribe(ctx, opts.Channel)

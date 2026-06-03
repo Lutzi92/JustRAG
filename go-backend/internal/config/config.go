@@ -201,6 +201,21 @@ func Load() (*Config, error) {
 		}
 		return v
 	}
+	// mustInt64 parses a 64-bit env var. Use it for sizes/limits stored as
+	// int64 (e.g. byte caps) so the value never narrows through int on a
+	// 32-bit build and the int64 intent is explicit at the call site.
+	mustInt64 := func(key string, fallback int64) int64 {
+		v := os.Getenv(key)
+		if v == "" {
+			return fallback
+		}
+		i, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s=%q is not a valid integer", key, v))
+			return fallback
+		}
+		return i
+	}
 	// mustDurationMs reads an integer-millisecond env var, returning the
 	// supplied default time.Duration when the env var is unset or invalid.
 	// Use it for legacy *_MS keys; the default is expressed using
@@ -266,7 +281,7 @@ func Load() (*Config, error) {
 	}
 
 	// 1 MiB default is generous for JSON payloads; uploads have their own cap.
-	cfg.MaxRequestBodyBytes = int64(mustInt("MAX_REQUEST_BODY_BYTES", 1024*1024))
+	cfg.MaxRequestBodyBytes = mustInt64("MAX_REQUEST_BODY_BYTES", 1024*1024)
 
 	cfg.EmbeddingCacheTTL = time.Duration(mustInt("EMBEDDING_CACHE_TTL_HOURS", 7*24)) * time.Hour
 

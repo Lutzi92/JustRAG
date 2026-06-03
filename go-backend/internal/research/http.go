@@ -180,12 +180,7 @@ func (h *Handler) startStreamingResearch(
 
 	// Write the session-id event first, before Run() sets SSE headers, by
 	// setting headers manually and flushing a preamble event.
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	// Opt out of the server-wide WriteTimeout for this connection.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	httputil.EnableSSE(w)
 
 	sessionEvent, _ := json.Marshal(map[string]string{"type": "session", "sessionId": session.ID})
 	_, _ = w.Write([]byte("data: " + string(sessionEvent) + "\n\n"))

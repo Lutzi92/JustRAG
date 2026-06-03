@@ -7,9 +7,17 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/justrag/go-backend/internal/logctx"
 )
+
+// errorResponse is the wire shape for every JSON error body: {"error": msg}.
+// A typed struct (vs. a per-call map[string]string) makes the contract
+// explicit and avoids a map allocation on every error response.
+type errorResponse struct {
+	Error string `json:"error"`
+}
 
 // WriteJSONCtx writes v as JSON with the given status code and logs encode
 // failures with the request context (request_id, user_id, kb_id, trace_id).
@@ -26,12 +34,15 @@ func WriteJSONCtx(ctx context.Context, w http.ResponseWriter, status int, v any)
 // WriteErrorCtx writes a JSON error response: {"error": msg}, with request
 // context for any failure log.
 func WriteErrorCtx(ctx context.Context, w http.ResponseWriter, status int, msg string) {
-	WriteJSONCtx(ctx, w, status, map[string]string{"error": msg})
+	WriteJSONCtx(ctx, w, status, errorResponse{Error: msg})
 }
 
-// WriteInternalErrorCtx sanitizes err for client consumption and returns HTTP
-// 500 with the safe message, threading the request context for log correlation.
+// WriteInternalErrorCtx logs the raw err internally (so the unredacted detail
+// is never lost) and returns HTTP 500 with a SanitizeError-redacted message to
+// the client. The raw error only ever appears in the server logs, correlated
+// with the request via ctx.
 func WriteInternalErrorCtx(ctx context.Context, w http.ResponseWriter, err error) {
+	logctx.From(ctx).ErrorContext(ctx, "httputil: internal error", "error", err)
 	WriteErrorCtx(ctx, w, http.StatusInternalServerError, SanitizeError(err))
 }
 
@@ -48,13 +59,36 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // WriteError writes a JSON error response: {"error": msg}. Prefer
 // WriteErrorCtx in HTTP handlers.
 func WriteError(w http.ResponseWriter, status int, msg string) {
-	WriteJSON(w, status, map[string]string{"error": msg})
+	WriteJSON(w, status, errorResponse{Error: msg})
 }
 
-// WriteInternalError sanitizes err for client consumption and returns HTTP
-// 500 with the safe message. Prefer WriteInternalErrorCtx in HTTP handlers.
+// WriteInternalError logs the raw err internally and returns HTTP 500 with a
+// SanitizeError-redacted message. Prefer WriteInternalErrorCtx in HTTP handlers
+// so the log line carries request correlation.
 func WriteInternalError(w http.ResponseWriter, err error) {
+	slog.Error("httputil: internal error", "error", err)
 	WriteError(w, http.StatusInternalServerError, SanitizeError(err))
+}
+
+// EnableSSE prepares w for Server-Sent Events: it sets the standard SSE
+// response headers (including X-Accel-Buffering: no so nginx does not buffer
+// the stream) and opts this connection out of the server-wide WriteTimeout.
+// SSE streams stay open far longer than any request timeout; per-handler
+// inactivity / context cancellation governs their lifetime instead. Call once,
+// before writing any event. The returned ResponseController can be used to
+// Flush; callers that flush another way may ignore it.
+func EnableSSE(w http.ResponseWriter) *http.ResponseController {
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("Connection", "keep-alive")
+	h.Set("X-Accel-Buffering", "no")
+	rc := http.NewResponseController(w)
+	// SetWriteDeadline only errors when the ResponseWriter doesn't support
+	// deadlines, which never happens for the stdlib server these handlers run
+	// under; match the prior call sites and ignore it.
+	_ = rc.SetWriteDeadline(time.Time{})
+	return rc
 }
 
 // pathHeuristic flags strings that look like absolute filesystem paths

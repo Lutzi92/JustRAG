@@ -515,11 +515,7 @@ func (h *Handler) streamResponse(
 	prompt, systemPrompt, kbID, model, completionID string,
 	created int64,
 ) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	// Opt out of the server-wide WriteTimeout for this connection.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	httputil.EnableSSE(w)
 
 	// Initial chunk with role.
 	writeSSEChunk(w, completionChunk{

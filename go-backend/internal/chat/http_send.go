@@ -535,13 +535,8 @@ func (h *Handler) tryDeepChat(
 		return false
 	}
 
-	// Set SSE headers.
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	// Opt out of the server-wide WriteTimeout for this connection.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	// Set SSE headers + opt out of the server-wide WriteTimeout.
+	httputil.EnableSSE(w)
 
 	sseFinished := false
 	defer func() {

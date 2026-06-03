@@ -430,11 +430,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// Streaming path
 	// ------------------------------------------------------------------
 	if streamMode {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		// Opt out of the server-wide WriteTimeout for this connection.
-		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+		httputil.EnableSSE(w)
 
 		writeSSE(w, map[string]any{
 			"sources":       sources,
@@ -619,12 +615,7 @@ func (h *Handler) streamResearch(
 	kbID, userID string,
 	body researchRequest,
 ) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	// Opt out of the server-wide WriteTimeout for this connection.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	httputil.EnableSSE(w)
 
 	var report string
 	var findings []research.Finding

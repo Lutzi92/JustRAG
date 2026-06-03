@@ -403,12 +403,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	enhancedQuery := p.chatCtx.EnhancedQuery
 	systemPrompt := p.chatCtx.SystemPrompt
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no") // tell nginx not to buffer SSE
-	// Opt out of the server-wide WriteTimeout for this connection.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	httputil.EnableSSE(w)
 
 	sseFinished := false
 	defer func() {
