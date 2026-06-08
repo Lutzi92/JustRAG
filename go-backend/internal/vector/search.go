@@ -1370,7 +1370,6 @@ func (s *SearchService) runMultiQuerySearches(
 				// endpoint surfaces in observability instead of silently
 				// trimming the candidate set.
 				logctx.From(ctx).Warn("multi-query: embedding failed", "alt_query", q, "error", err)
-				resultCh <- result{}
 				return
 			}
 			embStr := formatEmbedding(emb)
@@ -1383,7 +1382,6 @@ func (s *SearchService) runMultiQuerySearches(
 			rows, err := s.runVectorSearch(ctx, tableName, embStr, kbID, fileIDs, limit, dimensions, useHalfvec, efSearch, mrlTwoPass, embLowStr, "")
 			if err != nil {
 				logctx.From(ctx).Warn("multi-query: vector search failed", "alt_query", q, "error", err)
-				resultCh <- result{}
 				return
 			}
 			resultCh <- result{docs: toRankedDocs(rows, true)}
@@ -1449,11 +1447,9 @@ func (s *SearchService) runMultiQueryBM25Searches(
 			if err != nil {
 				observability.RecordKeywordSearchFailed("multi_query")
 				logctx.From(ctx).Warn("multi-query bm25: keyword search failed", "alt_query", q, "error", err)
-				resultCh <- result{}
 				return
 			}
 			if len(rows) == 0 {
-				resultCh <- result{}
 				return
 			}
 			resultCh <- result{docs: toRankedDocs(rows, false)}

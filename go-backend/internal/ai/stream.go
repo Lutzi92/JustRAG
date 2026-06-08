@@ -71,6 +71,11 @@ func StreamCompletion(ctx context.Context, resolver *ConfigResolver, prompt, sys
 	// ctx.Done() escape in `send` still guards against a disconnected consumer.
 	out := make(chan StreamEvent, 2)
 
+	// Bare go (not safego.Go) on purpose: the recover/close/endSpan LIFO defer
+	// chain below must run entirely under this goroutine's control so the
+	// panic-recovery can forward a terminal event while `out` is still open. A
+	// safego.Go wrapper would add an outer recovery layer that fires after
+	// close(out), unable to guarantee that ordering.
 	go func() {
 		// Defers are LIFO: recovery runs first (channel still open), then
 		// close(out), then endSpan. Do NOT reorder without understanding this.

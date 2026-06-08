@@ -492,6 +492,11 @@ func (c *Client) StreamChatCompletion(ctx context.Context, req ChatRequest) (<-c
 	// the JSON parser.
 	ch := make(chan StreamChunk, 1)
 
+	// Bare go (not safego.Go) on purpose: the recover/Body.Close/close(ch) LIFO
+	// defer chain below must run entirely under this goroutine's control so the
+	// panic-recovery can forward a terminal chunk while `ch` is still open. A
+	// safego.Go wrapper would add an outer recovery layer that fires after
+	// close(ch), unable to guarantee that ordering.
 	go func() {
 		// Defers execute LIFO. Registration order below is intentional and must
 		// not be changed:

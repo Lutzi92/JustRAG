@@ -121,6 +121,11 @@ func NewAgent(
 		searchSvc: searchSvc,
 		webClient: webClient,
 		redis:     rdb,
+		// Allocate the events channel here rather than inside Run's once.Do so
+		// the field is never nil after construction. A receive on a nil channel
+		// blocks forever; allocating at construction removes that footgun for
+		// any caller that reads the channel before Run establishes it.
+		events: make(chan ProgressEvent, researchEventBufferSize),
 	}
 }
 
@@ -134,8 +139,6 @@ func NewAgent(
 // same channel.
 func (a *Agent) Run(ctx context.Context) <-chan ProgressEvent {
 	a.once.Do(func() {
-		a.events = make(chan ProgressEvent, researchEventBufferSize)
-
 		safego.GoCtx(ctx, func() {
 			defer close(a.events)
 
