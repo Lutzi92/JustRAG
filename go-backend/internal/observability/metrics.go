@@ -2157,6 +2157,36 @@ func RecordAnswerToolLoopExhausted() {
 	answerToolLoopExhausted.Inc()
 }
 
+// --- Corpus-comparison table ------------------------------------------------
+
+var corpusTableTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name:        "rag_corpus_table_total",
+		Help:        "Corpus-comparison-table turns started.",
+		ConstLabels: commonLabels,
+	},
+)
+
+var corpusTableFiles = promauto.NewHistogram(
+	prometheus.HistogramOpts{
+		Name:        "rag_corpus_table_files",
+		Help:        "Files processed per corpus-table turn.",
+		Buckets:     []float64{1, 5, 10, 20, 30, 50, 100},
+		ConstLabels: commonLabels,
+	},
+)
+
+// RecordCorpusTableStart increments the corpus-table turn counter.
+func RecordCorpusTableStart() {
+	corpusTableTotal.Inc()
+}
+
+// RecordCorpusTableComplete observes the number of files processed in a
+// completed corpus-table turn.
+func RecordCorpusTableComplete(n int) {
+	corpusTableFiles.Observe(float64(n))
+}
+
 // --- Multi-pass extraction (G5 / chat/multipass.go) -------------------------
 
 var (

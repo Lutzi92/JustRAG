@@ -1288,3 +1288,66 @@ func TestHyPEAccessors(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Corpus comparison table config readers
+// ---------------------------------------------------------------------------
+
+func TestChatCorpusTableAccessors(t *testing.T) {
+	t.Parallel()
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_corpus_table_enabled":            strPtr("true"),
+		"chat_corpus_table_max_files":          strPtr("12"),
+		"chat_corpus_table_concurrency":        strPtr("3"),
+		"chat_corpus_table_model":              strPtr("gemma-fast"),
+		"chat_corpus_table_router_llm_enabled": strPtr("false"),
+	}}
+	ctx := context.Background()
+	if !ChatCorpusTableEnabled(ctx, r) {
+		t.Fatal("expected enabled")
+	}
+	if got := ChatCorpusTableMaxFiles(ctx, r); got != 12 {
+		t.Fatalf("max_files=%d want 12", got)
+	}
+	if got := ChatCorpusTableConcurrency(ctx, r); got != 3 {
+		t.Fatalf("concurrency=%d want 3", got)
+	}
+	if got := ChatCorpusTableModel(ctx, r); got != "gemma-fast" {
+		t.Fatalf("model=%q want gemma-fast", got)
+	}
+	if ChatCorpusTableRouterLLMEnabled(ctx, r) {
+		t.Fatal("expected router LLM disabled")
+	}
+}
+
+func TestChatCorpusTableDefaults(t *testing.T) {
+	t.Parallel()
+	r := &fakeSiteConfigReader{values: map[string]*string{}}
+	ctx := context.Background()
+	if ChatCorpusTableEnabled(ctx, r) {
+		t.Fatal("default should be disabled")
+	}
+	if got := ChatCorpusTableMaxFiles(ctx, r); got != 50 {
+		t.Fatalf("default max_files=%d want 50", got)
+	}
+	if got := ChatCorpusTableConcurrency(ctx, r); got != 6 {
+		t.Fatalf("default concurrency=%d want 6", got)
+	}
+	if !ChatCorpusTableRouterLLMEnabled(ctx, r) {
+		t.Fatal("router LLM should default on")
+	}
+}
+
+func TestChatCorpusTableClamp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	// chat_corpus_table_max_files = "0" is below the valid range [1, 500];
+	// readInt falls back to the default (50) for out-of-range values rather
+	// than clamping, so the accessor must return 50, not 0 and not 1.
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_corpus_table_max_files": strPtr("0"),
+	}}
+	if got := ChatCorpusTableMaxFiles(ctx, r); got != 50 {
+		t.Fatalf("max_files with value 0 (below min): got %d, want 50 (default)", got)
+	}
+}

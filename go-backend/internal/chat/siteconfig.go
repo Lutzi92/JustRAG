@@ -1197,3 +1197,43 @@ func DescribeImageEnabled(ctx context.Context, reader SiteConfigReader) bool {
 func DescribeImageModel(ctx context.Context, reader SiteConfigReader) string {
 	return ResolveFastTierModel(ctx, reader, "describe_image_model")
 }
+
+// ChatCorpusTableEnabled reports whether the corpus-comparison-table feature
+// is active. When true, the chat handler detects "compare/list all X across
+// these documents" queries and answers with a map-reduce structured table
+// (one fast-tier LLM call per in-scope file). Default off. Tunable via
+// "chat_corpus_table_enabled".
+func ChatCorpusTableEnabled(ctx context.Context, r SiteConfigReader) bool {
+	return readBool(ctx, r, "chat_corpus_table_enabled", false)
+}
+
+// ChatCorpusTableMaxFiles is the hard cap on the number of files processed
+// per corpus-table query. Excess files are dropped and the table is flagged
+// truncated. Default 50; clamped to [1, 500]. Tunable via
+// "chat_corpus_table_max_files".
+func ChatCorpusTableMaxFiles(ctx context.Context, r SiteConfigReader) int {
+	return readInt(ctx, r, "chat_corpus_table_max_files", 50, 1, 500)
+}
+
+// ChatCorpusTableConcurrency is the maximum number of parallel per-file
+// extraction calls. Default 6; clamped to [1, 50]. Tunable via
+// "chat_corpus_table_concurrency".
+func ChatCorpusTableConcurrency(ctx context.Context, r SiteConfigReader) int {
+	return readInt(ctx, r, "chat_corpus_table_concurrency", 6, 1, 50)
+}
+
+// ChatCorpusTableModel returns the LLM model override for column planning
+// and per-file extraction. Resolution chain: per-task override →
+// model_tier_fast → "" (caller falls back to the KB chat model). Tunable
+// via "chat_corpus_table_model".
+func ChatCorpusTableModel(ctx context.Context, r SiteConfigReader) string {
+	return ResolveFastTierModel(ctx, r, "chat_corpus_table_model")
+}
+
+// ChatCorpusTableRouterLLMEnabled reports whether, after the keyword router
+// fires, a fast-tier yes/no LLM confirmation call runs before the expensive
+// map-reduce. Default on — turn off only to audit raw keyword-router firing
+// rate. Tunable via "chat_corpus_table_router_llm_enabled".
+func ChatCorpusTableRouterLLMEnabled(ctx context.Context, r SiteConfigReader) bool {
+	return readBool(ctx, r, "chat_corpus_table_router_llm_enabled", true)
+}

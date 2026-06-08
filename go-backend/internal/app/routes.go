@@ -728,6 +728,10 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 		// chunks land in the citation pool the validator expands
 		// them to their leaf descendants for the n-gram check.
 		chat.WithRaptorDescendantsResolver(rc.chunkService),
+		// Corpus-table: vector.ChunkService satisfies CorpusChunkReader
+		// via GetChunksByFileID — used by RunCorpusTableChat to assemble
+		// full per-file text for comparison queries.
+		chat.WithCorpusChunks(rc.chunkService),
 	}
 	if rc.agentDecisionStore != nil {
 		chatOpts = append(chatOpts, chat.WithDecisionRecorder(&decisionRecorderAdapter{store: rc.agentDecisionStore}))

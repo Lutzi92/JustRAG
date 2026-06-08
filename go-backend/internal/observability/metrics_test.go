@@ -438,6 +438,20 @@ func TestRecordAnswerToolLoopExhausted_IncrementsCounter(t *testing.T) {
 	}
 }
 
+func TestRecordCorpusTable(t *testing.T) {
+	before := testutil.ToFloat64(corpusTableTotal)
+	RecordCorpusTableStart()
+	after := testutil.ToFloat64(corpusTableTotal)
+	if after-before != 1 {
+		t.Errorf("corpusTableTotal: expected +1, got delta %v", after-before)
+	}
+
+	RecordCorpusTableComplete(12)
+	if testutil.CollectAndCount(corpusTableFiles, "rag_corpus_table_files") < 1 {
+		t.Error("corpusTableFiles histogram should have at least one observation")
+	}
+}
+
 func TestRecordCitationAttribution_ByResultAndMethod(t *testing.T) {
 	beforeV := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("verified", "ngram"))
 	beforeU := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("unverified", "none"))

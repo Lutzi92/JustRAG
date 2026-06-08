@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import axios from 'axios';
-import type { Message, MessageSource, MessageVerification, KnowledgeBase, FileEntry, ChatEntry } from '../types';
+import type { Message, MessageSource, MessageVerification, StructuredTable, KnowledgeBase, FileEntry, ChatEntry } from '../types';
 import { API_BASE_URL } from '../api';
 import { useTheme } from '../contexts/ThemeContext';
 
@@ -21,6 +21,7 @@ interface RawChatMessage {
   feedback?: 'positive' | 'negative' | null;
   verification?: MessageVerification | null;
   traceId?: string | null;
+  structured_table?: StructuredTable | null;
 }
 
 interface UseChatParams {
@@ -226,6 +227,7 @@ export function useChat({
         feedback: m.feedback,
         verification: m.verification ?? null,
         traceId: m.traceId ?? null,
+        structured_table: m.structured_table ?? null,
       }));
       const newTree = buildMessageMap(rawMessages);
       setMessageTree(newTree);

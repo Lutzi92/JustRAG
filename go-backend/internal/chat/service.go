@@ -141,6 +141,10 @@ type ChatContext struct {
 	// flag exists so callers can also surface the decision in metrics or
 	// UI badges without re-parsing the system prompt.
 	Abstain bool
+	// StructuredTable is set only by the corpus-table orchestrator. When
+	// non-nil, the HTTP layer emits it as a {"structuredTable": …} SSE event
+	// and persists it on the AI message. nil for every other orchestrator.
+	StructuredTable *StructuredTable
 }
 
 // ---------------------------------------------------------------------------

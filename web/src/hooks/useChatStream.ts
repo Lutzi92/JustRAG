@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import type { Message, MessageSource, MessageVerification, KnowledgeBase, FileEntry, ChatEntry, TrajectoryEvent } from '../types';
+import type { Message, MessageSource, MessageVerification, StructuredTable, KnowledgeBase, FileEntry, ChatEntry, TrajectoryEvent } from '../types';
 import { API_BASE_URL, authFetch } from '../api';
 import { HAPTIC_PATTERNS, triggerHaptic } from '../utils/haptics';
 import {
@@ -264,6 +264,11 @@ export function useChatStream({
           if (event.verification) {
             setMessageTree(prev => updateMessageInTree(prev, currentAiTempIdRef.current, {
               verification: event.verification as MessageVerification,
+            }));
+          }
+          if (event.structuredTable) {
+            setMessageTree(prev => updateMessageInTree(prev, currentAiTempIdRef.current, {
+              structured_table: event.structuredTable as StructuredTable,
             }));
           }
         },

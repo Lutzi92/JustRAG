@@ -66,6 +66,11 @@ var kbConfigRegistry = []KBConfigField{
 	{Key: "chat_plan_execute_enabled", Type: FieldBool, Group: "Orchestrator", Label: "Plan-and-Execute", Help: "Plan → iterate → generate."},
 	{Key: "chat_agentic_enabled", Type: FieldBool, Group: "Orchestrator", Label: "Agentic orchestrator", Help: "Hop-1 → critique → optional follow-up hops."},
 	{Key: "chat_longcontext_enabled", Type: FieldBool, Group: "Orchestrator", Label: "Long-context (System 2)", Help: "Wide-retrieval routing for global-synthesis queries. CAUTION: high per-turn cost."},
+	{Key: "chat_corpus_table_enabled", Type: FieldBool, Group: "Orchestrator", Label: "Corpus comparison tables", Help: "Auto-detect 'compare/list all X across these documents' queries and answer with a map-reduce structured table. CAUTION: one fast-tier LLM call per in-scope file."},
+	{Key: "chat_corpus_table_max_files", Type: FieldInt, Group: "Orchestrator", Label: "Corpus table max files", Help: "Hard cap on files processed per corpus-table query (default 50). Excess files are dropped and the table is flagged truncated.", Min: f(1), Max: f(500)},
+	{Key: "chat_corpus_table_concurrency", Type: FieldInt, Group: "Orchestrator", Label: "Corpus table concurrency", Help: "Max parallel per-file extraction calls (default 6).", Min: f(1), Max: f(50)},
+	{Key: "chat_corpus_table_model", Type: FieldString, Group: "Orchestrator", Label: "Corpus table model", Help: "Per-task fast-tier model override for column planning + per-file extraction. Falls through model_tier_fast, then the KB chat model."},
+	{Key: "chat_corpus_table_router_llm_enabled", Type: FieldBool, Group: "Orchestrator", Label: "Corpus table LLM router", Help: "After the keyword router fires, confirm with a fast-tier yes/no LLM call before running the expensive map-reduce (default on). Turn off to audit the keyword firing rate."},
 
 	// --- Knowledge graph ---
 	{Key: "chat_graph_routing_enabled", Type: FieldBool, Group: "Knowledge graph", Label: "Graph routing", Help: "Emit graph-traversal decision; needs kg_extraction on the KB."},

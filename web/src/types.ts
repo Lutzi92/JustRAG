@@ -123,12 +123,27 @@ export interface TrajectoryEvent {
     refined_text?: string;
 }
 
+export interface TableColumn {
+    key: string;
+    label: string;
+    type: 'string' | 'number' | 'date';
+    deriveFrom?: string;
+}
+
+export interface StructuredTable {
+    columns: TableColumn[];
+    rows: Array<Record<string, unknown>>;
+    truncated: boolean;
+    totalFiles: number;
+}
+
 export interface Message {
     id?: string;              // DB UUID, undefined during streaming
     parentMessageId?: string; // Parent in tree
     role: 'user' | 'ai';
     content: string;
     sources?: MessageSource[];
+    structured_table?: StructuredTable | null;
     isEnhanced?: boolean;
     reasoning?: string;
     followUpQuestions?: string[];

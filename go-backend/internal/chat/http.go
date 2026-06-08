@@ -53,6 +53,10 @@ type Handler struct {
 	// Optional — when nil, forKB is a no-op and every KB uses the global
 	// reader + shared SearchService (zero added cost).
 	kbConfigStore KBConfigOverrideLister
+	// corpusChunks reads full per-file chunk text for corpus-comparison
+	// table queries. Optional — when nil, RunCorpusTableChat falls back
+	// to an error path (guarded by the caller before dispatch).
+	corpusChunks CorpusChunkReader
 }
 
 // RaptorDescendantsResolver is the narrow interface
@@ -222,6 +226,17 @@ func WithRaptorDescendantsResolver(r RaptorDescendantsResolver) HandlerOption {
 func WithKBConfigStore(s KBConfigOverrideLister) HandlerOption {
 	return func(h *Handler) {
 		h.kbConfigStore = s
+	}
+}
+
+// WithCorpusChunks attaches the corpus-table per-file chunk reader used by
+// RunCorpusTableChat to assemble full file text for comparison queries.
+// Production wiring passes *vector.ChunkService, which satisfies
+// CorpusChunkReader via GetChunksByFileID. Optional — when absent, the
+// corpus-table dispatch path is inert.
+func WithCorpusChunks(r CorpusChunkReader) HandlerOption {
+	return func(h *Handler) {
+		h.corpusChunks = r
 	}
 }
 

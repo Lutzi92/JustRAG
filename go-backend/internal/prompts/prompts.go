@@ -1134,3 +1134,61 @@ func GenBridgeSystemPrompt(lang string) string {
 func GenBridgeUserPrompt(aName, aText, bName, bText string) string {
 	return fmt.Sprintf("<passage source=%q>\n%s\n</passage>\n\n<passage source=%q>\n%s\n</passage>", aName, aText, bName, bText)
 }
+
+// ---------------------------------------------------------------------------
+// Corpus-comparison table prompts
+// ---------------------------------------------------------------------------
+
+// CorpusTableRouterSystem is the system prompt for the two-stage precision
+// router that confirms whether a user query asks for a corpus-wide comparison
+// table spanning many documents.
+func CorpusTableRouterSystem(lang string) string {
+	if lang == "de" {
+		return `Du entscheidest, ob eine Nutzerfrage eine korpusweite Vergleichstabelle über VIELE Dokumente verlangt (z. B. "vergleiche alle Höfe in einer Tabelle"). is_corpus_table=true nur, wenn explizit eine Liste/Tabelle ÜBER MEHRERE Dokumente gewünscht ist; false bei Einzelfakten, Zusammenfassungen eines Dokuments oder Vergleichen von nur zwei Aussagen. Antworte mit einem JSON-Objekt: {"is_corpus_table": true|false, "reason": "..."}`
+	}
+	return `Decide whether the user's question asks for a corpus-wide COMPARISON TABLE spanning MANY documents (e.g. 'compare all the farms in a table'). Set is_corpus_table=true only when an explicit list/table ACROSS MULTIPLE documents is wanted; false for single-fact lookups, single-document summaries, or comparing just two statements. Respond with a JSON object: {"is_corpus_table": true|false, "reason": "..."}`
+}
+
+// CorpusTableColumnsSystem is the system prompt for the column-planning step.
+// It instructs the model to propose 4–8 concise, comparable columns suitable
+// for all documents in the corpus.
+func CorpusTableColumnsSystem(lang string) string {
+	if lang == "de" {
+		return `Du entwirfst die Spalten einer Vergleichstabelle. Schlage 4–8 prägnante, vergleichbare Spalten vor, die für ALLE Dokumente sinnvoll befüllbar sind. key=snake_case, label=Anzeigename, type=string|number|date. Keine ID/Dateinamen-Spalte (wird separat erzeugt). Antworte mit einem JSON-Objekt der Form {"columns": [{"key": "snake_case", "label": "...", "type": "string|number|date"}, ...]}.`
+	}
+	return `You design the columns of a comparison table. Propose 4–8 concise, comparable columns that can be filled for ALL documents. key=snake_case, label=display name, type=string|number|date. Do NOT propose an ID/filename column (added separately). Respond with a JSON object of the form {"columns": [{"key": "snake_case", "label": "...", "type": "string|number|date"}, ...]}.`
+}
+
+// CorpusTableColumnsUser builds the user message for column planning: the
+// original user question plus a truncated sample of in-scope document text.
+func CorpusTableColumnsUser(question, sampleDocs string) string {
+	return "User request:\n" + question + "\n\nSample documents (truncated):\n" + sampleDocs
+}
+
+// CorpusTableExtractSystem is the system prompt for per-file row extraction.
+// It instructs the model to extract requested column values from a single
+// document, returning "—" for absent values.
+func CorpusTableExtractSystem(lang string) string {
+	if lang == "de" {
+		return `Extrahiere für GENAU dieses eine Dokument die angeforderten Spaltenwerte. Nutze ausschließlich den Dokumenttext. Fehlt ein Wert, gib "—" zurück. Kurze, vergleichbare Werte (Zahlen ohne Einheitstext wenn möglich). Antworte mit einem EINZIGEN JSON-Objekt, dessen Schlüssel GENAU den angegebenen Spalten-Keys entsprechen und dessen Werte die extrahierten Strings sind (verwende "—" wenn nicht vorhanden). Keine weiteren Schlüssel.`
+	}
+	return `For THIS single document, extract the requested column values. Use only the document text. If a value is absent, return "—". Keep values short and comparable (bare numbers where possible). Respond with a SINGLE JSON object whose keys are EXACTLY the provided column keys and whose values are the extracted strings (use "—" when absent). No other keys.`
+}
+
+// CorpusTableExtractUser builds the user message for per-file row extraction:
+// the overall question, the file name, the columns to fill (as JSON), and the
+// full document text.
+func CorpusTableExtractUser(question, fileName, fileText, columnsJSON string) string {
+	return "Overall request: " + question + "\nFile: " + fileName + "\nColumns to fill (JSON): " + columnsJSON + "\n\nDocument text:\n" + fileText
+}
+
+// CorpusTableNarrativeSystem is the system prompt for the narrative-synthesis
+// pass that follows the map-reduce extraction step. It instructs the model to
+// write a concise comparative analysis based solely on the assembled table
+// (which is appended verbatim to the prompt by the orchestrator).
+func CorpusTableNarrativeSystem(lang string) string {
+	if lang == "de" {
+		return "Du schreibst einen vergleichenden Bericht. Die maßgebliche Vergleichstabelle ist unten angefügt. Stütze dich ausschließlich auf diese Tabelle, erfinde keine zusätzlichen Zeilen oder Werte. Schreibe eine prägnante vergleichende Analyse (Gemeinsamkeiten, Unterschiede, Auffälligkeiten). Die Tabelle selbst wird separat angezeigt — wiederhole sie nicht vollständig."
+	}
+	return "You write a comparative report. The authoritative comparison table is appended below. Rely ONLY on that table; do not invent additional rows or values. Write a concise comparative analysis (commonalities, differences, outliers). The table is rendered separately — do not repeat it in full."
+}

@@ -387,18 +387,30 @@ func (h *Handler) tryDeepChat(
 
 	supervisorEnabled := ChatSupervisorEnabled(ctx, h.siteConfigReader)
 
+	// Corpus-table comparison: checked first so it can take top priority over
+	// all orchestrators. The two-stage gate (keyword classifier + optional LLM
+	// confirm) keeps false-positive rate low; corpusChunks being non-nil is the
+	// infrastructure-availability guard.
+	corpusTableEnabled := ChatCorpusTableEnabled(ctx, h.siteConfigReader)
+	willRunCorpusTable := corpusTableEnabled &&
+		h.corpusChunks != nil &&
+		body.Enhance == "" &&
+		IsCorpusComparisonQuery(searchQuery, lang) &&
+		(!ChatCorpusTableRouterLLMEnabled(ctx, h.siteConfigReader) ||
+			ai.ConfirmCorpusComparison(ctx, h.aiResolver, searchQuery, kbID, lang, ChatCorpusTableModel(ctx, h.siteConfigReader)))
+
 	// Phase 3 §3.2 supervisor takes priority over both plan-execute and
 	// agentic when the gate is on. Plan §3.2 ship gate: "non-regression
 	// on lookup/enumeration; ≥ 2 pp gain on complex_reasoning MRR or
 	// nDCG" — only the eval harness can decide whether the gate flips,
 	// so this gate stays per-deployment opt-in.
-	willRunSupervisor := supervisorEnabled &&
+	willRunSupervisor := !willRunCorpusTable && supervisorEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
-	willRunPlanExecute := !willRunSupervisor && planExecuteEnabled &&
+	willRunPlanExecute := !willRunCorpusTable && !willRunSupervisor && planExecuteEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
-	willRunAgentic := !willRunSupervisor && !willRunPlanExecute &&
+	willRunAgentic := !willRunCorpusTable && !willRunSupervisor && !willRunPlanExecute &&
 		agenticEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
@@ -407,8 +419,10 @@ func (h *Handler) tryDeepChat(
 		"supervisor_enabled", supervisorEnabled,
 		"plan_execute_enabled", planExecuteEnabled,
 		"agentic_enabled", agenticEnabled,
+		"corpus_table_enabled", corpusTableEnabled,
 		"query_type", queryType,
 		"enhance", body.Enhance,
+		"will_run_corpus_table", willRunCorpusTable,
 		"will_run_supervisor", willRunSupervisor,
 		"will_run_plan_execute", willRunPlanExecute,
 		"will_run_agentic", willRunAgentic,
@@ -426,6 +440,18 @@ func (h *Handler) tryDeepChat(
 	}
 
 	switch {
+	case willRunCorpusTable:
+		chatCtx, err = RunCorpusTableChat(ctx, h.aiResolver, h.searchService, h.corpusChunks, CorpusTableParams{
+			KbID:           kbID,
+			Query:          searchQuery,
+			Language:       lang,
+			FileIDs:        body.SelectedFileIDs,
+			KbSystemPrompt: kbSystemPrompt,
+			Model:          ChatCorpusTableModel(ctx, h.siteConfigReader),
+			MaxFiles:       ChatCorpusTableMaxFiles(ctx, h.siteConfigReader),
+			Concurrency:    ChatCorpusTableConcurrency(ctx, h.siteConfigReader),
+		}, collectEmit)
+
 	case willRunSupervisor:
 		supervisorParams := SupervisorChatParams{
 			KbID:            kbID,
@@ -663,6 +689,7 @@ func (h *Handler) tryDeepChat(
 		Sources:         chatCtx.Sources,
 		Reasoning:       reasoningPtr,
 		ParentMessageID: &userMsg.ID,
+		StructuredTable: chatCtx.StructuredTable,
 	})
 	if err != nil {
 		writeSSE(w, map[string]string{"error": "failed to save AI message"})
@@ -673,6 +700,9 @@ func (h *Handler) tryDeepChat(
 
 	// Send AI message ID.
 	writeSSE(w, map[string]string{"aiMessageId": aiMsg.ID})
+	if chatCtx.StructuredTable != nil {
+		writeSSE(w, map[string]any{"structuredTable": chatCtx.StructuredTable})
+	}
 
 	// Follow-ups + factcheck in parallel (no data dependency).
 	// AP-A2: emit callback so refine_start/refine_complete trajectory
@@ -697,6 +727,8 @@ func (h *Handler) tryDeepChat(
 	// terminal `answer` stage to the closed-enum outcome label.
 	mode := "standard"
 	switch {
+	case willRunCorpusTable:
+		mode = "corpus_table"
 	case willRunSupervisor:
 		mode = "supervisor"
 	case willRunPlanExecute:

@@ -792,6 +792,7 @@ export const translations = {
     agentSectionCragAdaptive: { de: 'CRAG & Adaptives Routing', en: 'CRAG & Adaptive Routing' },
     agentSectionGraph: { de: 'Wissensgraph (GraphRAG)', en: 'Knowledge Graph (GraphRAG)' },
     agentSectionMultiStep: { de: 'Mehrschritt-Pipelines', en: 'Multi-step Pipelines' },
+    agentSectionCorpusTable: { de: 'Korpus-Vergleichstabellen', en: 'Corpus comparison tables' },
     agentSectionValidation: { de: 'Validierung & QA', en: 'Validation & QA' },
     agentSectionIngestion: { de: 'Ingestion & Parsing', en: 'Ingestion & Parsing' },
     agentSectionObservability: { de: 'Observability', en: 'Observability' },
@@ -1079,6 +1080,31 @@ export const translations = {
     chatTabularChartsEnabledHelp: {
         de: 'Wenn aktiviert UND die KB Tabellendaten hat, erhält der Antwort-Prompt eine Anleitung, Ergebnisse als ```chart-Block (Recharts-JSON) auszugeben, den die Oberfläche rendert. Aggregationen via table_query (SQL GROUP BY); Nicht-SQL-Umformungen via code_exec (Plan-Phase). Modellabhängig — bei ungültigem JSON zeigt die Oberfläche einen Fallback. Standard: aus.',
         en: 'When on AND the KB has tabular data, the answer prompt gains guidance to emit results as a ```chart block (Recharts JSON) that the UI renders. Aggregations via table_query (SQL GROUP BY); non-SQL reshapes via code_exec (plan-time). Model-dependent — the UI shows a fallback on invalid JSON. Default: off.',
+    },
+    chatCorpusTableEnabled: { de: 'Aktivieren', en: 'Enable' },
+    chatCorpusTableEnabledHelp: {
+        de: 'Erkennt automatisch Anfragen wie „vergleiche/liste alle X über diese Dokumente" und beantwortet sie mit einer strukturierten Map-Reduce-Tabelle. ACHTUNG: ein schneller LLM-Aufruf pro einbezogener Datei.',
+        en: 'Auto-detects "compare/list all X across these documents" queries and answers with a structured map-reduce table. CAUTION: one fast-tier LLM call per in-scope file.',
+    },
+    chatCorpusTableModel: { de: 'Korpus-Tabelle: Modell-Override', en: 'Corpus table: model override' },
+    chatCorpusTableModelHelp: {
+        de: 'Modell für Spaltenplanung + Extraktion pro Datei. Fällt zurück auf model_tier_fast, dann das Chat-Modell der KB.',
+        en: 'Model for column planning + per-file extraction. Falls through to model_tier_fast, then the KB chat model.',
+    },
+    chatCorpusTableMaxFiles: { de: 'Korpus-Tabelle: max. Dateien', en: 'Corpus table: max files' },
+    chatCorpusTableMaxFilesHelp: {
+        de: 'Obergrenze der pro Anfrage verarbeiteten Dateien (Standard 50). Darüber hinausgehende Dateien werden verworfen und die Tabelle als gekürzt markiert.',
+        en: 'Hard cap on files processed per query (default 50). Excess files are dropped and the table is flagged truncated.',
+    },
+    chatCorpusTableConcurrency: { de: 'Korpus-Tabelle: Parallelität', en: 'Corpus table: concurrency' },
+    chatCorpusTableConcurrencyHelp: {
+        de: 'Maximale parallele Extraktionsaufrufe pro Datei (Standard 6).',
+        en: 'Max parallel per-file extraction calls (default 6).',
+    },
+    chatCorpusTableRouterLlmEnabled: { de: 'Korpus-Tabelle: LLM-Router-Bestätigung', en: 'Corpus table: LLM router confirm' },
+    chatCorpusTableRouterLlmEnabledHelp: {
+        de: 'Nach dem Keyword-Router eine schnelle Ja/Nein-LLM-Bestätigung einholen, bevor die teure Map-Reduce-Verarbeitung läuft (Standard an). Ausschalten, um die Keyword-Trefferrate zu prüfen.',
+        en: 'After the keyword router fires, confirm with a fast-tier yes/no LLM call before running the expensive map-reduce (default on). Turn off to audit the keyword firing rate.',
     },
     chatKBRouterMinConfidence: { de: 'KB-Router: Mindest-Konfidenz', en: 'KB router: min confidence' },
     chatKBRouterMinConfidenceHelp: {

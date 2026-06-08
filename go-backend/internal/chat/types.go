@@ -145,6 +145,7 @@ type MessageRow struct {
 	FeedbackUpdatedAt *time.Time           `json:"feedbackUpdatedAt,omitempty" db:"feedback_updated_at"`
 	Verification      *MessageVerification `json:"verification" db:"verification"`
 	TraceID           *string              `json:"traceId,omitempty" db:"trace_id"`
+	StructuredTable   *StructuredTable     `json:"structured_table,omitempty" db:"structured_table"`
 	CreatedAt         time.Time            `json:"createdAt" db:"created_at"`
 }
 
@@ -162,6 +163,7 @@ type AddMessageParams struct {
 	EnhancedQuery   *string
 	Reasoning       *string
 	ParentMessageID *string
+	StructuredTable *StructuredTable
 }
 
 // Store is the interface for chat-related database operations.
