@@ -258,6 +258,21 @@ func ConnectReadOnly(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	// each of those at 30 min (or 5 min idle) instead of process lifetime.
 	poolCfg.MaxConnLifetime = 30 * time.Minute
 	poolCfg.MaxConnIdleTime = 5 * time.Minute
+	// Cap query runtime at the Postgres layer. This pool runs LLM-authored
+	// SQL (sql_query / table_query); a malformed or adversarial SELECT can
+	// trivially trigger a full-table scan or runaway aggregation. The 10s MCP
+	// context timeout (mcp/dispatch.go) cancels the Go-side wait, but pgx's
+	// cancellation is best-effort — a server-side statement_timeout is the
+	// authoritative ceiling that stops the backend from churning after the
+	// client has given up. Operators can override by putting their own
+	// statement_timeout in the DSN; ParseConfig surfaces that in RuntimeParams,
+	// so we only set our 5s default when they did not.
+	if poolCfg.ConnConfig.RuntimeParams == nil {
+		poolCfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	if _, ok := poolCfg.ConnConfig.RuntimeParams["statement_timeout"]; !ok {
+		poolCfg.ConnConfig.RuntimeParams["statement_timeout"] = "5000"
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {

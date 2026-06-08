@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -403,6 +404,24 @@ func Load() (*Config, error) {
 	// (lower/upper/digit/symbol).
 	if jwtSecretCharClasses(cfg.JWTSecret) < 3 {
 		slog.Warn("JWT_SECRET appears low-entropy (fewer than 3 character classes); use a random value such as `openssl rand -base64 32`")
+	}
+
+	// AUTH_PROVIDER_SECRET_KEY wraps OIDC client_secret and LDAP bindCredentials
+	// at rest (authhandler/secrets.go). It is only *required* once an OIDC/LDAP
+	// row exists — which config can't know at boot — so we don't force it here.
+	// But when it IS set we validate its shape (base64 → exactly 32 bytes for
+	// AES-256) at startup rather than deferring to the first encrypt/decrypt: a
+	// malformed key would otherwise surface only when an admin first saves a
+	// provider or a user first logs in via OIDC, turning a typo into a runtime
+	// auth outage. Fail fast instead.
+	if raw := os.Getenv("AUTH_PROVIDER_SECRET_KEY"); raw != "" {
+		key, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return nil, fmt.Errorf("AUTH_PROVIDER_SECRET_KEY is set but not valid base64: %w", err)
+		}
+		if len(key) != 32 {
+			return nil, fmt.Errorf("AUTH_PROVIDER_SECRET_KEY must decode to exactly 32 bytes for AES-256 (got %d); generate one with `openssl rand -base64 32`", len(key))
+		}
 	}
 
 	// Production validations

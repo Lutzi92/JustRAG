@@ -23,6 +23,14 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # Fail the build on known CVEs that the code actually calls. govulncheck
+      # is call-graph aware, so it only flags reachable vulnerabilities — a
+      # vulnerable dependency we never invoke does not break CI. Remediate a
+      # red run by bumping the flagged module (or the `toolchain` floor in
+      # go.mod for a stdlib advisory) to the "Fixed in" version it prints.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
       # -count=1 bypasses the test cache so the race detector actually runs
       # rather than replaying a cached pass. DB/Redis-backed integration tests
       # self-skip when their *_DSN / DB_* env vars are unset (see t.Skip guards),
