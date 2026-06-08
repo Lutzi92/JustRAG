@@ -100,6 +100,25 @@ Aggregate (k=%d, count=%d):
 				label, a.Count, a.MeanRecall, a.MeanPrecision, a.MRR, a.MeanNDCG)
 		}
 	}
+	if rep.RoutingAccuracy != nil {
+		ra := rep.RoutingAccuracy
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "Routing accuracy (query-type classification vs golden, scored=%d):\n", ra.Scored)
+		fmt.Fprintf(w, "  accuracy = %.3f (%d/%d)\n", ra.Accuracy, ra.Correct, ra.Scored)
+		expected := make([]string, 0, len(ra.PerExpected))
+		for e := range ra.PerExpected {
+			expected = append(expected, e)
+		}
+		sort.Strings(expected)
+		for _, e := range expected {
+			b := ra.PerExpected[e]
+			acc := 0.0
+			if b.Scored > 0 {
+				acc = float64(b.Correct) / float64(b.Scored)
+			}
+			fmt.Fprintf(w, "  %-20s %.3f (%d/%d)\n", e, acc, b.Correct, b.Scored)
+		}
+	}
 	if rep.DepthBuckets != nil {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "Depth buckets (k=%d, min_total_chunks=%d, eligible_questions=%d):\n",

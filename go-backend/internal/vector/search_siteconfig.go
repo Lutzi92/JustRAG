@@ -45,6 +45,16 @@ var siteConfigParsers = map[string]siteConfigSetter{
 			cfg.ScoreDropThreshold = f
 		}
 	},
+	"rerank_score_drop_enabled": func(cfg *KBVectorConfig, v string) {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.RerankScoreDropEnabled = b
+		}
+	},
+	"rerank_score_drop_threshold": func(cfg *KBVectorConfig, v string) {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f <= 1 {
+			cfg.RerankScoreDropThreshold = f
+		}
+	},
 	"context_window_size": func(cfg *KBVectorConfig, v string) {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 5 {
 			cfg.ContextWindowSize = n

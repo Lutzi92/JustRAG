@@ -55,6 +55,18 @@ type KBVectorConfig struct {
 	MinSimilarityThreshold float64
 	ScoreDropThreshold     float64
 
+	// RerankScoreDropEnabled extends ApplyScoreDrop's elbow detection to the
+	// reranker-active path. The two filters above are skipped when a reranker
+	// runs (the blended rerank score is trusted), but a sharp gap in that
+	// blended, normalized score still marks a natural relevance cliff. When
+	// enabled, the tail past the elbow is cut on the post-rerank list using
+	// RerankScoreDropThreshold (same ratio-of-top semantics as
+	// ScoreDropThreshold). Default OFF — retrieval stays byte-stable until an
+	// operator enables it and validates the threshold on a golden set. Never
+	// applied in long-context mode (which deliberately keeps the wide pool).
+	RerankScoreDropEnabled   bool
+	RerankScoreDropThreshold float64
+
 	// MMRLambda controls the relevance-diversity trade-off in Maximal Marginal
 	// Relevance reranking. 1.0 = pure relevance (MMR is a no-op), 0.0 = pure
 	// diversity. Tunable via site_configs key "mmr_lambda".
@@ -318,6 +330,10 @@ func DefaultConfig() KBVectorConfig {
 		MinSimilarityThreshold:           0.3,
 		AutoSpellCorrect:                 false,
 		ScoreDropThreshold:               0.15,
+		// RerankScoreDropEnabled defaults false (inert). The threshold is
+		// pre-seeded at the documented midpoint so the first enable already
+		// trims a tail; operators tune it against a golden set from there.
+		RerankScoreDropThreshold: 0.5,
 		DefaultTopK:                      15,
 		ContextWindowSize:                3,
 		MMRLambda:                        0.7,

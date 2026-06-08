@@ -181,8 +181,9 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 		out, err := a.prod.Search(ctx, q, k)
 		if err == nil {
 			a.traceCache[q.ID] = &AgentTrace{
-				Orchestrator:   OrchestratorStandard,
-				DispatchReason: dispatchReason,
+				Orchestrator:        OrchestratorStandard,
+				ClassifiedQueryType: queryType,
+				DispatchReason:      dispatchReason,
 			}
 		}
 		return out, err
@@ -254,14 +255,17 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 		out, perr := a.prod.Search(ctx, q, k)
 		if perr == nil {
 			a.traceCache[q.ID] = &AgentTrace{
-				Orchestrator:   OrchestratorStandard,
-				DispatchReason: orchestrator + "_error_fallback",
+				Orchestrator:        OrchestratorStandard,
+				ClassifiedQueryType: queryType,
+				DispatchReason:      orchestrator + "_error_fallback",
 			}
 		}
 		return out, perr
 	}
 
-	a.traceCache[q.ID] = BuildAgentTrace(orchestrator, dispatchReason, events, planInputs)
+	trace := BuildAgentTrace(orchestrator, dispatchReason, events, planInputs)
+	trace.ClassifiedQueryType = queryType
+	a.traceCache[q.ID] = trace
 	a.chunkCache[q.ID] = chatCtx.FinalChunks
 
 	// FinalChunks is in sandwich order (best at 0 and N-1). For retrieval

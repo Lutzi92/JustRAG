@@ -1,6 +1,7 @@
 import { memo, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import type { Message, BranchInfo, MessageVerification } from './types';
+import { flaggedClaimsFor } from './utils/verification';
 import { useReducedMotion, getMotionProps } from './hooks/useReducedMotion';
 import { BranchIndicator } from './components/BranchIndicator';
 import { MessageActions } from './components/MessageActions';
@@ -312,7 +313,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                         suspectCitations={suspectCitationMap(message.verification)}
                         semanticCitations={semanticCitationSet(message.verification)}
                         trajectory={message.trajectory}
-                        flaggedClaims={message.verification?.factuality?.flagged_claims}
+                        flaggedClaims={flaggedClaimsFor(message.verification)}
                     />
                 </div>
             ) : (

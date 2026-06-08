@@ -7,12 +7,18 @@ import "github.com/justrag/go-backend/internal/chat"
 // the eval mirrors production dispatch; nil for adapters that don't dispatch
 // through an orchestrator, so on-disk reports stay byte-stable.
 type AgentTrace struct {
-	Orchestrator   string         `json:"orchestrator"`
-	Specialist     string         `json:"specialist,omitempty"`
-	Tools          map[string]int `json:"tools,omitempty"`
-	Hops           int            `json:"hops,omitempty"`
-	Plan           *PlanShape     `json:"plan,omitempty"`
-	DispatchReason string         `json:"dispatch_reason,omitempty"`
+	Orchestrator string         `json:"orchestrator"`
+	Specialist   string         `json:"specialist,omitempty"`
+	Tools        map[string]int `json:"tools,omitempty"`
+	Hops         int            `json:"hops,omitempty"`
+	Plan         *PlanShape     `json:"plan,omitempty"`
+	// ClassifiedQueryType is the query type the production classifier
+	// assigned to this question (lookup / enumeration / complex_reasoning).
+	// It deterministically drives orchestrator dispatch, so comparing it
+	// against the golden Question.QueryType yields routing accuracy. Set by
+	// OrchestratorDispatchAdapter; empty for adapters that don't classify.
+	ClassifiedQueryType string `json:"classified_query_type,omitempty"`
+	DispatchReason      string `json:"dispatch_reason,omitempty"`
 }
 
 // PlanShape summarizes a Plan-Execute orchestrator's plan. NodeCount is the

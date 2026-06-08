@@ -149,4 +149,10 @@ type Report struct {
 	// --depth-buckets. Nil when not requested so existing on-disk
 	// report shapes stay byte-stable for consumers diffing runs.
 	DepthBuckets *DepthBucketReport `json:"depth_buckets,omitempty"`
+	// RoutingAccuracy scores the production query-type classifier against
+	// the golden QueryType labels. Non-nil only when the eval dispatched
+	// through an orchestrator (Agent populated) AND at least one question
+	// carries a golden QueryType; nil otherwise so legacy report shapes
+	// stay byte-stable.
+	RoutingAccuracy *RoutingAccuracyReport `json:"routing_accuracy,omitempty"`
 }

@@ -27,6 +27,13 @@ RUN cd web && npm run build
 FROM golang:1.26-alpine AS builder
 WORKDIR /build
 
+# Default to a mirror that serves module zips directly. Networks here block
+# storage.googleapis.com (Go's default zip CDN), which breaks `go mod download`.
+# Override for faster downloads on unblocked networks:
+#   docker build --build-arg GOPROXY=https://proxy.golang.org,direct .
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY}
+
 COPY go-backend/go.mod go-backend/go.sum ./
 RUN go mod download
 

@@ -1311,6 +1311,45 @@ func FactualityVerifierTotalForTest() *prometheus.CounterVec {
 	return factualityVerifierTotal
 }
 
+// --- Citation attribution (per-citation validator outcomes) ----------------
+
+// citationAttributionsTotal counts individual citation MARKERS, unlike the
+// per-answer factuality/citation outcome counters. verified/(verified+
+// unverified) is the attribution rate — the fraction of [N] markers the
+// validator could ground in their cited source. method records which tier
+// grounded it (ngram / semantic) or "none" for an unverified marker.
+var citationAttributionsTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_citation_attributions_total",
+		Help: "Per-citation-marker validator outcomes. result=verified|unverified; " +
+			"method=ngram|semantic|none. verified/(verified+unverified) over a " +
+			"window is the attribution rate.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"result", "method"},
+)
+
+// RecordCitationAttribution increments the per-citation counter once per
+// citation marker. verified reflects CitationStatus.Verified; method is
+// CitationStatus.Method ("" or unknown normalizes to "none").
+func RecordCitationAttribution(verified bool, method string) {
+	result := "unverified"
+	if verified {
+		result = "verified"
+	}
+	switch method {
+	case "ngram", "semantic":
+	default:
+		method = "none"
+	}
+	citationAttributionsTotal.WithLabelValues(result, method).Inc()
+}
+
+// CitationAttributionsTotalForTest exposes the counter for test assertions.
+func CitationAttributionsTotalForTest() *prometheus.CounterVec {
+	return citationAttributionsTotal
+}
+
 // --- Factuality refine gate (AP-A1) ---------------------------------------
 
 var (

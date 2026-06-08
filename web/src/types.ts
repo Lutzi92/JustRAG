@@ -35,12 +35,37 @@ export interface FactualityVerification {
     flagged_claims: FlaggedClaimStatus[];
 }
 
+// ChunkRelevanceStatus mirrors the backend ai.ChunkRelevance (ISREL):
+// per-source relevance verdicts from the AP-D2 Self-RAG verifier.
+export interface ChunkRelevanceStatus {
+    n: number;
+    verdict: 'relevant' | 'partially_relevant' | 'irrelevant';
+}
+
+// UsefulnessStatus mirrors the backend ai.UsefulnessVerdict (ISUSE):
+// whether the answer actually addresses the question.
+export interface UsefulnessStatus {
+    verdict: 'yes' | 'partial' | 'no';
+    reason: string;
+}
+
+// SelfRAGVerification is the AP-D2 unified-verifier shape persisted under
+// MessageVerification.self_rag. When present it REPLACES `factuality` — the
+// two are mutually exclusive in the post-response path — and the flagged
+// claims live under `issup` (mirroring the backend JSON tags isrel/issup/isuse).
+export interface SelfRAGVerification {
+    isrel: ChunkRelevanceStatus[];
+    issup: FlaggedClaimStatus[];
+    isuse: UsefulnessStatus;
+}
+
 export interface MessageVerification {
     verified: boolean;          // LLM factchecker verdict; default false when factcheck didn't run
     score: number;              // 0-100; 0 when factcheck didn't run
     issues: string[];           // empty when factcheck didn't run
     citations?: CitationStatus[]; // present only when the n-gram validator ran
     factuality?: FactualityVerification | null; // present only when the verifier ran
+    self_rag?: SelfRAGVerification | null; // present only when Self-RAG ran; replaces `factuality`
 }
 
 // TrajChunkRef is the per-step chunk preview surfaced to the trajectory

@@ -1022,6 +1022,20 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		timer.Mark("score_filter")
 	}
 
+	// 11b. Reranker-active elbow cutoff (opt-in, default off). The block
+	// above skips score filtering when a reranker ran — the blended,
+	// normalized rerank score is the trusted signal — but a sharp gap in
+	// that blended score still marks a natural relevance cliff. When the
+	// operator opts in, cut the tail past the elbow on the post-rerank
+	// list. Off by default so retrieval is byte-stable; long-context mode
+	// is exempt (it deliberately keeps the wide pool).
+	if useReranker && !opts.LongContextMode && siteCfg.RerankScoreDropEnabled && siteCfg.RerankScoreDropThreshold > 0 {
+		before := len(fused)
+		fused = ApplyScoreDrop(fused, siteCfg.RerankScoreDropThreshold)
+		stageLog = append(stageLog, "rerank_score_drop_docs", len(fused), "rerank_score_drop_cut", before-len(fused))
+		timer.Mark("rerank_score_drop")
+	}
+
 	// ------------------------------------------------------------------
 	// 12. Deduplication
 	// ------------------------------------------------------------------

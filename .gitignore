@@ -19,6 +19,7 @@ e2e/.auth/
 /docs
 .playwright-mcp
 .tmp/
+/example/
 
 # OS files
 .DS_Store

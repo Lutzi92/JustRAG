@@ -256,9 +256,12 @@ func (h *Handler) runPostResponseTasks(
 				}
 				verRes.citationStatuses = RunCitationValidation(ctx, aiResponse, sources, sem)
 				for _, c := range verRes.citationStatuses {
+					// Per-marker attribution telemetry: verified/(verified+
+					// unverified) over a window is the attribution rate. Record
+					// every marker (no early break) so the denominator is whole.
+					observability.RecordCitationAttribution(c.Verified, c.Method)
 					if !c.Verified {
 						hasCitationSuspect = true
-						break
 					}
 				}
 				// Phase F cite-by-kind telemetry: increment after

@@ -437,3 +437,22 @@ func TestRecordAnswerToolLoopExhausted_IncrementsCounter(t *testing.T) {
 		t.Fatalf("counter: before=%v after=%v (want diff 1)", before, after)
 	}
 }
+
+func TestRecordCitationAttribution_ByResultAndMethod(t *testing.T) {
+	beforeV := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("verified", "ngram"))
+	beforeU := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("unverified", "none"))
+
+	RecordCitationAttribution(true, "ngram")
+	RecordCitationAttribution(false, "")        // unknown method -> "none"
+	RecordCitationAttribution(false, "garbage") // unknown method -> "none"
+
+	afterV := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("verified", "ngram"))
+	afterU := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("unverified", "none"))
+
+	if afterV-beforeV != 1 {
+		t.Errorf("verified/ngram: expected +1, got %v", afterV-beforeV)
+	}
+	if afterU-beforeU != 2 {
+		t.Errorf("unverified/none: expected +2 (empty + garbage normalize to none), got %v", afterU-beforeU)
+	}
+}

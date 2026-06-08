@@ -508,6 +508,49 @@ func TestLoadSiteConfig_BM25TieredBoost(t *testing.T) {
 	}
 }
 
+// TestLoadSiteConfig_RerankScoreDrop pins the opt-in reranker-active elbow
+// cutoff: enabled defaults false, threshold defaults 0.5, explicit values
+// parse, and out-of-range thresholds fall back to the default.
+func TestLoadSiteConfig_RerankScoreDrop(t *testing.T) {
+	t.Parallel()
+
+	// defaults: disabled, threshold pre-seeded at 0.5
+	svc := NewSearchService(nil, nil, nil, WithSiteConfigReader(&stubSiteConfig{values: map[string]*string{}}))
+	cfg := svc.loadSiteConfig(context.Background())
+	if cfg.RerankScoreDropEnabled {
+		t.Errorf("RerankScoreDropEnabled: default must be false")
+	}
+	if cfg.RerankScoreDropThreshold != 0.5 {
+		t.Errorf("RerankScoreDropThreshold: default must be 0.5, got %v", cfg.RerankScoreDropThreshold)
+	}
+
+	// explicit enable + threshold
+	svc = NewSearchService(nil, nil, nil, WithSiteConfigReader(&stubSiteConfig{values: map[string]*string{
+		"rerank_score_drop_enabled":   strPtr("true"),
+		"rerank_score_drop_threshold": strPtr("0.3"),
+	}}))
+	cfg = svc.loadSiteConfig(context.Background())
+	if !cfg.RerankScoreDropEnabled {
+		t.Errorf("RerankScoreDropEnabled: explicit true must enable")
+	}
+	if cfg.RerankScoreDropThreshold != 0.3 {
+		t.Errorf("RerankScoreDropThreshold: explicit 0.3 must parse, got %v", cfg.RerankScoreDropThreshold)
+	}
+
+	// out-of-range threshold falls back to default (0.5); garbage enable -> default false
+	svc = NewSearchService(nil, nil, nil, WithSiteConfigReader(&stubSiteConfig{values: map[string]*string{
+		"rerank_score_drop_enabled":   strPtr("perhaps"),
+		"rerank_score_drop_threshold": strPtr("1.5"),
+	}}))
+	cfg = svc.loadSiteConfig(context.Background())
+	if cfg.RerankScoreDropEnabled {
+		t.Errorf("RerankScoreDropEnabled: garbage must yield default (false)")
+	}
+	if cfg.RerankScoreDropThreshold != 0.5 {
+		t.Errorf("RerankScoreDropThreshold: out-of-range must yield default (0.5), got %v", cfg.RerankScoreDropThreshold)
+	}
+}
+
 // TestLoadSiteConfig_RAGFusionEnabled pins the P4 gate. Default
 // off; explicit "true" enables; bad values fall back to default.
 func TestLoadSiteConfig_RAGFusionEnabled(t *testing.T) {
