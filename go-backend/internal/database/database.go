@@ -151,18 +151,24 @@ func connectWithRetry(ctx context.Context, label string, cfg config.DBConfig) (*
 		attempts = defaultConnectAttempts
 	}
 
+	// Open the pool once and retry only Ping. pgxpool.NewWithConfig does not
+	// dial eagerly (MinConns are filled lazily in the background and never
+	// block or fail the constructor), so the thing actually being waited on is
+	// network/DB reachability — which Ping probes. Re-allocating the pool
+	// struct and its background goroutines on every attempt was wasted work
+	// during the startup race; a failed Ping leaves no usable connection in
+	// the pool for pgxpool to hand out, so reuse is safe.
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s DB pool: %w", label, err)
+	}
+
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
-		pool, openErr := pgxpool.NewWithConfig(ctx, poolCfg)
-		if openErr == nil {
-			if pingErr := pool.Ping(ctx); pingErr == nil {
-				return pool, nil
-			} else {
-				lastErr = pingErr
-				pool.Close()
-			}
+		if pingErr := pool.Ping(ctx); pingErr == nil {
+			return pool, nil
 		} else {
-			lastErr = openErr
+			lastErr = pingErr
 		}
 
 		if attempt == attempts-1 {
@@ -181,9 +187,11 @@ func connectWithRetry(ctx context.Context, label string, cfg config.DBConfig) (*
 		case <-t.C:
 		case <-ctx.Done():
 			t.Stop()
+			pool.Close()
 			return nil, ctx.Err()
 		}
 	}
+	pool.Close()
 	return nil, fmt.Errorf("connecting to %s DB after %d attempts: %w", label, attempts, lastErr)
 }
 
@@ -243,6 +251,13 @@ func ConnectReadOnly(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	}
 	poolCfg.MinConns = 0
 	poolCfg.HealthCheckPeriod = 30 * time.Second
+	// Bound connection age explicitly. This pool backs a least-privilege
+	// SELECT-only role; unbounded connections can outlive a credential
+	// rotation, accumulate after a burst of low-frequency tool calls, or
+	// survive a PgBouncer restart with stale session state. Recycling caps
+	// each of those at 30 min (or 5 min idle) instead of process lifetime.
+	poolCfg.MaxConnLifetime = 30 * time.Minute
+	poolCfg.MaxConnIdleTime = 5 * time.Minute
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {

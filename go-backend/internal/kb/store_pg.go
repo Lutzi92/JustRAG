@@ -134,16 +134,25 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 	if offset < 0 {
 		offset = 0
 	}
+	// Ownership-or-share membership is expressed as an EXISTS subquery rather
+	// than a LEFT JOIN + DISTINCT. The join form could emit one row per share
+	// for a KB the user both owns and is shared on, which forced a DISTINCT
+	// sort/dedup of the full result set before LIMIT/OFFSET — defeating
+	// index-driven pagination. EXISTS yields at most one row per KB by
+	// construction, letting the planner use the btree indexes on
+	// knowledge_bases.user_id and knowledge_base_shares.kb_id.
 	const sql = `
-		SELECT DISTINCT ` + kbSelectCols + `,
+		SELECT ` + kbSelectCols + `,
 		       u.first_name AS owner_first_name,
 		       u.last_name  AS owner_last_name,
 		       u.username   AS owner_username
 		FROM knowledge_bases kb
-		LEFT JOIN knowledge_base_shares kbs ON kb.id = kbs.kb_id AND kbs.user_id = $1
 		LEFT JOIN users u ON kb.user_id = u.id
 		WHERE kb.user_id = $1
-		   OR kbs.user_id = $1
+		   OR EXISTS (
+		       SELECT 1 FROM knowledge_base_shares
+		       WHERE kb_id = kb.id AND user_id = $1
+		   )
 		ORDER BY kb.created_at DESC
 		LIMIT $2 OFFSET $3`
 
@@ -220,35 +229,16 @@ func (s *PGStore) CreateKnowledgeBase(ctx context.Context, name string, descript
 // kb.UpdateStore implementation
 // ---------------------------------------------------------------------------
 
-// updateBuilder accumulates `column = $N` clauses + the matching bind args in
-// lock-step so the manual `param` counter cannot drift. Each addValue call
-// appends to both lists and derives `$N` from len(args) directly. addNull
-// emits a `column = NULL` clause with no bind argument.
-//
-// Bind numbering assumption: the caller will pass these args after the id
-// (which is $1 in the WHERE clause), so we offset by +1. See callsite in
-// UpdateKnowledgeBase.
-type updateBuilder struct {
-	clauses []string
-	args    []any
-}
-
-func (b *updateBuilder) addValue(column string, val any) {
-	b.args = append(b.args, val)
-	b.clauses = append(b.clauses, fmt.Sprintf("%s = $%d", column, len(b.args)+1))
-}
-
-func (b *updateBuilder) addNull(column string) {
-	b.clauses = append(b.clauses, column+" = NULL")
-}
-
 // addOrNull combines the two patterns used across the nullable-string columns:
 // set to val when non-nil, or set to NULL when jsonKey is in data.NullFields.
-func (b *updateBuilder) addOrNull(column string, val *string, nullFields map[string]bool, jsonKey string) {
+// The shared pgxutil.ClauseBuilder keeps each `$N` in lock-step with its bind
+// arg; the builder is created with base=1 so the first SET arg binds $2 (id is
+// $1 in the WHERE clause).
+func addOrNull(b *pgxutil.ClauseBuilder, column string, val *string, nullFields map[string]bool, jsonKey string) {
 	if val != nil {
-		b.addValue(column, *val)
+		b.Add(column+" = $%d", *val)
 	} else if nullFields[jsonKey] {
-		b.addNull(column)
+		b.AddRaw(column + " = NULL")
 	}
 }
 
@@ -257,42 +247,42 @@ func (b *updateBuilder) addOrNull(column string, val *string, nullFields map[str
 // exists — callers match with errors.Is to distinguish "missing" from other
 // failure modes.
 func (s *PGStore) UpdateKnowledgeBase(ctx context.Context, id string, data KBUpdate) (*KBRow, error) {
-	b := &updateBuilder{}
+	b := pgxutil.NewClauseBuilder(1) // id=$1 in WHERE; first SET arg binds $2
 
 	if data.Name != nil {
-		b.addValue("name", *data.Name)
+		b.Add("name = $%d", *data.Name)
 	}
-	b.addOrNull("description", data.Description, data.NullFields, "description")
+	addOrNull(b, "description", data.Description, data.NullFields, "description")
 	if data.Language != nil {
-		b.addValue("language", *data.Language)
+		b.Add("language = $%d", *data.Language)
 	}
-	b.addOrNull("system_prompt", data.SystemPrompt, data.NullFields, "systemPrompt")
-	b.addOrNull("header_text", data.HeaderText, data.NullFields, "headerText")
-	b.addOrNull("example_prompts", data.ExamplePrompts, data.NullFields, "examplePrompts")
-	b.addOrNull("tts_model", data.TTSModel, data.NullFields, "ttsModel")
-	b.addOrNull("stt_model", data.SttModel, data.NullFields, "sttModel")
-	b.addOrNull("ai_config_id", data.AIConfigID, data.NullFields, "aiConfigId")
-	b.addOrNull("chat_model", data.ChatModel, data.NullFields, "chatModel")
-	b.addOrNull("embedding_model", data.EmbeddingModel, data.NullFields, "embeddingModel")
-	b.addOrNull("rerank_model", data.RerankModel, data.NullFields, "rerankModel")
+	addOrNull(b, "system_prompt", data.SystemPrompt, data.NullFields, "systemPrompt")
+	addOrNull(b, "header_text", data.HeaderText, data.NullFields, "headerText")
+	addOrNull(b, "example_prompts", data.ExamplePrompts, data.NullFields, "examplePrompts")
+	addOrNull(b, "tts_model", data.TTSModel, data.NullFields, "ttsModel")
+	addOrNull(b, "stt_model", data.SttModel, data.NullFields, "sttModel")
+	addOrNull(b, "ai_config_id", data.AIConfigID, data.NullFields, "aiConfigId")
+	addOrNull(b, "chat_model", data.ChatModel, data.NullFields, "chatModel")
+	addOrNull(b, "embedding_model", data.EmbeddingModel, data.NullFields, "embeddingModel")
+	addOrNull(b, "rerank_model", data.RerankModel, data.NullFields, "rerankModel")
 	if data.ChunkSize != nil {
-		b.addValue("chunk_size", *data.ChunkSize)
+		b.Add("chunk_size = $%d", *data.ChunkSize)
 	}
 	if data.ChunkOverlap != nil {
-		b.addValue("chunk_overlap", *data.ChunkOverlap)
+		b.Add("chunk_overlap = $%d", *data.ChunkOverlap)
 	}
 	if data.IsPublished != nil {
-		b.addValue("is_published", *data.IsPublished)
+		b.Add("is_published = $%d", *data.IsPublished)
 	}
 	if data.StudioConfig != nil {
 		jsonBytes, err := json.Marshal(data.StudioConfig)
 		if err != nil {
 			return nil, fmt.Errorf("UpdateKnowledgeBase: marshal studio_config: %w", err)
 		}
-		b.addValue("studio_config", jsonBytes)
+		b.Add("studio_config = $%d", jsonBytes)
 	}
 
-	if len(b.clauses) == 0 {
+	if b.Len() == 0 {
 		// Nothing to update — return the current row unchanged.
 		row, err := pgxutil.QueryOne[kbFullRow](ctx, s.pool,
 			`SELECT `+kbSelectColsNoAlias+` FROM knowledge_bases WHERE id = $1`, id)
@@ -308,9 +298,9 @@ func (s *PGStore) UpdateKnowledgeBase(ctx context.Context, id string, data KBUpd
 
 	updateSQL := fmt.Sprintf(
 		`UPDATE knowledge_bases SET %s WHERE id = $1 RETURNING `+kbSelectColsNoAlias,
-		strings.Join(b.clauses, ", "),
+		strings.Join(b.Clauses(), ", "),
 	)
-	allArgs := append([]any{id}, b.args...)
+	allArgs := append([]any{id}, b.Args()...)
 
 	row, err := pgxutil.QueryOne[kbFullRow](ctx, s.pool, updateSQL, allArgs...)
 	if err != nil {
