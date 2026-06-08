@@ -1,10 +1,11 @@
 package agents
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -267,11 +268,11 @@ func mergeSpecialistChunksRRF(k int, lists ...[]vector.SearchChunk) []vector.Sea
 	for id, a := range merged {
 		ranked = append(ranked, scored{id: id, score: a.score})
 	}
-	sort.Slice(ranked, func(i, j int) bool {
-		if ranked[i].score != ranked[j].score {
-			return ranked[i].score > ranked[j].score
-		}
-		return ranked[i].id < ranked[j].id
+	slices.SortFunc(ranked, func(a, b scored) int {
+		return cmp.Or(
+			cmp.Compare(b.score, a.score), // score descending
+			cmp.Compare(a.id, b.id),       // id ascending, deterministic tie-break
+		)
 	})
 
 	out := make([]vector.SearchChunk, 0, len(ranked))

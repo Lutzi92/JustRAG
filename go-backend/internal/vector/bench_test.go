@@ -221,6 +221,31 @@ func BenchmarkBlendRerankScores(b *testing.B) {
 	}
 }
 
+// BenchmarkBuildRerankDocs guards the rerank-input assembly on the search hot
+// path (invoked whenever a reranker is active). Half the docs carry a
+// ContextualPrefix to exercise the pooled-buffer prefix+content concat path;
+// the other half pass through with no allocation. A regression in the string
+// building (e.g. losing the buffer pool) surfaces here at n=200, the realistic
+// candidate-pool size after RRF fusion.
+func BenchmarkBuildRerankDocs(b *testing.B) {
+	for _, n := range []int{20, 50, 100, 200} {
+		docs := makeBenchDocs(n)
+		// Give every other doc a contextual prefix so both branches run.
+		for i := range docs {
+			if i%2 == 0 {
+				docs[i].ContextualPrefix = fmt.Sprintf("Section %d of the source document.", i)
+			}
+		}
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = buildRerankDocs(docs)
+			}
+		})
+	}
+}
+
 // BenchmarkDeduplicate guards the near-duplicate filter on the retrieval hot
 // path. It is O(kept^2) in the worst case (every kept doc compared against
 // each survivor), with one sortedUniqueWords tokenization per accepted doc,

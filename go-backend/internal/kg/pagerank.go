@@ -1,11 +1,12 @@
 package kg
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/justrag/go-backend/internal/observability"
@@ -241,13 +242,10 @@ func (s *PgStore) PPREntities(ctx context.Context, kbID string, seedIDs []int64,
 		}
 		ranked = append(ranked, scored{id, sc})
 	}
-	sort.Slice(ranked, func(i, j int) bool {
-		if ranked[i].score != ranked[j].score {
-			return ranked[i].score > ranked[j].score
-		}
-		// Stable secondary sort by id so identical-score ties don't
-		// flap between runs (tests expect deterministic ordering).
-		return ranked[i].id < ranked[j].id
+	slices.SortFunc(ranked, func(a, b scored) int {
+		// Score descending; ties broken by id ascending so identical-score
+		// ties don't flap between runs (tests expect deterministic ordering).
+		return cmp.Or(cmp.Compare(b.score, a.score), cmp.Compare(a.id, b.id))
 	})
 	if len(ranked) > topK {
 		ranked = ranked[:topK]
@@ -344,11 +342,8 @@ func (s *PgStore) PPRChunks(ctx context.Context, kbID string, seedIDs []int64, t
 		}
 		ranked = append(ranked, scored{id, sc})
 	}
-	sort.Slice(ranked, func(i, j int) bool {
-		if ranked[i].score != ranked[j].score {
-			return ranked[i].score > ranked[j].score
-		}
-		return ranked[i].id < ranked[j].id
+	slices.SortFunc(ranked, func(a, b scored) int {
+		return cmp.Or(cmp.Compare(b.score, a.score), cmp.Compare(a.id, b.id))
 	})
 	if topEntities < 1 {
 		topEntities = 1
@@ -401,11 +396,8 @@ func (s *PgStore) PPRChunks(ctx context.Context, kbID string, seedIDs []int64, t
 	for id, sc := range chunkScores {
 		chunkRanked = append(chunkRanked, chunkScored{id, sc})
 	}
-	sort.Slice(chunkRanked, func(i, j int) bool {
-		if chunkRanked[i].score != chunkRanked[j].score {
-			return chunkRanked[i].score > chunkRanked[j].score
-		}
-		return chunkRanked[i].id < chunkRanked[j].id
+	slices.SortFunc(chunkRanked, func(a, b chunkScored) int {
+		return cmp.Or(cmp.Compare(b.score, a.score), cmp.Compare(a.id, b.id))
 	})
 	if len(chunkRanked) > maxChunks {
 		chunkRanked = chunkRanked[:maxChunks]

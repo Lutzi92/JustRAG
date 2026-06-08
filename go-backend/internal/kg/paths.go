@@ -1,9 +1,10 @@
 package kg
 
 import (
+	"cmp"
 	"context"
 	"errors"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/justrag/go-backend/internal/observability"
@@ -166,13 +167,13 @@ enumeration_done:
 
 	// Order: shortest first; ties broken by aggregate weight
 	// descending (heavier evidence wins). Final trim to MaxPaths.
-	sort.Slice(found, func(i, j int) bool {
-		if found[i].Length != found[j].Length {
-			return found[i].Length < found[j].Length
-		}
-		wi := totalWeight(found[i].Edges)
-		wj := totalWeight(found[j].Edges)
-		return wi > wj
+	slices.SortFunc(found, func(a, b RelationalPath) int {
+		// Length ascending (shortest first); ties broken by aggregate edge
+		// weight descending so heavier evidence wins.
+		return cmp.Or(
+			cmp.Compare(a.Length, b.Length),
+			cmp.Compare(totalWeight(b.Edges), totalWeight(a.Edges)),
+		)
 	})
 	if len(found) > cfg.MaxPaths {
 		found = found[:cfg.MaxPaths]
@@ -265,11 +266,8 @@ func (s *PgStore) PathChunks(ctx context.Context, kbID string, srcID, dstID int6
 	for id, sc := range scoreByID {
 		ranked = append(ranked, chunkScored{id, sc})
 	}
-	sort.Slice(ranked, func(i, j int) bool {
-		if ranked[i].score != ranked[j].score {
-			return ranked[i].score > ranked[j].score
-		}
-		return ranked[i].id < ranked[j].id
+	slices.SortFunc(ranked, func(a, b chunkScored) int {
+		return cmp.Or(cmp.Compare(b.score, a.score), cmp.Compare(a.id, b.id))
 	})
 	if len(ranked) > maxChunks {
 		ranked = ranked[:maxChunks]

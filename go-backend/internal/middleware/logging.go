@@ -75,21 +75,23 @@ func Logging(verbose bool) func(http.Handler) http.Handler {
 			if status == 0 {
 				status = http.StatusOK
 			}
-			// Cap 12 = the five base key/value pairs (10) plus the optional
-			// user_id pair (2). Pre-sizing avoids the grow-and-copy that a
-			// cap-10 composite literal triggers on every authenticated request.
-			attrs := make([]any, 0, 12)
-			attrs = append(attrs,
-				"method", r.Method,
-				"path", r.URL.Path,
-				"status", status,
-				"duration_ms", time.Since(start).Milliseconds(),
-				"request_id", requestid.FromContext(ctx),
-			)
-			if userCap.UserID != "" {
-				attrs = append(attrs, "user_id", userCap.UserID)
+			// Build the attrs on the stack and emit via LogAttrs: the typed
+			// slog.Attr path takes no per-request []any allocation and boxes
+			// no values, unlike the variadic slog.Info path. Index 5 is the
+			// optional user_id, only included on authenticated requests.
+			attrs := [6]slog.Attr{
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+				slog.Int("status", status),
+				slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+				slog.String("request_id", requestid.FromContext(ctx)),
 			}
-			slog.Info("request", attrs...)
+			n := 5
+			if userCap.UserID != "" {
+				attrs[5] = slog.String("user_id", userCap.UserID)
+				n = 6
+			}
+			slog.LogAttrs(ctx, slog.LevelInfo, "request", attrs[:n]...)
 		})
 	}
 }

@@ -137,7 +137,13 @@ func (c *QueryCache) Lookup(ctx context.Context, kbID string, hash []byte, embed
 	start := time.Now()
 	defer func() { observability.QueryCacheLookupSeconds.Observe(time.Since(start).Seconds()) }()
 
-	embStr := formatEmbedding(embedding)
+	// Bind the query embedding as a binary pgvector parameter (registered
+	// codec, see internal/database/pgvector_codec.go) instead of a text
+	// literal — ~4× smaller wire payload per lookup and no formatEmbedding
+	// pool borrow/return cycle. The `$3::vector` cast is a no-op on an
+	// already-vector-typed param (matches the insertBatch convention) and
+	// keeps the halfvec recast that the HNSW index requires.
+	embArg := vectorArg(embedding)
 	// The HNSW index is on (query_embedding::halfvec(2560)) halfvec_cosine_ops
 	// (vector(2560) > pgvector's 2000-dim HNSW cap, halfvec extends it to 4000).
 	// ORDER BY must use the same halfvec cast on both sides to hit the index.
@@ -149,7 +155,7 @@ func (c *QueryCache) Lookup(ctx context.Context, kbID string, hash []byte, embed
 		  AND expires_at > now()
 		ORDER BY query_embedding::halfvec(2560) <=> $3::vector::halfvec(2560)
 		LIMIT 1
-	`, kbID, hash, embStr)
+	`, kbID, hash, embArg)
 
 	var bytes []byte
 	if err := row.Scan(&bytes, &distance); err != nil {
@@ -186,11 +192,11 @@ func (c *QueryCache) Store(ctx context.Context, kbID string, hash []byte, embedd
 }
 
 func (c *QueryCache) writeOne(ctx context.Context, w queryCacheWrite) error {
-	embStr := formatEmbedding(w.embedding)
+	// Binary pgvector binding, matching Lookup and insertBatch — see vectorArg.
 	_, err := c.pool.Exec(ctx, `
 		INSERT INTO query_cache (kb_id, shape_hash, query_embedding, query_text, result_json, expires_at)
 		VALUES ($1, $2, $3::vector, $4, $5, now() + ($6 * interval '1 millisecond'))
-	`, w.kbID, w.hash, embStr, w.queryText, w.result, w.ttl.Milliseconds())
+	`, w.kbID, w.hash, vectorArg(w.embedding), w.queryText, w.result, w.ttl.Milliseconds())
 	return err
 }
 

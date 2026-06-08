@@ -77,22 +77,25 @@ var sseBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 // stop work when the client has gone away; this log is observability, not
 // flow control.
 func writeSSE(w http.ResponseWriter, data any) {
-	buf := sseBufPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	defer sseBufPool.Put(buf)
-	// Pool the encode buffer to cut per-frame GC pressure on long streams
-	// (chat responses emit hundreds of frames). Encoder HTML-escapes the
-	// same as json.Marshal, so the wire bytes are unchanged; it appends a
-	// trailing '\n' which we trim before framing.
-	if err := json.NewEncoder(buf).Encode(data); err != nil {
+	// json.Marshal reuses an internal encodeState pool, so it avoids the
+	// per-frame json.Encoder struct allocation a fresh NewEncoder incurs on
+	// long streams (chat responses emit hundreds of frames). It HTML-escapes
+	// identically and returns no trailing newline, so nothing to trim.
+	payload, err := json.Marshal(data)
+	if err != nil {
 		slog.Error("chat: writeSSE marshal failed", "error", err, "type", fmt.Sprintf("%T", data))
 		return
 	}
-	b := buf.Bytes()
-	if n := len(b); n > 0 && b[n-1] == '\n' {
-		b = b[:n-1]
-	}
-	if _, werr := fmt.Fprintf(w, "data: %s\n\n", b); werr != nil {
+	// Assemble the whole frame in a pooled buffer and emit it in one Write
+	// (one Flush syscall) instead of fmt.Fprintf parsing "data: %s\n\n" per
+	// token. The buffer reuse keeps GC pressure flat across the stream.
+	buf := sseBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer sseBufPool.Put(buf)
+	buf.WriteString("data: ")
+	buf.Write(payload)
+	buf.WriteString("\n\n")
+	if _, werr := w.Write(buf.Bytes()); werr != nil {
 		slog.Debug("chat: writeSSE write failed (likely client disconnect)", "error", werr)
 		return
 	}

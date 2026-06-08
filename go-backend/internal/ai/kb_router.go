@@ -1,10 +1,11 @@
 package ai
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -95,7 +96,7 @@ func RouteKB(ctx context.Context, resolver *ConfigResolver, query string, candid
 		}
 		out = append(out, KBRouterMatch{KBID: id, Confidence: conf, Reason: strings.TrimSpace(m.Reason)})
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Confidence > out[j].Confidence })
+	slices.SortStableFunc(out, func(a, b KBRouterMatch) int { return cmp.Compare(b.Confidence, a.Confidence) })
 
 	logctx.From(ctx).Info("rag.kb_router.decide",
 		"stage", "kb_router",

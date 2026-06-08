@@ -1,10 +1,11 @@
 package builtin
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/justrag/go-backend/internal/mcp"
@@ -95,7 +96,7 @@ func countMentionsHandler(svc MentionsCounter) mcp.ToolHandlerFunc {
 		}
 		// Sort by descending count so the model's eye lands on the
 		// largest-and-likely-most-meaningful figure first.
-		sort.SliceStable(results, func(i, j int) bool { return results[i].Count > results[j].Count })
+		slices.SortStableFunc(results, func(a, b pair) int { return cmp.Compare(b.Count, a.Count) })
 
 		var text strings.Builder
 		for _, p := range results {

@@ -1,10 +1,11 @@
 package vector
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -999,7 +1000,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 				weight = 0.05
 			}
 			ApplyFeedbackBoost(fused, net, weight)
-			sort.SliceStable(fused, func(i, j int) bool { return fused[i].Score > fused[j].Score })
+			slices.SortStableFunc(fused, func(a, b RankedDoc) int { return cmp.Compare(b.Score, a.Score) })
 			stageLog = append(stageLog, "feedback_boost_applied", len(net))
 		}
 	}
