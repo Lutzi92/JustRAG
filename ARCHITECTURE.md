@@ -14,7 +14,7 @@ JustRAG currently runs as:
 - Redis for queues, rate limiting, relay state, and caches
 - optional filesystem or S3-compatible object storage
 
-The older Node.js implementation under `src/` remains in the repository for compatibility, schema tooling, and migration support, but it is not the default runtime.
+The legacy Node.js implementation under `src/` has been removed; the runtime is Go-only. Migrations are managed by the Go `migrate` entrypoint (`go-backend/cmd/migrate`).
 
 ## Primary Runtime Path
 

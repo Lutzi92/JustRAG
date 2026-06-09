@@ -254,13 +254,17 @@ func TestEncodeQuery_SendsWrappedInputToEmbeddingServer(t *testing.T) {
 
 	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
+		// GenerateEmbedding now delegates to the batch path which sends
+		// input as []string rather than a bare string.
 		var req struct {
-			Input string `json:"input"`
+			Input []string `json:"input"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			t.Fatalf("decode request body: %v", err)
 		}
-		gotInput = req.Input
+		if len(req.Input) > 0 {
+			gotInput = req.Input[0]
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(embeddingResponse([]map[string]any{
@@ -287,13 +291,17 @@ func TestEncodeQuery_EmptyInstructionSendsBareQuery(t *testing.T) {
 
 	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
+		// GenerateEmbedding now delegates to the batch path which sends
+		// input as []string rather than a bare string.
 		var req struct {
-			Input string `json:"input"`
+			Input []string `json:"input"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			t.Fatalf("decode request body: %v", err)
 		}
-		gotInput = req.Input
+		if len(req.Input) > 0 {
+			gotInput = req.Input[0]
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(embeddingResponse([]map[string]any{
@@ -329,5 +337,47 @@ func TestGenerateEmbeddings_AllRetriesFailReturnsError(t *testing.T) {
 
 	if n := callCount.Load(); n != 3 {
 		t.Errorf("expected exactly 3 API calls, got %d", n)
+	}
+}
+
+// TestGenerateEmbedding_RetriesTransient verifies that a transient server error
+// on the first attempt is retried by GenerateEmbedding via the batch path.
+// The server returns 500 on the first request and a valid embedding on the second.
+// Expect: err == nil, correct vector returned, server received exactly 2 requests.
+// NOTE: the batch retry backoff is 2s between attempts, so this test takes ~2s.
+func TestGenerateEmbedding_RetriesTransient(t *testing.T) {
+	var callCount atomic.Int32
+	want := []float64{0.11, 0.22, 0.33}
+
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		n := callCount.Add(1)
+		if n == 1 {
+			// First request: transient 500
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"transient failure"}`))
+			return
+		}
+		// Second request: valid response
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(embeddingResponse([]map[string]any{
+			validEmbeddingData(0, want),
+		}))
+	})
+
+	resolver := newEmbeddingResolver(srv.URL)
+	got, err := ai.GenerateEmbedding(context.Background(), resolver, "hello", "kb-1", nil)
+	if err != nil {
+		t.Fatalf("expected no error after retry, got: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected vector length %d, got %d", len(want), len(got))
+	}
+	for i, v := range want {
+		if got[i] != v {
+			t.Errorf("embedding[%d]: want %f, got %f", i, v, got[i])
+		}
+	}
+	if n := callCount.Load(); n != 2 {
+		t.Errorf("expected exactly 2 server requests (1 fail + 1 retry), got %d", n)
 	}
 }

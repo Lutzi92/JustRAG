@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -11,6 +12,43 @@ import (
 	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/requestid"
 )
+
+// getRetryCount / getMaxRetry are package-level indirections over the asynq
+// accessors so MarkErrorOnExhaustion is unit-testable without a live asynq
+// server populating the context. Tests override these.
+var getRetryCount = asynq.GetRetryCount
+var getMaxRetry = asynq.GetMaxRetry
+
+// statusStore is the minimal surface MarkErrorOnExhaustion needs.
+type statusStore interface {
+	UpdateFileStatus(ctx context.Context, fileID, status string) error
+}
+
+// MarkErrorOnExhaustion wraps a file-processing handler so that when it returns
+// an error on the FINAL retry attempt, the file is transitioned to 'error'
+// immediately instead of waiting for the maintenance stuck-file sweep (~10 min).
+// Non-final failures pass through unchanged so asynq still retries.
+func MarkErrorOnExhaustion(h asynq.HandlerFunc, store statusStore) asynq.HandlerFunc {
+	return func(ctx context.Context, task *asynq.Task) error {
+		err := h(ctx, task)
+		if err == nil {
+			return nil
+		}
+		retried, _ := getRetryCount(ctx)
+		maxRetry, _ := getMaxRetry(ctx)
+		if retried >= maxRetry {
+			var p jobs.FileProcessingPayload
+			if jsonErr := json.Unmarshal(task.Payload(), &p); jsonErr == nil && p.FileID != "" {
+				if uErr := store.UpdateFileStatus(ctx, p.FileID, "error"); uErr != nil {
+					logctx.From(ctx).Error("worker: failed to mark file error on retry exhaustion", "fileId", p.FileID, "error", uErr)
+				} else {
+					logctx.From(ctx).Warn("worker: file marked error after retry exhaustion", "fileId", p.FileID)
+				}
+			}
+		}
+		return err
+	}
+}
 
 // DefaultJobOptions returns standard retry/cleanup options.
 func DefaultJobOptions() []asynq.Option {

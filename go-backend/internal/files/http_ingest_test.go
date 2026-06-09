@@ -2,6 +2,7 @@ package files_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,10 +10,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hibiken/asynq"
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/files"
 	"github.com/justrag/go-backend/internal/kbaccess"
 )
+
+// ---------------------------------------------------------------------------
+// failingEnqueuer — satisfies the (unexported) taskEnqueuer interface by
+// always returning an error from Enqueue. Used to test compensating cleanup.
+// ---------------------------------------------------------------------------
+
+type failingEnqueuer struct{}
+
+func (f *failingEnqueuer) Enqueue(_ *asynq.Task, _ ...asynq.Option) (*asynq.TaskInfo, error) {
+	return nil, errors.New("enqueue failed")
+}
 
 // ---------------------------------------------------------------------------
 // Helpers for ingest tests (builds on mockStore/mockStorage defined in handler_test.go)
@@ -410,5 +423,58 @@ func TestFetchURL_RealPublicURL(t *testing.T) {
 	}
 	if resp["id"] == "" || resp["id"] == nil {
 		t.Error("expected non-empty file ID in response")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Enqueue-failure compensating-cleanup tests
+// ---------------------------------------------------------------------------
+
+// TestAddTextSource_EnqueueFailureDeletesFile verifies that when the Asynq
+// enqueue call fails, AddTextSource deletes the just-created DB record so
+// the file does not remain as an unprocessable orphan.
+func TestAddTextSource_EnqueueFailureDeletesFile(t *testing.T) {
+	kb := defaultKB()
+
+	// mockStore records every ID passed to DeleteFileRecord in deletedIDs.
+	// CreateFile returns a record with ID "created-file-id".
+	store := &mockStore{
+		kb: kb,
+		createFile: &files.FileRecord{
+			ID:        "created-file-id",
+			KbID:      "kb-1",
+			Name:      "My Text",
+			Type:      "text/plain",
+			Size:      intPtr(13),
+			Status:    "pending",
+			Origin:    "text",
+			CreatedAt: time.Now(),
+		},
+	}
+
+	stor := &mockStorage{}
+	h := files.NewHandlerWithEnqueuer(store, stor, noopChunks(), &failingEnqueuer{})
+
+	body := `{"title":"My Text","content":"Hello, world!"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/kb/kb-1/text", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "kb-1")
+	req = withUser(req, ingestUser())
+	req = withKBAccess(req, kb)
+
+	rr := httptest.NewRecorder()
+	h.AddTextSource(rr, req)
+
+	// 1. Handler must return 500.
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on enqueue failure, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// 2. The created file's ID must appear in the store's deleted list.
+	if len(store.deletedIDs) == 0 {
+		t.Fatal("expected DeleteFileRecord to be called with the created file ID, but deletedIDs is empty")
+	}
+	if store.deletedIDs[0] != "created-file-id" {
+		t.Errorf("expected deleted ID %q, got %q", "created-file-id", store.deletedIDs[0])
 	}
 }

@@ -37,6 +37,7 @@ type mockStore struct {
 	share           *kbaccess.KBShare
 	shareErr        error
 	deleteErr       error
+	deletedIDs      []string // records every ID passed to DeleteFileRecord
 	createFile      *files.FileRecord
 	createErr       error
 	kbFileLimits    *files.KBFileLimits
@@ -47,7 +48,8 @@ func (m *mockStore) GetFileByID(_ context.Context, _ string) (*files.FileInfo, e
 	return m.file, m.fileErr
 }
 
-func (m *mockStore) DeleteFileRecord(_ context.Context, _ string) error {
+func (m *mockStore) DeleteFileRecord(_ context.Context, id string) error {
+	m.deletedIDs = append(m.deletedIDs, id)
 	return m.deleteErr
 }
 

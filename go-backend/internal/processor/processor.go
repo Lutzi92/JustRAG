@@ -30,6 +30,14 @@ type HashLookup interface {
 	GetExistingChunkHashes(ctx context.Context, kbID string, dimensions int, hashes []string) (map[string]struct{}, error)
 }
 
+// reingestCleaner removes a file's existing chunks before (re-)ingestion so
+// that an Asynq retry of a partially-failed ProcessFile attempt replaces
+// rather than duplicates rows. *vector.ChunkService satisfies it.
+type reingestCleaner interface {
+	DeleteChunksByFileIDAllDims(ctx context.Context, fileID string) error
+	DeleteParentChunksByFileID(ctx context.Context, fileID string) error
+}
+
 // dedupResult holds the indices of survivor chunks in the original batch
 // (those that should be embedded + stored), the parallel hashes, and a count
 // of how many were dropped.
@@ -151,6 +159,11 @@ type Processor struct {
 	store            ProcessorStore
 	embeddingCache   *ai.EmbeddingCache
 	siteConfigReader SiteConfigReader
+	// cleaner is the injection seam for idempotent re-ingestion. It is set
+	// from chunkSvc in NewProcessor (nil-safe: only assigned when chunkSvc
+	// is non-nil to avoid the nil-pointer-in-interface trap). Tests may
+	// assign a fake to verify cleanup fires before the ingest stages.
+	cleaner reingestCleaner
 	// mainDB is the application Postgres pool, used to look up the KB's
 	// language so the BM25 tsvector can be built with a matching
 	// regconfig (e.g. "german"). Optional — when nil, inserts fall back
@@ -187,13 +200,21 @@ func NewProcessor(factory *parser.Factory, aiResolver *ai.ConfigResolver, chunkS
 	if len(cache) > 0 {
 		ec = cache[0]
 	}
-	return &Processor{
+	p := &Processor{
 		factory:        factory,
 		aiResolver:     aiResolver,
 		chunkSvc:       chunkSvc,
 		store:          store,
 		embeddingCache: ec,
 	}
+	// Assign cleaner only when chunkSvc is non-nil. Assigning a nil
+	// *vector.ChunkService to the reingestCleaner interface would create a
+	// non-nil interface holding a nil pointer, which would panic on any
+	// method call; the if-guard prevents that.
+	if chunkSvc != nil {
+		p.cleaner = chunkSvc
+	}
+	return p
 }
 
 // SetSiteConfigReader attaches a SiteConfigReader so the processor can check
@@ -540,6 +561,20 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		return fmt.Errorf("processor: update status processing: %w", err)
 	}
 	_ = p.store.UpdateFileProgress(ctx, fileID, 5)
+
+	// Idempotency guard: an Asynq retry re-runs this handler from the top.
+	// Delete any chunks a previous (failed/partial) attempt wrote, else the
+	// gen_random_uuid() ids mean the retry appends duplicates instead of
+	// replacing. Mirrors the user-triggered re-ingest path. nil cleaner
+	// (e.g. tests without a vector store) → skipped.
+	if p.cleaner != nil {
+		if err := p.cleaner.DeleteChunksByFileIDAllDims(ctx, fileID); err != nil {
+			logctx.From(ctx).Warn("processor: pre-ingest chunk cleanup failed; continuing", "fileId", fileID, "error", err)
+		}
+		if err := p.cleaner.DeleteParentChunksByFileID(ctx, fileID); err != nil {
+			logctx.From(ctx).Warn("processor: pre-ingest parent cleanup failed; continuing", "fileId", fileID, "error", err)
+		}
+	}
 
 	// Step 2: select parser.
 	par := p.factory.GetParser(mimeType, fileName)

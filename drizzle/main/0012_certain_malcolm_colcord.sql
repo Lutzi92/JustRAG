@@ -1,1 +1,0 @@
-ALTER TABLE "knowledge_bases" ADD COLUMN "is_published" boolean DEFAULT true NOT NULL;

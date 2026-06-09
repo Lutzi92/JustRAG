@@ -305,6 +305,8 @@ func (h *Handler) AddTextSource(w http.ResponseWriter, r *http.Request) {
 			MimeType:     "text/plain",
 		})
 		if marshalErr != nil {
+			_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
+			_ = h.storage.DeleteFile(r.Context(), storagePath)
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to prepare processing job")
 			return
 		}
@@ -314,6 +316,11 @@ func (h *Handler) AddTextSource(w http.ResponseWriter, r *http.Request) {
 			asynq.MaxRetry(3),
 		); enqErr != nil {
 			slog.Error("failed to enqueue text processing job", "error", enqErr)
+			// Compensating cleanup: the file row + blob would otherwise be an
+			// unprocessable orphan (no job will ever run). Delete so a client
+			// retry is clean.
+			_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
+			_ = h.storage.DeleteFile(r.Context(), storagePath)
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to queue for processing")
 			return
 		}
@@ -533,6 +540,8 @@ func (h *Handler) FetchURL(w http.ResponseWriter, r *http.Request) {
 			MimeType:     fetched.MimeType,
 		})
 		if marshalErr != nil {
+			_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
+			_ = h.storage.DeleteFile(r.Context(), storagePath)
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to prepare processing job")
 			return
 		}
@@ -542,6 +551,11 @@ func (h *Handler) FetchURL(w http.ResponseWriter, r *http.Request) {
 			asynq.MaxRetry(3),
 		); enqErr != nil {
 			slog.Error("failed to enqueue URL processing job", "error", enqErr)
+			// Compensating cleanup: the file row + blob would otherwise be an
+			// unprocessable orphan (no job will ever run). Delete so a client
+			// retry is clean.
+			_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
+			_ = h.storage.DeleteFile(r.Context(), storagePath)
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to queue for processing")
 			return
 		}
@@ -655,7 +669,7 @@ func (h *Handler) AddSources(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Enqueue file-processing job (best-effort for batch add — log but don't abort).
+		// Enqueue file-processing job.
 		if h.asynqClient != nil {
 			payload, marshalErr := json.Marshal(jobs.FileProcessingPayload{
 				FileID:       fileRecord.ID,
@@ -664,14 +678,25 @@ func (h *Handler) AddSources(w http.ResponseWriter, r *http.Request) {
 				OriginalName: filename,
 				MimeType:     "text/markdown",
 			})
-			if marshalErr == nil {
-				if _, enqErr := h.asynqClient.Enqueue(
-					asynq.NewTask(jobs.TypeFileProcessing, payload),
-					asynq.Queue(jobs.QueueQuick),
-					asynq.MaxRetry(3),
-				); enqErr != nil {
-					slog.Error("failed to enqueue add-sources processing job", "fileId", fileRecord.ID, "error", enqErr)
-				}
+			if marshalErr != nil {
+				_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
+				_ = h.storage.DeleteFile(r.Context(), storagePath)
+				httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to prepare processing job")
+				return
+			}
+			if _, enqErr := h.asynqClient.Enqueue(
+				asynq.NewTask(jobs.TypeFileProcessing, payload),
+				asynq.Queue(jobs.QueueQuick),
+				asynq.MaxRetry(3),
+			); enqErr != nil {
+				slog.Error("failed to enqueue add-sources processing job", "fileId", fileRecord.ID, "error", enqErr)
+				// Compensating cleanup: the file row + blob would otherwise be an
+				// unprocessable orphan (no job will ever run). Delete so a client
+				// retry is clean.
+				_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
+				_ = h.storage.DeleteFile(r.Context(), storagePath)
+				httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to queue for processing")
+				return
 			}
 		}
 

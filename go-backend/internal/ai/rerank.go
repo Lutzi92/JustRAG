@@ -54,12 +54,12 @@ func Rerank(ctx context.Context, resolver *ConfigResolver, query string, documen
 		return identityScores(len(documents)), nil
 	}
 
-	// Qwen3-Reranker chat-template path. Gated by the explicit admin opt-in
-	// AND by a model-family check: switching a Cohere/Voyage endpoint onto
-	// the chat template would fail outright. On any per-pair error we fall
-	// through to the legacy /rerank endpoint below — same fail-open pattern
-	// as the rest of this function.
-	if opts.UseChatTemplate && IsQwen3RerankerModel(cfg.RerankModel) {
+	// Route to the model-family-specific path. Today only Qwen3-Reranker with
+	// explicit chat-template opt-in diverges from the standard /rerank endpoint;
+	// selectRerankStrategy is the single place to add new families. On any
+	// per-pair error we fall through to the legacy /rerank endpoint below —
+	// same fail-open pattern as the rest of this function.
+	if selectRerankStrategy(cfg.RerankModel, opts) == strategyQwen3ChatTemplate {
 		scores, qErr := rerankWithQwen3ChatTemplate(ctx, cfg, query, opts.Instruction, documents)
 		if qErr == nil {
 			if reason := validateRerankResponse(scores, len(documents)); reason != "" {

@@ -1,1 +1,0 @@
-ALTER TABLE "ai_configs" ADD COLUMN "reasoning_models" text;

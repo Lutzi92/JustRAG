@@ -977,51 +977,7 @@ func PrepareChatContext(
 	}
 
 	// Build context string with annotations.
-	var ctxParts []string
-	sources := make([]ChatSource, len(chunks))
-	for i, c := range chunks {
-		idx := i + 1
-		pages := pagesFromMetadata(c.Metadata)
-
-		// Format page range for annotation.
-		pageAnnotation := ""
-		if len(pages) > 0 {
-			if len(pages) == 1 {
-				pageAnnotation = fmt.Sprintf(", p. %d", pages[0])
-			} else {
-				pageAnnotation = fmt.Sprintf(", p. %d-%d", pages[0], pages[len(pages)-1])
-			}
-		}
-
-		// Surface the ingestion-time contextual prefix (e.g. "This passage
-		// lists the team of project Alpha.") into the LLM prompt so
-		// structural chunks (team lists, attribute tables) that don't
-		// carry their document's identity internally still get labeled.
-		// Without this, the LLM can't associate a `Team: Max Müller …`
-		// chunk with the project it belongs to, even when the file is
-		// one of the retrieved sources. For files ingested without
-		// enrichment the prefix is empty and nothing is added.
-		annotation := renderSourceHeader(idx, c.FileName, pageAnnotation, c.NodeKind, c.TreeLevel)
-		if p := strings.TrimSpace(c.ContextualPrefix); p != "" {
-			annotation += "\nContext: " + p
-		}
-		ctxParts = append(ctxParts, annotation+"\n"+c.Content)
-
-		sources[i] = ChatSource{
-			Index:     idx,
-			FileName:  c.FileName,
-			FileID:    c.FileID,
-			Content:   c.Content,
-			Score:     c.Score,
-			Pages:     pages,
-			ChunkID:   c.ID,
-			NodeKind:  c.NodeKind,
-			TreeLevel: c.TreeLevel,
-		}
-	}
-	// Use --- separator between chunks (matching the legacy Node.js format)
-	// so the LLM clearly distinguishes source boundaries.
-	contextText := strings.Join(ctxParts, "\n\n---\n\n")
+	sources, contextText := buildChatSourcesAndContext(chunks)
 
 	// Enumeration pre-pass. When the query asks for an exhaustive list
 	// ("In welchen Projekten…", "Wer arbeitet an…", "List all X that…")

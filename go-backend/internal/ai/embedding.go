@@ -80,59 +80,20 @@ func BuildQueryInput(query, instruction string) string {
 // The config is resolved for kbID (pass an empty string to use the global
 // active provider). A zero vector returned by the model is rejected.
 //
+// Delegates to GenerateEmbeddings so it inherits the same retry/backoff
+// policy: 3 attempts, 2s/4s/8s exponential backoff on transient errors.
+// Cache lookup and store are handled by the batch path.
+//
 // cache may be nil; EmbeddingCache.{Get,Set} are nil-safe.
 func GenerateEmbedding(ctx context.Context, resolver *ConfigResolver, text, kbID string, cache *EmbeddingCache) ([]float64, error) {
-	ctx, span := observability.Tracer().Start(ctx, "rag.embed")
-	defer span.End()
-	span.SetAttributes(attribute.Int("rag.embed.input_count", 1))
-
-	cfg, err := resolver.Resolve(ctx, kbID)
+	embs, err := GenerateEmbeddings(ctx, resolver, []string{text}, kbID, cache)
 	if err != nil {
-		return nil, fmt.Errorf("ai: resolve config: %w", err)
+		return nil, err
 	}
-	span.SetAttributes(attribute.String("rag.embed.model", cfg.EmbeddingModel))
-
-	// Check cache before making an API call.
-	if cache != nil {
-		if vec, ok := cache.Get(ctx, cfg.EmbeddingModel, text); ok {
-			observability.RecordEmbeddingCacheHit()
-			return vec, nil
-		}
-		observability.RecordEmbeddingCacheMiss()
+	if len(embs) != 1 {
+		return nil, fmt.Errorf("ai: GenerateEmbedding: expected 1 embedding, got %d", len(embs))
 	}
-
-	client := CachedClient(cfg.BaseURL, cfg.APIKey)
-	resp, err := client.Embedding(ctx, &EmbeddingRequest{
-		Model: cfg.EmbeddingModel,
-		Input: text, // single string, not a slice
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ai: embedding request: %w", err)
-	}
-
-	if len(resp.Data) == 0 {
-		return nil, fmt.Errorf("ai: embedding response contained no data")
-	}
-
-	vec := resp.Data[0].Embedding
-	if isZeroVector(vec) {
-		return nil, &ZeroVectorError{Model: cfg.EmbeddingModel, Index: 0}
-	}
-
-	// Store in cache (fire-and-forget). safego.Go contains panics in the
-	// Redis client so a serialization or connection-pool bug doesn't crash
-	// the process from a detached goroutine. WithoutCancel preserves
-	// trace/request-id values; WithTimeout caps the unbounded wait when
-	// Redis is unreachable so detached writes can't pile up indefinitely.
-	if cache != nil {
-		bgCtx, bgCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		safego.Go(func() {
-			defer bgCancel()
-			cache.Set(bgCtx, cfg.EmbeddingModel, text, vec)
-		})
-	}
-
-	return vec, nil
+	return embs[0], nil
 }
 
 // GenerateEmbeddings generates embeddings for multiple texts with retry logic.

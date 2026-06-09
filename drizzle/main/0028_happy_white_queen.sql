@@ -1,1 +1,0 @@
-CREATE INDEX "files_rss_feed_id_idx" ON "files" USING btree ("rss_feed_id");

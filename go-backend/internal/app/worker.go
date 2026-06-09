@@ -200,14 +200,17 @@ func RunWorker(cfg *config.Config) error {
 	mux := asynq.NewServeMux()
 	confStore := confluence.NewStore(db.Main)
 	fileHandler := worker.NewFileProcessingHandler(proc, kbStore, searchService, stor)
+	fileHandler = worker.MarkErrorOnExhaustion(fileHandler, filesStore)
 	mux.HandleFunc(jobs.TypeFileProcessing, worker.Instrument(func(ctx context.Context, task *asynq.Task) error {
 		err := fileHandler(ctx, task)
 		// After processing, update confluence source progress if applicable.
 		confluence.UpdateSourceProgressAfterFile(ctx, confStore, task.Payload())
 		return err
 	}))
-	mux.HandleFunc(jobs.TypeTextProcessing, worker.Instrument(worker.NewTextProcessingHandler(proc, kbStore, searchService)))
-	mux.HandleFunc(jobs.TypeURLProcessing, worker.Instrument(worker.NewURLProcessingHandler(proc, stor, kbStore, searchService)))
+	textHandler := worker.MarkErrorOnExhaustion(worker.NewTextProcessingHandler(proc, kbStore, searchService), filesStore)
+	mux.HandleFunc(jobs.TypeTextProcessing, worker.Instrument(textHandler))
+	urlHandler := worker.MarkErrorOnExhaustion(worker.NewURLProcessingHandler(proc, stor, kbStore, searchService), filesStore)
+	mux.HandleFunc(jobs.TypeURLProcessing, worker.Instrument(urlHandler))
 	mux.HandleFunc(jobs.TypeRSSPoll, worker.Instrument(worker.NewRSSPollHandler(worker.RSSPollDeps{
 		RSSStore:    rss.NewStore(db.Main),
 		FileStore:   filesStore,

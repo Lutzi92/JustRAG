@@ -133,34 +133,7 @@ func runSupervisorChatTestable(
 	accumulated = TruncateChunksToFit(accumulated, maxTokens)
 	accumulated = SandwichOrder(accumulated)
 
-	var ctxParts []string
-	sources := make([]ChatSource, len(accumulated))
-	for i, c := range accumulated {
-		idx := i + 1
-		pages := pagesFromMetadata(c.Metadata)
-		pageAnnotation := ""
-		if len(pages) > 0 {
-			if len(pages) == 1 {
-				pageAnnotation = fmt.Sprintf(", p. %d", pages[0])
-			} else {
-				pageAnnotation = fmt.Sprintf(", p. %d-%d", pages[0], pages[len(pages)-1])
-			}
-		}
-		annotation := renderSourceHeader(idx, c.FileName, pageAnnotation, c.NodeKind, c.TreeLevel)
-		ctxParts = append(ctxParts, annotation+"\n"+c.Content)
-		sources[i] = ChatSource{
-			Index:     idx,
-			FileName:  c.FileName,
-			FileID:    c.FileID,
-			Content:   c.Content,
-			Score:     c.Score,
-			Pages:     pages,
-			ChunkID:   c.ID,
-			NodeKind:  c.NodeKind,
-			TreeLevel: c.TreeLevel,
-		}
-	}
-	contextText := strings.Join(ctxParts, "\n\n---\n\n")
+	sources, contextText := buildChatSourcesAndContext(accumulated)
 
 	var sb strings.Builder
 	if params.KbSystemPrompt != "" {

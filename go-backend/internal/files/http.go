@@ -99,12 +99,18 @@ type QueryCacheInvalidator interface {
 // Handler
 // ---------------------------------------------------------------------------
 
+// taskEnqueuer is the subset of *asynq.Client the ingest handlers use,
+// extracted so tests can inject an enqueuer that fails. *asynq.Client satisfies it.
+type taskEnqueuer interface {
+	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
+}
+
 // Handler holds the dependencies for the file endpoints.
 type Handler struct {
 	store        Store
 	storage      storage.Storage
 	chunkService ChunkDeleter
-	asynqClient  *asynq.Client
+	asynqClient  taskEnqueuer
 	fetcher      *fetcher.Fetcher
 	queryCache   QueryCacheInvalidator
 }
@@ -142,8 +148,27 @@ func NewHandler(store Store, stor storage.Storage, chunkSvc ChunkDeleter, asynqC
 		storage:      stor,
 		chunkService: chunkSvc,
 	}
-	if len(asynqClient) > 0 {
+	// Guard the nil-interface trap: a nil *asynq.Client boxed into taskEnqueuer
+	// becomes a non-nil interface value, which would bypass the `if h.asynqClient != nil`
+	// guards in the ingest handlers. Only assign when the pointer is non-nil.
+	if len(asynqClient) > 0 && asynqClient[0] != nil {
 		h.asynqClient = asynqClient[0]
+	}
+	return h
+}
+
+// NewHandlerWithEnqueuer is like NewHandler but accepts any taskEnqueuer.
+// Intended for tests that need to inject a failing enqueuer; production code
+// uses NewHandler with a *asynq.Client.
+func NewHandlerWithEnqueuer(store Store, stor storage.Storage, chunkSvc ChunkDeleter, enq taskEnqueuer) *Handler {
+	h := &Handler{
+		store:        store,
+		storage:      stor,
+		chunkService: chunkSvc,
+	}
+	// Guard the nil-interface trap the same way as NewHandler.
+	if enq != nil {
+		h.asynqClient = enq
 	}
 	return h
 }

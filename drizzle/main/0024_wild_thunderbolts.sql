@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX "rss_feeds_kb_url_uniq" ON "rss_feeds" USING btree ("kb_id","url");

@@ -1,1 +1,0 @@
-ALTER TABLE "ai_models" ADD COLUMN "dimensions" integer DEFAULT 1536 NOT NULL;

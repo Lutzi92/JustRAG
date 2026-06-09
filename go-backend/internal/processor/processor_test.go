@@ -381,3 +381,56 @@ func TestDedupBatch_AllNew(t *testing.T) {
 		t.Errorf("expected 0 dropped, got %d", res.droppedCount)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// reingestCleaner seam test
+// ---------------------------------------------------------------------------
+
+// spyCleaner records calls to the two cleanup methods so
+// TestProcessFile_DeletesChunksBeforeIngest can verify they fired.
+type spyCleaner struct {
+	deletedChunks  []string
+	deletedParents []string
+}
+
+func (s *spyCleaner) DeleteChunksByFileIDAllDims(_ context.Context, fileID string) error {
+	s.deletedChunks = append(s.deletedChunks, fileID)
+	return nil
+}
+
+func (s *spyCleaner) DeleteParentChunksByFileID(_ context.Context, fileID string) error {
+	s.deletedParents = append(s.deletedParents, fileID)
+	return nil
+}
+
+// TestProcessFile_DeletesChunksBeforeIngest verifies that ProcessFile calls
+// both cleanup methods BEFORE the no-parser early-return, so an Asynq retry
+// of a partially-failed attempt replaces rather than duplicates chunks.
+//
+// The test is deliberately DB-free: the empty parser.Factory means ProcessFile
+// exits at "Step 2: select parser" — right after the cleanup block — so we
+// never need a live vector store.
+func TestProcessFile_DeletesChunksBeforeIngest(t *testing.T) {
+	spy := &spyCleaner{}
+	store := &mockStore{}
+	factory := parser.NewFactory() // empty — no parser matches
+
+	p := NewProcessor(factory, nil, nil, store)
+	p.cleaner = spy // inject seam
+
+	// We expect an error (no parser), but cleanup must have fired first.
+	_ = p.ProcessFile(context.Background(), ProcessFileInput{
+		FileID:   "file-1",
+		FilePath: "/tmp/x.bin",
+		FileName: "unknown.bin",
+		MimeType: "application/octet-stream",
+		KBID:     "kb-1",
+	})
+
+	if len(spy.deletedChunks) != 1 || spy.deletedChunks[0] != "file-1" {
+		t.Errorf("DeleteChunksByFileIDAllDims: want [file-1], got %v", spy.deletedChunks)
+	}
+	if len(spy.deletedParents) != 1 || spy.deletedParents[0] != "file-1" {
+		t.Errorf("DeleteParentChunksByFileID: want [file-1], got %v", spy.deletedParents)
+	}
+}

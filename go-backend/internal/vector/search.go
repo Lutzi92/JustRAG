@@ -293,6 +293,12 @@ type SearchService struct {
 	// an implicit 50/50 blend; the new default (1.0, pure reranker) is a
 	// silent behaviour change for those, so we surface it at runtime.
 	rerankDefaultNoticeOnce sync.Once
+	// dimWarnOnce rate-limits the dimension-mismatch warning to once per
+	// (kbID, tableName) pair across the lifetime of this SearchService. Key
+	// is "<kbID>:<tableName>"; value is struct{}{}. sync.Map is chosen over a
+	// plain map+mutex because the hot path is a single LoadOrStore with no
+	// write contention once the key is populated.
+	dimWarnOnce sync.Map
 	// kbTableCache memoises kb_id → chunks-table-name for the AP-B1
 	// keyword_search / chunk_read / document_outline tools. Defined in
 	// keyword_search.go; declared here so the struct stays the
@@ -650,6 +656,10 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	}
 	dimensions := len(queryEmbedding)
 	tableName := GetVectorTableName(dimensions)
+
+	// Warn (once per kb+table pair) when the query embedding dimension does
+	// not match the dimension under which this KB's corpus was indexed.
+	s.warnDimMismatch(ctx, tableName, kbID, dimensions)
 
 	useHalfvec := dimensions > 2000 && dimensions <= 4000
 

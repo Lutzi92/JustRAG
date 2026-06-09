@@ -1,2 +1,0 @@
-CREATE INDEX "idx_kb_ai_config" ON "knowledge_bases" USING btree ("ai_config_id");--> statement-breakpoint
-CREATE INDEX "idx_jobs_status_type_created" ON "background_jobs" USING btree ("status","type","created_at");
