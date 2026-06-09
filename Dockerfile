@@ -65,10 +65,11 @@ RUN apk --no-cache add \
 
 WORKDIR /app
 
-# /app/server and /app/worker run as root inside this image; Alpine
-# Chromium refuses to start as root without --no-sandbox. Flip the flag
-# for fetcher.Config.AllowNoSandbox. Bare-metal deployments (go run) do
-# NOT set this env var and keep Chromium's OS sandbox enabled.
+# Chromium is launched with --no-sandbox inside this image
+# (fetcher.Config.AllowNoSandbox). That is the in-container posture and is
+# independent of the process UID — see the non-root USER below. Bare-metal
+# deployments (go run) do NOT set this env var and keep Chromium's OS sandbox
+# enabled.
 ENV FETCHER_ALLOW_NO_SANDBOX=true
 
 # Point rod at the system Chromium (installed via apk above) so it does
@@ -91,6 +92,14 @@ COPY --from=builder /migrate /app/migrate
 
 # Pre-built React SPA — served by Go at /client/dist in production
 COPY --from=frontend /app/web/dist /app/client/dist
+
+# Run as an unprivileged user. Chromium still uses --no-sandbox (see
+# FETCHER_ALLOW_NO_SANDBOX above) — that is independent of the process UID;
+# dropping root removes the root attack surface. The app user must own /app
+# (and /app/tmp, where rod's leakless guardian execs from TMPDIR).
+RUN addgroup -S app && adduser -S -G app -h /app app \
+    && chown -R app:app /app
+USER app
 
 EXPOSE 3000
 CMD ["/app/server"]
