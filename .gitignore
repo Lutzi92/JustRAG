@@ -15,8 +15,20 @@ playwright-report/
 test-results/
 e2e/.auth/
 .vscode
-/docs/plans
-/docs
+# docs/ is ignored except the files referenced from CLAUDE.md
+/docs/*
+!/docs/retrieval.md
+!/docs/agent-orchestration.md
+!/docs/feature-recipes.md
+!/docs/presentation/
+/docs/presentation/*
+!/docs/presentation/tuning-knobs.md
+!/docs/observability/
+/docs/observability/*
+!/docs/observability/docling.md
+!/docs/runbooks/
+/docs/runbooks/*
+!/docs/runbooks/hnsw-reindex.md
 .playwright-mcp
 .tmp/
 /example/
