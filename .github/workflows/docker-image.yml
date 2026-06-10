@@ -66,7 +66,7 @@ jobs:
       # image. The image is already in the registry at this point — the gate
       # is an alert, not a publish block; rollback is `keep-n-tagged` below.
       - name: Scan image for critical vulnerabilities
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: ${{ steps.scanref.outputs.ref }}
           format: table
