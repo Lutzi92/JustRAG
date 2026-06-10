@@ -29,7 +29,7 @@ type ThinkSegment struct {
 }
 
 // Process consumes text and returns 0+ segments that the caller should emit
-// immediately. A trailing partial tag (e.g. ``"foo<thi"``) is buffered and
+// immediately. A trailing partial tag (e.g. “"foo<thi"“) is buffered and
 // will be re-examined on the next Process or Flush call.
 func (f *ThinkTagFilter) Process(text string) []ThinkSegment {
 	if text == "" && f.buffer == "" {

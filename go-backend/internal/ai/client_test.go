@@ -303,8 +303,8 @@ func TestChatRequest_ToolsRoundTrip(t *testing.T) {
 		Messages: []ai.ChatMessage{
 			{Role: "user", Content: "what is 2+2"},
 			{Role: "assistant", ToolCalls: []ai.ToolCall{{
-				ID:   "call_1",
-				Type: "function",
+				ID:       "call_1",
+				Type:     "function",
 				Function: ai.ToolCallFunction{Name: "calculator", Arguments: `{"expression":"2+2"}`},
 			}}},
 			{Role: "tool", ToolCallID: "call_1", Name: "calculator", Content: "4"},

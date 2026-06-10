@@ -73,10 +73,16 @@ func TestMaxBytes_HandlerWroteStatus_NotOverridden(t *testing.T) {
 	}
 }
 
+// exemptUploads mimics the server's predicate shape: exempt only a specific
+// upload-route pattern, not a whole prefix.
+func exemptUploads(r *http.Request) bool {
+	return strings.HasPrefix(r.URL.Path, "/api/kb/") && strings.HasSuffix(r.URL.Path, "/files")
+}
+
 func TestMaxBytesExcept_SkipsExemptPath(t *testing.T) {
 	const limit = 8
 	var receivedLen int
-	h := MaxBytesExcept(limit, "/api/kb/", "/api/site-config/logo")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := MaxBytesExcept(limit, exemptUploads)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("unexpected read error on exempt path: %v", err)
@@ -101,7 +107,7 @@ func TestMaxBytesExcept_SkipsExemptPath(t *testing.T) {
 
 func TestMaxBytesExcept_EnforcesOnNonExemptPath(t *testing.T) {
 	const limit = 8
-	h := MaxBytesExcept(limit, "/api/kb/", "/api/site-config/logo")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := MaxBytesExcept(limit, exemptUploads)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, err := io.ReadAll(r.Body)
 		if err == nil {
 			t.Error("expected body read to fail on non-exempt path, got nil")

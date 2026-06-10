@@ -47,7 +47,7 @@ func TestMaterializeAggregations(t *testing.T) {
 	if err := pool.QueryRow(ctx, `INSERT INTO knowledge_bases (name, user_id) VALUES ('tab', $1) RETURNING id::text`, userID).Scan(&kbID); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO files (kb_id, file_name, status) VALUES ($1,'n.csv','completed') RETURNING id::text`, kbID).Scan(&fileID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO files (kb_id, name, type, status) VALUES ($1,'n.csv','text/csv','completed') RETURNING id::text`, kbID).Scan(&fileID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -88,7 +88,7 @@ func TestMaterializeSemanticRowChunks(t *testing.T) {
 	if err := pool.QueryRow(ctx, `INSERT INTO knowledge_bases (name, user_id) VALUES ('tab',$1) RETURNING id::text`, userID).Scan(&kbID); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO files (kb_id, file_name, status) VALUES ($1,'n.csv','completed') RETURNING id::text`, kbID).Scan(&fileID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO files (kb_id, name, type, status) VALUES ($1,'n.csv','text/csv','completed') RETURNING id::text`, kbID).Scan(&fileID); err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()

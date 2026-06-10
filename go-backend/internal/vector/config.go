@@ -324,16 +324,16 @@ func PgTextSearchConfig(lang string) string {
 // DefaultConfig returns a KBVectorConfig with sensible defaults.
 func DefaultConfig() KBVectorConfig {
 	return KBVectorConfig{
-		Dimensions:                       1536,
-		TableName:                        "document_chunks",
-		Language:                         "de",
-		MinSimilarityThreshold:           0.3,
-		AutoSpellCorrect:                 false,
-		ScoreDropThreshold:               0.15,
+		Dimensions:             1536,
+		TableName:              "document_chunks",
+		Language:               "de",
+		MinSimilarityThreshold: 0.3,
+		AutoSpellCorrect:       false,
+		ScoreDropThreshold:     0.15,
 		// RerankScoreDropEnabled defaults false (inert). The threshold is
 		// pre-seeded at the documented midpoint so the first enable already
 		// trims a tail; operators tune it against a golden set from there.
-		RerankScoreDropThreshold: 0.5,
+		RerankScoreDropThreshold:         0.5,
 		DefaultTopK:                      15,
 		ContextWindowSize:                3,
 		MMRLambda:                        0.7,

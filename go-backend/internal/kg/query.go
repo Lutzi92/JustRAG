@@ -195,9 +195,17 @@ func (s *PgStore) LookupSubgraph(ctx context.Context, kbID string, entityID int6
 		return Subgraph{}, fmt.Errorf("kg: load root entity: %w", err)
 	}
 
-	// Recursive CTE: walks both directions, depth-bounded.
-	// The result joins back to kg_entities so we get the "other"
-	// entity's full record per edge in one round-trip.
+	// Recursive CTE: walks both directions, depth-bounded. The main
+	// SELECT keeps only edges whose BOTH endpoints were reached and
+	// returns both endpoint records plus their hop distances. The Go
+	// side anchors each edge at the endpoint nearer the root, so
+	// Edge.Other is the endpoint farther from the root — for depth-1
+	// edges that reproduces the old root-relative semantics exactly,
+	// and for second-hop edges (e.g. C→D when walking from B) it
+	// surfaces the newly discovered entity instead of mislabeling the
+	// already-known one (the old projection compared endpoints against
+	// the root only, so depth-2 walks silently degenerated to depth-1
+	// stars).
 	const subgraphQuery = `
 		WITH RECURSIVE walk(entity_id, depth) AS (
 			SELECT $2::bigint, 0
@@ -210,21 +218,22 @@ func (s *PgStore) LookupSubgraph(ctx context.Context, kbID string, entityID int6
 			    ON (e.src_entity_id = w.entity_id OR e.dst_entity_id = w.entity_id)
 			 WHERE e.kb_id = $1::uuid
 			   AND w.depth < $3
+		),
+		reach AS (
+			SELECT entity_id, MIN(depth) AS depth FROM walk GROUP BY entity_id
 		)
 		SELECT DISTINCT
-		       CASE WHEN e.src_entity_id = $2 THEN 'out' ELSE 'in' END AS direction,
 		       e.rel,
-		       other.id, other.canonical_name, other.type, other.aliases,
+		       se.id, se.canonical_name, se.type, se.aliases, rs.depth,
+		       de.id, de.canonical_name, de.type, de.aliases, rd.depth,
 		       e.evidence,
 		       COALESCE(e.chunk_id::text, '')
 		  FROM kg_edges e
-		  JOIN kg_entities other
-		    ON other.id = CASE WHEN e.src_entity_id = $2 THEN e.dst_entity_id ELSE e.src_entity_id END
+		  JOIN reach rs ON rs.entity_id = e.src_entity_id
+		  JOIN reach rd ON rd.entity_id = e.dst_entity_id
+		  JOIN kg_entities se ON se.id = e.src_entity_id
+		  JOIN kg_entities de ON de.id = e.dst_entity_id
 		 WHERE e.kb_id = $1::uuid
-		   AND ($2 = ANY(SELECT entity_id FROM walk))
-		   AND ((e.src_entity_id = $2) OR (e.dst_entity_id = $2)
-		        OR (e.src_entity_id IN (SELECT entity_id FROM walk WHERE depth >= 1))
-		        OR (e.dst_entity_id IN (SELECT entity_id FROM walk WHERE depth >= 1)))
 	`
 	rows, err := s.pool.Query(ctx, subgraphQuery, kbID, entityID, depth)
 	if err != nil {
@@ -235,18 +244,35 @@ func (s *PgStore) LookupSubgraph(ctx context.Context, kbID string, entityID int6
 	subg := Subgraph{Root: root, Entities: []Entity{root}}
 	seenEntity := map[int64]bool{root.ID: true}
 	seenChunk := map[string]bool{}
+	addEntity := func(e Entity) {
+		if !seenEntity[e.ID] {
+			seenEntity[e.ID] = true
+			subg.Entities = append(subg.Entities, e)
+		}
+	}
 	for rows.Next() {
-		var ed Edge
-		if err := rows.Scan(&ed.Direction, &ed.Rel,
-			&ed.Other.ID, &ed.Other.CanonicalName, &ed.Other.Type, &ed.Other.Aliases,
+		var (
+			ed                 Edge
+			src, dst           Entity
+			srcDepth, dstDepth int
+		)
+		if err := rows.Scan(&ed.Rel,
+			&src.ID, &src.CanonicalName, &src.Type, &src.Aliases, &srcDepth,
+			&dst.ID, &dst.CanonicalName, &dst.Type, &dst.Aliases, &dstDepth,
 			&ed.Evidence, &ed.ChunkID); err != nil {
 			return Subgraph{}, fmt.Errorf("kg: scan edge: %w", err)
 		}
-		subg.Edges = append(subg.Edges, ed)
-		if !seenEntity[ed.Other.ID] {
-			seenEntity[ed.Other.ID] = true
-			subg.Entities = append(subg.Entities, ed.Other)
+		// Anchor at the endpoint nearer the root; "out" means the edge
+		// leaves the anchor. Equal depths anchor at src, matching how a
+		// root-incident edge with the root as src reads as "out".
+		if srcDepth <= dstDepth {
+			ed.Direction, ed.Other = "out", dst
+		} else {
+			ed.Direction, ed.Other = "in", src
 		}
+		subg.Edges = append(subg.Edges, ed)
+		addEntity(src)
+		addEntity(dst)
 		if ed.ChunkID != "" && !seenChunk[ed.ChunkID] {
 			seenChunk[ed.ChunkID] = true
 			subg.ChunkIDs = append(subg.ChunkIDs, ed.ChunkID)

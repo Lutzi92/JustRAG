@@ -33,15 +33,15 @@ func TestValidate(t *testing.T) {
 		wantErr  bool
 	}{
 		{"rerank_blend_alpha", "0.8", false},
-		{"rerank_blend_alpha", "1.5", true},   // above Max
-		{"rerank_blend_alpha", "abc", true},   // not a float
+		{"rerank_blend_alpha", "1.5", true}, // above Max
+		{"rerank_blend_alpha", "abc", true}, // not a float
 		{"crag_enabled", "true", false},
-		{"crag_enabled", "maybe", true},       // not a bool
+		{"crag_enabled", "maybe", true}, // not a bool
 		{"chat_graph_routing_path_mode", "ppr", false},
 		{"chat_graph_routing_path_mode", "bogus", true}, // not in Enum
 		{"top_n_lookup", "20", false},
-		{"top_n_lookup", "0", true},           // below Min
-		{"jwt_secret", "x", true},             // not a registry key
+		{"top_n_lookup", "0", true}, // below Min
+		{"jwt_secret", "x", true},   // not a registry key
 	}
 	for _, c := range cases {
 		err := Validate(c.key, c.val)

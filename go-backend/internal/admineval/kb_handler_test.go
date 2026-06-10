@@ -31,8 +31,10 @@ func (f *fakeRunStore) Get(_ context.Context, _ uuid.UUID) (*eval.Run, error) { 
 func (f *fakeRunStore) List(_ context.Context, o eval.ListOpts) ([]eval.Run, int, error) {
 	return []eval.Run{{KBID: *o.KBID}}, 1, nil
 }
-func (f *fakeRunStore) Delete(_ context.Context, _ uuid.UUID) (bool, bool, error) { return true, false, nil }
-func (f *fakeRunStore) MarkRunning(context.Context, uuid.UUID) error              { return nil }
+func (f *fakeRunStore) Delete(_ context.Context, _ uuid.UUID) (bool, bool, error) {
+	return true, false, nil
+}
+func (f *fakeRunStore) MarkRunning(context.Context, uuid.UUID) error { return nil }
 func (f *fakeRunStore) MarkCompleted(context.Context, uuid.UUID, json.RawMessage) error {
 	return nil
 }

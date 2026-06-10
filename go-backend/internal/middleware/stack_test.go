@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -15,7 +16,9 @@ import (
 func buildTestStack(t *testing.T, inner http.Handler) http.Handler {
 	t.Helper()
 	var h http.Handler = inner
-	h = MaxBytesExcept(1024, "/exempt")(h)
+	h = MaxBytesExcept(1024, func(r *http.Request) bool {
+		return strings.HasPrefix(r.URL.Path, "/exempt")
+	})(h)
 	h = Logging(false)(h)
 	h = RequestID(h)
 	h = Recovery(h)

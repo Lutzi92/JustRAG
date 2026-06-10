@@ -9,6 +9,7 @@ package vector
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"testing"
 	"time"
@@ -67,7 +68,16 @@ func TestQueryCache_StoreThenLookupHit(t *testing.T) {
 	if !hit {
 		t.Fatalf("expected hit immediately after store; got miss (distance=%v)", dist)
 	}
-	if string(rj) != string(resultBytes) {
+	// jsonb normalizes whitespace on storage, so compare parsed values
+	// rather than raw bytes.
+	var want, got map[string]string
+	if err := json.Unmarshal(resultBytes, &want); err != nil {
+		t.Fatalf("unmarshal want: %v", err)
+	}
+	if err := json.Unmarshal(rj, &got); err != nil {
+		t.Fatalf("unmarshal got: %v", err)
+	}
+	if !maps.Equal(want, got) {
 		t.Errorf("result mismatch: want %s, got %s", resultBytes, rj)
 	}
 }

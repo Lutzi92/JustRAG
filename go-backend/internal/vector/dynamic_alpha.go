@@ -48,6 +48,7 @@ import (
 //   - Common English (3-5 tokens): mean ID 3-5 k
 //   - Technical English (Q4-2024 EBITDA …): mean ID ~15 k
 //   - German technical / mixed-language: mean ID 14-22 k
+//
 // A divisor of 30 000 puts those classes at rarity ~0.1, ~0.5, and
 // ~0.6 respectively — meaningful per-class separation without
 // pinning extremes at the [0, 1] clamp.
@@ -108,4 +109,3 @@ func PredictHybridAlpha(query string, baseAlpha, sensitivity float64) float64 {
 	}
 	return alpha
 }
-

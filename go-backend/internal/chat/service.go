@@ -790,10 +790,10 @@ func maybeDecomposeQuery(
 	)
 	if params.Emit != nil {
 		params.Emit(map[string]any{
-			"type":         "decompose",
-			"sub_queries":  subQueries,
-			"model":        model,
-			"duration_ms":  time.Since(start).Milliseconds(),
+			"type":        "decompose",
+			"sub_queries": subQueries,
+			"model":       model,
+			"duration_ms": time.Since(start).Milliseconds(),
 		})
 	}
 }

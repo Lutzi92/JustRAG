@@ -22,19 +22,19 @@ import (
 var _ confluence.ConfluenceStore = (*mockStore)(nil)
 
 type mockStore struct {
-	conn             *confluence.ConfluenceConnectionRow
-	connErr          error
-	createdConn      *confluence.ConfluenceConnectionRow
-	createConnErr    error
-	updatedConn      *confluence.ConfluenceConnectionRow
-	updateConnErr    error
-	lastConnUpdate   *confluence.ConfluenceConnectionUpdate
-	deleteErr        error
-	source           *confluence.ConfluenceSourceRow
-	sources          []confluence.ConfluenceSourceRow
-	sourceErr        error
-	updatedSrc       *confluence.ConfluenceSourceRow
-	siteConfigs      map[string]*string
+	conn           *confluence.ConfluenceConnectionRow
+	connErr        error
+	createdConn    *confluence.ConfluenceConnectionRow
+	createConnErr  error
+	updatedConn    *confluence.ConfluenceConnectionRow
+	updateConnErr  error
+	lastConnUpdate *confluence.ConfluenceConnectionUpdate
+	deleteErr      error
+	source         *confluence.ConfluenceSourceRow
+	sources        []confluence.ConfluenceSourceRow
+	sourceErr      error
+	updatedSrc     *confluence.ConfluenceSourceRow
+	siteConfigs    map[string]*string
 }
 
 func (m *mockStore) GetConfluenceConnectionByUserID(_ context.Context, _ string) (*confluence.ConfluenceConnectionRow, error) {

@@ -74,9 +74,9 @@ type MemoryListStore interface {
 // Handler bundles maintenance HTTP endpoints behind a single struct so each
 // can be wired independently into the mux.
 type Handler struct {
-	store     KBStore
-	enqueuer  Enqueuer
-	memStore  MemoryListStore
+	store    KBStore
+	enqueuer Enqueuer
+	memStore MemoryListStore
 
 	// templateDir is the on-disk directory where uploaded agent template
 	// files are written. Default "uploads/templates"; override only in tests.

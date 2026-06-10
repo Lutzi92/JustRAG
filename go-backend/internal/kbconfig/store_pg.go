@@ -51,7 +51,7 @@ func (s *Store) UpsertBatch(ctx context.Context, kbID string, kv map[string]*str
 	var sb strings.Builder
 	sb.WriteString(`INSERT INTO kb_site_configs (kb_id, key, value, updated_at) VALUES `)
 	args := make([]any, 0, len(kv)*2+1) // 2 placeholders (key,value) per row + $1 kb_id
-	args = append(args, kbID)            // $1 reused for kb_id in every tuple
+	args = append(args, kbID)           // $1 reused for kb_id in every tuple
 	i := 0
 	for k, v := range kv {
 		if i > 0 {

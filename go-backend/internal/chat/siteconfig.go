@@ -1124,6 +1124,7 @@ func RaptorSummaryModel(ctx context.Context, reader SiteConfigReader) string {
 //     by graph topology — heterogeneous documents yield more,
 //     tighter clusters; homogeneous ones yield fewer, larger.
 //     branching_factor is ignored on this path.
+//
 // Unknown values normalise to "kmeans" so a typo never falls off
 // the v1 safe path. Tunable via "raptor_clustering_algorithm".
 func RaptorClusteringAlgorithm(ctx context.Context, reader SiteConfigReader) string {

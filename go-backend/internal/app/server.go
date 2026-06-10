@@ -8,6 +8,7 @@ import (
 	"net/http/pprof"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,37 @@ import (
 	"github.com/justrag/go-backend/internal/safego"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
+
+// isUploadExempt reports whether r targets one of the upload routes that set
+// their own larger http.MaxBytesReader / multipart caps internally and are
+// therefore exempt from the global request-body cap. The list is exhaustive
+// on purpose: every other route — including all other /api/kb/ routes —
+// gets the global cap, so a handler reading r.Body raw can never be
+// unbounded just because it lives under an upload route's prefix.
+func isUploadExempt(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	switch r.URL.Path {
+	case "/api/site-config/logo", // logo upload (siteconfig.maxLogoSize)
+		"/api/describe-image",         // vision input, 10 MiB (misc.maxImageBytes)
+		"/api/admin/agent/template",   // template upload, 10 MiB (adminmaintenance)
+		"/api/admin/eval/golden-sets": // golden-set JSONL upload, 5 MiB (admineval)
+		return true
+	}
+	// POST /api/kb/{id}/files (500 MiB) and POST /api/kb/{id}/eval/golden-sets
+	// (5 MiB): the {id} segment sits mid-path, so match the shape explicitly.
+	// Deeper paths (e.g. .../eval/golden-sets/generate) deliberately don't match.
+	rest, ok := strings.CutPrefix(r.URL.Path, "/api/kb/")
+	if !ok {
+		return false
+	}
+	id, tail, ok := strings.Cut(rest, "/")
+	if !ok || id == "" {
+		return false
+	}
+	return tail == "files" || tail == "eval/golden-sets"
+}
 
 // RunServer starts the HTTP server with all wiring. It blocks until the server
 // shuts down and returns any fatal error. The version string is typically set
@@ -84,9 +116,10 @@ func RunServer(cfg *config.Config, version string) error {
 	defer apiLimiter.Shutdown()
 
 	var handler http.Handler = mux
-	// Global body cap — upload routes (/api/kb/{id}/files, /api/site-config/logo)
-	// set their own larger caps internally and are exempt here.
-	handler = middleware.MaxBytesExcept(cfg.MaxRequestBodyBytes, "/api/kb/", "/api/site-config/logo")(handler)
+	// Global body cap — only the upload routes enumerated in isUploadExempt
+	// are exempt; each sets its own larger http.MaxBytesReader / multipart
+	// cap internally.
+	handler = middleware.MaxBytesExcept(cfg.MaxRequestBodyBytes, isUploadExempt)(handler)
 	handler = apiLimiter.MiddlewareForPrefix("/api", handler)
 	handler = middleware.MetricsMiddleware(handler)
 	handler = middleware.Logging(cfg.LogVerbose)(handler)
@@ -118,6 +151,10 @@ func RunServer(cfg *config.Config, version string) error {
 		// has an in-flight request, surfacing as 502s in clients.
 		IdleTimeout:       65 * time.Second,
 		ReadHeaderTimeout: 65 * time.Second,
+		// 64 KiB is generous for this API's headers (Bearer JWT + cookies,
+		// single-digit KiB) while bounding header-buffer memory per
+		// connection well below the stdlib's 1 MiB default.
+		MaxHeaderBytes: 64 << 10,
 	}
 
 	// Start pprof server only when explicitly enabled via PPROF_ENABLED=true.

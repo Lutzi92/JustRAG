@@ -82,8 +82,8 @@ func ClusterByLeiden(points []ClusterInput, cfg LeidenConfig) ([]Cluster, error)
 	}
 	adj := make([][]edgeTo, n)
 	type pair struct {
-		idx    int
-		simSq  float64
+		idx   int
+		simSq float64
 	}
 	for i := 0; i < n; i++ {
 		// Compute squared distance to every other point; pick the
@@ -346,4 +346,3 @@ func materialiseClusters(points []ClusterInput, community []int) []Cluster {
 	}
 	return out
 }
-

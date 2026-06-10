@@ -127,13 +127,13 @@ func TestInsertRowSQLTemplate(t *testing.T) {
 	query := fmt.Sprintf(insertRowSQLTemplate, "document_chunks")
 
 	for _, want := range []string{
-		"$13::regconfig",     // per-row regconfig binding
-		"contextual_prefix",  // column list intact
-		"embedding_low",      // dual-precision arm intact
-		"parent_chunk_id",    // parent-child path intact
-		"raptor_parent_id",   // RAPTOR path intact
-		`"document_chunks"`,  // quoted table name
-		"COALESCE($2, '')",   // tsvector folds the contextual prefix
+		"$13::regconfig",       // per-row regconfig binding
+		"contextual_prefix",    // column list intact
+		"embedding_low",        // dual-precision arm intact
+		"parent_chunk_id",      // parent-child path intact
+		"raptor_parent_id",     // RAPTOR path intact
+		`"document_chunks"`,    // quoted table name
+		"COALESCE($2, '')",     // tsvector folds the contextual prefix
 		"to_tsvector('simple'", // simple arm uses hardcoded regconfig
 	} {
 		if !strings.Contains(query, want) {

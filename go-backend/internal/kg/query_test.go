@@ -101,4 +101,3 @@ func TestPgStore_MatchAliasesInTokens_EmptyTokens(t *testing.T) {
 		})
 	}
 }
-

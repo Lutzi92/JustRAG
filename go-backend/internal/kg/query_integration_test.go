@@ -19,7 +19,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-
 func openKGTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("JUSTRAG_KG_TEST_DSN")
@@ -302,4 +301,3 @@ func TestPgStore_MatchAliasesInTokens_DB_DedupTokens(t *testing.T) {
 		t.Error("dedup/trim path must still match PPM-Team")
 	}
 }
-

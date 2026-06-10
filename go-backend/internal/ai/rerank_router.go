@@ -3,7 +3,7 @@ package ai
 type rerankStrategy int
 
 const (
-	strategyRerankEndpoint    rerankStrategy = iota
+	strategyRerankEndpoint rerankStrategy = iota
 	strategyQwen3ChatTemplate
 )
 

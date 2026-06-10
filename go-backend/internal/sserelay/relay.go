@@ -16,6 +16,7 @@ import (
 
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
+	"github.com/justrag/go-backend/internal/logctx"
 )
 
 // Options configures a single relay run.
@@ -134,16 +135,34 @@ func (r *Relay) Run(ctx context.Context, w http.ResponseWriter, opts Options) er
 			if msg.Payload == "__done__" {
 				return nil
 			}
-			writeSSEEvent(w, msg.Payload)
+			if err := writeSSEEvent(w, msg.Payload); err != nil {
+				return r.abortOnWriteError(ctx, opts, err)
+			}
 
 		case <-heartbeat.C:
-			writeSSEEvent(w, `{"type":"heartbeat"}`)
+			if err := writeSSEEvent(w, `{"type":"heartbeat"}`); err != nil {
+				return r.abortOnWriteError(ctx, opts, err)
+			}
 
 		case <-inactivity.C:
-			writeSSEEvent(w, `{"type":"error","message":"Research timed out due to inactivity"}`)
+			// Best-effort final frame — the relay ends either way.
+			_ = writeSSEEvent(w, `{"type":"error","message":"Research timed out due to inactivity"}`)
 			return nil
 		}
 	}
+}
+
+// abortOnWriteError handles a failed SSE frame write: the client is gone
+// (write error on a streaming ResponseWriter is terminal), so signal the
+// worker to abort the same way the ctx.Done() disconnect path does and end
+// the relay loop. Returns nil — a dropped client is a normal outcome, not
+// a server error.
+func (r *Relay) abortOnWriteError(ctx context.Context, opts Options, err error) error {
+	logctx.From(ctx).Debug("sserelay: SSE write failed (likely client disconnect); aborting relay", "error", err)
+	abortCtx, abortCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer abortCancel()
+	r.redis.Set(abortCtx, opts.AbortKey, "1", 24*time.Hour)
+	return nil
 }
 
 // SSE frame delimiters, kept as package-level byte slices so each frame write
@@ -157,11 +176,22 @@ var (
 // Direct writes avoid the per-frame allocation fmt.Fprintf incurs boxing the
 // payload into an `any` and running the format machinery — at 30-60 frames/s
 // per stream that is measurable GC pressure.
-func writeSSEEvent(w http.ResponseWriter, data string) {
-	w.Write(sseDataPrefix)
-	io.WriteString(w, data)
-	w.Write(sseFrameEnd)
+//
+// Returns the first write error: on a streaming ResponseWriter that means the
+// client is gone and the relay loop should stop instead of draining the rest
+// of the worker's events into a dead connection.
+func writeSSEEvent(w http.ResponseWriter, data string) error {
+	if _, err := w.Write(sseDataPrefix); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, data); err != nil {
+		return err
+	}
+	if _, err := w.Write(sseFrameEnd); err != nil {
+		return err
+	}
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
+	return nil
 }

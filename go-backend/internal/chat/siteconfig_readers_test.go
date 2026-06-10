@@ -1145,8 +1145,8 @@ func TestChatAnswerToolsMaxRounds_DefaultAndOutOfRange(t *testing.T) {
 		val  string
 		want int
 	}{
-		{"", 5},     // missing → default
-		{"1", 1},    // in range
+		{"", 5},  // missing → default
+		{"1", 1}, // in range
 		{"3", 3},
 		{"5", 5},
 		{"10", 10},

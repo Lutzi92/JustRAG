@@ -384,4 +384,3 @@ func (h *Handler) runPostResponseTasks(
 
 	return fuRes.followUps, verification, refinedAnswer
 }
-

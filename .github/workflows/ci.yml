@@ -11,6 +11,38 @@ jobs:
     defaults:
       run:
         working-directory: go-backend
+    services:
+      # pgvector-enabled Postgres backing the `integration`-tagged
+      # cascade/vector/kg/tabular tests. Hosts two databases (justrag +
+      # justrag_vector, created in the migrate step below) because cmd/migrate
+      # deliberately skips the vector migration tree on single-DB setups.
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: justrag
+          POSTGRES_PASSWORD: justrag
+          POSTGRES_DB: justrag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U justrag"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_USER: justrag
+      DB_PASSWORD: justrag
+      DB_NAME: justrag
+      VECTOR_DB_HOST: localhost
+      VECTOR_DB_PORT: "5432"
+      VECTOR_DB_USER: justrag
+      VECTOR_DB_PASSWORD: justrag
+      VECTOR_DB_NAME: justrag_vector
+      TEST_VECTOR_DSN: postgres://justrag:justrag@localhost:5432/justrag_vector
+      # CI-only dummy; config.Load requires >=32 chars even for cmd/migrate.
+      JWT_SECRET: ci-only-Jwt-secret-0123456789-abcdef
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v5
@@ -30,6 +62,14 @@ jobs:
           govulncheck ./...
       - name: test (race)
         run: go test -race -count=1 ./...
+      - name: migrate (integration DBs)
+        env:
+          PGPASSWORD: justrag
+        run: |
+          psql -h localhost -U justrag -d justrag -c "CREATE DATABASE justrag_vector OWNER justrag"
+          go run ./cmd/migrate
+      - name: test (integration, DB-backed)
+        run: go test -tags integration -race -count=1 ./internal/cascade/... ./internal/vector/... ./internal/kg/... ./internal/tabular/...
       - name: benchmark smoke
         run: go test -run='^$' -bench=. -benchtime=1x -benchmem ./...
 

@@ -19,6 +19,9 @@ linters:
     # offenders so the current codebase passes while new growth is flagged.
     - funlen
     - gocyclo
+    # Formatting gate: `gofmt -l` must be empty so struct-literal alignment
+    # and friends can't drift between contributors' editor setups.
+    - gofmt
   disable:
     # TODO(arch-remediation): re-enable after cleanup — 24 gosimple findings (struct literal conversions)
     - gosimple
@@ -57,8 +60,6 @@ linters-settings:
       - (*github.com/jackc/pgx/v5.Tx).Rollback
       # Crypto rand — panics on failure anyway.
       - crypto/rand.Read
-      # SSE relay: io.WriteString to an already-streaming ResponseWriter; write error = connection dropped, already terminal.
-      - io.WriteString
       # ODS parser: fmt.Sscanf on a best-effort numeric field; parse failure leaves n at its zero value which is correct.
       - fmt.Sscanf
 

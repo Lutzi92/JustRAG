@@ -28,13 +28,13 @@ func TestRaptorMinChunks_BoundsAndClamp(t *testing.T) {
 		stored   string
 		expected int
 	}{
-		{"", 25},      // unset → default
-		{"50", 50},    // in-range
-		{"3", 25},     // below lo (5) → default
-		{"500", 25},   // above hi (200) → default
-		{"abc", 25},   // unparseable → default
-		{"5", 5},      // lo bound
-		{"200", 200},  // hi bound
+		{"", 25},     // unset → default
+		{"50", 50},   // in-range
+		{"3", 25},    // below lo (5) → default
+		{"500", 25},  // above hi (200) → default
+		{"abc", 25},  // unparseable → default
+		{"5", 5},     // lo bound
+		{"200", 200}, // hi bound
 	}
 	for _, tc := range cases {
 		var values map[string]*string

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 )
 
 // MaxBytes wraps handlers so request bodies larger than n bytes are rejected
@@ -32,19 +31,20 @@ func MaxBytes(n int64) func(http.Handler) http.Handler {
 	}
 }
 
-// MaxBytesExcept is like MaxBytes but leaves requests whose path matches one
-// of exemptPrefixes untouched (e.g. file-upload routes that set their own
-// larger cap internally).
-func MaxBytesExcept(n int64, exemptPrefixes ...string) func(http.Handler) http.Handler {
+// MaxBytesExcept is like MaxBytes but leaves requests for which exempt
+// returns true untouched (e.g. file-upload routes that set their own
+// larger cap internally). A predicate rather than a path-prefix list:
+// upload routes like "POST /api/kb/{id}/files" have the variable segment
+// mid-path, and a prefix broad enough to cover them would also exempt
+// every sibling route from the cap.
+func MaxBytesExcept(n int64, exempt func(*http.Request) bool) func(http.Handler) http.Handler {
 	inner := MaxBytes(n)
 	return func(next http.Handler) http.Handler {
 		wrapped := inner(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			for _, p := range exemptPrefixes {
-				if strings.HasPrefix(r.URL.Path, p) {
-					next.ServeHTTP(w, r)
-					return
-				}
+			if exempt(r) {
+				next.ServeHTTP(w, r)
+				return
 			}
 			wrapped.ServeHTTP(w, r)
 		})

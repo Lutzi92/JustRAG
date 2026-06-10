@@ -278,4 +278,3 @@ func (s *PgStore) PathChunks(ctx context.Context, kbID string, srcID, dstID int6
 	}
 	return out, nil
 }
-
