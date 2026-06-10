@@ -142,7 +142,7 @@ export function useChatStream({
             const enhancedMsgId = `temp-enhanced-${Date.now()}`;
             const aiTempId = currentAiTempIdRef.current;
             setMessageTree(prev => {
-              let tree = new Map(prev);
+              const tree = new Map(prev);
               const aiNode = tree.get(aiTempId);
               if (aiNode) {
                 const enhancedMsg: Message = {
@@ -305,7 +305,7 @@ export function useChatStream({
         setLoading(false);
       }
     }
-  }, [currentKb, loading, files, enhance, reasoningEnabled, reasoningLevel, language, fetchChats, t]);
+  }, [currentKb, loading, files, enhance, reasoningEnabled, reasoningLevel, language, fetchChats, t, activeChatIdRef, fetchChatsTimerRef, setActiveChatId, setActiveLeafId, setChats, setMessageTree]);
 
   const cancelStream = useCallback(() => {
     chatAbortRef.current?.abort();

@@ -12,6 +12,20 @@ import (
 // hypeDocPrefixTokenCap matches the contextual-prefix / KG budget.
 const hypeDocPrefixTokenCap = 8000
 
+// hypeQuestionsSpec is the Structured-Outputs contract for the HyPE /
+// golden-set question generator. The prompt's contract is a bare JSON
+// array of question strings (top-level array — vLLM guided_json
+// accepts this; backends requiring an object root reject the strict
+// schema and take the json_object downgrade, where parseHyPEQuestions'
+// bracket extraction still finds the embedded array).
+var hypeQuestionsSpec = &StructuredSpec{
+	Name: "hype_questions",
+	Schema: json.RawMessage(`{
+		"type": "array",
+		"items": {"type": "string"}
+	}`),
+}
+
 // GenerateHypotheticalQuestions returns up to maxQuestions self-contained
 // questions the chunk answers. The full document is sent as a cacheable
 // prefix (auto-cached by the provider across chunks of the same file),
@@ -26,7 +40,7 @@ func GenerateHypotheticalQuestions(ctx context.Context, resolver *ConfigResolver
 	sys := prompts.HyPEQuestionsSystemPrompt(lang)
 	user := prompts.HyPEQuestionsUserPrompt(fileName, truncatedDoc, chunk, maxQuestions)
 
-	result, err := GenerateCompletionWithModel(ctx, resolver, user, sys, kbID, false, modelOverride)
+	result, err := GenerateCompletionStructured(ctx, resolver, user, sys, kbID, modelOverride, hypeQuestionsSpec)
 	if err != nil {
 		return nil, fmt.Errorf("hype: completion: %w", err)
 	}

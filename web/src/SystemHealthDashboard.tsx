@@ -74,6 +74,30 @@ const formatTime = (isoString: string): string => {
     });
 };
 
+// Hoisted to module scope: defining a component type inside the dashboard's
+// render would create a new type each render and reset its state.
+const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: { value: number; color: string }[]; label?: string }) => {
+    if (active && payload && payload.length) {
+        return (
+            <div style={{
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '8px',
+                padding: '0.75rem',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+            }}>
+                <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>{label}</div>
+                {payload.map((entry, index: number) => (
+                    <div key={index} style={{ color: entry.color, fontSize: '0.9rem' }}>
+                        {entry.value}
+                    </div>
+                ))}
+            </div>
+        );
+    }
+    return null;
+};
+
 const StatCard = ({ title, value, subtitle, icon: Icon, color }: {
     title: string;
     value: string | number;
@@ -281,42 +305,55 @@ export default function SystemHealthDashboard() {
         return { from: from.toISOString(), to: to.toISOString() };
     }, [dateRange]);
 
+    // Pure loaders: fetch and RETURN data, no state writes. Effects apply the
+    // results inside async callbacks (react.dev fetch-then-set pattern), so no
+    // setState happens synchronously within an effect body.
+    const loadMetrics = useCallback(async (): Promise<LiveMetrics> => {
+        const response = await axios.get(`${API_BASE_URL}/api/system-health/live`);
+        return response.data;
+    }, []);
+
+    const loadHistoricalData = useCallback(async () => {
+        const { from, to } = getDateRange();
+        const metricsToFetch = ['active_users', 'storage_bytes', 'total_files', 'queue_failed'];
+
+        const results = await Promise.all(
+            metricsToFetch.map(metric =>
+                axios.get(`${API_BASE_URL}/api/system-health/history`, {
+                    params: { metric, from, to }
+                }).then(res => res.data as HistoricalData)
+            )
+        );
+
+        return {
+            activeUsers: results[0],
+            storage: results[1],
+            totalFiles: results[2],
+            queueFailed: results[3]
+        };
+    }, [getDateRange]);
+
+    // State-applying wrappers for event handlers and interval callbacks.
     const fetchMetrics = useCallback(async () => {
         try {
-            const response = await axios.get(`${API_BASE_URL}/api/system-health/live`);
-            setMetrics(response.data);
+            const data = await loadMetrics();
+            setMetrics(data);
             setLastUpdated(new Date());
             setError(null);
         } catch (err: unknown) {
             console.error('Failed to fetch metrics:', err);
             setError(getApiErrorMessage(err, 'Fehler beim Laden der Metriken'));
         }
-    }, []);
+    }, [loadMetrics]);
 
     const fetchHistoricalData = useCallback(async () => {
-        const { from, to } = getDateRange();
-        const metricsToFetch = ['active_users', 'storage_bytes', 'total_files', 'queue_failed'];
-
         try {
-            const results = await Promise.all(
-                metricsToFetch.map(metric =>
-                    axios.get(`${API_BASE_URL}/api/system-health/history`, {
-                        params: { metric, from, to }
-                    }).then(res => res.data as HistoricalData)
-                )
-            );
-
-            setHistoricalData({
-                activeUsers: results[0],
-                storage: results[1],
-                totalFiles: results[2],
-                queueFailed: results[3]
-            });
+            setHistoricalData(await loadHistoricalData());
         } catch (err: unknown) {
             console.error('Failed to fetch historical data:', err);
             setError(getApiErrorMessage(err, t('historicalDataError')));
         }
-    }, [getDateRange, t]);
+    }, [loadHistoricalData, t]);
 
     const fetchAll = useCallback(async () => {
         setLoading(true);
@@ -324,41 +361,47 @@ export default function SystemHealthDashboard() {
         setLoading(false);
     }, [fetchMetrics, fetchHistoricalData]);
 
+    // Initial load + refetch when the date range changes (loadHistoricalData's
+    // identity tracks dateRange via getDateRange). All state writes happen in
+    // async callbacks, never synchronously in the effect body.
     useEffect(() => {
-        fetchAll();
-    }, [fetchAll]);
+        let cancelled = false;
 
-    useEffect(() => {
-        fetchHistoricalData();
-    }, [dateRange, fetchHistoricalData]);
+        const metricsDone = loadMetrics()
+            .then(data => {
+                if (cancelled) return;
+                setMetrics(data);
+                setLastUpdated(new Date());
+                setError(null);
+            })
+            .catch((err: unknown) => {
+                if (cancelled) return;
+                console.error('Failed to fetch metrics:', err);
+                setError(getApiErrorMessage(err, 'Fehler beim Laden der Metriken'));
+            });
+
+        const historicalDone = loadHistoricalData()
+            .then(data => {
+                if (!cancelled) setHistoricalData(data);
+            })
+            .catch((err: unknown) => {
+                if (cancelled) return;
+                console.error('Failed to fetch historical data:', err);
+                setError(getApiErrorMessage(err, t('historicalDataError')));
+            });
+
+        Promise.allSettled([metricsDone, historicalDone]).then(() => {
+            if (!cancelled) setLoading(false);
+        });
+
+        return () => { cancelled = true; };
+    }, [loadMetrics, loadHistoricalData, t]);
 
     useEffect(() => {
         if (!autoRefresh) return;
         const interval = setInterval(fetchMetrics, 10000); // 10 seconds
         return () => clearInterval(interval);
     }, [autoRefresh, fetchMetrics]);
-
-    const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: { value: number; color: string }[]; label?: string }) => {
-        if (active && payload && payload.length) {
-            return (
-                <div style={{
-                    background: 'var(--bg-primary)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '8px',
-                    padding: '0.75rem',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
-                }}>
-                    <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>{label}</div>
-                    {payload.map((entry, index: number) => (
-                        <div key={index} style={{ color: entry.color, fontSize: '0.9rem' }}>
-                            {entry.value}
-                        </div>
-                    ))}
-                </div>
-            );
-        }
-        return null;
-    };
 
     if (loading && !metrics) {
         return (
@@ -657,7 +700,13 @@ export default function SystemHealthDashboard() {
                         {(['1h', '24h', '7d', '30d'] as const).map(range => (
                             <button
                                 key={range}
-                                onClick={() => setDateRange(range)}
+                                onClick={() => {
+                                    if (range === dateRange) return;
+                                    // Show the refresh spinner while the
+                                    // range-change effect refetches.
+                                    setLoading(true);
+                                    setDateRange(range);
+                                }}
                                 style={{
                                     padding: '0.4rem 0.8rem',
                                     background: dateRange === range ? 'var(--accent-primary)' : 'var(--bg-secondary)',

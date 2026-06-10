@@ -172,25 +172,30 @@ function AuthenticatedAppInner() {
     setShowSettings: kbSettings.setShowSettings,
   });
 
-  // Cross-hook handlers
+  // Cross-hook handlers. The setters are destructured into stable locals so
+  // the useCallback dep arrays don't have to depend on the whole hook objects
+  // (which are recreated each render and would defeat the memoization).
+  const { setIsRightSidebarOpen } = sidebar;
+  const { setSelectedContent, setCurrentCardIndex, setIsAnswerVisible, setShowContentModal } = content;
+
   const handleExpandStudio = useCallback(() => {
     setKbView('studio');
-    sidebar.setIsRightSidebarOpen(false);
-  }, [sidebar.setIsRightSidebarOpen]);
+    setIsRightSidebarOpen(false);
+  }, [setIsRightSidebarOpen]);
 
   const handleSelectContent = useCallback((item: GeneratedContent) => {
-    content.setSelectedContent(item);
+    setSelectedContent(item);
     if (item.type === 'analysis' || item.type === 'abstract') {
       setKbView('studio');
-      sidebar.setIsRightSidebarOpen(false);
+      setIsRightSidebarOpen(false);
     } else {
       if (item.type === 'flashcards') {
-        content.setCurrentCardIndex(0);
-        content.setIsAnswerVisible(false);
+        setCurrentCardIndex(0);
+        setIsAnswerVisible(false);
       }
-      content.setShowContentModal(true);
+      setShowContentModal(true);
     }
-  }, [content.setSelectedContent, content.setCurrentCardIndex, content.setIsAnswerVisible, content.setShowContentModal, sidebar.setIsRightSidebarOpen]);
+  }, [setSelectedContent, setCurrentCardIndex, setIsAnswerVisible, setShowContentModal, setIsRightSidebarOpen]);
 
   const handleUpdateKBSettings = async (data: Record<string, unknown>) => {
     if (!currentKb) return;

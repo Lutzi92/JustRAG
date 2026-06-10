@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { X, User, Eye, Edit3, Loader2, Trash2 } from 'lucide-react';
 import type { KnowledgeBase } from '../types';
 import { motion } from 'framer-motion';
@@ -40,18 +40,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     const [sharedUsers, setSharedUsers] = useState<{ id: string; userId: string; username: string; firstName: string; lastName: string; permission: string }[]>([]);
     const [loadingShares, setLoadingShares] = useState(false);
 
-    useEffect(() => {
-        if (show && sharingKb) {
-            fetchShares();
-        }
-    }, [show, sharingKb]);
-
-    // Parent closes the modal on successful share, so the share list refreshes on re-open.
-    const handleConfirmShare = async () => {
-        await onConfirmShare();
-    };
-
-    const fetchShares = async () => {
+    const fetchShares = useCallback(async () => {
         if (!sharingKb) return;
         setLoadingShares(true);
         try {
@@ -65,6 +54,17 @@ export const ShareModal: React.FC<ShareModalProps> = ({
         } finally {
             setLoadingShares(false);
         }
+    }, [sharingKb, token, toast, t]);
+
+    useEffect(() => {
+        if (show && sharingKb) {
+            fetchShares();
+        }
+    }, [show, sharingKb, fetchShares]);
+
+    // Parent closes the modal on successful share, so the share list refreshes on re-open.
+    const handleConfirmShare = async () => {
+        await onConfirmShare();
     };
 
     const handleRemoveShare = async (userId: string) => {
@@ -86,9 +86,8 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     if (!show) return null;
 
     return (
-        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions, jsx-a11y/no-noninteractive-element-interactions
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="share-modal-title" style={{ maxWidth: '500px' }}>
+        <div className="modal-overlay" role="presentation" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+            <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="share-modal-title" style={{ maxWidth: '500px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <h3 id="share-modal-title" style={{ margin: 0 }}>"{sharingKb?.name}" {t('shareKb')}</h3>
                     <button onClick={onClose} className="icon-button" aria-label={t('closeShareModal')}><X size={20} /></button>

@@ -1,4 +1,4 @@
-import React, { memo, useState, useCallback, useEffect } from 'react';
+import React, { memo, useState, useCallback } from 'react';
 import {
     PanelLeftClose, BookOpen, Link, Globe, Bot, FileText, Search, ChevronLeft,
     Rss
@@ -88,10 +88,14 @@ const SidebarLeftComp: React.FC = () => {
 
     const closeSourceModal = useCallback(() => setActiveSourceModal(null), []);
 
-    // Close modal when sources are successfully added
-    useEffect(() => {
+    // Close modal when sources are successfully added.
+    // Adjust-state-during-render pattern (react.dev "You Might Not Need an Effect"):
+    // compare against the previous value instead of reacting in an effect.
+    const [prevSourcesAddedCount, setPrevSourcesAddedCount] = useState(sourcesAddedCount);
+    if (sourcesAddedCount !== prevSourcesAddedCount) {
+        setPrevSourcesAddedCount(sourcesAddedCount);
         if (sourcesAddedCount > 0) setActiveSourceModal(null);
-    }, [sourcesAddedCount]);
+    }
 
     return (
         <aside

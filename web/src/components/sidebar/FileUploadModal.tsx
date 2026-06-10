@@ -70,6 +70,7 @@ const FileUploadModalComp: React.FC<FileUploadModalProps> = ({
                         placeholder={t('textContent')}
                         value={textSourceContent}
                         onChange={(e) => { setTextSourceContent(e.target.value); clearError('content'); }}
+                        // eslint-disable-next-line jsx-a11y/no-autofocus -- focus first field on dialog open (WAI-ARIA dialog pattern)
                         autoFocus
                     />
                     {errors.content && <span className="field-error" role="alert">{errors.content}</span>}

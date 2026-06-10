@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useReducer, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useReducer, type ReactNode } from 'react';
 
 export interface Toast {
   id: string;
@@ -67,15 +67,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'ADD', toast: { id, type, message, duration } });
   }, []);
 
-  const toast: ToastApi = {
-    success: useCallback((msg: string, opts?: ToastOptions) => addToast('success', msg, opts), [addToast]),
-    error: useCallback((msg: string, opts?: ToastOptions) => addToast('error', msg, opts), [addToast]),
-    info: useCallback((msg: string, opts?: ToastOptions) => addToast('info', msg, opts), [addToast]),
-    warning: useCallback((msg: string, opts?: ToastOptions) => addToast('warning', msg, opts), [addToast]),
-  };
+  const toast: ToastApi = useMemo(() => ({
+    success: (msg: string, opts?: ToastOptions) => addToast('success', msg, opts),
+    error: (msg: string, opts?: ToastOptions) => addToast('error', msg, opts),
+    info: (msg: string, opts?: ToastOptions) => addToast('info', msg, opts),
+    warning: (msg: string, opts?: ToastOptions) => addToast('warning', msg, opts),
+  }), [addToast]);
+
+  const value = useMemo(() => ({ toasts, toast, removeToast }), [toasts, toast, removeToast]);
 
   return (
-    <ToastContext.Provider value={{ toasts, toast, removeToast }}>
+    <ToastContext.Provider value={value}>
       {children}
     </ToastContext.Provider>
   );

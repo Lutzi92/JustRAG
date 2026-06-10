@@ -65,7 +65,7 @@ export function useGeneratedContent({
       console.error('Failed to fetch generated content:', err);
       toast.error(t('contentFetchError'));
     }
-  }, []);
+  }, [t, toast]);
 
   const startPodcastPolling = useCallback((kbId: string, jobId: string) => {
     setPodcastProgress({ step: 'waiting', message: t('podcastWaiting') });
@@ -174,7 +174,7 @@ export function useGeneratedContent({
     } finally {
       setGenerating(false);
     }
-  }, [chartPrompt, currentKb, selectedFileId, language, fetchGeneratedContent, t]);
+  }, [chartPrompt, currentKb, selectedFileId, language, fetchGeneratedContent, t, toast]);
 
   const submitAbstractGeneration = useCallback(async () => {
     if (!abstractFileId || !currentKb) return;
@@ -209,7 +209,7 @@ export function useGeneratedContent({
       setGeneratedContent(snapshot);
       toast.error(t('deleteContentError'));
     }
-  }, [showConfirm, t]);
+  }, [showConfirm, t, toast]);
 
   return useMemo(() => ({
     generatedContent, setGeneratedContent, generating,

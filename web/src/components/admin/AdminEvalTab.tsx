@@ -667,10 +667,22 @@ function RunRow({ run, onDelete, onExport, onCompareWith, runs }: { run: RunSumm
         return <span style={{ padding: '0.1rem 0.4rem', borderRadius: '3px', fontSize: '0.75rem', background: colorMap[s], color: 'white' }}>{s}</span>;
     };
 
+    // Elapsed time for running runs: Date.now() is impure, so it is sampled in
+    // an effect (ticking every second while the run is in progress) instead of
+    // being called during render.
+    const [nowMs, setNowMs] = useState<number | null>(null);
+    useEffect(() => {
+        if (run.status !== 'running' || !run.started_at) return;
+        const update = () => setNowMs(Date.now());
+        const immediate = setTimeout(update, 0);
+        const interval = setInterval(update, 1000);
+        return () => { clearTimeout(immediate); clearInterval(interval); };
+    }, [run.status, run.started_at]);
+
     const duration = run.started_at && run.finished_at
         ? `${Math.round((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000)}s`
-        : run.started_at && (run.status === 'running')
-        ? `${Math.round((Date.now() - new Date(run.started_at).getTime()) / 1000)}s …`
+        : run.started_at && (run.status === 'running') && nowMs !== null
+        ? `${Math.round((nowMs - new Date(run.started_at).getTime()) / 1000)}s …`
         : '—';
 
     return (
@@ -696,7 +708,13 @@ function RunRow({ run, onDelete, onExport, onCompareWith, runs }: { run: RunSumm
                     <>
                         <button type="button" onClick={() => setShowComparePicker(!showComparePicker)} title={t('evalCompareWith')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0.2rem' }}><BarChart3 size={14} /></button>
                         {showComparePicker && (
-                            <select autoFocus onChange={e => { onCompareWith(e.target.value); setShowComparePicker(false); }} onBlur={() => setShowComparePicker(false)} style={{ marginLeft: '0.3rem' }}>
+                            <select
+                                // eslint-disable-next-line jsx-a11y/no-autofocus -- focus the just-revealed picker so keyboard users land on it and onBlur dismissal works (dialog-like disclosure pattern)
+                                autoFocus
+                                onChange={e => { onCompareWith(e.target.value); setShowComparePicker(false); }}
+                                onBlur={() => setShowComparePicker(false)}
+                                style={{ marginLeft: '0.3rem' }}
+                            >
                                 <option value="">{t('evalPickRun')}</option>
                                 {otherRuns.map(r => <option key={r.id} value={r.id}>{r.label || r.id.slice(0, 8)}</option>)}
                             </select>

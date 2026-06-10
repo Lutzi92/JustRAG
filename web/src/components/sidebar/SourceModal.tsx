@@ -25,13 +25,15 @@ const SourceModalComp: React.FC<SourceModalProps> = ({ title, show, onClose, chi
     if (!show) return null;
 
     return (
-        <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={title}>
+        <div className="modal-overlay" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
             <motion.div
                 {...getMotionProps(reducedMotion)}
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 className={`modal-content source-modal${className ? ` ${className}` : ''}`}
-                onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+                aria-label={title}
             >
                 <div className="source-modal__header">
                     <h3 className="source-modal__title">{title}</h3>

@@ -34,6 +34,40 @@ type CritiqueResult struct {
 	Reason       string         `json:"reason,omitempty"`
 }
 
+// critiqueDAGSpec is the Structured-Outputs contract for the AP-D3
+// critic, matching the prompt's documented verdict shape. new_nodes
+// items carry exactly the fields normaliseCritiqueResult copies
+// (id/query/depends_on/reason — never tool/args); the action enum
+// mirrors the CritiqueAction constants. parseCritiqueDAGJSON stays
+// tolerant for the json_object fallback path.
+var critiqueDAGSpec = &StructuredSpec{
+	Name: "critique_dag_verdict",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"action": {"type": "string", "enum": ["continue", "add_nodes", "prune_nodes", "answer_now"]},
+			"new_nodes": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"id": {"type": "string"},
+						"query": {"type": "string"},
+						"depends_on": {"type": "array", "items": {"type": "string"}},
+						"reason": {"type": "string"}
+					},
+					"required": ["id", "query", "depends_on", "reason"],
+					"additionalProperties": false
+				}
+			},
+			"prune_node_ids": {"type": "array", "items": {"type": "string"}},
+			"reason": {"type": "string"}
+		},
+		"required": ["action", "new_nodes", "prune_node_ids", "reason"],
+		"additionalProperties": false
+	}`),
+}
+
 // CritiqueDAGProgress runs one inter-level critic call. The plan
 // + completed-node findings + pending-node list go into the
 // prompt; the LLM picks one of four actions. The chat layer's
@@ -74,7 +108,7 @@ func CritiqueDAGProgress(
 	sys := prompts.CritiqueDAGSystemPrompt(lang)
 	user := prompts.CritiqueDAGUserPrompt(question, completed, pending)
 
-	res, err := resolver.completionFn(ctx, user, sys, kbID, modelOverride)
+	res, err := resolver.structuredCompletionFn(ctx, user, sys, kbID, modelOverride, critiqueDAGSpec)
 	if err != nil {
 		observability.RecordCritiqueDAGAction("error")
 		logctx.From(ctx).Warn("critique_dag: completion failed; treating as continue", "error", err)

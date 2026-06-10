@@ -22,6 +22,26 @@ type iterateActionResponse struct {
 	Reason  string   `json:"reason"`
 }
 
+// iterateActionSpec is the Structured-Outputs contract for
+// DecideNextAction, matching iterateActionResponse. The action enum
+// mirrors the prompt's search|answer dichotomy — DecideNextAction
+// hard-errors on anything else, so grammar enforcement directly
+// removes an error path. parseIterateActionJSON stays tolerant for
+// the json_object fallback.
+var iterateActionSpec = &StructuredSpec{
+	Name: "iterate_action",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"action": {"type": "string", "enum": ["search", "answer"]},
+			"queries": {"type": "array", "items": {"type": "string"}},
+			"reason": {"type": "string"}
+		},
+		"required": ["action", "queries", "reason"],
+		"additionalProperties": false
+	}`),
+}
+
 // DecideNextAction asks the LLM, given the current question + chunks
 // accumulated so far, whether to search again (and propose 0..3
 // sub-queries) or answer.
@@ -39,7 +59,7 @@ func DecideNextAction(ctx context.Context, resolver *ConfigResolver, kbID, quest
 	sys := prompts.IterateActionSystemPrompt(language)
 	user := prompts.IterateActionUserPrompt(question, chunkSummaries, round)
 
-	res, err := resolver.completionFn(ctx, user, sys, kbID, modelOverride)
+	res, err := resolver.structuredCompletionFn(ctx, user, sys, kbID, modelOverride, iterateActionSpec)
 	if err != nil {
 		return "", nil, "", fmt.Errorf("decide_next_action: completion: %w", err)
 	}

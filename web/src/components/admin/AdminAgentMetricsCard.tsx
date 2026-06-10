@@ -133,27 +133,33 @@ function ToolMixCard({ mix }: { mix: ToolMixEntry[] }) {
 }
 
 export default function AdminAgentMetricsCard({ kbId }: { kbId?: string }) {
-    const [data, setData] = useState<AgentMetricsResponse | null>(null);
-    const [error, setError] = useState<string | null>(null);
-    const [loading, setLoading] = useState(false);
     const [window, setWindow] = useState<'1h' | '24h' | '7d'>('24h');
+    // Fetch state is keyed by window/kbId/refresh-token; loading and error are
+    // derived during render so the effect never calls setState synchronously.
+    // Stale data stays visible while a newer query is in flight (same as before).
+    const [result, setResult] = useState<{ key: string; data: AgentMetricsResponse | null; error: string | null } | null>(null);
+    const [refreshToken, setRefreshToken] = useState(0);
 
-    const reload = useCallback(() => {
+    const queryKey = `${window}|${kbId ?? ''}|${refreshToken}`;
+    const loading = result?.key !== queryKey;
+    const data = result?.data ?? null;
+    const error = !loading && result ? result.error : null;
+
+    useEffect(() => {
+        let cancelled = false;
         const qs = new URLSearchParams({ window });
         if (kbId) qs.set('kb_id', kbId);
-        setLoading(true);
-        setError(null);
         authFetch(`${API_BASE_URL}/api/admin/agent-metrics?${qs.toString()}`)
             .then(async r => {
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 return r.json() as Promise<AgentMetricsResponse>;
             })
-            .then(setData)
-            .catch(e => setError(String(e)))
-            .finally(() => setLoading(false));
-    }, [window, kbId]);
+            .then(d => { if (!cancelled) setResult({ key: queryKey, data: d, error: null }); })
+            .catch(e => { if (!cancelled) setResult(prev => ({ key: queryKey, data: prev?.data ?? null, error: String(e) })); });
+        return () => { cancelled = true; };
+    }, [window, kbId, queryKey]);
 
-    useEffect(() => { reload(); }, [reload]);
+    const reload = useCallback(() => setRefreshToken(n => n + 1), []);
 
     return (
         <div className="result-card" style={{ padding: '1.5rem', marginTop: '1.5rem' }}>

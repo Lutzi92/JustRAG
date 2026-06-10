@@ -49,9 +49,10 @@ export const Modal: React.FC<CustomModalProps> = ({ modal, setModal }) => {
     useEffect(() => {
         if (!modal.show) return;
 
+        const onCancel = modal.onCancel;
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
-                modal.onCancel();
+                onCancel();
                 return;
             }
 
@@ -86,6 +87,7 @@ export const Modal: React.FC<CustomModalProps> = ({ modal, setModal }) => {
         <div
             className="modal-overlay"
             style={{ zIndex: 3000 }}
+            role="presentation"
             onClick={() => modal.onCancel()}
         >
             <motion.div

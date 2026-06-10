@@ -37,15 +37,15 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
       {/* Resize Handle Left */}
       {sidebar.isLeftSidebarOpen && (
         <div
-          role="separator"
+          role="slider"
           aria-orientation="vertical"
           aria-label={t('resizeLeftSidebar')}
           aria-valuemin={150}
           aria-valuemax={600}
           aria-valuenow={sidebar.leftSidebarWidth}
-          tabIndex={0} // eslint-disable-line jsx-a11y/no-noninteractive-tabindex
-          onMouseDown={() => sidebar.setIsResizingLeft(true)} // eslint-disable-line jsx-a11y/no-noninteractive-element-interactions
-          onKeyDown={(e) => { // eslint-disable-line jsx-a11y/no-noninteractive-element-interactions
+          tabIndex={0}
+          onMouseDown={() => sidebar.setIsResizingLeft(true)}
+          onKeyDown={(e) => {
             if (e.key === 'ArrowLeft') {
               e.preventDefault();
               sidebar.setLeftSidebarWidth?.(Math.max(150, sidebar.leftSidebarWidth - 10));
@@ -72,15 +72,15 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
 
       {/* Resize Handle Right */}
       <div
-        role="separator"
+        role="slider"
         aria-orientation="vertical"
         aria-label={t('resizeRightSidebar')}
         aria-valuemin={150}
         aria-valuemax={800}
         aria-valuenow={sidebar.rightSidebarWidth}
-        tabIndex={0} // eslint-disable-line jsx-a11y/no-noninteractive-tabindex
-        onMouseDown={() => sidebar.setIsResizingRight(true)} // eslint-disable-line jsx-a11y/no-noninteractive-element-interactions
-        onKeyDown={(e) => { // eslint-disable-line jsx-a11y/no-noninteractive-element-interactions
+        tabIndex={0}
+        onMouseDown={() => sidebar.setIsResizingRight(true)}
+        onKeyDown={(e) => {
           if (e.key === 'ArrowLeft') {
             e.preventDefault();
             sidebar.setRightSidebarWidth?.(Math.min(800, sidebar.rightSidebarWidth + 10));

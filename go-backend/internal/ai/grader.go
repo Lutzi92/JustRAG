@@ -23,6 +23,25 @@ const (
 	GradeIrrelevant Grade = "irrelevant"
 )
 
+// graderSpec is the Structured-Outputs contract for GradeRelevance, matching
+// the {"grades":[...]} shape parseGraderResponse expects. The enum mirrors
+// the Grade constants; parseGraderResponse stays tolerant for the
+// json_object fallback path.
+var graderSpec = &StructuredSpec{
+	Name: "relevance_grades",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"grades": {
+				"type": "array",
+				"items": {"type": "string", "enum": ["relevant", "ambiguous", "irrelevant"]}
+			}
+		},
+		"required": ["grades"],
+		"additionalProperties": false
+	}`),
+}
+
 // GradeRelevance asks a small LLM to grade each chunk's relevance to query.
 // Used by Corrective RAG (CRAG) to decide whether to proceed with the
 // retrieved context, rewrite the query and retry, or abstain.
@@ -44,9 +63,10 @@ func GradeRelevance(ctx context.Context, resolver *ConfigResolver, query string,
 	}
 
 	userPrompt := prompts.RelevanceGraderUser(query, contents)
-	// Deterministic temperature: same chunks should always get the same
-	// verdict, otherwise CRAG decisions would flap between identical calls.
-	result, err := GenerateCompletionWithModelDeterministic(ctx, resolver, userPrompt, prompts.RelevanceGraderSystem(), kbID, false, modelOverride)
+	// Structured + deterministic: temperature 0 so identical chunks always
+	// get the same verdict (CRAG decisions must not flap), and a strict
+	// json_schema contract so the grade enum can't come back malformed.
+	result, err := GenerateCompletionStructured(ctx, resolver, userPrompt, prompts.RelevanceGraderSystem(), kbID, modelOverride, graderSpec)
 	if err != nil {
 		logctx.From(ctx).Warn("ai.grader.llm_failed",
 			"error", err,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import {
     ArrowLeft, Save, Globe, FileText, Sparkles, Users, Trash2, Plus, Loader2,
@@ -74,18 +74,7 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
     const [rerankModel, setRerankModel] = useState(kb.rerankModel || '');
     const [ttsModel, setTtsModel] = useState(kb.ttsModel || '');
 
-    useEffect(() => {
-        fetchFiles();
-        fetchEditors();
-        fetchConfigs();
-        fetchRssFeeds();
-        if (confluenceEnabled) {
-            fetchConfluenceConnection();
-            fetchConfluenceSources();
-        }
-    }, [kb.id]);
-
-    const fetchFiles = async () => {
+    const fetchFiles = useCallback(async () => {
         try {
             const res = await axios.get(`${API_BASE_URL}/api/kb/${kb.id}/files`);
             setFiles(res.data);
@@ -93,9 +82,9 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
             console.error('Failed to fetch files:', err);
             toast.error(t('filesFetchError'));
         }
-    };
+    }, [kb.id, toast, t]);
 
-    const fetchEditors = async () => {
+    const fetchEditors = useCallback(async () => {
         try {
             const res = await axios.get(`${API_BASE_URL}/api/admin/global-kbs/${kb.id}/editors`);
             setEditors(res.data);
@@ -103,9 +92,9 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
             console.error('Failed to fetch editors:', err);
             toast.error(t('editorsFetchError'));
         }
-    };
+    }, [kb.id, toast, t]);
 
-    const fetchConfigs = async () => {
+    const fetchConfigs = useCallback(async () => {
         try {
             const res = await axios.get(`${API_BASE_URL}/api/public/configs`);
             setAvailableConfigs(res.data);
@@ -113,7 +102,7 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
             console.error('Failed to fetch configs:', err);
             toast.error(t('configsFetchError'));
         }
-    };
+    }, [toast, t]);
 
     const handleSave = async () => {
         if (!validate({ name })) return;
@@ -261,12 +250,12 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
     };
 
     // RSS
-    const fetchRssFeeds = async () => {
+    const fetchRssFeeds = useCallback(async () => {
         try {
             const res = await axios.get(`${API_BASE_URL}/api/kb/${kb.id}/rss`);
             setRssFeeds(res.data);
         } catch { /* ignore */ }
-    };
+    }, [kb.id]);
 
     const handleAddRssFeed = async () => {
         if (!rssUrl.trim()) return;
@@ -296,19 +285,33 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
     };
 
     // Confluence
-    const fetchConfluenceConnection = async () => {
+    const fetchConfluenceConnection = useCallback(async () => {
         try {
             const res = await axios.get(`${API_BASE_URL}/api/confluence/connections`);
             setConfluenceConnection(res.data);
         } catch { /* ignore */ }
-    };
+    }, []);
 
-    const fetchConfluenceSources = async () => {
+    const fetchConfluenceSources = useCallback(async () => {
         try {
             const res = await axios.get(`${API_BASE_URL}/api/kb/${kb.id}/confluence-sources`);
             setConfluenceSources(res.data);
         } catch { /* ignore */ }
-    };
+    }, [kb.id]);
+
+    // Initial load (and reload when the KB or language changes — the fetchers
+    // are memoized on kb.id/t/toast, so this is equivalent to the old
+    // [kb.id]-keyed effect plus a refetch when confluence support flips on).
+    useEffect(() => {
+        fetchFiles();
+        fetchEditors();
+        fetchConfigs();
+        fetchRssFeeds();
+        if (confluenceEnabled) {
+            fetchConfluenceConnection();
+            fetchConfluenceSources();
+        }
+    }, [fetchFiles, fetchEditors, fetchConfigs, fetchRssFeeds, confluenceEnabled, fetchConfluenceConnection, fetchConfluenceSources]);
 
     const handleSaveConfluenceConnection = async (token: string, displayName?: string) => {
         setConfluenceLoading(true);
@@ -955,8 +958,9 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
                     </h2>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
                         <div>
-                            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>KI-Provider</label>
+                            <label htmlFor="gkb-ai-provider" style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>KI-Provider</label>
                             <select
+                                id="gkb-ai-provider"
                                 value={aiConfigId}
                                 onChange={(e) => { setAiConfigId(e.target.value); setChatModel(''); setEmbeddingModel(''); setRerankModel(''); setTtsModel(''); }}
                                 style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
@@ -970,29 +974,29 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
                         {selectedConfig && (
                             <>
                                 <div>
-                                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Chat-Modell</label>
-                                    <select value={chatModel} onChange={(e) => setChatModel(e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                                    <label htmlFor="gkb-chat-model" style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Chat-Modell</label>
+                                    <select id="gkb-chat-model" value={chatModel} onChange={(e) => setChatModel(e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
                                         <option value="">Standard</option>
                                         {selectedConfig.chat_models.map(m => <option key={m} value={m}>{m}</option>)}
                                     </select>
                                 </div>
                                 <div>
-                                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Embedding-Modell</label>
-                                    <select value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                                    <label htmlFor="gkb-embedding-model" style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Embedding-Modell</label>
+                                    <select id="gkb-embedding-model" value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
                                         <option value="">Standard</option>
                                         {selectedConfig.embedding_models.map(m => <option key={m} value={m}>{m}</option>)}
                                     </select>
                                 </div>
                                 <div>
-                                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Rerank-Modell</label>
-                                    <select value={rerankModel} onChange={(e) => setRerankModel(e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                                    <label htmlFor="gkb-rerank-model" style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Rerank-Modell</label>
+                                    <select id="gkb-rerank-model" value={rerankModel} onChange={(e) => setRerankModel(e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
                                         <option value="">Standard</option>
                                         {selectedConfig.rerank_models.map(m => <option key={m} value={m}>{m}</option>)}
                                     </select>
                                 </div>
                                 <div>
-                                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>TTS-Modell</label>
-                                    <select value={ttsModel} onChange={(e) => setTtsModel(e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                                    <label htmlFor="gkb-tts-model" style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>TTS-Modell</label>
+                                    <select id="gkb-tts-model" value={ttsModel} onChange={(e) => setTtsModel(e.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
                                         <option value="">Keines</option>
                                         {selectedConfig.tts_models.map(m => <option key={m} value={m}>{m}</option>)}
                                     </select>

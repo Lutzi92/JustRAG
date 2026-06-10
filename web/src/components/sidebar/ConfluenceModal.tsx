@@ -271,7 +271,16 @@ const ConfluenceModalComp: React.FC<ConfluenceModalProps> = ({
                             />
                             <FileText size={14} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
                             <span
+                                role="button"
+                                tabIndex={0}
                                 onClick={() => togglePageSelection({ id: node.id, title: node.title })}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        togglePageSelection({ id: node.id, title: node.title });
+                                    }
+                                }}
+                                aria-pressed={isSelected}
                                 style={{ fontSize: '0.85rem', color: 'var(--text-primary)', flex: 1, cursor: 'pointer' }}
                             >
                                 {node.title}
@@ -307,7 +316,16 @@ const ConfluenceModalComp: React.FC<ConfluenceModalProps> = ({
                         />
                         <FileText size={14} style={{ color: 'var(--text-secondary)', flexShrink: 0, marginTop: 2 }} />
                         <div
+                            role="button"
+                            tabIndex={0}
                             onClick={() => togglePageSelection({ id: node.id, title: node.title })}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    togglePageSelection({ id: node.id, title: node.title });
+                                }
+                            }}
+                            aria-pressed={isSelected}
                             style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
                         >
                             <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -355,6 +373,7 @@ const ConfluenceModalComp: React.FC<ConfluenceModalProps> = ({
                 onChange={e => setPat(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') handleSaveConnection(); }}
                 className="sidebar-left__tools-input"
+                // eslint-disable-next-line jsx-a11y/no-autofocus -- focus first field on dialog open (WAI-ARIA dialog pattern)
                 autoFocus
                 placeholder="••••••••••••"
             />

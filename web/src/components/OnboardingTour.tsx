@@ -25,21 +25,21 @@ const steps = [
 ];
 
 export function OnboardingTour({ show, onClose }: OnboardingTourProps) {
+  // Mount the tour only while shown — unmounting resets the step state,
+  // so each open starts at the first step without a sync effect.
+  if (!show) return null;
+  return <OnboardingTourContent onClose={onClose} />;
+}
+
+function OnboardingTourContent({ onClose }: { onClose: () => void }) {
   const { t } = useTheme();
   const reducedMotion = useReducedMotion();
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState(1);
   const modalRef = useRef<HTMLDivElement>(null);
 
-  // Reset step when opening
-  useEffect(() => {
-    if (show) setStep(0);
-  }, [show]);
-
   // Focus trap & Escape key
   useEffect(() => {
-    if (!show) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose();
@@ -61,7 +61,7 @@ export function OnboardingTour({ show, onClose }: OnboardingTourProps) {
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [show, onClose]);
+  }, [onClose]);
 
   const goTo = (newStep: number) => {
     setDirection(newStep > step ? 1 : -1);
@@ -76,8 +76,6 @@ export function OnboardingTour({ show, onClose }: OnboardingTourProps) {
     if (step > 0) goTo(step - 1);
   };
 
-  if (!show) return null;
-
   const current = steps[step];
   const Icon = current.icon;
   const hasImage = !!current.image;
@@ -91,10 +89,10 @@ export function OnboardingTour({ show, onClose }: OnboardingTourProps) {
   };
 
   return (
-    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
     <div
       className="modal-overlay"
       style={{ zIndex: 3100 }}
+      role="presentation"
       onClick={onClose}
     >
       <motion.div

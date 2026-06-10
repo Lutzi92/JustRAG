@@ -20,6 +20,22 @@ type EvidentialityScore struct {
 	Score float64
 }
 
+// evidentialitySpec is the Structured-Outputs contract for the ECoRAG
+// classifier, matching the prompt's primary {"scores":[...]} shape.
+// parseEvidentialityScores keeps tolerating the bare-array variant
+// and prose wrapping for the json_object fallback path.
+var evidentialitySpec = &StructuredSpec{
+	Name: "evidentiality_scores",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"scores": {"type": "array", "items": {"type": "number"}}
+		},
+		"required": ["scores"],
+		"additionalProperties": false
+	}`),
+}
+
 // MaxEvidentialityChunkChars caps how much of each chunk we feed
 // the classifier per call. Chunks longer than this are truncated;
 // the classifier's job is "does this passage support an answer",
@@ -75,7 +91,10 @@ func ScoreEvidentiality(ctx context.Context, resolver *ConfigResolver, query str
 	sb.WriteString("Return ONLY a JSON object {\"scores\": [float, float, ...]} with one float per passage in the same order. ")
 	sb.WriteString("No explanation, no introduction.")
 
-	result, err := GenerateCompletionWithModel(ctx, resolver, sb.String(), prompts.EvidentialitySystemPrompt(lang), kbID, false, modelOverride)
+	// Structured + deterministic: temperature 0 (was 0.2) so the same
+	// (query, chunk pool) always yields the same scores, and a strict
+	// json_schema contract so the scores array can't come back malformed.
+	result, err := GenerateCompletionStructured(ctx, resolver, sb.String(), prompts.EvidentialitySystemPrompt(lang), kbID, modelOverride, evidentialitySpec)
 	if err != nil {
 		return nil, fmt.Errorf("evidentiality: completion: %w", err)
 	}

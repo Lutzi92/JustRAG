@@ -342,7 +342,22 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
                 {/* Resizer Handle */}
                 {viewMode === 'split' && !isMobile && (
                     <div
+                        role="slider"
+                        aria-label="Resize editor/preview split"
+                        aria-valuemin={20}
+                        aria-valuemax={80}
+                        aria-valuenow={Math.round(splitRatio * 100)}
+                        tabIndex={0}
                         onMouseDown={handleMouseDown}
+                        onKeyDown={(e) => {
+                            if (e.key === 'ArrowLeft') {
+                                e.preventDefault();
+                                setSplitRatio(r => Math.max(0.2, r - 0.05));
+                            } else if (e.key === 'ArrowRight') {
+                                e.preventDefault();
+                                setSplitRatio(r => Math.min(0.8, r + 0.05));
+                            }
+                        }}
                         style={{
                             width: '4px',
                             background: isDragging ? 'var(--accent-primary)' : 'var(--border-color)',
@@ -408,6 +423,9 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
                                 remarkPlugins={[remarkGfm]}
                                 components={{
                                     code({ node, inline, className, children, ...props }: React.HTMLAttributes<HTMLElement> & { inline?: boolean; node?: unknown }) {
+                                        // `node` is react-markdown's AST node; destructured only so it
+                                        // isn't spread onto the DOM element below.
+                                        void node;
                                         return !inline ? (
                                             <pre style={{ background: 'var(--bg-primary)', padding: '1rem', borderRadius: '4px', overflowX: 'auto' }}>
                                                 <code className={className} {...props}>

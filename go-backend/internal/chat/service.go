@@ -979,6 +979,26 @@ func PrepareChatContext(
 	// Build context string with annotations.
 	sources, contextText := buildChatSourcesAndContext(chunks)
 
+	// Q2 sufficient-context gate: one fast-tier call judging whether the
+	// assembled set as a WHOLE suffices to answer (Google ICLR 2025
+	// "sufficient context"). Complements CRAG, which grades each chunk
+	// independently — individually-relevant chunks can still be jointly
+	// insufficient, the regime where models hallucinate instead of
+	// abstaining. On "insufficient" the existing abstain plumbing takes
+	// over (abstain notice in the system prompt, Abstain flag for
+	// metrics/UI). Skipped when CRAG already decided to abstain, under
+	// long-context routing (the wide pool is intentionally unfiltered),
+	// and on empty context (rule 13 already covers that). Fail-open
+	// inside JudgeContextSufficiency: judge errors never block answers.
+	if !abstain && !longContextRoute && len(chunks) > 0 && ChatSufficientContextEnabled(ctx, siteConfig) {
+		model := ResolveFastTierModel(ctx, siteConfig, "chat_sufficient_context_model")
+		if !ai.JudgeContextSufficiency(ctx, aiResolver, params.KbID, params.SearchQuery, contextText, params.Language, model) {
+			abstain = true
+			logctx.From(ctx).Info("rag.sufficient_context.abstain",
+				"chunks_in_context", len(chunks), "kb_id", params.KbID)
+		}
+	}
+
 	// Enumeration pre-pass. When the query asks for an exhaustive list
 	// ("In welchen Projekten…", "Wer arbeitet an…", "List all X that…")
 	// we run a structured-extraction LLM call over the already-assembled

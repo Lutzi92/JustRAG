@@ -43,7 +43,7 @@ export function useFileManagement({ currentKb }: UseFileManagementParams) {
       console.error('Failed to fetch files:', err);
       toast.error(t('filesFetchError'));
     }
-  }, []);
+  }, [t, toast]);
 
   // Polling for processing files
   const hasProcessingFiles = files.some(f => f.status === 'processing' || f.status === 'pending');
@@ -117,7 +117,7 @@ export function useFileManagement({ currentKb }: UseFileManagementParams) {
       setFiles(snapshot);
       toast.error(t('deleteFileError'));
     }
-  }, [showConfirm, t]);
+  }, [showConfirm, t, toast]);
 
   const handleToggleFileSelection = useCallback((fileId: string, e: React.SyntheticEvent) => {
     e.stopPropagation();
@@ -157,7 +157,7 @@ export function useFileManagement({ currentKb }: UseFileManagementParams) {
       console.error('Failed to download file:', err);
       toast.error(t('downloadFileError'));
     }
-  }, [files, t]);
+  }, [files, t, toast]);
 
   const openUploadModal = useCallback(() => {
     setTextSourceTitle('');

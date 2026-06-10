@@ -133,7 +133,7 @@ export function useConfluenceSources({ currentKb, fetchFiles }: UseConfluenceSou
         } finally {
             setConfluenceLoading(false);
         }
-    }, [currentKb, confluenceConnection, fetchSources, fetchFiles, t, toast]);
+    }, [currentKb, confluenceConnection, t, toast]);
 
     const updateSource = useCallback(async (sourceId: string, updates: { syncInterval?: number | null; status?: 'active' | 'paused'; includeAttachments?: boolean }) => {
         if (!currentKb) return;

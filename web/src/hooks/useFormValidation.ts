@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 
 type ValidationRule = (value: string) => string | false;
 type ValidationRules = Record<string, ValidationRule>;
@@ -6,8 +6,13 @@ type Errors = Record<string, string>;
 
 export function useFormValidation(rules: ValidationRules) {
   const [errors, setErrors] = useState<Errors>({});
+  // Keep the latest rules in a ref without writing it during render.
+  // `validate` is only invoked from event handlers (after the effect has
+  // run), so syncing in an effect preserves the "always latest" semantics.
   const rulesRef = useRef(rules);
-  rulesRef.current = rules;
+  useEffect(() => {
+    rulesRef.current = rules;
+  });
 
   const validate = useCallback((values: Record<string, string>): boolean => {
     const newErrors: Errors = {};

@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import axios from 'axios';
 import { Loader2 } from 'lucide-react';
 import type { User as UserType } from './types';
@@ -49,46 +49,6 @@ function App() {
   // Config state (needed for Login too)
   const [siteConfigs, setSiteConfigs] = useState<Record<string, string>>({});
 
-  // Fetch site configs
-  const fetchSiteConfigs = async () => {
-    try {
-      const res = await axios.get(`${API_BASE_URL}/api/site-config`);
-      setSiteConfigs(res.data);
-    } catch (err: unknown) {
-      console.error('Failed to fetch site configs:', err);
-    }
-  };
-
-  // Auth/config setup + auto-logout on 401
-  useEffect(() => {
-    fetchSiteConfigs();
-    if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    } else {
-      delete axios.defaults.headers.common['Authorization'];
-    }
-
-    // Intercept 401 responses to auto-logout when token is expired/invalidated
-    const interceptor = axios.interceptors.response.use(
-      response => response,
-      error => {
-        if (error.response?.status === 401 && token) {
-          handleLogout();
-        }
-        return Promise.reject(error);
-      }
-    );
-
-    // Also handle 401 from direct fetch() calls via authFetch
-    const onUnauthorized = () => handleLogout();
-    window.addEventListener('auth:unauthorized', onUnauthorized);
-
-    return () => {
-      axios.interceptors.response.eject(interceptor);
-      window.removeEventListener('auth:unauthorized', onUnauthorized);
-    };
-  }, [token]);
-
   // Auth handlers
   // SECURITY (tracked follow-up): the JWT lives in localStorage, which is
   // readable by any script on the page. The hardened design is an
@@ -96,23 +56,7 @@ function App() {
   // require CSRF tokens and reworking the Bearer-header axios/SSE/OIDC flows.
   // Deferred as a deliberate decision; CSP + a short token TTL are the interim
   // mitigations. See the security review (2026-05-26).
-  const handleLogin = (newToken: string, newUser: UserType) => {
-    // Set axios auth header synchronously BEFORE state updates trigger re-render.
-    // React runs child effects before parent effects, so AuthenticatedApp's
-    // fetchKBs() would fire before App's useEffect sets the header.
-    axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
-    setToken(newToken);
-    setUser(newUser);
-    localStorage.setItem('token', newToken);
-    localStorage.setItem('user', JSON.stringify(newUser));
-  };
-
-  const handleUpdateUser = (updatedUser: UserType) => {
-    setUser(updatedUser);
-    localStorage.setItem('user', JSON.stringify(updatedUser));
-  };
-
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     const currentToken = token;
     const wasOidc = user?.authMethod === 'oidc';
 
@@ -145,6 +89,57 @@ function App() {
 
     setToken(null);
     setUser(null);
+  }, [token, user]);
+
+  // Auth/config setup + auto-logout on 401
+  useEffect(() => {
+    // Fetch site configs (react.dev fetch-then-set pattern: the state write
+    // happens in the async callback, not synchronously in the effect body)
+    axios.get(`${API_BASE_URL}/api/site-config`)
+      .then(res => setSiteConfigs(res.data))
+      .catch((err: unknown) => console.error('Failed to fetch site configs:', err));
+
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    } else {
+      delete axios.defaults.headers.common['Authorization'];
+    }
+
+    // Intercept 401 responses to auto-logout when token is expired/invalidated
+    const interceptor = axios.interceptors.response.use(
+      response => response,
+      error => {
+        if (error.response?.status === 401 && token) {
+          handleLogout();
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    // Also handle 401 from direct fetch() calls via authFetch
+    const onUnauthorized = () => handleLogout();
+    window.addEventListener('auth:unauthorized', onUnauthorized);
+
+    return () => {
+      axios.interceptors.response.eject(interceptor);
+      window.removeEventListener('auth:unauthorized', onUnauthorized);
+    };
+  }, [token, handleLogout]);
+
+  const handleLogin = (newToken: string, newUser: UserType) => {
+    // Set axios auth header synchronously BEFORE state updates trigger re-render.
+    // React runs child effects before parent effects, so AuthenticatedApp's
+    // fetchKBs() would fire before App's useEffect sets the header.
+    axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+    setToken(newToken);
+    setUser(newUser);
+    localStorage.setItem('token', newToken);
+    localStorage.setItem('user', JSON.stringify(newUser));
+  };
+
+  const handleUpdateUser = (updatedUser: UserType) => {
+    setUser(updatedUser);
+    localStorage.setItem('user', JSON.stringify(updatedUser));
   };
 
   return (

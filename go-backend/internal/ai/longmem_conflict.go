@@ -40,6 +40,25 @@ type LongmemConflictVerdict struct {
 	SupersedeIDs []int64               `json:"supersede_ids,omitempty"`
 }
 
+// longmemConflictSpec is the Structured-Outputs contract for
+// ClassifyLongmemConflict, mirroring the prompt's documented verdict
+// shape {"action": ..., "supersede_ids": [...]}. The singular
+// "supersede_id" tolerated by parseLongmemConflictVerdict is drift
+// repair for the json_object fallback path, not part of the strict
+// contract, so it is intentionally absent here.
+var longmemConflictSpec = &StructuredSpec{
+	Name: "longmem_conflict_verdict",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"action": {"type": "string", "enum": ["create_new", "supersede", "skip_redundant"]},
+			"supersede_ids": {"type": "array", "items": {"type": "integer"}}
+		},
+		"required": ["action", "supersede_ids"],
+		"additionalProperties": false
+	}`),
+}
+
 // LongmemCandidate is a compact projection of a longmem.Memory row
 // passed to the conflict classifier. ID round-trips so the LLM can
 // reference a specific existing row in its verdict's SupersedeIDs.
@@ -79,7 +98,11 @@ func ClassifyLongmemConflict(ctx context.Context, resolver *ConfigResolver, newF
 		return LongmemConflictVerdict{Action: LongmemConflictCreateNew}, mErr
 	}
 
-	result, err := GenerateCompletionWithModel(ctx, resolver, string(payload), prompts.LongmemConflictPrompt(lang), kbID, false, modelOverride)
+	// Structured + deterministic: temperature 0 (was 0.2) so the same
+	// (new fact, candidates) pair always yields the same verdict, and a
+	// strict json_schema contract so the action enum can't come back
+	// malformed.
+	result, err := GenerateCompletionStructured(ctx, resolver, string(payload), prompts.LongmemConflictPrompt(lang), kbID, modelOverride, longmemConflictSpec)
 	if err != nil {
 		return LongmemConflictVerdict{Action: LongmemConflictCreateNew}, err
 	}

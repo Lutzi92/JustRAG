@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/observability"
 )
 
@@ -95,10 +97,63 @@ func GenerateCompletionWithModelDeterministic(ctx context.Context, resolver *Con
 	return generateCompletionInner(ctx, config, prompt, systemPrompt, model, wantReasoning, 0.0)
 }
 
+// StructuredSpec describes an optional Structured-Outputs contract for a
+// completion call: the request is sent with a strict `json_schema`
+// response_format (vLLM guided_json / OpenAI Structured Outputs) and on
+// rejection downgraded to the looser `json_object` contract, so the call
+// degrades gracefully on backends without grammar support. Callers keep
+// their tolerant JSON parsing as the last line of defense.
+type StructuredSpec struct {
+	Name   string
+	Schema json.RawMessage
+}
+
+// GenerateCompletionStructured is GenerateCompletionWithModelDeterministic
+// plus a Structured-Outputs contract. Classifier/planner-style fast-tier
+// calls want both properties together: temperature 0 (same input → same
+// verdict) and grammar-enforced output shape (the dominant failure mode of
+// small models on these calls is malformed JSON, not wrong intent). A nil
+// spec behaves exactly like GenerateCompletionWithModelDeterministic.
+func GenerateCompletionStructured(ctx context.Context, resolver *ConfigResolver, prompt, systemPrompt, kbID, modelOverride string, spec *StructuredSpec) (*CompletionResult, error) {
+	config, err := resolver.Resolve(ctx, kbID)
+	if err != nil {
+		return nil, fmt.Errorf("ai: resolve config: %w", err)
+	}
+	model := config.ChatModel
+	if modelOverride != "" {
+		if slices.Contains(config.ChatModels, modelOverride) {
+			model = modelOverride
+		} else {
+			observability.RecordModelFallback("not_in_chat_models")
+			slog.Warn("ai: model override not available in resolved config, falling back to ChatModel",
+				"modelOverride", modelOverride,
+				"providerName", config.ProviderName,
+				"fallback", config.ChatModel)
+		}
+	}
+	return generateCompletionStructuredInner(ctx, config, prompt, systemPrompt, model, false, 0.0, spec)
+}
+
+// structuredCompletionFn is the Structured-Outputs sibling of completionFn:
+// it dispatches through the same per-resolver test hook (which ignores the
+// spec — hooked tests assert on prompts and parsing, not wire format), and
+// in production adds the strict-json_schema contract on top of the
+// deterministic path.
+func (r *ConfigResolver) structuredCompletionFn(ctx context.Context, prompt, systemPrompt, kbID, modelOverride string, spec *StructuredSpec) (*CompletionResult, error) {
+	if h := r.completionHook.Load(); h != nil {
+		return (*h)(ctx, r, prompt, systemPrompt, kbID, modelOverride)
+	}
+	return GenerateCompletionStructured(ctx, r, prompt, systemPrompt, kbID, modelOverride, spec)
+}
+
 // generateCompletionInner performs the actual chat completion request using
 // the supplied resolved config and model name. The model parameter replaces
 // any reference to config.ChatModel so callers can override it.
 func generateCompletionInner(ctx context.Context, config *ResolvedConfig, prompt, systemPrompt, model string, wantReasoning bool, temperature float64) (*CompletionResult, error) {
+	return generateCompletionStructuredInner(ctx, config, prompt, systemPrompt, model, wantReasoning, temperature, nil)
+}
+
+func generateCompletionStructuredInner(ctx context.Context, config *ResolvedConfig, prompt, systemPrompt, model string, wantReasoning bool, temperature float64, structured *StructuredSpec) (*CompletionResult, error) {
 	ctx, span := observability.StartGenerationSpan(ctx, "rag.llm_completion", observability.GenerationAttrs{
 		System: observability.ProviderSystemFromBaseURL(config.BaseURL),
 		Model:  model,
@@ -117,6 +172,16 @@ func generateCompletionInner(ctx context.Context, config *ResolvedConfig, prompt
 		Model:       model,
 		Messages:    messages,
 		Temperature: &temperature,
+	}
+	if structured != nil {
+		req.ResponseFormat = &ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &ResponseJSONSchema{
+				Name:   structured.Name,
+				Strict: true,
+				Schema: structured.Schema,
+			},
+		}
 	}
 
 	// Retry loop: up to 3 attempts with exponential backoff (2s, 4s, 8s).
@@ -152,6 +217,18 @@ func generateCompletionInner(ctx context.Context, config *ResolvedConfig, prompt
 		resp, err := client.ChatCompletion(ctx, req)
 		if err != nil {
 			lastErr = err
+			// Some backends don't support strict json_schema — downgrade
+			// to the looser json_object contract for the remaining
+			// attempts so the feature degrades gracefully on older
+			// LiteLLM / vLLM stacks (same fallback as the enumeration
+			// pre-pass). A transient network error also takes this path;
+			// that costs only strictness, not correctness, since every
+			// caller keeps tolerant JSON parsing.
+			if req.ResponseFormat != nil && req.ResponseFormat.Type == "json_schema" {
+				logctx.From(ctx).Info("ai.structured.strict_schema_rejected_falling_back",
+					"error", err, "model", model)
+				req.ResponseFormat = &ResponseFormat{Type: "json_object"}
+			}
 			continue
 		}
 

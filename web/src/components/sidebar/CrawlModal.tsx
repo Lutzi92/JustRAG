@@ -1,4 +1,4 @@
-import React, { memo, useState, useEffect } from 'react';
+import React, { memo, useState } from 'react';
 import { Loader2, Search, Layout } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { SourceModal } from './SourceModal';
@@ -14,21 +14,18 @@ interface CrawlModalProps {
     onOpenWorkspace: () => void;
 }
 
-const CrawlModalComp: React.FC<CrawlModalProps> = ({
-    show, onClose, toolLoading, onToolSubmit,
+const CrawlModalContent: React.FC<Omit<CrawlModalProps, 'show'>> = ({
+    onClose, toolLoading, onToolSubmit,
     crawlMaxPages, setCrawlMaxPages, crawlResults, onOpenWorkspace,
 }) => {
     const { t } = useTheme();
-    // Own local state — isolated from the web search input
+    // Own local state — isolated from the web search input.
+    // The content component mounts fresh each time the modal opens, so the
+    // URL input starts empty without a sync effect.
     const [crawlUrl, setCrawlUrl] = useState('');
 
-    // Reset when modal opens
-    useEffect(() => {
-        if (show) setCrawlUrl('');
-    }, [show]);
-
     return (
-        <SourceModal title={t('crawl')} show={show} onClose={onClose}>
+        <SourceModal title={t('crawl')} show onClose={onClose}>
             <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{t('crawlDesc')}</p>
             <input
                 type="text"
@@ -38,6 +35,7 @@ const CrawlModalComp: React.FC<CrawlModalProps> = ({
                 onKeyDown={(e) => { if (e.key === 'Enter' && crawlUrl.trim() && !toolLoading) onToolSubmit(crawlUrl); }}
                 aria-label={t('enterUrl')}
                 className="sidebar-left__tools-input"
+                // eslint-disable-next-line jsx-a11y/no-autofocus -- focus first field on dialog open (WAI-ARIA dialog pattern)
                 autoFocus
             />
             <div className="sidebar-left__slider-row">
@@ -73,5 +71,8 @@ const CrawlModalComp: React.FC<CrawlModalProps> = ({
         </SourceModal>
     );
 };
+
+const CrawlModalComp: React.FC<CrawlModalProps> = ({ show, ...rest }) =>
+    show ? <CrawlModalContent {...rest} /> : null;
 
 export const CrawlModal = memo(CrawlModalComp);

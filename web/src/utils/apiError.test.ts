@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AxiosError } from 'axios';
+import { AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import { getApiErrorMessage } from './apiError';
 
 function makeAxiosError(data: unknown, status = 400): AxiosError {
@@ -9,7 +9,7 @@ function makeAxiosError(data: unknown, status = 400): AxiosError {
         status,
         statusText: 'Bad Request',
         headers: {},
-        config: { headers: {} } as any,
+        config: { headers: {} } as unknown as InternalAxiosRequestConfig,
     };
     return err;
 }

@@ -128,7 +128,7 @@ export function useWebTools({ currentKb, fetchFiles }: UseWebToolsParams) {
         statusClearTimerRef.current = undefined;
       }, 3000);
     }
-  }, [currentKb, toolInput, language, t, fetchFiles]);
+  }, [currentKb, toolInput, language, t, toast, fetchFiles]);
 
   const handleCancelWebResearch = useCallback(() => {
     if (webResearchAbortRef.current) {
@@ -266,7 +266,7 @@ export function useWebTools({ currentKb, fetchFiles }: UseWebToolsParams) {
     } finally {
       setToolLoading(false);
     }
-  }, [currentKb, selectedPages, toolTab, searchResults, crawlResults, fetchFiles]);
+  }, [currentKb, selectedPages, toolTab, searchResults, crawlResults, fetchFiles, t, toast]);
 
   const handleUpdateWebResult = useCallback(async (url: string, newContent: string) => {
     if (toolTab === 'websearch') {
@@ -297,7 +297,7 @@ export function useWebTools({ currentKb, fetchFiles }: UseWebToolsParams) {
         setToolLoading(false);
       }
     }
-  }, [toolTab, searchResults, crawlResults, currentKb]);
+  }, [toolTab, searchResults, crawlResults, currentKb, t, toast]);
 
   const handlePdfSourceOpen = useCallback((fileId: string, fileName: string, page: number) => {
     setPdfPreview({ fileId, fileName, page });
@@ -315,7 +315,7 @@ export function useWebTools({ currentKb, fetchFiles }: UseWebToolsParams) {
       console.error('Failed to fetch file content:', err);
       toast.error(t('previewLoadError'));
     }
-  }, []);
+  }, [t, toast]);
 
   const handlePreviewSource = useCallback((fileOrId: import('../types').FileEntry | string, fileName?: string) => {
     const id = typeof fileOrId === 'string' ? fileOrId : fileOrId.id;
@@ -333,7 +333,7 @@ export function useWebTools({ currentKb, fetchFiles }: UseWebToolsParams) {
     } else {
       toast.info(t('previewNotSupported'));
     }
-  }, [handlePdfSourceOpen, fetchFileContent]);
+  }, [handlePdfSourceOpen, fetchFileContent, t, toast]);
 
   return useMemo(() => ({
     toolTab, setToolTab, toolInput, setToolInput,

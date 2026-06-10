@@ -26,8 +26,8 @@ export const RssFeedEntriesModal: React.FC<RssFeedEntriesModalProps> = ({ feed, 
     }, [onClose]);
 
     return (
-        <div className="rss-entries-modal__overlay" onClick={onClose}>
-            <div className="rss-entries-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="rss-entries-modal__overlay" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+            <div className="rss-entries-modal" role="dialog" aria-modal="true" aria-label={feed.title || feed.url}>
                 <div className="rss-entries-modal__header">
                     <Rss size={16} />
                     <h2 className="rss-entries-modal__title">{feed.title || feed.url}</h2>

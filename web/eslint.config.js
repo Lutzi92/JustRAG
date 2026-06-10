@@ -22,4 +22,12 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    files: ['src/contexts/**/*.tsx'],
+    rules: {
+      // Context modules intentionally export Provider + hook together; an HMR
+      // update of a context invalidates its consumers, which is acceptable.
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

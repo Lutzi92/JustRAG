@@ -170,6 +170,21 @@ var siteConfigParsers = map[string]siteConfigSetter{
 			cfg.FeedbackBoostWeight = f
 		}
 	},
+	"recency_boost_enabled": func(cfg *KBVectorConfig, v string) {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.RecencyBoostEnabled = b
+		}
+	},
+	"recency_boost_weight": func(cfg *KBVectorConfig, v string) {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 0.5 {
+			cfg.RecencyBoostWeight = f
+		}
+	},
+	"recency_half_life_days": func(cfg *KBVectorConfig, v string) {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 3650 {
+			cfg.RecencyHalfLifeDays = f
+		}
+	},
 	"rerank_blend_alpha_entity": func(cfg *KBVectorConfig, v string) {
 		// Sentinel-aware: any value outside [0, 1] keeps the field at -1
 		// (inherit). Same convention as the per-route alpha overrides.

@@ -31,9 +31,8 @@ export const PreviewModal: React.FC<PreviewModalProps> = ({ show, onClose, previ
     const isMarkdown = previewPage.title.toLowerCase().endsWith('.md');
 
     return (
-        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '80vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }} role="dialog" aria-modal="true" aria-labelledby="preview-title">
+        <div className="modal-overlay" role="presentation" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+            <div className="modal-content" style={{ maxWidth: '80vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }} role="dialog" aria-modal="true" aria-labelledby="preview-title">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem' }}>
                     <div style={{ overflow: 'hidden' }}>
                         <h2 id="preview-title" style={{ margin: 0, fontSize: '1.25rem', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{previewPage.title}</h2>

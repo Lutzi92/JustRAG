@@ -26,7 +26,7 @@ export function useKbSettings() {
       console.error('Failed to fetch configs:', err);
       toast.error(t('configsFetchError'));
     }
-  }, []);
+  }, [t, toast]);
 
   return {
     isPro, setIsPro,

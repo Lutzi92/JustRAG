@@ -55,6 +55,10 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64.8
+          # The prebuilt v1.64.8 binary is compiled with go1.24 and refuses
+          # go.mod targets >= 1.25; goinstall builds it with the toolchain
+          # from setup-go instead (matches local `go install` setups).
+          install-mode: goinstall
           working-directory: go-backend
       - name: govulncheck
         run: |

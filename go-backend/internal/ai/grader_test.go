@@ -1,6 +1,11 @@
 package ai
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"testing"
+)
 
 // TestParseGraderResponse_StrictJSON exercises the happy path.
 func TestParseGraderResponse_StrictJSON(t *testing.T) {
@@ -121,5 +126,32 @@ func TestStripJSONFences(t *testing.T) {
 				t.Errorf("stripJSONFences(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestGradeRelevance_SendsStructuredOutputContract(t *testing.T) {
+	var captured map[string]any
+	srv := buildChatServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		writeChatJSON(w, chatResponse(`{"grades":["relevant","irrelevant"]}`, ""))
+	})
+	resolver := resolverForServer(srv, "fast-model")
+
+	grades, err := GradeRelevance(context.Background(), resolver, "q", []string{"a", "b"}, "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(grades) != 2 || grades[0] != GradeRelevant || grades[1] != GradeIrrelevant {
+		t.Errorf("grades = %v", grades)
+	}
+
+	rf, ok := captured["response_format"].(map[string]any)
+	if !ok {
+		t.Fatalf("grader request carried no response_format: %v", captured)
+	}
+	if rf["type"] != "json_schema" {
+		t.Errorf("response_format.type = %v, want json_schema", rf["type"])
 	}
 }

@@ -276,19 +276,14 @@ export function HomeView(props: HomeViewProps) {
         </li>
 
         {kbs.map(kb => (
+          // Card-level click is a mouse convenience (role="presentation"); the
+          // accessible control is the KB-name button below, which carries the
+          // label and the keyboard path.
           <li
             key={kb.id}
             className="source-card home-view__kb-card"
+            role="presentation"
             onClick={() => onSelectKB(kb)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onSelectKB(kb);
-              }
-            }}
-            role="button"
-            tabIndex={0}
-            aria-label={`${t('openKb')}: ${kb.name}`}
           >
             <div className="home-view__card-top">
               <BookOpen size={20} color="var(--text-secondary)" aria-hidden="true" />
@@ -326,6 +321,7 @@ export function HomeView(props: HomeViewProps) {
               <button
                 type="button"
                 className="text-button home-view__kb-name-btn"
+                aria-label={`${t('openKb')}: ${kb.name}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectKB(kb);

@@ -39,7 +39,7 @@ export function useKnowledgeBases({
       console.error('Failed to fetch KBs:', err);
       toast.error(t('kbFetchError'));
     }
-  }, []);
+  }, [t, toast]);
 
   const handleSelectKB = useCallback((kb: KnowledgeBase) => {
     setCurrentKb(kb);
@@ -76,7 +76,7 @@ export function useKnowledgeBases({
       setKbs(snapshot);
       toast.error(t('deleteKBError'));
     }
-  }, [showConfirm, t, handleGoHome]);
+  }, [showConfirm, t, handleGoHome, toast]);
 
   const handleCreateGlobalKB = async () => {
     const name = await showPrompt(t('globalKbNamePrompt'));
@@ -102,7 +102,7 @@ export function useKnowledgeBases({
       setGlobalKbs(snapshot);
       toast.error(t('deleteKBError'));
     }
-  }, [showConfirm, t, handleGoHome]);
+  }, [showConfirm, t, handleGoHome, toast]);
 
   const handleOpenGlobalKbSettings = (kb: KnowledgeBase, e: React.MouseEvent) => {
     e.stopPropagation();

@@ -30,7 +30,7 @@ export function useRssFeeds({ currentKb, fetchFiles }: UseRssFeedsParams) {
             console.error('Failed to fetch RSS feeds:', err);
             toast.error(t('rssFetchError'));
         }
-    }, [currentKb?.id]);
+    }, [currentKb?.id, t, toast]);
 
     const addRssFeed = useCallback(async (url: string, pollInterval: number) => {
         if (!currentKb) return;

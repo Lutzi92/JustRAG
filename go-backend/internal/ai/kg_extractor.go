@@ -38,6 +38,50 @@ type KGExtraction struct {
 	Relations []KGRelation `json:"relations"`
 }
 
+// kgExtractionSpec is the Structured-Outputs contract for ExtractKG,
+// matching the prompt's {"entities":[...],"relations":[...]} shape.
+// The type enum mirrors prompts.AllowedKGEntityTypes (closed set);
+// the post-parse normalizer still coerces drift to "other" on the
+// json_object fallback path. rel stays free-form — the prompt asks
+// for an open snake_case verb phrase, not a closed vocabulary.
+var kgExtractionSpec = &StructuredSpec{
+	Name: "kg_extraction",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"entities": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"name": {"type": "string"},
+						"type": {"type": "string", "enum": ["person", "organization", "project", "document", "concept", "location", "role", "other"]},
+						"aliases": {"type": "array", "items": {"type": "string"}}
+					},
+					"required": ["name", "type", "aliases"],
+					"additionalProperties": false
+				}
+			},
+			"relations": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"src": {"type": "string"},
+						"rel": {"type": "string"},
+						"dst": {"type": "string"},
+						"evidence": {"type": "string"}
+					},
+					"required": ["src", "rel", "dst", "evidence"],
+					"additionalProperties": false
+				}
+			}
+		},
+		"required": ["entities", "relations"],
+		"additionalProperties": false
+	}`),
+}
+
 // kgDocPrefixTokenCap is the same ~8k cl100k_base budget the
 // ContextualPrefix path uses. Documents larger than this get
 // truncated; the chunk itself ALWAYS goes through unmodified
@@ -86,7 +130,7 @@ func ExtractKG(ctx context.Context, resolver *ConfigResolver, documentName, docu
 	sys := prompts.KGExtractorSystemPrompt(lang)
 	user := prompts.KGExtractorUserPrompt(documentName, documentBody, chunkContent)
 
-	res, err := resolver.completionFn(ctx, user, sys, kbID, modelOverride)
+	res, err := resolver.structuredCompletionFn(ctx, user, sys, kbID, modelOverride, kgExtractionSpec)
 	if err != nil {
 		observability.RecordKGExtraction("error")
 		return KGExtraction{}, fmt.Errorf("kg_extractor: completion: %w", err)

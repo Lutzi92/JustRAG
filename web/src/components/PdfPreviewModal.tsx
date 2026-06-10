@@ -13,52 +13,53 @@ interface PdfPreviewModalProps {
     page: number;
 }
 
-export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({ show, onClose, fileId, fileName, page }) => {
+type PdfPreviewContentProps = Omit<PdfPreviewModalProps, 'show'>;
+
+const PdfPreviewContent: React.FC<PdfPreviewContentProps> = ({ onClose, fileId, fileName, page }) => {
     const { t } = useTheme();
     const toast = useToast();
     const [blobUrl, setBlobUrl] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(Boolean(fileId));
 
     useEffect(() => {
-        if (!show || !fileId) return;
+        if (!fileId) return;
 
         let revoke: string | null = null;
-        setLoading(true);
-        setError(null);
+        let cancelled = false;
 
         axios.get(`${API_BASE_URL}/api/files/${fileId}/download`, { responseType: 'blob' })
             .then(res => {
                 const blob = new Blob([res.data], { type: 'application/pdf' });
                 const url = URL.createObjectURL(blob);
+                if (cancelled) {
+                    URL.revokeObjectURL(url);
+                    return;
+                }
                 revoke = url;
                 setBlobUrl(url);
             })
             .catch(() => {
+                if (cancelled) return;
                 setError(t('pdfLoadError'));
                 toast.error(t('pdfLoadError'));
             })
             .finally(() => {
-                setLoading(false);
+                if (!cancelled) setLoading(false);
             });
 
         return () => {
+            cancelled = true;
             if (revoke) URL.revokeObjectURL(revoke);
-            setBlobUrl(null);
-            setError(null);
         };
-    }, [show, fileId]);
-
-    if (!show) return null;
+    }, [fileId, t, toast]);
 
     const iframeSrc = blobUrl ? `${blobUrl}#page=${page}` : '';
 
     return (
-        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
-        <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-overlay" role="presentation" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
             <div
                 className="modal-content"
-                onClick={e => e.stopPropagation()}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="pdf-preview-title"
@@ -92,4 +93,10 @@ export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({ show, onClose,
             </div>
         </div>
     );
+};
+
+export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({ show, ...rest }) => {
+    if (!show) return null;
+    // Remount on fileId change so blob/loading/error state resets per document.
+    return <PdfPreviewContent key={rest.fileId} {...rest} />;
 };

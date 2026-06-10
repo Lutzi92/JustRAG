@@ -65,16 +65,23 @@ export const WebWorkspace: React.FC<WebWorkspaceProps> = ({
             setActiveResultUrl(results[0].url);
             setEditContent(results[0].content || results[0].snippet || '');
         }
-    }, [results]);
+    }, [results, activeResultUrl]);
 
-    // Update effect to refresh edit content when result content is updated (e.g. after fetch)
+    // Refresh edit content when the active result's content arrives/changes
+    // (e.g. after a fetch). lastSyncedContent gates the sync to actual content
+    // transitions so re-runs caused by the user typing (editContent changes)
+    // never clobber an in-progress edit.
+    const lastSyncedContentRef = React.useRef(activeResult?.content);
     React.useEffect(() => {
-        if (activeResult && !activeResult.isEdited && activeResult.content !== editContent) {
-            if (activeResult.content !== undefined && activeResult.content !== null) {
-                setEditContent(activeResult.content);
+        const content = activeResult?.content;
+        if (content === lastSyncedContentRef.current) return;
+        lastSyncedContentRef.current = content;
+        if (activeResult && !activeResult.isEdited && content !== editContent) {
+            if (content !== undefined && content !== null) {
+                setEditContent(content);
             }
         }
-    }, [activeResult?.content]);
+    }, [activeResult, editContent]);
 
     const handleSaveEdit = () => {
         if (activeResultUrl) {
@@ -124,7 +131,18 @@ export const WebWorkspace: React.FC<WebWorkspaceProps> = ({
                             <div
                                 key={index}
                                 className={`result-card ${activeResultUrl === result.url ? 'active' : ''}`}
+                                role="button"
+                                tabIndex={0}
                                 onClick={() => handleEdit(result)}
+                                onKeyDown={(e) => {
+                                    // Only react to keys on the card itself, not on the
+                                    // nested checkbox/buttons (their keys bubble up here).
+                                    if (e.target !== e.currentTarget) return;
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        handleEdit(result);
+                                    }
+                                }}
                             >
                                 <div className="result-card-top">
                                     <input

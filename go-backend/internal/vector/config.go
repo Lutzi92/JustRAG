@@ -246,6 +246,19 @@ type KBVectorConfig struct {
 	// ("feedback_boost_weight"); 0 falls back to 0.05 at apply time.
 	FeedbackBoostWeight float64
 
+	// RecencyBoostEnabled gates the recency prior ("recency_boost_enabled").
+	// Off by default — worth enabling for time-sensitive corpora (RSS /
+	// Confluence KBs); static document KBs gain nothing and risk ranking
+	// churn on re-upload (file created_at resets with the new file row).
+	RecencyBoostEnabled bool
+	// RecencyBoostWeight is the score adjustment a brand-new file gets
+	// ("recency_boost_weight"). Range (0, 0.5]; default 0.1.
+	RecencyBoostWeight float64
+	// RecencyHalfLifeDays is the exponential-decay half-life in days
+	// ("recency_half_life_days"). Default 14 (the similarity⊕recency
+	// fusion setting from arXiv 2509.19376).
+	RecencyHalfLifeDays float64
+
 	// BM25TieredBoost gates a multiplicative ranking adjustment in the BM25
 	// keyword arm: chunks matching the strict (AND-required) websearch
 	// form score ×100, chunks matching only the OR-tokens recall floor
@@ -355,5 +368,10 @@ func DefaultConfig() KBVectorConfig {
 		// the very first flip-on already produces measurable shifts
 		// without a separate config step.
 		HybridDynamicAlphaSensitivity: 0.3,
+		// Recency prior (Q3): inert until recency_boost_enabled — defaults
+		// pre-seeded at the paper's operating point so the first flip-on
+		// is already sensible.
+		RecencyBoostWeight:  0.1,
+		RecencyHalfLifeDays: 14,
 	}
 }

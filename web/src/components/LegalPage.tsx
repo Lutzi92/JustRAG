@@ -25,16 +25,27 @@ const htmlFiles: Record<LegalPageType, Record<Language, string>> = {
 export function LegalPage({ page, onBack }: LegalPageProps) {
   const { t, language } = useTheme();
   const toast = useToast();
-  const [html, setHtml] = useState('');
-  const [loading, setLoading] = useState(true);
+  // Loaded content is keyed by page+language; `loading` is derived during
+  // render (no synchronous setState in the effect — state only changes in the
+  // fetch continuations).
+  const [loaded, setLoaded] = useState<{ key: string; html: string } | null>(null);
+  const contentKey = `${page}:${language}`;
+  const loading = loaded?.key !== contentKey;
+  const html = loaded?.key === contentKey ? loaded.html : '';
 
   useEffect(() => {
-    setLoading(true);
+    let cancelled = false;
+    const key = `${page}:${language}`;
     fetch(htmlFiles[page][language])
       .then(res => res.text())
-      .then(text => { setHtml(text); setLoading(false); })
-      .catch(() => { setHtml(''); setLoading(false); toast.error(t('pageLoadError')); });
-  }, [page, language]);
+      .then(text => { if (!cancelled) setLoaded({ key, html: text }); })
+      .catch(() => {
+        if (cancelled) return;
+        setLoaded({ key, html: '' });
+        toast.error(t('pageLoadError'));
+      });
+    return () => { cancelled = true; };
+  }, [page, language, t, toast]);
 
   return (
     <div style={{

@@ -28,6 +28,35 @@ type factualityVerifierResponse struct {
 	FlaggedClaims []FlaggedClaim `json:"flagged_claims"`
 }
 
+// factualityVerifierSpec is the Structured-Outputs contract for
+// VerifyFactuality, matching the prompt's {"flagged_claims":[...]}
+// shape. The reason enum mirrors the prompt's closed vocabulary;
+// the post-parse normalizer still coerces drift to "unsupported"
+// on the json_object fallback path.
+var factualityVerifierSpec = &StructuredSpec{
+	Name: "factuality_verifier_claims",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"flagged_claims": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"claim_text": {"type": "string"},
+						"reason": {"type": "string", "enum": ["unsupported", "contradicted", "out_of_scope"]},
+						"cited_n": {"type": "integer"}
+					},
+					"required": ["claim_text", "reason", "cited_n"],
+					"additionalProperties": false
+				}
+			}
+		},
+		"required": ["flagged_claims"],
+		"additionalProperties": false
+	}`),
+}
+
 // VerifyFactuality runs the Phase 3 §3.3 factuality verifier against
 // one answer + its source block. Returns the (possibly empty) list of
 // flagged claims. On any LLM-side failure (call error, parse error)
@@ -44,7 +73,7 @@ func VerifyFactuality(ctx context.Context, resolver *ConfigResolver, question, a
 	sys := prompts.FactualityVerifierSystemPrompt(lang)
 	user := prompts.FactualityVerifierUserPrompt(question, answer, sourcesBlock)
 
-	res, err := resolver.completionFn(ctx, user, sys, kbID, modelOverride)
+	res, err := resolver.structuredCompletionFn(ctx, user, sys, kbID, modelOverride, factualityVerifierSpec)
 	if err != nil {
 		observability.RecordFactualityVerifier("error")
 		observability.ObserveFactualityVerifierSeconds(time.Since(start).Seconds())

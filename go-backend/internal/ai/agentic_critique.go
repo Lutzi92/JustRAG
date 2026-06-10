@@ -38,6 +38,25 @@ type needsMoreInfoResponse struct {
 	FollowUpQuery string `json:"follow_up_query"`
 }
 
+// needsMoreInfoSpec is the Structured-Outputs contract for
+// NeedsMoreInfo. The prompt allows omitting follow_up_query when
+// sufficient=true, but strict mode requires every property, so the
+// model emits "" in that case — exactly the zero value the parser
+// already produces for a missing key. parseNeedsMoreInfoJSON stays
+// tolerant for the json_object fallback path.
+var needsMoreInfoSpec = &StructuredSpec{
+	Name: "needs_more_info",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"sufficient": {"type": "boolean"},
+			"follow_up_query": {"type": "string"}
+		},
+		"required": ["sufficient", "follow_up_query"],
+		"additionalProperties": false
+	}`),
+}
+
 // NeedsMoreInfo asks the LLM whether the chunks accumulated so far
 // suffice to answer the question. Returns:
 //   - sufficient=true: the LLM thinks current chunks are enough; caller
@@ -60,7 +79,7 @@ func NeedsMoreInfo(ctx context.Context, resolver *ConfigResolver, kbID, question
 	sys := prompts.AgenticNeedsMoreInfoSystemPrompt(language)
 	user := prompts.AgenticNeedsMoreInfoUserPrompt(question, chunkSummaries)
 
-	res, err := resolver.completionFn(ctx, user, sys, kbID, modelOverride)
+	res, err := resolver.structuredCompletionFn(ctx, user, sys, kbID, modelOverride, needsMoreInfoSpec)
 	if err != nil {
 		return false, "", fmt.Errorf("needs_more_info: completion: %w", err)
 	}

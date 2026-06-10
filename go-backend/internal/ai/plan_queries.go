@@ -16,6 +16,54 @@ type planQueriesResponse struct {
 	Rationale string   `json:"rationale"`
 }
 
+// planQueriesSpec is the Structured-Outputs contract for the flat
+// planner, matching planQueriesResponse. parsePlanQueriesJSON stays
+// tolerant for the json_object fallback path.
+var planQueriesSpec = &StructuredSpec{
+	Name: "plan_queries",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"queries": {"type": "array", "items": {"type": "string"}},
+			"rationale": {"type": "string"}
+		},
+		"required": ["queries", "rationale"],
+		"additionalProperties": false
+	}`),
+}
+
+// planQueriesDAGSpec is the Structured-Outputs contract for the
+// non-tool-aware DAG planner. Node items carry exactly the fields the
+// PlanQueriesDAGSystemPrompt documents (id/query/depends_on/reason);
+// PlanNode's Tool/Args fields belong to the tool-aware variant, which
+// cannot use strict mode (see PlanQueriesDAGToolAware) and therefore
+// never sends this spec.
+var planQueriesDAGSpec = &StructuredSpec{
+	Name: "plan_queries_dag",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"nodes": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"id": {"type": "string"},
+						"query": {"type": "string"},
+						"depends_on": {"type": "array", "items": {"type": "string"}},
+						"reason": {"type": "string"}
+					},
+					"required": ["id", "query", "depends_on", "reason"],
+					"additionalProperties": false
+				}
+			},
+			"rationale": {"type": "string"}
+		},
+		"required": ["nodes", "rationale"],
+		"additionalProperties": false
+	}`),
+}
+
 // PlanNode is one entry in the Phase 3 §3.1 DAG-shaped plan. Each node
 // names a sub-query and its dependencies on other nodes' outputs.
 // Nodes whose `DependsOn` is empty are independent — they execute in
@@ -79,7 +127,7 @@ func PlanQueriesDAG(ctx context.Context, resolver *ConfigResolver, kbID, questio
 	sys := prompts.PlanQueriesDAGSystemPrompt(language)
 	user := prompts.PlanQueriesUserPrompt(question)
 
-	res, err := resolver.completionFn(ctx, user, sys, kbID, modelOverride)
+	res, err := resolver.structuredCompletionFn(ctx, user, sys, kbID, modelOverride, planQueriesDAGSpec)
 	if err != nil {
 		return Plan{}, fmt.Errorf("plan_queries_dag: completion: %w", err)
 	}
@@ -137,6 +185,11 @@ func PlanQueriesDAGToolAware(ctx context.Context, resolver *ConfigResolver, kbID
 	sys := prompts.PlanQueriesDAGToolAwareSystemPrompt(language, toolCatalog)
 	user := prompts.PlanQueriesUserPrompt(question)
 
+	// Deliberately NOT structured: each node's `args` is a free-form
+	// per-tool JSON object (map[string]any). Strict-mode json_schema
+	// requires `additionalProperties: false` on every object level,
+	// which would force args to be empty and break calculator /
+	// sql_query / chunk_read nodes whose arguments carry the work.
 	res, err := resolver.completionFn(ctx, user, sys, kbID, modelOverride)
 	if err != nil {
 		return Plan{}, fmt.Errorf("plan_queries_dag_tool_aware: completion: %w", err)
@@ -209,7 +262,7 @@ func PlanQueries(ctx context.Context, resolver *ConfigResolver, kbID, question, 
 	sys := prompts.PlanQueriesSystemPrompt(language)
 	user := prompts.PlanQueriesUserPrompt(question)
 
-	res, err := resolver.completionFn(ctx, user, sys, kbID, modelOverride)
+	res, err := resolver.structuredCompletionFn(ctx, user, sys, kbID, modelOverride, planQueriesSpec)
 	if err != nil {
 		return nil, "", fmt.Errorf("plan_queries: completion: %w", err)
 	}

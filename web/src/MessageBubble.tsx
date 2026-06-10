@@ -155,7 +155,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
     const showActions = isMobile ? tapped : (isHovered || isFocused);
 
     // Handle clicks on inline citation references [1], [2], etc.
-    const handleCitationClick = useCallback((e: React.MouseEvent) => {
+    const handleCitationClick = useCallback((e: React.MouseEvent | React.KeyboardEvent) => {
         const target = (e.target as HTMLElement).closest('.source-ref') as HTMLElement | null;
         if (!target || !message.sources?.length) return;
 
@@ -173,6 +173,16 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
             onPreviewSource(source.fileId, source.fileName);
         }
     }, [message.sources, onPdfOpen, onPreviewSource]);
+
+    // Keyboard equivalent of the delegated citation click handler. Only acts
+    // when the event originates from a citation ref, so Enter/Space on nested
+    // interactive elements (links, buttons) keeps its default behavior.
+    const handleCitationKeyDown = useCallback((e: React.KeyboardEvent) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        if (!(e.target as HTMLElement).closest('.source-ref')) return;
+        e.preventDefault();
+        handleCitationClick(e);
+    }, [handleCitationClick]);
 
     // Memoize source grouping to prevent recalculation on every render
     const sourceElements = useMemo(() => {
@@ -303,9 +313,10 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                 />
             )}
 
-            {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
             {message.role === 'ai' ? (
-                <div onClick={handleCitationClick}>
+                // role+tabIndex (instead of <button>) because the message body
+                // contains nested interactive elements of its own.
+                <div role="button" tabIndex={0} onClick={handleCitationClick} onKeyDown={handleCitationKeyDown}>
                     <MessageContent
                         content={message.content}
                         reasoning={message.reasoning}

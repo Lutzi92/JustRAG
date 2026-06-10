@@ -25,6 +25,34 @@ type salientFactsResponse struct {
 	Facts []SalientFact `json:"facts"`
 }
 
+// salientFactsSpec is the Structured-Outputs contract for the AP-D1
+// extractor, matching the prompt's {"facts":[...]} shape. The kind
+// enum mirrors prompts.SalientFactKinds; the post-parse normalizer
+// still drops drift on the json_object fallback path.
+var salientFactsSpec = &StructuredSpec{
+	Name: "salient_facts",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"facts": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"kind": {"type": "string", "enum": ["episodic", "semantic", "procedural"]},
+						"content": {"type": "string"},
+						"salience": {"type": "number"}
+					},
+					"required": ["kind", "content", "salience"],
+					"additionalProperties": false
+				}
+			}
+		},
+		"required": ["facts"],
+		"additionalProperties": false
+	}`),
+}
+
 // salientFactContentMaxLen mirrors the 280-char ceiling the prompt
 // enforces. The Go-side normalizer trims past this; the storage
 // layer's column type is TEXT so over-long entries would land
@@ -70,7 +98,7 @@ func ExtractSalientFacts(ctx context.Context, resolver *ConfigResolver, userMess
 	sys := prompts.ExtractSalientFactsSystemPrompt(lang)
 	user := prompts.ExtractSalientFactsUserPrompt(userMessage, assistantAnswer)
 
-	res, err := resolver.completionFn(ctx, user, sys, kbID, modelOverride)
+	res, err := resolver.structuredCompletionFn(ctx, user, sys, kbID, modelOverride, salientFactsSpec)
 	if err != nil {
 		observability.RecordLongmemExtract("error")
 		logctx.From(ctx).Warn("longmem_extract: completion failed", "error", err)

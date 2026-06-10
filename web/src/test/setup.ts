@@ -7,32 +7,29 @@ afterEach(() => {
 });
 
 // Mock framer-motion to avoid jsdom issues with animations
-vi.mock('framer-motion', () => ({
-  motion: new Proxy({}, {
-    get: (_target, prop: string) => {
-      // Return a forwardRef component that renders the HTML element
-      const { forwardRef } = require('react');
-      return forwardRef((props: Record<string, unknown>, ref: unknown) => {
-        // Strip framer-motion-specific props
-        const {
-          initial: _initial,
-          animate: _animate,
-          exit: _exit,
-          transition: _transition,
-          variants: _variants,
-          whileHover: _whileHover,
-          whileTap: _whileTap,
-          whileFocus: _whileFocus,
-          whileDrag: _whileDrag,
-          whileInView: _whileInView,
-          layout: _layout,
-          layoutId: _layoutId,
-          ...rest
-        } = props;
-        const { createElement } = require('react');
-        return createElement(prop, { ...rest, ref });
-      });
-    },
-  }),
-  AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
-}));
+vi.mock('framer-motion', async () => {
+  const { forwardRef, createElement } = await vi.importActual<typeof import('react')>('react');
+
+  // framer-motion-specific props that must be stripped before rendering the
+  // plain HTML element, so they don't leak onto the DOM node.
+  const MOTION_PROPS = [
+    'initial', 'animate', 'exit', 'transition', 'variants',
+    'whileHover', 'whileTap', 'whileFocus', 'whileDrag', 'whileInView',
+    'layout', 'layoutId',
+  ];
+
+  return {
+    motion: new Proxy({}, {
+      get: (_target, prop: string) => {
+        // Return a forwardRef component that renders the HTML element
+        return forwardRef((props: Record<string, unknown>, ref: unknown) => {
+          const rest = Object.fromEntries(
+            Object.entries(props).filter(([k]) => !MOTION_PROPS.includes(k))
+          );
+          return createElement(prop, { ...rest, ref });
+        });
+      },
+    }),
+    AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+  };
+});

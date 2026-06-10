@@ -33,6 +33,7 @@ const RssModalComp: React.FC<RssModalProps> = ({ show, onClose, rssLoading, onAd
                 onChange={(e) => setRssUrl(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
                 className="sidebar-left__tools-input"
+                // eslint-disable-next-line jsx-a11y/no-autofocus -- focus first field on dialog open (WAI-ARIA dialog pattern)
                 autoFocus
             />
             <div className="sidebar-left__slider-row">

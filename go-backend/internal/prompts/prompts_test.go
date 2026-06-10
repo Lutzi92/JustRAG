@@ -363,3 +363,35 @@ func TestAgenticNeedsMoreInfoSystemPrompt_FilterStrictness(t *testing.T) {
 		}
 	})
 }
+
+func TestChatSystemPrompt_SpotlightsContextAsData(t *testing.T) {
+	// Indirect-prompt-injection rail: the system prompt must tell the model
+	// that retrieved context is quoted reference data, never instructions.
+	// Guards against the rule being trimmed in a future prompt edit.
+	en := ChatSystemPrompt("en")
+	if !strings.Contains(en, "never as instructions") {
+		t.Errorf("EN chat system prompt lost the context-is-data injection rail")
+	}
+	de := ChatSystemPrompt("de")
+	if !strings.Contains(de, "niemals als Anweisungen") {
+		t.Errorf("DE chat system prompt lost the context-is-data injection rail")
+	}
+}
+
+func TestSufficientContextPrompts(t *testing.T) {
+	en := SufficientContextSystem("en")
+	if !strings.Contains(en, `{"sufficient"`) {
+		t.Errorf("EN sufficient-context system prompt must pin the JSON contract, got %q", en)
+	}
+	de := SufficientContextSystem("de")
+	if !strings.Contains(de, `{"sufficient"`) {
+		t.Errorf("DE sufficient-context system prompt must pin the JSON contract, got %q", de)
+	}
+	if de == en {
+		t.Errorf("DE and EN variants must differ")
+	}
+	user := SufficientContextUser("what is X?", "[1] some context")
+	if !strings.Contains(user, "what is X?") || !strings.Contains(user, "[1] some context") {
+		t.Errorf("user prompt must embed question and context, got %q", user)
+	}
+}

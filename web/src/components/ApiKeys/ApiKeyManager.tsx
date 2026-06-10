@@ -45,7 +45,7 @@ export default function ApiKeyManager() {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [t]);
 
     useEffect(() => {
         fetchKeys();

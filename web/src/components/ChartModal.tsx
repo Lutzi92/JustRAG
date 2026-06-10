@@ -27,9 +27,8 @@ export const ChartModal: React.FC<ChartModalProps> = ({
     if (!show) return null;
 
     return (
-        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions, jsx-a11y/no-noninteractive-element-interactions
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }} role="dialog" aria-modal="true" aria-labelledby="chart-modal-title">
+        <div className="modal-overlay" role="presentation" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+            <div className="modal-content" style={{ maxWidth: '500px' }} role="dialog" aria-modal="true" aria-labelledby="chart-modal-title">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '1.5rem' }}>
                     <div style={{ padding: '10px', background: 'var(--tag-bg)', borderRadius: '12px', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <Sparkles size={24} aria-hidden="true" />

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { Plus, ChevronLeft, ShieldCheck, Cpu, UserPlus, Search, FileText, Activity, Globe, Settings, Database } from 'lucide-react';
 import { getApiErrorMessage } from './utils/apiError';
@@ -181,16 +181,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
             }
     );
 
-    useEffect(() => {
-        if (activeTab === 'configs') {
-            fetchConfigs();
-            fetchSiteConfigs();
-        } else if (activeTab === 'auth') fetchAuthProviders();
-        else if (activeTab === 'users') fetchUsers();
-        else if (activeTab === 'site' || activeTab === 'search' || activeTab === 'agent') fetchSiteConfigs();
-    }, [activeTab]);
-
-    const fetchSiteConfigs = async () => {
+    const fetchSiteConfigs = useCallback(async () => {
         setLoading(true);
         try {
             const res = await axios.get(`${API_BASE_URL}/api/site-config`);
@@ -201,7 +192,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
         } finally {
             setLoading(false);
         }
-    };
+    }, [toast, t]);
 
     const handleSiteConfigSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -235,7 +226,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
         }
     };
 
-    const fetchConfigs = async () => {
+    const fetchConfigs = useCallback(async () => {
         setLoading(true);
         try {
             const res = await axios.get(`${API_BASE_URL}/api/admin/configs`);
@@ -246,9 +237,9 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
         } finally {
             setLoading(false);
         }
-    };
+    }, [toast, t]);
 
-    const fetchAuthProviders = async () => {
+    const fetchAuthProviders = useCallback(async () => {
         setLoading(true);
         try {
             const res = await axios.get(`${API_BASE_URL}/api/admin/auth-providers`);
@@ -259,9 +250,9 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
         } finally {
             setLoading(false);
         }
-    };
+    }, [toast, t]);
 
-    const fetchUsers = async () => {
+    const fetchUsers = useCallback(async () => {
         setLoading(true);
         try {
             const res = await axios.get(`${API_BASE_URL}/api/admin/users`);
@@ -272,7 +263,16 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
         } finally {
             setLoading(false);
         }
-    };
+    }, [toast, t]);
+
+    useEffect(() => {
+        if (activeTab === 'configs') {
+            fetchConfigs();
+            fetchSiteConfigs();
+        } else if (activeTab === 'auth') fetchAuthProviders();
+        else if (activeTab === 'users') fetchUsers();
+        else if (activeTab === 'site' || activeTab === 'search' || activeTab === 'agent') fetchSiteConfigs();
+    }, [activeTab, fetchConfigs, fetchSiteConfigs, fetchAuthProviders, fetchUsers]);
 
     const handleRoleChange = async (id: string, newRole: string) => {
         if (!await showConfirm(t('confirmPromoteUser'))) return;
@@ -381,7 +381,12 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
         }
     };
 
-    const resetForm = () => {
+    // clearAll is a stable useCallback inside useFormValidation; depending on
+    // the destructured functions (not the hook objects) keeps resetForm stable.
+    const { clearAll: clearConfigValidation } = configValidation;
+    const { clearAll: clearAuthValidation } = authValidation;
+
+    const resetForm = useCallback(() => {
         setShowForm(false);
         setEditingId(null);
         setConfigFormData({
@@ -407,9 +412,9 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
             },
             isActive: true
         });
-        configValidation.clearAll();
-        authValidation.clearAll();
-    };
+        clearConfigValidation();
+        clearAuthValidation();
+    }, [clearConfigValidation, clearAuthValidation]);
 
     useEffect(() => {
         const handleEsc = (e: KeyboardEvent) => {
@@ -421,7 +426,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
         };
         window.addEventListener('keydown', handleEsc);
         return () => window.removeEventListener('keydown', handleEsc);
-    }, [showForm]);
+    }, [showForm, resetForm]);
 
     const handleDelete = async (id: string, type: 'config' | 'auth') => {
         if (!await showConfirm(type === 'config' ? t('confirmDeleteConfig') : t('confirmDeleteProvider'))) return;

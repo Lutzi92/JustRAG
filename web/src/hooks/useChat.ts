@@ -66,10 +66,10 @@ export function useChat({
   const [chats, setChats] = useState<ChatEntry[]>([]);
   const [activeChatId, setActiveChatIdState] = useState<string | null>(null);
   const activeChatIdRef = useRef<string | null>(null);
-  const setActiveChatId = (id: string | null) => {
+  const setActiveChatId = useCallback((id: string | null) => {
     activeChatIdRef.current = id;
     setActiveChatIdState(id);
-  };
+  }, []);
 
   // Research session loaded from history
   const [loadedResearchSession, setLoadedResearchSession] = useState<{
@@ -116,14 +116,19 @@ export function useChat({
   });
   const { loading, chatAbortRef } = stream;
 
-  // Cleanup timers and abort in-flight SSE on unmount
+  // Cleanup timers and abort in-flight SSE on unmount. The ref *objects* are
+  // captured locally so the cleanup reads their latest .current at unmount
+  // (the timers/abort controller are assigned after mount).
   useEffect(() => {
+    const fetchChatsTimer = fetchChatsTimerRef;
+    const forkFocusTimer = forkFocusTimerRef;
+    const chatAbort = chatAbortRef;
     return () => {
-      clearTimeout(fetchChatsTimerRef.current);
-      clearTimeout(forkFocusTimerRef.current);
-      chatAbortRef.current?.abort();
+      clearTimeout(fetchChatsTimer.current);
+      clearTimeout(forkFocusTimer.current);
+      chatAbort.current?.abort();
     };
-  }, []);
+  }, [chatAbortRef]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -240,7 +245,7 @@ export function useChat({
     } finally {
       chatSwitchingRef.current = false;
     }
-  }, [onResearchLoaded, onAcademicResearchLoaded, setMessageTree, setActiveLeafId, setComparisonMode, setComparisonLeafId, toast, t]);
+  }, [onResearchLoaded, onAcademicResearchLoaded, setActiveChatId, setMessageTree, setActiveLeafId, setComparisonMode, setComparisonLeafId, toast, t]);
 
   const handleNewChat = useCallback(() => {
     setActiveChatId(null);
@@ -252,7 +257,7 @@ export function useChat({
     setForkPointId(null);
     setLoadedResearchSession(null);
     setLoadedAcademicSession(null);
-  }, []);
+  }, [setActiveChatId, setMessageTree, setActiveLeafId, setComparisonMode, setComparisonLeafId]);
 
   const handleDeleteChat = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -268,7 +273,7 @@ export function useChat({
       setChats(snapshot);
       toast.error(t('deleteChatError'));
     }
-  }, [handleNewChat, showConfirm, t]);
+  }, [handleNewChat, showConfirm, t, toast]);
 
   // Orchestrating send: clears input, resets UI state, delegates to stream hook
   const handleSendMessage = useCallback(async (e: React.FormEvent | React.KeyboardEvent, editParentId?: string) => {
@@ -303,7 +308,7 @@ export function useChat({
     setEditingMessageId(null);
     setUserMessageInput(newContent);
     pendingEditRef.current = parentId || null;
-  }, []);
+  }, [messageTreeRef]);
 
   const handleForkFromMessage = useCallback((messageId: string) => {
     setActiveLeafId(messageId);
@@ -312,7 +317,7 @@ export function useChat({
       textareaRef.current?.focus();
       textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 50);
-  }, []);
+  }, [setActiveLeafId]);
 
   const handleRegenerate = useCallback((aiMessageId: string) => {
     const aiMsg = messageTreeRef.current.get(aiMessageId);
@@ -324,7 +329,7 @@ export function useChat({
     const parentOfUser = userMsg.parentMessageId;
     setUserMessageInput(userMsg.content);
     pendingEditRef.current = parentOfUser || null;
-  }, []);
+  }, [messageTreeRef]);
 
   const handleFollowUpClick = useCallback((question: string) => {
     pendingFollowUpRef.current = question;
@@ -350,7 +355,7 @@ export function useChat({
       console.error('Failed to submit feedback', error);
       toast.error(t('feedbackError'));
     }
-  }, [currentKb]);
+  }, [currentKb, setMessageTree, t, toast]);
 
   // Auto-trigger for pending edits and follow-ups
   useEffect(() => {
@@ -421,8 +426,13 @@ export function useChat({
     fetchChats,
   }), [
     messageTree,
+    setMessageTree,
     activeLeafId,
+    setActiveLeafId,
     messages,
+    setComparisonMode,
+    setComparisonLeafId,
+    setActiveChatId,
     comparisonMode,
     comparisonLeafId,
     editingMessageId,

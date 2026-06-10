@@ -463,6 +463,9 @@ func (h *Handler) tryDeepChat(
 			GraphChunkIDs:   graphChunkIDs,
 			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
 			MultiSpecialist: ChatSupervisorMultiSpecialist(ctx, h.siteConfigReader),
+
+			SufficientContextEnabled: ChatSufficientContextEnabled(ctx, h.siteConfigReader),
+			SufficientContextModel:   ResolveFastTierModel(ctx, h.siteConfigReader, "chat_sufficient_context_model"),
 		}
 		chatCtx, err = RunSupervisorChat(ctx, h.aiResolver, h.searchService, supervisorParams, collectEmit)
 

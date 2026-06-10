@@ -33,12 +33,16 @@ const queryCacheSchemaVersion byte = 2
 //   - ModelOverride (string): the LLM used by HyDE / MultiQuery / StepBack
 //     auxiliary calls — different overrides produce different generated
 //     queries which select different candidate pools
+//   - embeddingModel (string): the embedder that produced query_embedding.
+//     Same-dimension embedder swaps keep the same cache table, and cosine
+//     similarity between vectors from different embedders is meaningless —
+//     without this field a swap would silently serve stale-semantics hits
 //   - topN (uint64 big-endian): final result-set size cap
 //   - FileIDs (sorted): scope filter
 //   - SubQueries count (uint16 big-endian): length-only — see inline comment
 //   - GraphChunkIDs count (uint16 big-endian): length-only, same compromise
 //     as SubQueries — KG re-ingest changes the count → invalidates entry
-func shapeHash(opts SearchOptions, topN int) []byte {
+func shapeHash(opts SearchOptions, topN int, embeddingModel string) []byte {
 	h := sha256.New()
 	h.Write([]byte{queryCacheSchemaVersion})
 	h.Write([]byte(opts.Enhance))
@@ -70,6 +74,8 @@ func shapeHash(opts SearchOptions, topN int) []byte {
 	h.Write([]byte(opts.GraderModel))
 	h.Write([]byte{0})
 	h.Write([]byte(opts.ModelOverride))
+	h.Write([]byte{0})
+	h.Write([]byte(embeddingModel))
 	h.Write([]byte{0})
 
 	var topNBuf [8]byte

@@ -1,11 +1,9 @@
 package vector
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -551,7 +549,16 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		emb, err := ai.EncodeQuery(ctx, s.aiResolver, query, siteCfg.QueryInstruction, kbID, s.embeddingCache)
 		if err == nil && len(emb) > 0 {
 			qcEmbedding = emb
-			qcHash = shapeHash(opts, limit)
+			// The embedder identity must be part of the shape: a same-dim
+			// embedder swap keeps the same cache table, but cosine matches
+			// against query embeddings from the old model are meaningless.
+			// EncodeQuery just resolved this config, so Resolve here is a
+			// warm cache read.
+			embeddingModel := ""
+			if aiCfg, cfgErr := s.aiResolver.Resolve(ctx, kbID); cfgErr == nil {
+				embeddingModel = aiCfg.EmbeddingModel
+			}
+			qcHash = shapeHash(opts, limit, embeddingModel)
 			// Per-query-type threshold: lookups can hit a looser threshold
 			// because paraphrases of "what is X" reliably refer to the same
 			// answer; complex_reasoning needs a tighter threshold because
@@ -999,22 +1006,17 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	// up/down on answers that cited each chunk. Gated; default off.
 	// Fail-open — a feedback read error never fails the search.
 	// ------------------------------------------------------------------
-	if siteCfg.FeedbackBoostEnabled && s.feedback != nil && len(fused) > 0 {
-		ids := make([]string, len(fused))
-		for i := range fused {
-			ids[i] = fused[i].ID
-		}
-		if net, err := s.feedback.NetSignals(ctx, kbID, ids); err != nil {
-			logctx.From(ctx).Warn("feedback boost: net signals", "error", err, "kb_id", kbID)
-		} else if len(net) > 0 {
-			weight := siteCfg.FeedbackBoostWeight
-			if weight <= 0 {
-				weight = 0.05
-			}
-			ApplyFeedbackBoost(fused, net, weight)
-			slices.SortStableFunc(fused, func(a, b RankedDoc) int { return cmp.Compare(b.Score, a.Score) })
-			stageLog = append(stageLog, "feedback_boost_applied", len(net))
-		}
+	if n := s.applyFeedbackPrior(ctx, kbID, fused, siteCfg); n > 0 {
+		stageLog = append(stageLog, "feedback_boost_applied", n)
+	}
+
+	// ------------------------------------------------------------------
+	// 10c. Recency prior: similarity ⊕ exponential-decay freshness, for
+	// time-sensitive corpora (RSS / Confluence KBs). Gated; default off.
+	// Fail-open — a files-table read error never fails the search.
+	// ------------------------------------------------------------------
+	if n := s.applyRecencyPrior(ctx, kbID, fused, siteCfg); n > 0 {
+		stageLog = append(stageLog, "recency_boost_applied", n)
 	}
 
 	// ------------------------------------------------------------------

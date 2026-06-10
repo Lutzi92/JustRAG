@@ -27,11 +27,17 @@ export const ContentModal: React.FC<ContentModalProps> = ({
     const { t } = useTheme();
     const [audioUrl, setAudioUrl] = React.useState<string | null>(null);
 
+    // Narrowed before the effect so the dependency is a stable primitive.
+    const podcastStreamId = selectedContent?.type === 'podcast' &&
+        (selectedContent.content.filePath || selectedContent.content.audioPath)
+        ? selectedContent.id
+        : null;
+
     React.useEffect(() => {
         let cancelled = false;
 
-        if (selectedContent?.type === 'podcast' && (selectedContent.content.filePath || selectedContent.content.audioPath)) {
-            axios.get(`${API_BASE_URL}/api/generated-content/${selectedContent.id}/stream`, {
+        if (podcastStreamId) {
+            axios.get(`${API_BASE_URL}/api/generated-content/${podcastStreamId}/stream`, {
                 responseType: 'blob',
             }).then(response => {
                 if (cancelled) return;
@@ -53,7 +59,7 @@ export const ContentModal: React.FC<ContentModalProps> = ({
                 return null;
             });
         };
-    }, [selectedContent?.id, selectedContent?.type]);
+    }, [podcastStreamId, t, toast]);
 
     if (!show || !selectedContent) return null;
 
@@ -147,9 +153,8 @@ export const ContentModal: React.FC<ContentModalProps> = ({
     };
 
     return (
-        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions, jsx-a11y/no-noninteractive-element-interactions
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '800px', width: '90%' }} role="dialog" aria-modal="true" aria-labelledby="content-modal-title">
+        <div className="modal-overlay" role="presentation" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+            <div className="modal-content" style={{ maxWidth: '800px', width: '90%' }} role="dialog" aria-modal="true" aria-labelledby="content-modal-title">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <h3 id="content-modal-title" style={{ margin: 0 }}>{selectedContent.title}</h3>
                     <div style={{ display: 'flex', gap: '8px' }}>
@@ -371,6 +376,7 @@ export const ContentModal: React.FC<ContentModalProps> = ({
                                     borderRadius: '8px',
                                     border: '1px solid var(--border-color)',
                                 }}>
+                                    {/* eslint-disable-next-line jsx-a11y/media-has-caption -- generated TTS audio, no captions available */}
                                     <audio
                                         controls
                                         style={{ width: '100%', marginBottom: '0.5rem' }}

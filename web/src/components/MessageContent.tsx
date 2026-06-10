@@ -83,7 +83,7 @@ function addCitationRefs(content: string, sources?: MessageSource[], suspect?: M
     // turns that synthesize across several chunks — listed their sources but
     // left the inline marker as plain text with no click handler.
     safe = safe.replace(
-        /(?<![`\[])\\?\[\s*(\d{1,3}(?:\s*,\s*\d{1,3})*)\s*\\?\](?!\()/g,
+        /(?<![`[])\\?\[\s*(\d{1,3}(?:\s*,\s*\d{1,3})*)\s*\\?\](?!\()/g,
         (_match, group: string) => {
             // Collapse indices in this marker that resolve to the same file.
             // The model often cites several chunks of one document in a single
@@ -239,9 +239,12 @@ const REHYPE_PLUGINS: import('unified').PluggableList = [rehypeRaw, [rehypeSanit
 function buildMarkdownComponents(language: 'de' | 'en') {
     const loadingChartLabel = language === 'en' ? 'Loading chart...' : 'Lade Diagramm...';
     return {
-        img: ({ node: _node, ...props }: React.ComponentProps<'img'> & ExtraProps) => (
-            <img {...props} alt={props.alt || ''} loading="lazy" style={{ maxWidth: '100%', height: 'auto' }} />
-        ),
+        img: (imgProps: React.ComponentProps<'img'> & ExtraProps) => {
+            // Strip the react-markdown AST `node` so it isn't spread onto the DOM element.
+            const { node, ...props } = imgProps;
+            void node;
+            return <img {...props} alt={props.alt || ''} loading="lazy" style={{ maxWidth: '100%', height: 'auto' }} />;
+        },
         code({ inline, className, children, ...props }: React.HTMLAttributes<HTMLElement> & { inline?: boolean; node?: unknown }) {
             const match = /language-(\w+)/.exec(className || '');
             return !inline && match ? (

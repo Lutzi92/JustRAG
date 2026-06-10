@@ -43,7 +43,7 @@ export function useSharing({ username }: UseSharingParams) {
     } finally {
       setShareLoading(false);
     }
-  }, [shareUserId, t]);
+  }, [shareUserId, t, toast]);
 
   const confirmShare = useCallback(async () => {
     if (!sharingKb || !shareTargetUser) return;
@@ -61,7 +61,7 @@ export function useSharing({ username }: UseSharingParams) {
     } finally {
       setShareLoading(false);
     }
-  }, [sharingKb, shareTargetUser, sharePermission, t]);
+  }, [sharingKb, shareTargetUser, sharePermission, t, toast]);
 
   const copyUserId = useCallback(() => {
     if (username) {

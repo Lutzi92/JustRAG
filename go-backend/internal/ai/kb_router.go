@@ -26,6 +26,36 @@ type kbRouterResponse struct {
 	Matches []KBRouterMatch `json:"matches"`
 }
 
+// kbRouterSpec is the Structured-Outputs contract for RouteKB, matching
+// the {"matches":[...]} shape parseKBRouterJSON expects. kb_id stays a
+// free-form string (the candidate UUID list is dynamic per call);
+// hallucinated IDs are still filtered against the candidate allowlist
+// after parsing. parseKBRouterJSON stays tolerant for the json_object
+// fallback path.
+var kbRouterSpec = &StructuredSpec{
+	Name: "kb_router_matches",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"matches": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"kb_id": {"type": "string"},
+						"confidence": {"type": "number"},
+						"reason": {"type": "string"}
+					},
+					"required": ["kb_id", "confidence", "reason"],
+					"additionalProperties": false
+				}
+			}
+		},
+		"required": ["matches"],
+		"additionalProperties": false
+	}`),
+}
+
 // RouteKB asks the LLM which KB(s) the query most likely belongs to.
 // Returns the matches in confidence-descending order. An empty list
 // signals "no plausible match" — the caller falls back to the
@@ -53,7 +83,7 @@ func RouteKB(ctx context.Context, resolver *ConfigResolver, query string, candid
 	sys := prompts.KBRouterSystemPrompt()
 	user := prompts.KBRouterUserPrompt(query, candidates)
 
-	res, err := resolver.completionFn(ctx, user, sys, kbID, modelOverride)
+	res, err := resolver.structuredCompletionFn(ctx, user, sys, kbID, modelOverride, kbRouterSpec)
 	if err != nil {
 		logctx.From(ctx).Warn("kb_router: completion failed", "error", err)
 		return nil, fmt.Errorf("kb_router: completion: %w", err)

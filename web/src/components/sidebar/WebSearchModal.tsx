@@ -80,6 +80,7 @@ const WebSearchModalComp: React.FC<WebSearchModalProps> = ({
                     onKeyDown={handleKeyDown}
                     aria-label={t('enterSearchTerm')}
                     className="sidebar-left__tools-input"
+                    // eslint-disable-next-line jsx-a11y/no-autofocus -- focus first field on dialog open (WAI-ARIA dialog pattern)
                     autoFocus
                 />
             ) : (
@@ -91,6 +92,7 @@ const WebSearchModalComp: React.FC<WebSearchModalProps> = ({
                     aria-label={t('enterTopic')}
                     className="sidebar-left__tools-input sidebar-left__tools-textarea"
                     style={{ opacity: webResearchRunning ? 0.6 : 1 }}
+                    // eslint-disable-next-line jsx-a11y/no-autofocus -- focus first field on dialog open (WAI-ARIA dialog pattern)
                     autoFocus
                 />
             )}

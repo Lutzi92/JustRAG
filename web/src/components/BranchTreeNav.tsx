@@ -274,7 +274,23 @@ export function BranchTreeNav({ messageTree, activeLeafId, onSelectBranch }: Bra
             }}>
             {isOpen && (
                 <div
+                    role="slider"
+                    aria-label={language === 'en' ? 'Resize branch tree' : 'Zweig-Baum-Breite ändern'}
+                    aria-orientation="vertical"
+                    aria-valuemin={200}
+                    aria-valuemax={600}
+                    aria-valuenow={width}
+                    tabIndex={0}
                     onMouseDown={startResizing}
+                    onKeyDown={(e) => {
+                        if (e.key === 'ArrowLeft') {
+                            e.preventDefault();
+                            setWidth(w => Math.min(600, w + 10));
+                        } else if (e.key === 'ArrowRight') {
+                            e.preventDefault();
+                            setWidth(w => Math.max(200, w - 10));
+                        }
+                    }}
                     style={{
                         position: 'absolute',
                         left: 0,

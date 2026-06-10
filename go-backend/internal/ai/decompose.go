@@ -2,10 +2,25 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/justrag/go-backend/internal/prompts"
 )
+
+// decomposeSpec is the Structured-Outputs contract for the query
+// decomposer. The prompt's contract is a bare JSON array of strings
+// (top-level array — vLLM guided_json accepts this; backends that
+// require an object root reject the strict schema and take the
+// json_object downgrade, where parseJSONStringArray's substring
+// extraction still finds the embedded array).
+var decomposeSpec = &StructuredSpec{
+	Name: "decompose_sub_queries",
+	Schema: json.RawMessage(`{
+		"type": "array",
+		"items": {"type": "string"}
+	}`),
+}
 
 // maxDecomposedSubQueries caps the LLM output the same way GenerateMultiQueries
 // caps multi-query output. Beyond ~4 sub-questions the retrieval gain plateaus
@@ -39,7 +54,7 @@ func GenerateSubQueries(ctx context.Context, resolver *ConfigResolver, query, kb
 // resolver's ChatModel. Wire fast-tier resolution at the call site via
 // chat.ResolveFastTierModel(ctx, reader, "query_decompose_model").
 func GenerateSubQueriesWithModel(ctx context.Context, resolver *ConfigResolver, query, kbID, lang, modelOverride string) ([]string, error) {
-	result, err := GenerateCompletionWithModel(ctx, resolver, query, prompts.DecomposeQueryPrompt(lang), kbID, false, modelOverride)
+	result, err := GenerateCompletionStructured(ctx, resolver, query, prompts.DecomposeQueryPrompt(lang), kbID, modelOverride, decomposeSpec)
 	if err != nil {
 		return nil, err
 	}

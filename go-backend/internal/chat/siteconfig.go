@@ -640,6 +640,20 @@ func ChatContextCompressionEnabled(ctx context.Context, reader SiteConfigReader)
 	return readBool(ctx, reader, "chat_context_compression_enabled", false)
 }
 
+// ChatSufficientContextEnabled gates the Q2 sufficient-context
+// abstention gate: one fast-tier LLM call between context assembly
+// and generation asking whether the assembled chunk set as a WHOLE
+// suffices to answer (Google ICLR 2025 "sufficient context";
+// complements per-chunk CRAG grading). On "insufficient" the
+// existing abstain plumbing fires. Model resolves via
+// ResolveFastTierModel("chat_sufficient_context_model"). Default:
+// off — adds one fast-tier LLM call per standard-path turn;
+// validate abstain rates on the golden set before flipping on.
+// Tunable via "chat_sufficient_context_enabled".
+func ChatSufficientContextEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_sufficient_context_enabled", false)
+}
+
 // ChatContextCompressionMinChunks is the chunk-count threshold
 // below which the compressor skips — small candidate pools rarely
 // have drop-able distractors and aren't worth the LLM call. Range

@@ -41,6 +41,55 @@ type SelfRAGResult struct {
 	Usefulness    UsefulnessVerdict `json:"isuse"`
 }
 
+// selfRAGSpec is the Structured-Outputs contract for VerifySelfRAG,
+// matching the prompt's three-verdict shape. All three enums mirror
+// the prompt's closed vocabularies; normaliseSelfRAGResult still
+// coerces drift on the json_object fallback path.
+var selfRAGSpec = &StructuredSpec{
+	Name: "self_rag_verdicts",
+	Schema: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"isrel": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"n": {"type": "integer"},
+						"verdict": {"type": "string", "enum": ["relevant", "partially_relevant", "irrelevant"]}
+					},
+					"required": ["n", "verdict"],
+					"additionalProperties": false
+				}
+			},
+			"issup": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"claim_text": {"type": "string"},
+						"reason": {"type": "string", "enum": ["unsupported", "contradicted", "out_of_scope"]},
+						"cited_n": {"type": "integer"}
+					},
+					"required": ["claim_text", "reason", "cited_n"],
+					"additionalProperties": false
+				}
+			},
+			"isuse": {
+				"type": "object",
+				"properties": {
+					"verdict": {"type": "string", "enum": ["yes", "partial", "no"]},
+					"reason": {"type": "string"}
+				},
+				"required": ["verdict", "reason"],
+				"additionalProperties": false
+			}
+		},
+		"required": ["isrel", "issup", "isuse"],
+		"additionalProperties": false
+	}`),
+}
+
 // VerifySelfRAG runs the AP-D2 unified verifier. Replaces the
 // legacy VerifyFactuality call when chat_self_rag_enabled is on
 // — feeds the same FlaggedClaim slice into the refine gate,
@@ -64,7 +113,7 @@ func VerifySelfRAG(ctx context.Context, resolver *ConfigResolver, question, answ
 	sys := prompts.SelfRAGSystemPrompt(lang)
 	user := prompts.SelfRAGUserPrompt(question, answer, sourcesBlock)
 
-	res, err := resolver.completionFn(ctx, user, sys, kbID, modelOverride)
+	res, err := resolver.structuredCompletionFn(ctx, user, sys, kbID, modelOverride, selfRAGSpec)
 	if err != nil {
 		observability.RecordSelfRAG("error")
 		logctx.From(ctx).Warn("self_rag: completion failed", "error", err)

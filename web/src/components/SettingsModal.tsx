@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import type { KnowledgeBase, SafeAIConfig } from '../types';
 import { useTheme } from '../contexts/ThemeContext';
@@ -11,23 +11,15 @@ interface SettingsModalProps {
     onUpdateSettings: (data: Record<string, unknown>) => void;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({
-    show, onClose, currentKb, availableConfigs, onUpdateSettings
+const SettingsModalContent: React.FC<Omit<SettingsModalProps, 'show'>> = ({
+    onClose, currentKb, availableConfigs, onUpdateSettings
 }) => {
     const { t } = useTheme();
     const [systemPrompt, setSystemPrompt] = useState(currentKb?.systemPrompt || '');
 
-    // Sync local state when KB changes
-    useEffect(() => {
-        setSystemPrompt(currentKb?.systemPrompt || '');
-    }, [currentKb?.id, currentKb?.systemPrompt]);
-
-    if (!show) return null;
-
     return (
-        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions, jsx-a11y/no-noninteractive-element-interactions
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '600px' }} role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+        <div className="modal-overlay" role="presentation" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+            <div className="modal-content" style={{ maxWidth: '600px' }} role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <h3 id="settings-modal-title" style={{ margin: 0 }}>{t('settingsTitle')}: {currentKb?.name}</h3>
                     <button onClick={onClose} className="icon-button" aria-label={t('closeSettings')}><X size={20} /></button>
@@ -168,4 +160,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
         </div>
     );
+};
+
+export const SettingsModal: React.FC<SettingsModalProps> = ({ show, ...rest }) => {
+    if (!show) return null;
+    // Key on the KB id so local edit state resets when a different KB is opened.
+    return <SettingsModalContent key={rest.currentKb?.id ?? 'none'} {...rest} />;
 };

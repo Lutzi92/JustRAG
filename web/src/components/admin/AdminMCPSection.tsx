@@ -138,7 +138,7 @@ function ServerCard({ s }: { s: ServerStatus }) {
 export default function AdminMCPSection({ siteConfigs, setSiteConfigs }: AdminMCPSectionProps) {
     const [status, setStatus] = useState<StatusResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
     const [reloading, setReloading] = useState(false);
     // Local editor state. Initialized from siteConfigs.mcp_servers; written
     // back to siteConfigs on every keystroke so the parent's "Save settings"
@@ -146,9 +146,9 @@ export default function AdminMCPSection({ siteConfigs, setSiteConfigs }: AdminMC
     const [editor, setEditor] = useState(siteConfigs.mcp_servers ?? '[]');
     const [editorErr, setEditorErr] = useState<string | null>(null);
 
+    // No synchronous setState here: `loading` starts true (initial load) and is
+    // flipped on by the Refresh button's handler before re-invoking this.
     const fetchStatus = useCallback(() => {
-        setLoading(true);
-        setError(null);
         authFetch(`${API_BASE_URL}/api/admin/mcp/status`)
             .then(async r => {
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -158,6 +158,12 @@ export default function AdminMCPSection({ siteConfigs, setSiteConfigs }: AdminMC
             .catch(e => setError(String(e)))
             .finally(() => setLoading(false));
     }, []);
+
+    const refreshStatus = useCallback(() => {
+        setLoading(true);
+        setError(null);
+        fetchStatus();
+    }, [fetchStatus]);
 
     const reload = useCallback(() => {
         setReloading(true);
@@ -247,7 +253,7 @@ export default function AdminMCPSection({ siteConfigs, setSiteConfigs }: AdminMC
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <button
                         type="button"
-                        onClick={fetchStatus}
+                        onClick={refreshStatus}
                         disabled={loading || reloading}
                         style={{
                             background: 'transparent', color: 'var(--text-primary)',

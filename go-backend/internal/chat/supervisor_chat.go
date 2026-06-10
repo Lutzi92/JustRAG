@@ -31,6 +31,14 @@ type SupervisorChatParams struct {
 	// HyPESearch enables the HyPE query-time arm on this orchestrator's
 	// initial search (resolved from hype_search_enabled at dispatch).
 	HyPESearch bool
+	// SufficientContextEnabled enables the Q2 sufficient-context
+	// abstention gate on the assembled specialist context. Resolved by
+	// the caller from chat_sufficient_context_enabled (the supervisor
+	// has no SiteConfigReader — flags arrive pre-resolved, same pattern
+	// as MultiSpecialist). SufficientContextModel carries the resolved
+	// fast-tier model override. False (default) skips the gate.
+	SufficientContextEnabled bool
+	SufficientContextModel   string
 	// MultiSpecialist routes through Supervisor.RunMulti instead of the
 	// single-specialist Run: on enumeration intent the retriever and
 	// enumerator dispatch in parallel and their results merge via RRF.
@@ -135,13 +143,30 @@ func runSupervisorChatTestable(
 
 	sources, contextText := buildChatSourcesAndContext(accumulated)
 
+	// Q2 sufficient-context gate, same contract as the standard path in
+	// PrepareChatContext (see the comment there). The supervisor is the
+	// production orchestrator, so the gate matters most here: the
+	// specialist's chunks can be individually relevant yet jointly
+	// insufficient. Fail-open inside JudgeContextSufficiency.
+	abstain := false
+	if params.SufficientContextEnabled {
+		if !ai.JudgeContextSufficiency(ctx, aiResolver, params.KbID, params.Query, contextText, params.Language, params.SufficientContextModel) {
+			abstain = true
+			logctx.From(ctx).Info("rag.sufficient_context.abstain",
+				"chunks_in_context", len(accumulated), "kb_id", params.KbID, "orchestrator", "supervisor")
+		}
+	}
+
 	var sb strings.Builder
 	if params.KbSystemPrompt != "" {
 		sb.WriteString(params.KbSystemPrompt)
 		sb.WriteString("\n\n")
 	}
 	sb.WriteString(prompts.ChatSystemPrompt(params.Language))
-	if IsLowConfidence(accumulated) {
+	switch {
+	case abstain:
+		sb.WriteString(prompts.ChatAbstainNotice(params.Language))
+	case IsLowConfidence(accumulated):
 		sb.WriteString(prompts.ChatLowConfidenceNotice(params.Language))
 	}
 	if res.Notes != "" {
@@ -156,5 +181,6 @@ func runSupervisorChatTestable(
 		Sources:      sources,
 		Context:      contextText,
 		FinalChunks:  accumulated,
+		Abstain:      abstain,
 	}, nil
 }

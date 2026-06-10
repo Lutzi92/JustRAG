@@ -374,7 +374,17 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             <div
                                 key={item.id}
                                 className={`source-card ${selectedItem?.id === item.id ? 'active' : ''}`}
+                                role="button"
+                                tabIndex={0}
                                 onClick={() => setSelectedItem(item)}
+                                onKeyDown={(e) => {
+                                    // Ignore keys bubbling from the nested delete button.
+                                    if (e.target !== e.currentTarget) return;
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        setSelectedItem(item);
+                                    }
+                                }}
                                 style={{
                                     cursor: 'pointer',
                                     border: selectedItem?.id === item.id ? '1px solid var(--accent-primary)' : undefined,
@@ -590,7 +600,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     alignItems: 'center',
                     justifyContent: 'center',
                     zIndex: 1000
-                }} onClick={() => setShowAnalysisModal(false)}>
+                }}
+                    // Backdrop click-to-close is a mouse convenience redundant with the
+                    // modal's close button; only clicks on the backdrop itself dismiss.
+                    role="presentation"
+                    onClick={(e) => { if (e.target === e.currentTarget) setShowAnalysisModal(false); }}
+                >
                     <div style={{
                         background: 'var(--bg-primary)',
                         padding: '2rem',
@@ -599,7 +614,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                         maxWidth: '90%',
                         boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
                         border: '1px solid var(--border-color)'
-                    }} onClick={e => e.stopPropagation()}>
+                    }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
                             <h3 style={{ margin: 0 }}>{t('deepAnalysis')}</h3>
                             <button onClick={() => setShowAnalysisModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
@@ -647,6 +662,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                 color: 'var(--text-primary)',
                                 resize: 'none'
                             }}
+                            // eslint-disable-next-line jsx-a11y/no-autofocus -- focus first field on dialog open (WAI-ARIA dialog pattern)
                             autoFocus
                         />
 

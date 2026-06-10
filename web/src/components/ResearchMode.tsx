@@ -173,14 +173,18 @@ export default function ResearchMode({ kbId, onClose, loadedSession, onSessionSa
         hideFindings: 'Erkenntnisse ausblenden',
     };
 
-    // Cleanup on unmount
+    // Cleanup on unmount. The ref objects (not their .current values) are
+    // captured up front; .current must still be read at cleanup time because
+    // the controller/source are created after mount.
     useEffect(() => {
+        const abortRef = abortControllerRef;
+        const sourceRef = eventSourceRef;
         return () => {
-            if (abortControllerRef.current) {
-                abortControllerRef.current.abort();
+            if (abortRef.current) {
+                abortRef.current.abort();
             }
-            if (eventSourceRef.current) {
-                eventSourceRef.current.close();
+            if (sourceRef.current) {
+                sourceRef.current.close();
             }
         };
     }, []);
