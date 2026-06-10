@@ -7,6 +7,12 @@ export interface SSEParserOptions {
   onParseError?: (error: unknown, rawData: string) => void;
   /** Return true to abort processing (e.g., stale request check) */
   isStale?: () => boolean;
+  /**
+   * Reject (and cancel the reader) when no bytes arrive for this many ms.
+   * Guards against a silently hung server keeping the stream open forever.
+   * Undefined or 0 disables the watchdog.
+   */
+  idleTimeoutMs?: number;
 }
 
 /**
@@ -20,14 +26,38 @@ export async function parseSseStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   options: SSEParserOptions
 ): Promise<void> {
-  const { onEvent, onDone, onParseError, isStale } = options;
+  const { onEvent, onDone, onParseError, isStale, idleTimeoutMs } = options;
+
+  // Wrap reader.read() in an idle watchdog when requested. On timeout the
+  // underlying stream is cancelled (tearing down the HTTP connection) and
+  // the returned promise rejects; the still-pending read settling later is
+  // harmless because a promise only settles once.
+  const read = (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    if (!idleTimeoutMs) return reader.read();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reader.cancel().catch(() => {});
+        reject(new Error(`SSE stream idle for ${idleTimeoutMs}ms; connection aborted`));
+      }, idleTimeoutMs);
+      reader.read().then(
+        (result) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+        (err: unknown) => {
+          clearTimeout(timer);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      );
+    });
+  };
 
   const decoder = new TextDecoder();
   let buffer = '';
   let streamDone = false;
 
   while (!streamDone) {
-    const { done, value } = await reader.read();
+    const { done, value } = await read();
 
     if (done) {
       // Flush any remaining bytes from the decoder

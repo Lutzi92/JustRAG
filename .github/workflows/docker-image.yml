@@ -36,13 +36,46 @@ jobs:
             type=sha,prefix=
             type=raw,value=latest
 
+      # Buildx is required for the SBOM/provenance attestations below — the
+      # default docker driver silently ignores them.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Attach SBOM + minimal provenance attestations to the pushed image
+          # (inspectable via `docker buildx imagetools inspect <ref> --format
+          # '{{ json .SBOM }}'`).
+          sbom: true
+          provenance: mode=min
+
+      - name: Compute lowercase image ref for scanning
+        id: scanref
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: echo "ref=${IMAGE,,}@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      # Fails the workflow on fixable CRITICAL vulnerabilities in the pushed
+      # image. The image is already in the registry at this point — the gate
+      # is an alert, not a publish block; rollback is `keep-n-tagged` below.
+      - name: Scan image for critical vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.scanref.outputs.ref }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute lowercase package name
         id: pkg

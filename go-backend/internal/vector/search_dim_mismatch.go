@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/justrag/go-backend/internal/logctx"
+	"github.com/justrag/go-backend/internal/observability"
 )
 
 // shouldWarnDimMismatch reports whether to emit a dimension-mismatch warning:
@@ -82,15 +83,33 @@ func (s *SearchService) checkDimMismatch(ctx context.Context, tableName, kbID st
 	return ""
 }
 
-// warnDimMismatch checks for a dimension mismatch and logs a rate-limited
+// warnDimMismatch checks for a dimension mismatch, logs a rate-limited
 // warning the first time a given (kbID, tableName) pair is seen with a
-// mismatch. Called immediately after tableName is derived from the query
-// embedding dimension.
+// mismatch, and increments rag_search_dim_mismatch_total on EVERY search
+// against a pair known to be mismatched — the log is the diagnostic, the
+// metric is the alertable rate. Called immediately after tableName is
+// derived from the query embedding dimension.
+//
+// The probe verdict is cached per (kbID, tableName) for the process
+// lifetime, so a KB re-ingested under the matching dimension stops
+// counting only after a restart — acceptable for what is an
+// operator-error signal, and it keeps the hot path at one DB probe per
+// pair.
 func (s *SearchService) warnDimMismatch(ctx context.Context, tableName, kbID string, dimensions int) {
-	if _, seen := s.dimWarnOnce.LoadOrStore(kbID+":"+tableName, struct{}{}); seen {
+	key := kbID + ":" + tableName
+	if v, seen := s.dimWarnOnce.Load(key); seen {
+		if mismatch, ok := v.(bool); ok && mismatch {
+			observability.RecordSearchDimMismatch()
+		}
 		return
 	}
-	if detail := s.checkDimMismatch(ctx, tableName, kbID); detail != "" {
+	detail := s.checkDimMismatch(ctx, tableName, kbID)
+	// Plain Store (not LoadOrStore): a concurrent first-search race at worst
+	// runs the probe twice and logs twice — harmless, and both store the
+	// same verdict.
+	s.dimWarnOnce.Store(key, detail != "")
+	if detail != "" {
+		observability.RecordSearchDimMismatch()
 		logctx.From(ctx).Warn("search: query embedding dimension may not match indexed corpus",
 			"dimensions", dimensions, "table", tableName, "detail", detail)
 	}

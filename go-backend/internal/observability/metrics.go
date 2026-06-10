@@ -390,6 +390,19 @@ var (
 		},
 		[]string{"arm"},
 	)
+
+	searchDimMismatchTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "rag_search_dim_mismatch_total",
+			Help: "Searches that targeted an empty dim-keyed chunk table while another " +
+				"chunk table holds rows for the same KB — i.e. the query embedder's " +
+				"dimension no longer matches the dimension the corpus was indexed " +
+				"under. Every affected search increments this; a sustained rate means " +
+				"users are silently getting zero results and the KB needs a re-ingest " +
+				"(see the dim-mismatch warning log for kb_id/table detail).",
+			ConstLabels: commonLabels,
+		},
+	)
 )
 
 // RecordVectorSearch records one vector-search SQL invocation.
@@ -410,6 +423,13 @@ func RecordMRLTwoPassUsed() {
 // dashboard signal, the log carries the error and query context.
 func RecordKeywordSearchFailed(arm string) {
 	keywordSearchFailedTotal.WithLabelValues(arm).Inc()
+}
+
+// RecordSearchDimMismatch increments the embedder/corpus dimension-mismatch
+// counter. Unlike the once-per-(kb,table) log warning, this fires on every
+// affected search so the mismatch shows up as a rate on dashboards.
+func RecordSearchDimMismatch() {
+	searchDimMismatchTotal.Inc()
 }
 
 // --- Reranker health --------------------------------------------------------
@@ -475,6 +495,19 @@ var (
 		},
 		[]string{"task_type"},
 	)
+
+	workerTaskExhaustedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "worker_task_exhausted_total",
+			Help: "Asynq tasks that failed their final retry and were moved to " +
+				"the asynq archive (dead-letter set in Redis), labeled by " +
+				"task_type. Archived tasks are inspectable via the asynq CLI / " +
+				"Inspector; a non-zero rate warrants looking at the matching " +
+				"'task exhausted retries' error logs.",
+			ConstLabels: commonLabels,
+		},
+		[]string{"task_type"},
+	)
 )
 
 // RecordWorkerTask is the worker package's single point of telemetry emission
@@ -489,6 +522,12 @@ func RecordWorkerTask(taskType, status string, duration time.Duration) {
 	}
 	workerTaskTotal.WithLabelValues(taskType, status).Inc()
 	workerTaskDuration.WithLabelValues(taskType).Observe(duration.Seconds())
+}
+
+// RecordWorkerTaskExhausted increments the retry-exhaustion counter for a
+// task type. Called from the asynq ErrorHandler on the final failed attempt.
+func RecordWorkerTaskExhausted(taskType string) {
+	workerTaskExhaustedTotal.WithLabelValues(taskType).Inc()
 }
 
 // WorkerTaskTotalForTest exposes the worker task counter to other test
@@ -755,6 +794,18 @@ var queryCacheWriteDroppedTotal = promauto.NewCounter(
 	},
 )
 
+var queryCacheDimSkippedTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "rag_query_cache_dim_skipped_total",
+		Help: "Query-cache lookups/stores skipped because the query embedding's " +
+			"dimension does not match the fixed vector(2560) query_cache column " +
+			"(migration 0011). A sustained rate means the deployment's embedder " +
+			"changed dimension and the cache is effectively disabled until the " +
+			"query_cache table is rebuilt for the new dimension.",
+		ConstLabels: commonLabels,
+	},
+)
+
 var QueryCacheSize = promauto.NewGauge(
 	prometheus.GaugeOpts{
 		Name:        "rag_query_cache_size",
@@ -786,6 +837,10 @@ func RecordQueryCacheInvalidation() {
 
 func RecordQueryCacheWriteDropped() {
 	queryCacheWriteDroppedTotal.Inc()
+}
+
+func RecordQueryCacheDimSkipped() {
+	queryCacheDimSkippedTotal.Inc()
 }
 
 // --- RAGAS sampling (Phase 3 §G) ------------------------------------------

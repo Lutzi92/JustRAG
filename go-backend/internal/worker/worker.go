@@ -1,12 +1,15 @@
 package worker
 
 import (
+	"context"
 	"runtime"
 	"time"
 
 	"github.com/hibiken/asynq"
 
 	"github.com/justrag/go-backend/internal/jobs"
+	"github.com/justrag/go-backend/internal/logctx"
+	"github.com/justrag/go-backend/internal/observability"
 )
 
 // Default queue priorities.
@@ -71,8 +74,33 @@ func NewServer(cfg ServerConfig) *asynq.Server {
 			// handlers to return before forcibly cancelling. 30s matches the
 			// k8s preStop terminationGracePeriodSeconds we target.
 			ShutdownTimeout: 30 * time.Second,
+			ErrorHandler:    asynq.ErrorHandlerFunc(handleTaskError),
 		},
 	)
+}
+
+// handleTaskError is the asynq server-level error hook, called after every
+// failed handler invocation (including the final one before the task is
+// moved to the asynq archive). Per-task handlers already log their own
+// errors; this hook exists so retry EXHAUSTION is loud — without it an
+// exhausted task lands in the Redis archive with no log line or metric
+// distinguishing "will retry" from "gone until an operator runs the asynq
+// CLI". File-processing tasks additionally mark their file status=error via
+// MarkErrorOnExhaustion; this hook covers every other task type too.
+func handleTaskError(ctx context.Context, task *asynq.Task, err error) {
+	retried, _ := asynq.GetRetryCount(ctx)
+	maxRetry, _ := asynq.GetMaxRetry(ctx)
+	queue, _ := asynq.GetQueueName(ctx)
+	if retried >= maxRetry {
+		observability.RecordWorkerTaskExhausted(task.Type())
+		logctx.From(ctx).Error("worker: task exhausted retries, archived to asynq dead-letter set",
+			"task_type", task.Type(), "queue", queue,
+			"retried", retried, "max_retry", maxRetry, "error", err)
+		return
+	}
+	logctx.From(ctx).Warn("worker: task failed, will retry",
+		"task_type", task.Type(), "queue", queue,
+		"retried", retried, "max_retry", maxRetry, "error", err)
 }
 
 // NewClient creates an Asynq client for enqueuing jobs.

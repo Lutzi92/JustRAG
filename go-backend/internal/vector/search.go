@@ -293,11 +293,13 @@ type SearchService struct {
 	// an implicit 50/50 blend; the new default (1.0, pure reranker) is a
 	// silent behaviour change for those, so we surface it at runtime.
 	rerankDefaultNoticeOnce sync.Once
-	// dimWarnOnce rate-limits the dimension-mismatch warning to once per
+	// dimWarnOnce caches the dimension-mismatch probe verdict per
 	// (kbID, tableName) pair across the lifetime of this SearchService. Key
-	// is "<kbID>:<tableName>"; value is struct{}{}. sync.Map is chosen over a
-	// plain map+mutex because the hot path is a single LoadOrStore with no
-	// write contention once the key is populated.
+	// is "<kbID>:<tableName>"; value is bool (true = mismatch detected — the
+	// log warning fired once and every subsequent search increments
+	// rag_search_dim_mismatch_total). sync.Map is chosen over a plain
+	// map+mutex because the hot path is a single Load with no write
+	// contention once the key is populated.
 	dimWarnOnce sync.Map
 	// kbTableCache memoises kb_id → chunks-table-name for the AP-B1
 	// keyword_search / chunk_read / document_outline tools. Defined in

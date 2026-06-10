@@ -126,6 +126,12 @@ export function useChatStream({
       let enhancedShown = false;
 
       await parseSseStream(reader, {
+        // Watchdog against a silently hung server: orchestrators stream
+        // trajectory/token events steadily, but a single long LLM call can
+        // legitimately go quiet for tens of seconds — so the window is
+        // generous. On timeout the parser cancels the stream and throws,
+        // which the catch below surfaces as a generic chat error.
+        idleTimeoutMs: 120_000,
         isStale: () => requestIdRef.current !== thisRequestId,
         onParseError: (e) => { console.error('Error parsing SSE data:', e); },
         onEvent: (data: unknown) => {

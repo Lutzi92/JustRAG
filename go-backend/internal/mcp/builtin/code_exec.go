@@ -10,8 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/mcp"
 )
 
@@ -45,7 +47,7 @@ const codeExecInputSchema = `{
 // to docker; docker must have runsc registered as a runtime in
 // /etc/docker/daemon.json.
 type CodeExecConfig struct {
-	Image       string        // container image (operator overrides via chat_code_exec_image site_config)
+	Image       string        // container image; set at construction (no site_config override exists yet)
 	WallClock   time.Duration // cap on docker exec wall-clock; 10s default
 	MemoryMB    int           // memory limit; 256 default
 	CPUs        float64       // CPU limit; 1.0 default
@@ -150,9 +152,21 @@ func NewCodeExec(cfg CodeExecConfig, runner CodeExecRunner, enabled func(ctx con
 }
 
 func codeExecHandler(cfg CodeExecConfig, runner CodeExecRunner, enabled func(ctx context.Context) bool) mcp.ToolHandlerFunc {
+	var pinWarnOnce sync.Once
 	return func(ctx context.Context, raw json.RawMessage) (mcp.ToolResult, error) {
 		if !enabled(ctx) {
 			return mcp.ToolResult{}, fmt.Errorf("code_exec: disabled (site_config chat_code_exec_enabled=false)")
+		}
+		// The security recipe says the operator MUST digest-pin the sandbox
+		// image before enabling code_exec, but nothing enforces it — surface
+		// the gap once per process instead of failing, since a mutable tag
+		// is a supply-chain risk, not an immediate breakage. Checked only
+		// when the tool actually runs so disabled deployments stay silent.
+		if !strings.Contains(cfg.Image, "@sha256:") {
+			pinWarnOnce.Do(func() {
+				logctx.From(ctx).Warn("code_exec: sandbox image is not digest-pinned; pin to <image>@sha256:... in production",
+					"image", cfg.Image)
+			})
 		}
 		var args CodeExecArgs
 		if err := json.Unmarshal(raw, &args); err != nil {

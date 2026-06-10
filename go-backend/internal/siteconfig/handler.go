@@ -144,6 +144,23 @@ func (h *Handler) UpdateSiteConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Reject batches that would enable both halves of a documented
+	// mutually-exclusive flag pair (raptor vs parent-child, Self-RAG vs
+	// factuality verifier). Validation needs the merged view, so fetch the
+	// current table first; on fetch failure fall through to the save rather
+	// than blocking config writes on a read error — the runtime skip logic
+	// still guards against the incoherent combinations.
+	if existing, err := h.store.GetAllSiteConfigs(ctx); err == nil {
+		existingMap := make(map[string]*string, len(existing))
+		for _, row := range existing {
+			existingMap[row.Key] = row.Value
+		}
+		if err := ValidateConflicts(existingMap, kvs); err != nil {
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	rows, err := h.store.UpdateSiteConfigsBatch(ctx, kvs)
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "Failed to update site config")

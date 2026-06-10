@@ -198,4 +198,48 @@ describe('parseSseStream', () => {
 
     expect(events).toEqual([{ chunk: 1 }, { chunk: 2 }, { chunk: 3 }]);
   });
+
+  it('should cancel the reader and reject when the stream goes idle past idleTimeoutMs', async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn(async () => {});
+      const reader = {
+        // A read that never resolves — silent server hang.
+        read: vi.fn(() => new Promise(() => {})),
+        cancel,
+        releaseLock: vi.fn(),
+        closed: Promise.resolve(undefined),
+      } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+
+      const result = parseSseStream(reader, {
+        onEvent: vi.fn(),
+        idleTimeoutMs: 5000,
+      });
+      const expectation = expect(result).rejects.toThrow(/idle/i);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await expectation;
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('should not time out while data keeps arriving', async () => {
+    const reader = createMockReader([
+      'data: {"a":1}\n',
+      'data: {"a":2}\ndata: [DONE]\n',
+    ]);
+    const events: unknown[] = [];
+    const onDone = vi.fn();
+
+    await parseSseStream(reader, {
+      onEvent: (data) => events.push(data),
+      onDone,
+      idleTimeoutMs: 5000,
+    });
+
+    expect(events).toEqual([{ a: 1 }, { a: 2 }]);
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
 });

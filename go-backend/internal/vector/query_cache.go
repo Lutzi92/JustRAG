@@ -48,6 +48,39 @@ type QueryCache struct {
 
 	writeCh atomic.Pointer[chan queryCacheWrite]
 	once    sync.Once
+	// dimSkipWarnOnce gates the one-shot operator warning emitted when a
+	// query embedding's dimension doesn't match the fixed query_cache
+	// column (see queryCacheDims). The per-event signal is the
+	// rag_query_cache_dim_skipped_total counter.
+	dimSkipWarnOnce sync.Once
+}
+
+// queryCacheDims is the dimension of the query_cache.query_embedding
+// column — fixed at vector(2560) by migration 0011 (sized for the
+// Qwen3-Embedding-4B deployment the cache shipped under). Embeddings of
+// any other dimension can be neither stored nor compared: the
+// ::halfvec(2560) cast raises a pgvector dimension error, which used to
+// surface only as a swallowed per-lookup error and a per-write warn log.
+// Lookup/Store skip the cache outright for mismatched dimensions and
+// record rag_query_cache_dim_skipped_total so the silent-disable is
+// visible on dashboards. Rebuilding the cache for a new embedder
+// dimension requires recreating the query_cache table + HNSW index at
+// that dimension.
+const queryCacheDims = 2560
+
+// dimSupported reports whether emb can be used against the fixed-dim
+// query_cache column; on mismatch it records the skip metric and emits a
+// one-shot warning.
+func (c *QueryCache) dimSupported(ctx context.Context, emb []float64) bool {
+	if len(emb) == queryCacheDims {
+		return true
+	}
+	observability.RecordQueryCacheDimSkipped()
+	c.dimSkipWarnOnce.Do(func() {
+		logctx.From(ctx).Warn("query_cache: embedding dimension does not match query_cache column; cache disabled for this embedder",
+			"embedding_dims", len(emb), "column_dims", queryCacheDims)
+	})
+	return false
 }
 
 type queryCacheWrite struct {
@@ -134,6 +167,9 @@ func (c *QueryCache) processWrite(ctx context.Context, w queryCacheWrite) {
 // pgvector `<=>` operator returns cosine DISTANCE in [0, 2]. The hit
 // criterion is `distance <= 1 - threshold`.
 func (c *QueryCache) Lookup(ctx context.Context, kbID string, hash []byte, embedding []float64, threshold float64) (resultJSON []byte, hit bool, distance float64, err error) {
+	if !c.dimSupported(ctx, embedding) {
+		return nil, false, 0, nil
+	}
 	start := time.Now()
 	defer func() { observability.QueryCacheLookupSeconds.Observe(time.Since(start).Seconds()) }()
 
@@ -177,6 +213,9 @@ func (c *QueryCache) Lookup(ctx context.Context, kbID string, hash []byte, embed
 // writeCh is still nil), Store falls back to a synchronous insert so
 // integration tests can drive the cache deterministically.
 func (c *QueryCache) Store(ctx context.Context, kbID string, hash []byte, embedding []float64, queryText string, result []byte, ttl time.Duration) error {
+	if !c.dimSupported(ctx, embedding) {
+		return nil
+	}
 	w := queryCacheWrite{kbID: kbID, hash: hash, embedding: embedding, queryText: queryText, result: result, ttl: ttl}
 	chPtr := c.writeCh.Load()
 	if chPtr == nil {
