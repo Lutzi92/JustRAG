@@ -371,7 +371,7 @@ func (p *Processor) runTabularMaterializer(ctx context.Context, filePath, fileNa
 // standard embedding batch size + cache. file_id ties the chunks to the file so
 // cascade-delete / re-ingest clean them up with no extra code.
 func (p *Processor) embedTabularRowChunks(ctx context.Context, fileID, kbID string, sheets []tabular.SheetResult, pgConfig string) error {
-	const embeddingBatchSize = 20
+	embeddingBatchSize := resolveEmbeddingBatchSize(ctx, p.siteConfigReader)
 	type pending struct {
 		content string
 		table   string
@@ -516,6 +516,27 @@ func resolveLateChunkingMaxInputTokens(ctx context.Context, reader SiteConfigRea
 		return def
 	}
 	n, err := strconv.Atoi(*val)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
+}
+
+// resolveEmbeddingBatchSize is the number of chunks sent per embedding
+// API call (site_config `embedding_batch_size`). This is the main
+// throughput knob for bulk re-ingests — which every embedder change
+// requires — so it is operator-tunable like the other ingestion knobs.
+// Default 20; non-positive or unparsable values fall back to it.
+func resolveEmbeddingBatchSize(ctx context.Context, reader SiteConfigReader) int {
+	const def = 20
+	if reader == nil {
+		return def
+	}
+	val, err := reader.GetSiteConfigValue(ctx, "embedding_batch_size")
+	if err != nil || val == nil || *val == "" {
+		return def
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(*val))
 	if err != nil || n <= 0 {
 		return def
 	}
@@ -787,7 +808,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// stages overlap: embedding can start as soon as a batch-worth of
 	// enriched chunks is ready, while remaining chunks are still being
 	// enriched.
-	const embeddingBatchSize = 20
+	embeddingBatchSize := resolveEmbeddingBatchSize(ctx, p.siteConfigReader)
 	const maxEnrichConcurrency = 10
 	totalChunks := len(chunks)
 	processed := 0
@@ -1115,9 +1136,11 @@ func (p *Processor) runRaptorBuildStage(ctx context.Context, fileID, kbID, fileN
 //
 // Best-effort: per-chunk LLM failures log and skip; partial state is
 // fine because the storage layer is idempotent (entities dedupe on
-// (canonical_name, type), edges append). The whole stage runs
-// sequentially per chunk — parallelizing here would be a Phase-D
-// optimization once the eval gate has measured the baseline.
+// (canonical_name, type), edges append). LLM extraction runs with
+// bounded concurrency (the document-prefix prompt cache still hits
+// after the first calls seed it); persistence stays serial because
+// persistKGExtraction upserts overlapping entity sets in one
+// transaction — concurrent persists could deadlock on row locks.
 //
 // Dimensions resolution: probe each known dim table for any row of
 // this fileID. The first hit wins. Cheap because ListChunkTableDimensions
@@ -1155,18 +1178,41 @@ func (p *Processor) runKGExtractionStage(ctx context.Context, fileID, kbID, file
 	// form ("german") would silently miss the de branch.
 	store := newKGStore(p.mainDB)
 
-	totalCreated, totalDeduped, totalEdges := 0, 0, 0
-	for _, c := range chunks {
+	// Extract in parallel (LLM-bound, ~all of the stage's wall-clock),
+	// then persist serially below. nil slot = extraction failed/skipped.
+	const maxKGExtractConcurrency = 4
+	exts := make([]*ai.KGExtraction, len(chunks))
+	var extractWg sync.WaitGroup
+	sem := make(chan struct{}, maxKGExtractConcurrency)
+	for i, c := range chunks {
 		if ctx.Err() != nil {
 			break
 		}
-		ext, err := ai.ExtractKG(ctx, p.aiResolver, fileName, document, c.Content, kbID, lang, model)
-		if err != nil {
-			logctx.From(ctx).Warn("kg extraction: chunk extract failed; skipping chunk",
-				"fileId", fileID, "chunkId", c.ID, "error", err)
+		sem <- struct{}{}
+		extractWg.Add(1)
+		safego.GoCtx(ctx, func() {
+			defer extractWg.Done()
+			defer func() { <-sem }()
+			ext, err := ai.ExtractKG(ctx, p.aiResolver, fileName, document, c.Content, kbID, lang, model)
+			if err != nil {
+				logctx.From(ctx).Warn("kg extraction: chunk extract failed; skipping chunk",
+					"fileId", fileID, "chunkId", c.ID, "error", err)
+				return
+			}
+			exts[i] = &ext
+		})
+	}
+	extractWg.Wait()
+
+	totalCreated, totalDeduped, totalEdges := 0, 0, 0
+	for i, c := range chunks {
+		if ctx.Err() != nil {
+			break
+		}
+		if exts[i] == nil {
 			continue
 		}
-		created, deduped, edges, err := store.persistKGExtraction(ctx, kbID, c.ID, ext)
+		created, deduped, edges, err := store.persistKGExtraction(ctx, kbID, c.ID, *exts[i])
 		if err != nil {
 			logctx.From(ctx).Warn("kg extraction: persist failed; skipping chunk",
 				"fileId", fileID, "chunkId", c.ID, "error", err)
@@ -1339,7 +1385,7 @@ func (p *Processor) runParentChildIngest(
 	// contextual_prefix (folded into both the embedding input and the
 	// stored row so the BM25 tsvector picks it up — see the long Step B
 	// comment for why this is critical).
-	const embeddingBatchSize = 20
+	embeddingBatchSize := resolveEmbeddingBatchSize(ctx, p.siteConfigReader)
 	type pendingChild struct {
 		text     string
 		parentID string

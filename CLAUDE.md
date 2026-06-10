@@ -16,7 +16,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `query_decompose_*` — sub-question decomposition (DecomposeRAG)
 - `bm25_simple_arm_enabled`, `bm25_tiered_boost_enabled` — BM25 keyword-arm tuning
 - `hybrid_dynamic_alpha_*` — per-query α shift from BPE-token rarity
-- `contextual_enrichment*`, `parent_child_*`, `docling_*`, `late_chunking_*` — ingestion
+- `contextual_enrichment*`, `parent_child_*`, `docling_*`, `late_chunking_*`, `embedding_batch_size` — ingestion
 - `raptor_*` — per-file RAPTOR hierarchical summary trees (`raptor_clustering_algorithm` selects kmeans vs leiden)
 - `chat_tabular_*`, `tabular_semantic_*` — structured spreadsheet Q&A + fuzzy free-text-cell search + charts/pivots (Phase 1/2/3; `chat_tabular_charts_enabled` is the Phase-3 flag)
 - `ragas_*`, `factcheck_*`, `citation_validation_*`, `langfuse_*` — validation + observability

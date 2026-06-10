@@ -190,6 +190,36 @@ func TestResolveEnrichmentEnabled_NilReader(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// resolveEmbeddingBatchSize tests
+// ---------------------------------------------------------------------------
+
+func TestResolveEmbeddingBatchSize_Default(t *testing.T) {
+	r := &fakeSiteConfigReader{values: map[string]*string{}}
+	if got := resolveEmbeddingBatchSize(context.Background(), r); got != 20 {
+		t.Fatalf("expected default 20 when key is absent, got %d", got)
+	}
+	if got := resolveEmbeddingBatchSize(context.Background(), nil); got != 20 {
+		t.Fatalf("expected default 20 when reader is nil, got %d", got)
+	}
+}
+
+func TestResolveEmbeddingBatchSize_FromConfig(t *testing.T) {
+	r := &fakeSiteConfigReader{values: map[string]*string{"embedding_batch_size": strPtr(" 50 ")}}
+	if got := resolveEmbeddingBatchSize(context.Background(), r); got != 50 {
+		t.Fatalf("expected 50, got %d", got)
+	}
+}
+
+func TestResolveEmbeddingBatchSize_InvalidFallsBack(t *testing.T) {
+	for _, bad := range []string{"0", "-3", "abc", ""} {
+		r := &fakeSiteConfigReader{values: map[string]*string{"embedding_batch_size": strPtr(bad)}}
+		if got := resolveEmbeddingBatchSize(context.Background(), r); got != 20 {
+			t.Errorf("value %q: expected fallback 20, got %d", bad, got)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // resolveEnrichmentModel tests
 // ---------------------------------------------------------------------------
 

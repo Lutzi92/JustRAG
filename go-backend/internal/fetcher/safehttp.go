@@ -3,6 +3,7 @@ package fetcher
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -23,14 +24,25 @@ func ValidateURL(ctx context.Context, rawURL string) error {
 //
 // timeout is the full request lifecycle deadline (Client.Timeout). The
 // internal dialTimeout is fixed at 5s to match the fetcher tier-1 default.
+//
+// All callers share one Transport (built once below): the SSRF check lives
+// in safeDialContext, which re-resolves the host on every dial and holds no
+// per-call state, so sharing is safe — and a per-call Transport would mean
+// zero connection reuse (every fetch pays TCP+TLS setup) plus idle conns
+// lingering until their idle timeout with nothing to reuse them.
 func SafeHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: safeTransport(),
+	}
+}
+
+// safeTransport lazily builds the single shared SSRF-safe Transport.
+var safeTransport = sync.OnceValue(func() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = safeDialContext(5 * time.Second)
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 20
 	transport.IdleConnTimeout = 90 * time.Second
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-	}
-}
+	return transport
+})

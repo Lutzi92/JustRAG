@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"io"
 	"os"
 	"strings"
 )
@@ -35,16 +36,19 @@ func (p *TextParser) CanParse(mimeType, fileName string) bool {
 	return true
 }
 
-// Parse reads the file at pctx.FilePath and returns its content as text,
-// truncating at TextMaxChars if necessary.
+// Parse reads the file at pctx.FilePath and returns its content as text.
+// Reads at most TextMaxChars bytes so a huge file (URL ingest and crawler
+// paths allow up to 100 MB on disk) never gets buffered whole just to be
+// truncated — same pattern as the PDF parser's stdout LimitReader.
 func (p *TextParser) Parse(ctx context.Context, pctx ParseContext) (*ParseResult, error) {
-	data, err := os.ReadFile(pctx.FilePath)
+	f, err := os.Open(pctx.FilePath)
 	if err != nil {
 		return nil, err
 	}
-	text := string(data)
-	if len(text) > TextMaxChars {
-		text = text[:TextMaxChars]
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, int64(TextMaxChars)))
+	if err != nil {
+		return nil, err
 	}
-	return &ParseResult{Text: text}, nil
+	return &ParseResult{Text: string(data)}, nil
 }

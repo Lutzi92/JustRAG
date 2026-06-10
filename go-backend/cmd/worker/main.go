@@ -6,10 +6,6 @@ import (
 
 	"github.com/justrag/go-backend/internal/app"
 	"github.com/justrag/go-backend/internal/config"
-
-	// Aligns GOMAXPROCS with the cgroup CPU quota when running in a container,
-	// so the Go scheduler doesn't oversubscribe threads on a constrained host.
-	_ "go.uber.org/automaxprocs"
 )
 
 func main() {

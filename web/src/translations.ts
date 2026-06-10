@@ -923,6 +923,11 @@ export const translations = {
         de: 'Maximales Token-Budget (cl100k_base-Schätzung) pro Embedding-Aufruf. Dokumente, deren Chunks dieses Budget überschreiten, werden in aufeinanderfolgende Fenster aufgeteilt; kein Chunk wird zwischen Fenstern geteilt. Standard 8192 — auf das Kontextfenster des Embedders abstimmen.',
         en: 'Maximum token budget (cl100k_base estimate) per embedding call. Documents whose chunks exceed the budget are split into successive windows; no chunk is split across windows. Default 8192 — set to match the embedder context window.',
     },
+    embeddingBatchSize: { de: 'Embedding-Batchgröße', en: 'Embedding batch size' },
+    embeddingBatchSizeHelp: {
+        de: 'Anzahl der Chunks pro Embedding-API-Aufruf während der Ingestion. Der wichtigste Durchsatz-Regler für Massen-Re-Ingests (z. B. nach einem Embedder-Wechsel). Standard 20 — auf das Batch-Limit des Embedding-Anbieters abstimmen.',
+        en: "Number of chunks sent per embedding API call during ingestion. The main throughput knob for bulk re-ingests (e.g. after an embedder change). Default 20 — set to match the embedding provider's batch limit.",
+    },
     useKbDefaultModel: { de: 'KB-Standardmodell verwenden', en: "Use KB's default model" },
     factcheckInChat: { de: 'Antworten im Chat verifizieren', en: 'Verify answers in chat' },
     factcheckInChatHelp: { de: 'Führt eine Verifizierung jeder Antwort nach dem Streaming durch; das Ergebnis erscheint als Badge neben den Zitaten.', en: 'Runs a verification pass on every answer after streaming completes; the result appears as a badge next to citations.' },
