@@ -19,6 +19,52 @@ import (
 	"github.com/justrag/go-backend/internal/database"
 )
 
+// migrationLockKey is the pg advisory-lock key that serializes concurrent
+// migration runs against the same database (e.g. a scaled k8s rollout where
+// every replica runs cmd/migrate as an init container). Advisory locks are
+// scoped per database, so main and vector runs against separate DBs don't
+// contend. The value is arbitrary but fixed: ASCII "justragm".
+const migrationLockKey int64 = 0x6a7573747261676d
+
+// acquireMigrationLock takes a session-scoped advisory lock covering the
+// ENTIRE migration run. goose's own WithSessionLocker would lock only
+// provider.Up — the Drizzle / fresh-bootstrap / reconcile phases that run
+// before it mutate the goose tracking table and would still race.
+//
+// Advisory locks belong to a session, so the lock is held on a dedicated
+// *sql.Conn pinned for the duration; the returned release func unlocks and
+// returns the conn to the pool. Waiters block until the holder finishes,
+// then typically find the schema already migrated and no-op.
+func acquireMigrationLock(ctx context.Context, db *sql.DB) (release func(), err error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("advisory lock: acquire conn: %w", err)
+	}
+	// Try-then-block so the common uncontended path stays silent but a
+	// blocked run logs WHY it appears hung instead of stalling mutely.
+	var locked bool
+	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", migrationLockKey).Scan(&locked); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("advisory lock: try: %w", err)
+	}
+	if !locked {
+		slog.Info("another migration run holds the advisory lock; waiting")
+		if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("advisory lock: wait: %w", err)
+		}
+	}
+	return func() {
+		// Best-effort explicit unlock (detached from ctx so a cancelled run
+		// still releases promptly); closing the conn ends the session and
+		// releases the lock regardless.
+		if _, err := conn.ExecContext(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
+			slog.Warn("releasing migration advisory lock", "error", err)
+		}
+		conn.Close()
+	}, nil
+}
+
 // RunMain applies pending main-database migrations using goose.
 // It first bootstraps from Drizzle if needed, then runs goose.Up.
 func RunMain(ctx context.Context, cfg config.DBConfig, migrations fs.FS) error {
@@ -32,6 +78,12 @@ func RunMain(ctx context.Context, cfg config.DBConfig, migrations fs.FS) error {
 		return fmt.Errorf("migrate main: open db: %w", err)
 	}
 	defer db.Close()
+
+	release, err := acquireMigrationLock(ctx, db)
+	if err != nil {
+		return fmt.Errorf("migrate main: %w", err)
+	}
+	defer release()
 
 	if err := bootstrapFromDrizzle(ctx, db); err != nil {
 		return fmt.Errorf("migrate main: bootstrap: %w", err)
@@ -113,6 +165,12 @@ func RunVector(ctx context.Context, cfg config.DBConfig, migrations fs.FS) error
 		return fmt.Errorf("migrate vector: open db: %w", err)
 	}
 	defer db.Close()
+
+	release, err := acquireMigrationLock(ctx, db)
+	if err != nil {
+		return fmt.Errorf("migrate vector: %w", err)
+	}
+	defer release()
 
 	if err := bootstrapFromDrizzle(ctx, db); err != nil {
 		return fmt.Errorf("migrate vector: bootstrap: %w", err)

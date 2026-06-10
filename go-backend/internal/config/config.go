@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -347,6 +348,23 @@ func Load() (*Config, error) {
 		HealthCheckPeriod:  cfg.DB.HealthCheckPeriod,
 		ConnectAttempts:    cfg.DB.ConnectAttempts,
 	}
+
+	// Pool-sizing sanity: report nonsense values as clear env-var errors at
+	// startup instead of a confusing pgxpool failure downstream (or a silent
+	// overflow in BuildPoolConfig's int→int32 narrowing).
+	validatePoolSizing := func(prefix string, db DBConfig) {
+		if db.MaxConns < 1 || db.MaxConns > math.MaxInt32 {
+			errs = append(errs, fmt.Sprintf("%s_POOL_MAX=%d must be between 1 and %d", prefix, db.MaxConns, math.MaxInt32))
+		}
+		if db.MinConns < 0 || db.MinConns > math.MaxInt32 {
+			errs = append(errs, fmt.Sprintf("%s_POOL_MIN=%d must be between 0 and %d", prefix, db.MinConns, math.MaxInt32))
+		}
+		if db.MinConns > db.MaxConns {
+			errs = append(errs, fmt.Sprintf("%s_POOL_MIN=%d must not exceed %s_POOL_MAX=%d", prefix, db.MinConns, prefix, db.MaxConns))
+		}
+	}
+	validatePoolSizing("DB", cfg.DB)
+	validatePoolSizing("VECTOR_DB", cfg.VectorDB)
 
 	// Worker settings
 	if queues := os.Getenv("WORKER_QUEUES"); queues != "" {

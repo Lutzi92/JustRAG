@@ -72,6 +72,53 @@ func TestValidateSQLQuery_DenyTableOutsideAllowlist(t *testing.T) {
 	}
 }
 
+// TestValidateSQLQuery_DenyCommaJoin: comma-separated FROM lists must
+// reject. fromOrJoinRe only validates the identifier directly after
+// FROM/JOIN, so `FROM messages, knowledge_bases` would otherwise read a
+// non-allowlisted table — including via a derived-table prefix that ends
+// in `), other_table`.
+func TestValidateSQLQuery_DenyCommaJoin(t *testing.T) {
+	t.Parallel()
+	bad := []string{
+		"SELECT * FROM messages, knowledge_bases",
+		"SELECT * FROM messages m, knowledge_bases kb WHERE m.kb_id = kb.id",
+		"SELECT * FROM messages AS m, chats AS c",
+		"SELECT * FROM (SELECT id FROM messages) m, knowledge_bases kb",
+		"SELECT * FROM messages WHERE id IN (SELECT id FROM chats c, knowledge_bases kb)",
+	}
+	for _, q := range bad {
+		if err := validateSQLQuery(q, allowedTablesDefault); err == nil {
+			t.Errorf("expected reject, got nil for %q", q)
+		}
+	}
+}
+
+// TestValidateSQLQuery_AcceptLegitimateCommas: commas outside a FROM
+// table list (select list, IN lists, function args, GROUP/ORDER BY,
+// string literals) must NOT trip the comma-join rejection.
+func TestValidateSQLQuery_AcceptLegitimateCommas(t *testing.T) {
+	t.Parallel()
+	good := []string{
+		"SELECT id, content, created_at FROM messages",
+		"SELECT * FROM messages WHERE id IN ('a', 'b', 'c')",
+		"SELECT coalesce(content, '') FROM messages",
+		"SELECT chat_id, count(*) FROM messages GROUP BY chat_id ORDER BY count(*) DESC, chat_id",
+		"SELECT m.id, c.title FROM messages m JOIN chats c ON m.chat_id = c.id",
+		// Comma inside a string literal within the FROM region (the ON
+		// clause): the scanner must skip literal contents. (A literal
+		// containing the word FROM would be false-rejected by the
+		// pre-existing fromOrJoinRe layer — separate, known limitation.)
+		"SELECT m.id FROM messages m JOIN chats c ON c.title = 'a, b'",
+		"SELECT (SELECT count(*) FROM chats), id FROM messages",
+		"SELECT * FROM messages UNION SELECT * FROM chats ORDER BY 1, 2",
+	}
+	for _, q := range good {
+		if err := validateSQLQuery(q, allowedTablesDefault); err != nil {
+			t.Errorf("expected accept, got error for %q: %v", q, err)
+		}
+	}
+}
+
 // TestValidateSQLQuery_DenyMultiStatement covers the smuggle path
 // where an LLM appends a second statement after `;`.
 func TestValidateSQLQuery_DenyMultiStatement(t *testing.T) {

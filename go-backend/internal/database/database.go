@@ -246,7 +246,7 @@ func ConnectReadOnly(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	// already applied that value, so only clamp to our default when the DSN
 	// did not specify one. Without this guard the override is silently
 	// discarded.
-	if !strings.Contains(dsn, "pool_max_conns") {
+	if !dsnHasPoolMaxConns(dsn) {
 		poolCfg.MaxConns = 4
 	}
 	poolCfg.MinConns = 0
@@ -283,6 +283,29 @@ func ConnectReadOnly(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("ping read-only pool: %w", err)
 	}
 	return pool, nil
+}
+
+// dsnHasPoolMaxConns reports whether the operator's DSN explicitly sets
+// pool_max_conns, in either URL form (postgres://…?pool_max_conns=8) or
+// keyword/value form (`host=… pool_max_conns=8`). A plain substring check
+// would also fire on the parameter name appearing inside a password or
+// other value; parsing the params avoids that false positive.
+func dsnHasPoolMaxConns(dsn string) bool {
+	if strings.Contains(dsn, "://") {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			// ParseConfig accepted the DSN, so this should not happen;
+			// fall back to the conservative substring check.
+			return strings.Contains(dsn, "pool_max_conns")
+		}
+		return u.Query().Has("pool_max_conns")
+	}
+	for f := range strings.FieldsSeq(dsn) {
+		if strings.HasPrefix(f, "pool_max_conns=") {
+			return true
+		}
+	}
+	return false
 }
 
 func (db *DB) Close() {

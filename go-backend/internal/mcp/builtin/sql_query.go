@@ -233,15 +233,114 @@ func validateReadOnlyShape(q string) error {
 	return nil
 }
 
+// fromClauseTerminators are the keywords that end a FROM clause's table
+// list when they appear at the clause's own parenthesis depth. JOIN/ON/
+// USING are deliberately absent — they continue the table-reference
+// context, and any commas they legitimately contain (USING (a, b), row
+// comparisons in ON) sit inside parentheses at a deeper depth.
+var fromClauseTerminators = map[string]bool{
+	"where": true, "group": true, "having": true, "order": true,
+	"limit": true, "offset": true, "fetch": true, "for": true,
+	"union": true, "except": true, "intersect": true, "window": true,
+}
+
+// rejectFromListComma rejects comma-separated table lists in FROM clauses
+// (`FROM a, b`). fromOrJoinRe validates only the identifier immediately
+// after FROM/JOIN, so a comma-join would smuggle a non-allowlisted second
+// table past the allowlist — including via a derived table:
+// `FROM (SELECT … FROM messages) m, knowledge_bases kb`. Rather than try
+// to extract every comma-joined table name, the syntax is rejected
+// outright; the error reaches the LLM, which rewrites with an explicit
+// JOIN (equivalent semantics, and the JOIN keyword re-anchors the regex).
+//
+// Mechanism: a single-pass scan tracking parenthesis depth. FROM at depth
+// d opens a clause region at d; the region closes when depth drops below d
+// or a terminator keyword appears at d. A comma at the region's own depth
+// is a comma-join. Commas at deeper depth (function args, IN lists,
+// subquery select lists) and commas outside any FROM region (select list,
+// GROUP/ORDER BY) are untouched. Single-quoted literals and double-quoted
+// identifiers are skipped so their contents can't corrupt depth tracking;
+// comment markers are already rejected by validateReadOnlyShape.
+func rejectFromListComma(q string) error {
+	isWordByte := func(c byte) bool {
+		return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+	}
+	depth := 0
+	var fromStack []int // depths with an open FROM table list
+	for i := 0; i < len(q); {
+		switch c := q[i]; {
+		case c == '\'': // string literal; '' is an escaped quote
+			i++
+			for i < len(q) {
+				if q[i] == '\'' {
+					if i+1 < len(q) && q[i+1] == '\'' {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+		case c == '"': // quoted identifier
+			i++
+			for i < len(q) && q[i] != '"' {
+				i++
+			}
+			if i < len(q) {
+				i++
+			}
+		case c == '(':
+			depth++
+			i++
+		case c == ')':
+			depth--
+			for len(fromStack) > 0 && fromStack[len(fromStack)-1] > depth {
+				fromStack = fromStack[:len(fromStack)-1]
+			}
+			i++
+		case c == ',':
+			if len(fromStack) > 0 && fromStack[len(fromStack)-1] == depth {
+				return fmt.Errorf("comma-separated table lists in FROM are not allowed; use an explicit JOIN ... ON instead")
+			}
+			i++
+		case isWordByte(c):
+			j := i
+			for j < len(q) && isWordByte(q[j]) {
+				j++
+			}
+			switch word := strings.ToLower(q[i:j]); {
+			case word == "from":
+				if len(fromStack) == 0 || fromStack[len(fromStack)-1] != depth {
+					fromStack = append(fromStack, depth)
+				}
+			case fromClauseTerminators[word]:
+				if len(fromStack) > 0 && fromStack[len(fromStack)-1] == depth {
+					fromStack = fromStack[:len(fromStack)-1]
+				}
+			}
+			i = j
+		default:
+			i++
+		}
+	}
+	return nil
+}
+
 // validateSQLQuery applies the string-level allowlist rules.
 //  1. Must start with SELECT (case-insensitive, after whitespace).
 //  2. No `;` outside trailing whitespace — single statement only.
 //  3. No `--` or `/*` comment markers (would let the LLM hide
 //     denylisted keywords inside a comment).
 //  4. No denylisted DDL/DML keywords (whole-word match).
-//  5. Every FROM/JOIN target must be in the allowlist.
+//  5. No comma-separated FROM lists (every table must be introduced by
+//     FROM or JOIN so rule 6 sees it).
+//  6. Every FROM/JOIN target must be in the allowlist.
 func validateSQLQuery(q string, allow map[string]bool) error {
 	if err := validateReadOnlyShape(q); err != nil {
+		return err
+	}
+	if err := rejectFromListComma(q); err != nil {
 		return err
 	}
 	matches := fromOrJoinRe.FindAllStringSubmatch(strings.TrimSpace(q), -1)

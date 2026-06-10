@@ -165,3 +165,35 @@ func TestVectorDBFallsBackToMainDB(t *testing.T) {
 		t.Errorf("expected VectorDB.User to fall back to main DB user, got %s", cfg.VectorDB.User)
 	}
 }
+
+func TestPoolSizingValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantErr bool
+	}{
+		{"max zero rejected", map[string]string{"DB_POOL_MAX": "0"}, true},
+		{"max negative rejected", map[string]string{"DB_POOL_MAX": "-1"}, true},
+		{"min negative rejected", map[string]string{"DB_POOL_MIN": "-1"}, true},
+		{"min above max rejected", map[string]string{"DB_POOL_MAX": "4", "DB_POOL_MIN": "8"}, true},
+		{"max above int32 rejected", map[string]string{"DB_POOL_MAX": "2147483648"}, true},
+		{"vector min above max rejected", map[string]string{"VECTOR_DB_POOL_MAX": "2", "VECTOR_DB_POOL_MIN": "10"}, true},
+		{"min equals max accepted", map[string]string{"DB_POOL_MAX": "8", "DB_POOL_MIN": "8"}, false},
+		{"min zero accepted", map[string]string{"DB_POOL_MIN": "0"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("JWT_SECRET", "test-secret-that-is-at-least-32-characters-long")
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			_, err := config.Load()
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected validation error for %v, got nil", tc.env)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error for %v: %v", tc.env, err)
+			}
+		})
+	}
+}
