@@ -152,6 +152,8 @@ func (s *Supervisor) RunMulti(ctx context.Context, in Input) (SupervisorResult, 
 			defer wg.Done()
 			defer safego.RecoverError(&results[i].err)
 
+			// Per-specialist timeout; intentionally layers UNDER any parent
+			// deadline on ctx — whichever expires first cancels the dispatch.
 			dispatchCtx, cancel := context.WithTimeout(ctx, SupervisorTimeout)
 			defer cancel()
 

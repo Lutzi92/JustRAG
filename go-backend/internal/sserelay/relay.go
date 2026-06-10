@@ -93,6 +93,7 @@ func (r *Relay) Run(ctx context.Context, w http.ResponseWriter, opts Options) er
 			asynq.NewTask(opts.JobType, opts.JobPayload),
 			asynq.Queue(jobs.QueueQuick),
 			asynq.MaxRetry(1),
+			asynq.Timeout(jobs.TimeoutFor(opts.JobType)),
 		)
 		if err != nil {
 			return err

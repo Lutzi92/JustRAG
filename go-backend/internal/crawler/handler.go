@@ -127,7 +127,7 @@ func (h *Handler) Crawl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task := asynq.NewTask(jobs.TypeCrawl, payloadBytes)
-	info, err := h.asynq.Enqueue(task, asynq.Queue(jobs.QueueQuick))
+	info, err := h.asynq.Enqueue(task, asynq.Queue(jobs.QueueQuick), asynq.Timeout(jobs.TimeoutFor(jobs.TypeCrawl)))
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to enqueue crawl job")
 		return

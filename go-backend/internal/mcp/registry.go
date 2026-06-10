@@ -188,8 +188,11 @@ func (r *Registry) snapshotBuiltinNames() map[string]struct{} {
 }
 
 // List returns every tool the KB can call: built-ins ∪ per-KB ∪
-// global-remote. Returned slice is a snapshot — callers may mutate it
-// without locking.
+// global-remote. The returned slice is a snapshot — callers may reorder,
+// filter, or append to it without locking. The copy is SHALLOW: the Tool
+// values share reference fields (notably InputSchema's json.RawMessage
+// backing array) with the registry, so callers must not mutate a Tool's
+// fields in place — replace the whole element instead.
 func (r *Registry) List(kbID string) []Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

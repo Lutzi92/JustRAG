@@ -424,10 +424,11 @@ func (s *ChunkService) ListChunkTableDimensions(ctx context.Context) ([]int, err
 // DeleteChunksByFileIDAllDims deletes chunks for fileID from every existing
 // chunk table in parallel. Each dim is a separate table so the DELETEs don't
 // contend; len(dims) is small (typically 1-3, capped by the number of
-// production embedding dimensions ever used on this deployment), so no
-// concurrency cap is needed. errgroup returns the first error and cancels the
-// rest — matches the previous "join all errors" intent closely enough: any
-// failure means the caller must retry the whole fileID anyway, since a
+// production embedding dimensions ever used on this deployment). SetLimit(8)
+// is insurance against a pathological deployment with many historic dims —
+// it never binds in practice. errgroup returns the first error and cancels
+// the rest — matches the previous "join all errors" intent closely enough:
+// any failure means the caller must retry the whole fileID anyway, since a
 // half-deleted file is the same problem either way.
 func (s *ChunkService) DeleteChunksByFileIDAllDims(ctx context.Context, fileID string) error {
 	dims, err := s.ListChunkTableDimensions(ctx)
@@ -435,8 +436,8 @@ func (s *ChunkService) DeleteChunksByFileIDAllDims(ctx context.Context, fileID s
 		return err
 	}
 	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
 	for _, d := range dims {
-		d := d
 		g.Go(func() error {
 			return s.DeleteChunksByFileID(gctx, fileID, d)
 		})
@@ -456,8 +457,8 @@ func (s *ChunkService) DeleteChunksByFileIDsAllDims(ctx context.Context, fileIDs
 		return err
 	}
 	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
 	for _, d := range dims {
-		d := d
 		g.Go(func() error {
 			return s.DeleteChunksByFileIDs(gctx, fileIDs, d)
 		})

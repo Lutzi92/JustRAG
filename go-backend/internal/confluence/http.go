@@ -341,6 +341,7 @@ func (h *Handler) CreateSource(w http.ResponseWriter, r *http.Request) {
 				asynq.NewTask(jobs.TypeConfluenceSync, payload),
 				asynq.Queue(jobs.QueueHeavy),
 				asynq.MaxRetry(3),
+				asynq.Timeout(jobs.TimeoutFor(jobs.TypeConfluenceSync)),
 			); enqErr != nil {
 				slog.Error("failed to enqueue initial confluence sync", "sourceId", source.ID, "error", enqErr)
 			}
@@ -512,6 +513,7 @@ func (h *Handler) TriggerSync(w http.ResponseWriter, r *http.Request) {
 				asynq.NewTask(jobs.TypeConfluenceSync, payload),
 				asynq.Queue(jobs.QueueHeavy),
 				asynq.MaxRetry(3),
+				asynq.Timeout(jobs.TimeoutFor(jobs.TypeConfluenceSync)),
 			); enqErr != nil {
 				slog.Error("failed to enqueue confluence sync", "sourceId", sourceID, "error", enqErr)
 				httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to trigger sync")

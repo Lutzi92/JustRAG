@@ -125,6 +125,7 @@ func NewRSSPollHandler(deps RSSPollDeps) asynq.HandlerFunc {
 				asynq.NewTask(jobs.TypeFileProcessing, jobPayload),
 				asynq.Queue(jobs.QueueQuick),
 				asynq.MaxRetry(3),
+				asynq.Timeout(jobs.TimeoutFor(jobs.TypeFileProcessing)),
 			); enqErr != nil {
 				// Roll back: remove the orphaned file record and storage blob
 				// so the next poll can retry this item cleanly.

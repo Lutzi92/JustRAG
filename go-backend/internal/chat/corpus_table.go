@@ -88,29 +88,37 @@ func RunCorpusTableChat(
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	doneCount := 0
+queue:
 	for i, f := range files {
+		// Cancellation-aware acquire: a cancelled request must not keep
+		// queueing the remaining files just to have each goroutine fail —
+		// matches the semaphore idiom in multipass.go / vector/search.go.
+		// Unqueued files leave their rows[i] nil; the nil filter below drops
+		// them.
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break queue
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		// Go 1.22+ per-iteration loop vars: capturing i, f directly is safe.
 		// safego.GoCtx takes (ctx context.Context, fn func()) — use it so
 		// panic recoveries carry the request-scoped logger fields.
-		iCap := i
-		fCap := f
 		safego.GoCtx(ctx, func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			text := assembleFileText(ctx, chunkReader, params.KbID, fCap.FileID, dims)
-			vals := ai.ExtractCorpusRow(ctx, aiResolver, params.Query, fCap.FileName, text, extractCols, params.KbID, params.Language, params.Model)
-			row := TableRow{"_file_id": fCap.FileID, "_file_name": fCap.FileName, "_source_idx": iCap + 1}
+			text := assembleFileText(ctx, chunkReader, params.KbID, f.FileID, dims)
+			vals := ai.ExtractCorpusRow(ctx, aiResolver, params.Query, f.FileName, text, extractCols, params.KbID, params.Language, params.Model)
+			row := TableRow{"_file_id": f.FileID, "_file_name": f.FileName, "_source_idx": i + 1}
 			for k, v := range vals {
 				row[k] = v
 			}
 			for _, c := range cols {
 				if c.DeriveFrom == "filename" {
-					row[c.Key] = deriveFarmIDFromFilename(fCap.FileName)
+					row[c.Key] = deriveFarmIDFromFilename(f.FileName)
 				}
 			}
-			rows[iCap] = row
+			rows[i] = row
 			mu.Lock()
 			doneCount++
 			emit(map[string]any{"tableProgress": map[string]any{"done": doneCount, "total": len(files)}})

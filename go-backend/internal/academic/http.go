@@ -466,6 +466,7 @@ func (h *Handler) downloadAndStorePaper(
 			asynq.NewTask(jobs.TypeFileProcessing, payload),
 			asynq.Queue(jobs.QueueQuick),
 			asynq.MaxRetry(3),
+			asynq.Timeout(jobs.TimeoutFor(jobs.TypeFileProcessing)),
 		); enqErr != nil {
 			return fmt.Errorf("enqueue file processing: %w", enqErr)
 		}

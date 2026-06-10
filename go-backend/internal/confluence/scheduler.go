@@ -114,6 +114,7 @@ func (s *ConfluenceScheduler) enqueueSync(sourceID string) error {
 		asynq.NewTask(jobs.TypeConfluenceSync, payload),
 		asynq.Queue(jobs.QueueHeavy),
 		asynq.MaxRetry(3),
+		asynq.Timeout(jobs.TimeoutFor(jobs.TypeConfluenceSync)),
 	)
 	if err != nil {
 		slog.Error("failed to enqueue Confluence sync", "sourceId", sourceID, "error", err)

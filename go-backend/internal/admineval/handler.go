@@ -162,6 +162,13 @@ var snapshotConfigKeys = []string{
 	"chat_graph_routing_inject_chunks",
 	"raptor_enabled",
 	"parent_child_enabled",
+	// Corpus-table structured extraction (registry keys; cross-checked by
+	// snapshot_registry_test.go like the Plan-1 block above).
+	"chat_corpus_table_enabled",
+	"chat_corpus_table_max_files",
+	"chat_corpus_table_concurrency",
+	"chat_corpus_table_model",
+	"chat_corpus_table_router_llm_enabled",
 }
 
 // ---------------------------------------------------------------------------

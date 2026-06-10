@@ -204,6 +204,7 @@ func (h *Handler) CreateRSSFeed(w http.ResponseWriter, r *http.Request) {
 			asynq.NewTask(jobs.TypeRSSPoll, payload),
 			asynq.Queue(jobs.QueueHeavy),
 			asynq.MaxRetry(3),
+			asynq.Timeout(jobs.TimeoutFor(jobs.TypeRSSPoll)),
 		); enqErr != nil {
 			// Non-fatal: the scheduled poll will eventually pick it up.
 			slog.Error("failed to enqueue initial RSS poll", "feedId", feed.ID, "error", enqErr)
@@ -375,6 +376,7 @@ func (h *Handler) TriggerPoll(w http.ResponseWriter, r *http.Request) {
 			asynq.NewTask(jobs.TypeRSSPoll, payload),
 			asynq.Queue(jobs.QueueHeavy),
 			asynq.MaxRetry(3),
+			asynq.Timeout(jobs.TimeoutFor(jobs.TypeRSSPoll)),
 		); enqErr != nil {
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to enqueue poll job")
 			return

@@ -44,6 +44,7 @@ func (h *Handler) enqueueRAGASSample(
 		asynq.NewTask(jobs.TypeRAGASSample, body),
 		asynq.Queue(jobs.QueueBatch),
 		asynq.MaxRetry(1),
+		asynq.Timeout(jobs.TimeoutFor(jobs.TypeRAGASSample)),
 	); err != nil {
 		logctx.From(ctx).Warn("ragas_sample: enqueue failed", "error", err)
 	}

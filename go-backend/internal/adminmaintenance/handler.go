@@ -138,6 +138,7 @@ func (h *Handler) ReembedAll(w http.ResponseWriter, r *http.Request) {
 				asynq.NewTask(jobs.TypeReEmbedding, payload),
 				asynq.Queue(jobs.QueueHeavy),
 				asynq.MaxRetry(3),
+				asynq.Timeout(jobs.TimeoutFor(jobs.TypeReEmbedding)),
 			); err != nil {
 				slog.Warn("reembed-all: enqueue failed", "fileId", f.ID, "error", err)
 				continue
@@ -172,6 +173,7 @@ func (h *Handler) ReembedUserMemory(w http.ResponseWriter, r *http.Request) {
 			asynq.NewTask(jobs.TypeReEmbedUserMemory, payload),
 			asynq.Queue(jobs.QueueHeavy),
 			asynq.MaxRetry(3),
+			asynq.Timeout(jobs.TimeoutFor(jobs.TypeReEmbedUserMemory)),
 		); err != nil {
 			slog.Warn("reembed-user-memory: enqueue failed", "userId", uid, "error", err)
 			continue

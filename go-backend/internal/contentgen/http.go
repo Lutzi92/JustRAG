@@ -400,7 +400,7 @@ func (h *Handler) GeneratePodcast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task := asynq.NewTask(jobs.TypeContentGeneration, payloadBytes)
-	info, err := h.asynq.Enqueue(task, asynq.Queue(jobs.QueueHeavy))
+	info, err := h.asynq.Enqueue(task, asynq.Queue(jobs.QueueHeavy), asynq.Timeout(jobs.TimeoutFor(jobs.TypeContentGeneration)))
 	if err != nil {
 		slog.Error("failed to enqueue podcast job", "error", err)
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to enqueue podcast generation")

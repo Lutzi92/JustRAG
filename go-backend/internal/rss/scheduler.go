@@ -110,6 +110,7 @@ func (s *Scheduler) enqueuePoll(feedID string) error {
 		asynq.NewTask(jobs.TypeRSSPoll, payload),
 		asynq.Queue(jobs.QueueHeavy),
 		asynq.MaxRetry(3),
+		asynq.Timeout(jobs.TimeoutFor(jobs.TypeRSSPoll)),
 	)
 	if err != nil {
 		slog.Error("failed to enqueue RSS poll", "feedId", feedID, "error", err)

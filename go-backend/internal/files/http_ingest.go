@@ -314,6 +314,7 @@ func (h *Handler) AddTextSource(w http.ResponseWriter, r *http.Request) {
 			asynq.NewTask(jobs.TypeFileProcessing, payload),
 			asynq.Queue(jobs.QueueQuick),
 			asynq.MaxRetry(3),
+			asynq.Timeout(jobs.TimeoutFor(jobs.TypeFileProcessing)),
 		); enqErr != nil {
 			slog.Error("failed to enqueue text processing job", "error", enqErr)
 			// Compensating cleanup: the file row + blob would otherwise be an
@@ -549,6 +550,7 @@ func (h *Handler) FetchURL(w http.ResponseWriter, r *http.Request) {
 			asynq.NewTask(jobs.TypeURLProcessing, payload),
 			asynq.Queue(jobs.QueueHeavy),
 			asynq.MaxRetry(3),
+			asynq.Timeout(jobs.TimeoutFor(jobs.TypeURLProcessing)),
 		); enqErr != nil {
 			slog.Error("failed to enqueue URL processing job", "error", enqErr)
 			// Compensating cleanup: the file row + blob would otherwise be an
@@ -688,6 +690,7 @@ func (h *Handler) AddSources(w http.ResponseWriter, r *http.Request) {
 				asynq.NewTask(jobs.TypeFileProcessing, payload),
 				asynq.Queue(jobs.QueueQuick),
 				asynq.MaxRetry(3),
+				asynq.Timeout(jobs.TimeoutFor(jobs.TypeFileProcessing)),
 			); enqErr != nil {
 				slog.Error("failed to enqueue add-sources processing job", "fileId", fileRecord.ID, "error", enqErr)
 				// Compensating cleanup: the file row + blob would otherwise be an

@@ -566,6 +566,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 			asynq.NewTask(jobs.TypeFileProcessing, payload),
 			asynq.Queue(jobs.QueueQuick),
 			asynq.MaxRetry(3),
+			asynq.Timeout(jobs.TimeoutFor(jobs.TypeFileProcessing)),
 		); enqErr != nil {
 			slog.Error("failed to enqueue file processing job", "fileId", fileRecord.ID, "error", enqErr)
 			// Clean up the orphaned file and DB record so retries don't create duplicates.

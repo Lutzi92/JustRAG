@@ -8,21 +8,17 @@ import (
 	"github.com/pkoukk/tiktoken-go"
 )
 
-var (
-	tokenizer     *tiktoken.Tiktoken
-	tokenizerOnce sync.Once
-)
-
-func initTokenizer() {
-	tokenizerOnce.Do(func() {
-		enc, err := tiktoken.EncodingForModel("gpt-4")
-		if err != nil {
-			slog.Warn("failed to initialize tiktoken tokenizer, falling back to char estimation", "error", err)
-			return
-		}
-		tokenizer = enc
-	})
-}
+// getTokenizer lazily initializes the shared tiktoken encoder exactly once.
+// Returns nil when initialization failed — callers fall back to char-based
+// estimation (CountTokens) or "no signal" (EncodeBPE).
+var getTokenizer = sync.OnceValue(func() *tiktoken.Tiktoken {
+	enc, err := tiktoken.EncodingForModel("gpt-4")
+	if err != nil {
+		slog.Warn("failed to initialize tiktoken tokenizer, falling back to char estimation", "error", err)
+		return nil
+	}
+	return enc
+})
 
 // CountTokens returns the token count for text using tiktoken (cl100k_base).
 // Falls back to len(text)/4 if the tokenizer is unavailable.
@@ -30,9 +26,8 @@ func CountTokens(text string) int {
 	if text == "" {
 		return 0
 	}
-	initTokenizer()
-	if tokenizer != nil {
-		return len(tokenizer.Encode(text, nil, nil))
+	if tok := getTokenizer(); tok != nil {
+		return len(tok.Encode(text, nil, nil))
 	}
 	return utf8.RuneCountInString(text) / 4
 }
@@ -48,9 +43,9 @@ func EncodeBPE(text string) []int {
 	if text == "" {
 		return nil
 	}
-	initTokenizer()
-	if tokenizer == nil {
+	tok := getTokenizer()
+	if tok == nil {
 		return nil
 	}
-	return tokenizer.Encode(text, nil, nil)
+	return tok.Encode(text, nil, nil)
 }
