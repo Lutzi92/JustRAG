@@ -452,7 +452,7 @@ func (h *Handler) FetchURL(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Validate URL (scheme + SSRF check).
 	if err := validateURL(r.Context(), req.URL); err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, httputil.SanitizeError(err))
 		return
 	}
 

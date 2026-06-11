@@ -97,7 +97,7 @@ func (h *Handler) PutSettings(w http.ResponseWriter, r *http.Request) {
 
 	var req putRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid JSON: "+httputil.SanitizeError(err))
 		return
 	}
 	if len(req.Configs) == 0 {
@@ -109,7 +109,7 @@ func (h *Handler) PutSettings(w http.ResponseWriter, r *http.Request) {
 	kv := make(map[string]*string, len(req.Configs))
 	for k, v := range req.Configs {
 		if err := siteconfig.Validate(k, v); err != nil {
-			httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, err.Error())
+			httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, httputil.SanitizeError(err))
 			return
 		}
 		val := v

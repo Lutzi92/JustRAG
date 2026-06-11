@@ -334,7 +334,7 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// ------------------------------------------------------------------
 	kbID, err := extractKBID(body.Model)
 	if err != nil {
-		writeAPIError(ctx, w, http.StatusBadRequest, err.Error())
+		writeAPIError(ctx, w, http.StatusBadRequest, httputil.SanitizeError(err))
 		return
 	}
 
@@ -547,7 +547,7 @@ func (h *Handler) streamResponse(
 			"kbId", kbID,
 		)
 		errPayload, _ := json.Marshal(apiError{Error: apiErrorDetail{
-			Message: err.Error(),
+			Message: httputil.SanitizeError(err),
 			Type:    "internal_error",
 			Code:    "stream_failed",
 		}})

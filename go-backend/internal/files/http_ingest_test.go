@@ -3,7 +3,6 @@ package files_test
 import (
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -160,41 +159,12 @@ func mockHTTPTarget(t *testing.T, body, contentType string) *httptest.Server {
 	}))
 }
 
-// isLocalhost returns true when net.LookupIP resolves to a loopback address.
-// Used to skip tests that require real DNS when running in CI.
-func isLocalhostTestSkip(t *testing.T) bool {
-	t.Helper()
-	ips, err := net.LookupIP("localhost")
-	if err != nil {
-		return false
-	}
-	for _, ip := range ips {
-		if ip.IsLoopback() {
-			return true
-		}
-	}
-	return false
-}
-
 func TestFetchURL_Valid(t *testing.T) {
 	// Start a local server.
 	target := mockHTTPTarget(t, "<html>hello</html>", "text/html")
 	defer target.Close()
 
-	kb := defaultKB()
-	store := &mockStore{
-		kb: kb,
-		createFile: &files.FileRecord{
-			ID:        "file-url-1",
-			KbID:      "kb-1",
-			Name:      "fetched",
-			Type:      "text/html",
-			Size:      intPtr(20),
-			Status:    "pending",
-			Origin:    "url",
-			CreatedAt: time.Now(),
-		},
-	}
+	store := &mockStore{}
 
 	// The target URL points to 127.0.0.1 which normally triggers SSRF rejection.
 	// We use a custom validateURL bypass by pointing to the test server directly.

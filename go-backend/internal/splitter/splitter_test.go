@@ -5,16 +5,6 @@ import (
 	"testing"
 )
 
-// helpers
-
-func totalTokens(chunks []string) int {
-	t := 0
-	for _, c := range chunks {
-		t += estimateTokens(c)
-	}
-	return t
-}
-
 // 1. Short text — fits in a single chunk, returned as-is.
 func TestShortText(t *testing.T) {
 	t.Parallel()

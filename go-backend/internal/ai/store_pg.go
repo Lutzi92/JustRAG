@@ -114,14 +114,7 @@ func (s *PGStore) GetAIModelsByProvider(ctx context.Context, providerID string) 
 	}
 	result := make([]AIModelInfo, len(rows))
 	for i, r := range rows {
-		result[i] = AIModelInfo{
-			Name:        r.Name,
-			IsReasoning: r.IsReasoning,
-			IsEmbedding: r.IsEmbedding,
-			IsRerank:    r.IsRerank,
-			IsTts:       r.IsTts,
-			IsStt:       r.IsStt,
-		}
+		result[i] = AIModelInfo(r)
 	}
 	return result, nil
 }

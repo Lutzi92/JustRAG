@@ -45,16 +45,7 @@ type confluenceConnectionRow struct {
 
 // toConfluenceConnectionRow converts an internal row to the exported type.
 func toConfluenceConnectionRow(r confluenceConnectionRow) ConfluenceConnectionRow {
-	return ConfluenceConnectionRow{
-		ID:             r.ID,
-		UserID:         r.UserID,
-		DisplayName:    r.DisplayName,
-		Token:          r.Token,
-		Status:         r.Status,
-		ErrorMessage:   r.ErrorMessage,
-		LastVerifiedAt: r.LastVerifiedAt,
-		CreatedAt:      r.CreatedAt,
-	}
+	return ConfluenceConnectionRow(r)
 }
 
 // ---------------------------------------------------------------------------
@@ -84,24 +75,7 @@ type confluenceSourceRow struct {
 
 // toConfluenceSourceRow converts an internal row to the exported type.
 func toConfluenceSourceRow(r confluenceSourceRow) ConfluenceSourceRow {
-	return ConfluenceSourceRow{
-		ID:                  r.ID,
-		KbID:                r.KbID,
-		ConnectionID:        r.ConnectionID,
-		SpaceKey:            r.SpaceKey,
-		RootPageID:          r.RootPageID,
-		RootPageTitle:       r.RootPageTitle,
-		IncludeAttachments:  r.IncludeAttachments,
-		SyncInterval:        r.SyncInterval,
-		Status:              r.Status,
-		ErrorMessage:        r.ErrorMessage,
-		ConsecutiveFailures: r.ConsecutiveFailures,
-		LastSyncedAt:        r.LastSyncedAt,
-		PageCount:           r.PageCount,
-		SyncProgress:        r.SyncProgress,
-		SyncTotal:           r.SyncTotal,
-		CreatedAt:           r.CreatedAt,
-	}
+	return ConfluenceSourceRow(r)
 }
 
 const confluenceSourceColumns = `
@@ -478,19 +452,7 @@ type confluenceFileDBRow struct {
 }
 
 func toConfluenceFileRow(r confluenceFileDBRow) ConfluenceFileRow {
-	return ConfluenceFileRow{
-		ID:                 r.ID,
-		KbID:               r.KbID,
-		Name:               r.Name,
-		Type:               r.Type,
-		Size:               r.Size,
-		Status:             r.Status,
-		Origin:             r.Origin,
-		StoragePath:        r.StoragePath,
-		ConfluenceSourceID: r.ConfluenceSourceID,
-		ConfluencePageID:   r.ConfluencePageID,
-		CreatedAt:          r.CreatedAt,
-	}
+	return ConfluenceFileRow(r)
 }
 
 // CreateConfluenceFile inserts a new file record with confluence_source_id and

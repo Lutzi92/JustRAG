@@ -191,10 +191,6 @@ func (m *mockGoldenSetStore) ListByKB(_ context.Context, _ uuid.UUID) ([]eval.Go
 
 func strPtr(s string) *string { return &s }
 
-func boolPtr(b bool) *bool { return &b }
-
-func intPtr(i int) *int { return &i }
-
 // injectUser builds an http.Request with auth.Claims injected into context,
 // mirroring the pattern used by auth.Middleware.
 func injectUser(r *http.Request, userID string) *http.Request {

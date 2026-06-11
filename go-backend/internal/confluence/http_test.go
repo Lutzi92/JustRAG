@@ -142,8 +142,6 @@ const (
 )
 
 func strPtr(s string) *string { return &s }
-func boolPtr(b bool) *bool    { return &b }
-func intPtr(i int) *int       { return &i }
 
 // makeEncryptedConn creates a ConfluenceConnectionRow with a real encrypted token.
 func makeEncryptedConn(t *testing.T) *confluence.ConfluenceConnectionRow {
@@ -515,17 +513,6 @@ func TestDeleteSource_NotFound(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Helpers for new endpoint tests
 // ---------------------------------------------------------------------------
-
-// serveConfluenceConnID wraps a handler in a mux that populates PathValue("id").
-func serveConfluenceConnID(connID string, method string, handler http.HandlerFunc, r *http.Request) *httptest.ResponseRecorder {
-	mux := http.NewServeMux()
-	pattern := method + " /api/confluence/connections/{id}"
-	r.URL.Path = "/api/confluence/connections/" + connID
-	mux.HandleFunc(pattern, handler)
-	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, r)
-	return rr
-}
 
 // serveVerifyConn wraps the verify handler to populate both the {id} segment
 // and the extra /verify suffix.

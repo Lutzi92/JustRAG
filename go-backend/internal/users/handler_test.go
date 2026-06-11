@@ -47,8 +47,6 @@ func (m *mockStore) UpdateUser(_ context.Context, _ string, _ users.UserUpdate) 
 // Helpers
 // ---------------------------------------------------------------------------
 
-func strPtr(s string) *string { return &s }
-
 func makeUser(id, username, role string) *users.UserRow {
 	email := username + "@example.com"
 	first := "First"

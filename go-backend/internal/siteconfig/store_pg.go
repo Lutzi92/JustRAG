@@ -60,7 +60,7 @@ func (s *PGStore) GetAllSiteConfigs(ctx context.Context) ([]SiteConfigRow, error
 
 	result := make([]SiteConfigRow, len(rows))
 	for i, r := range rows {
-		result[i] = SiteConfigRow{Key: r.Key, Value: r.Value}
+		result[i] = SiteConfigRow(r)
 	}
 	return result, nil
 }
@@ -93,7 +93,7 @@ func (s *PGStore) UpdateSiteConfigsBatch(ctx context.Context, configs []KeyValue
 	}
 	result := make([]SiteConfigRow, len(rows))
 	for i, r := range rows {
-		result[i] = SiteConfigRow{Key: r.Key, Value: r.Value}
+		result[i] = SiteConfigRow(r)
 	}
 	return result, nil
 }

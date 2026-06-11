@@ -59,8 +59,6 @@ func parseSlideOrderFromXML(presXML, relsXML []byte) []string {
 		return nil
 	}
 
-	const nsRelationships = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-
 	// Step 1: Parse rels XML to build rId → target map.
 	rIdToTarget := make(map[string]string)
 	dec := xml.NewDecoder(bytes.NewReader(relsXML))

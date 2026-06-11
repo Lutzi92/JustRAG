@@ -116,7 +116,6 @@ func TestRedisStore_ConcurrentAppendNoteNoLostWrites(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(n)
 	for i := 0; i < n; i++ {
-		i := i
 		go func() {
 			defer wg.Done()
 			if err := store.AppendNote(ctx, "chat-shared", SessionNote{Text: "n" + itoa(i)}); err != nil {

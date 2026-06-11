@@ -183,7 +183,6 @@ func TestRunMultipassExtraction_LLMErrorPassesThrough(t *testing.T) {
 func TestRunMultipassExtraction_NoneSentinelVariants(t *testing.T) {
 	cases := []string{"NONE", " none ", "None.", "**NONE**", "none"}
 	for _, payload := range cases {
-		payload := payload
 		t.Run(payload, func(t *testing.T) {
 			resolver := multipassTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
 				mustWriteChatCompletion(t, w, payload)

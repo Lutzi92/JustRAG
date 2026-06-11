@@ -99,15 +99,7 @@ type messageDBRow struct {
 }
 
 func toChatRow(r chatDBRow) ChatRow {
-	return ChatRow{
-		ID:        r.ID,
-		KbID:      r.KbID,
-		UserID:    r.UserID,
-		Title:     r.Title,
-		Type:      r.Type,
-		CreatedAt: r.CreatedAt,
-		UpdatedAt: r.UpdatedAt,
-	}
+	return ChatRow(r)
 }
 
 func toMessageRow(r messageDBRow) (MessageRow, error) {

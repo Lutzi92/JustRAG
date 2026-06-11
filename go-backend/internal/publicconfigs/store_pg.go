@@ -52,12 +52,7 @@ func (s *PGStore) GetAIProviders(ctx context.Context) ([]AIProvider, error) {
 
 	result := make([]AIProvider, len(rows))
 	for i, r := range rows {
-		result[i] = AIProvider{
-			ID:       r.ID,
-			Name:     r.Name,
-			Provider: r.Provider,
-			IsActive: r.IsActive,
-		}
+		result[i] = AIProvider(r)
 	}
 	return result, nil
 }
@@ -81,16 +76,7 @@ func (s *PGStore) GetAIModelsByProviderIDs(ctx context.Context, ids []string) ([
 
 	result := make([]AIModel, len(rows))
 	for i, r := range rows {
-		result[i] = AIModel{
-			ID:          r.ID,
-			ProviderID:  r.ProviderID,
-			Name:        r.Name,
-			IsReasoning: r.IsReasoning,
-			IsEmbedding: r.IsEmbedding,
-			IsRerank:    r.IsRerank,
-			IsTts:       r.IsTts,
-			IsStt:       r.IsStt,
-		}
+		result[i] = AIModel(r)
 	}
 	return result, nil
 }

@@ -53,11 +53,13 @@ func (m *mockStore) DeleteAuthProvider(_ context.Context, _ string) error {
 	return m.err
 }
 
+func (m *mockStore) LogAuditAction(_ context.Context, _, _, _, _ string, _ any) error {
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-func boolPtr(b bool) *bool { return &b }
 
 func makeProvider(id, typ, name string) adminproviders.AuthProviderRow {
 	return adminproviders.AuthProviderRow{

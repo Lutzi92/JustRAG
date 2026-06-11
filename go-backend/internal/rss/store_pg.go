@@ -41,19 +41,7 @@ type rssFeedRow struct {
 
 // toRSSFeedRow converts an internal rssFeedRow to the exported RSSFeedRow.
 func toRSSFeedRow(r rssFeedRow) RSSFeedRow {
-	return RSSFeedRow{
-		ID:                  r.ID,
-		KbID:                r.KbID,
-		URL:                 r.URL,
-		Title:               r.Title,
-		PollInterval:        r.PollInterval,
-		Status:              r.Status,
-		ErrorMessage:        r.ErrorMessage,
-		ConsecutiveFailures: r.ConsecutiveFailures,
-		LastPolledAt:        r.LastPolledAt,
-		ItemCount:           r.ItemCount,
-		CreatedAt:           r.CreatedAt,
-	}
+	return RSSFeedRow(r)
 }
 
 // CreateRSSFeed inserts a new RSS feed for the given KB and returns the stored row.
@@ -134,7 +122,7 @@ func (s *PGStore) UpdateRSSFeed(ctx context.Context, feedID string, updates RSSF
 	}
 	if updates.ErrorMessage != nil {
 		if *updates.ErrorMessage == "" {
-			setClauses = append(setClauses, fmt.Sprintf("error_message = NULL"))
+			setClauses = append(setClauses, "error_message = NULL")
 		} else {
 			setClauses = append(setClauses, fmt.Sprintf("error_message = $%d", param))
 			args = append(args, *updates.ErrorMessage)

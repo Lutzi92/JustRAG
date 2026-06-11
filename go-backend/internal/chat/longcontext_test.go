@@ -127,7 +127,6 @@ func TestShouldRouteLongContext_GatingOrder(t *testing.T) {
 		{"empty_query", enabledReader, "complex_reasoning", "", false},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			got := ShouldRouteLongContext(context.Background(), c.reader, c.queryType, c.query)

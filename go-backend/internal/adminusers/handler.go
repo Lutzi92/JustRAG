@@ -49,14 +49,6 @@ func NewHandler(store Store, blacklist *auth.Blacklist, deleter CascadeDeleter) 
 	return &Handler{store: store, blacklist: blacklist, deleter: deleter}
 }
 
-// validRoles is the set of accepted role values.
-var validRoles = map[string]bool{
-	auth.RoleUser:       true,
-	auth.RoleAdmin:      true,
-	auth.RoleSuperAdmin: true,
-	auth.RoleAPIUser:    true,
-}
-
 // ListUsers handles GET /api/admin/users.
 // Returns all users ordered by created_at DESC.
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {

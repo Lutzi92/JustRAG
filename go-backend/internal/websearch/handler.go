@@ -77,7 +77,7 @@ func CallGoogle(ctx context.Context, apiKey, cx, query string, limit int, lang s
 	}
 	out := make([]Hit, len(results))
 	for i, r := range results {
-		out[i] = Hit{Title: r.Title, Snippet: r.Snippet, URL: r.URL}
+		out[i] = Hit(r)
 	}
 	return out, nil
 }
@@ -156,7 +156,7 @@ func (h *Handler) WebSearch(w http.ResponseWriter, r *http.Request) {
 	// 4. Call Google Custom Search API.
 	results, err := callGoogleSearch(ctx, *apiKeyVal, *cxVal, req.Query, req.Limit, req.Language)
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadGateway, fmt.Sprintf("Google Search API error: %s", err.Error()))
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadGateway, fmt.Sprintf("Google Search API error: %s", httputil.SanitizeError(err)))
 		return
 	}
 

@@ -27,10 +27,8 @@ func TestDeriveFarmIDFromFilename_FallbackToStem(t *testing.T) {
 
 func TestStructuredTableShape(t *testing.T) {
 	tbl := StructuredTable{
-		Columns:    []TableColumn{{Key: "farm_id", Label: "Farm ID", Type: "string", DeriveFrom: "filename"}},
-		Rows:       []TableRow{{"farm_id": "KZ 1", "_file_name": "KZ 1.docx"}},
-		Truncated:  true,
-		TotalFiles: 25,
+		Columns: []TableColumn{{Key: "farm_id", Label: "Farm ID", Type: "string", DeriveFrom: "filename"}},
+		Rows:    []TableRow{{"farm_id": "KZ 1", "_file_name": "KZ 1.docx"}},
 	}
 	if tbl.Rows[0]["farm_id"] != "KZ 1" {
 		t.Fatal("row value mismatch")

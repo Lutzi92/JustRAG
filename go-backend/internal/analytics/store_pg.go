@@ -267,7 +267,7 @@ func (s *PGStore) GetGeneratedContentStats(ctx context.Context, kbID string, f F
 
 	overTime := make([]DateCount, len(overTimeRows))
 	for i, r := range overTimeRows {
-		overTime[i] = DateCount{Date: r.Date, Count: r.Count}
+		overTime[i] = DateCount(r)
 	}
 
 	return &GeneratedContentStats{

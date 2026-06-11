@@ -57,24 +57,7 @@ const globalKBSelectCols = `id, name, description, language, is_published,
 	studio_config, created_at`
 
 func toGlobalKBRow(r globalKBDBRow) GlobalKBRow {
-	return GlobalKBRow{
-		ID:             r.ID,
-		Name:           r.Name,
-		Description:    r.Description,
-		Language:       r.Language,
-		IsPublished:    r.IsPublished,
-		SystemPrompt:   r.SystemPrompt,
-		HeaderText:     r.HeaderText,
-		ExamplePrompts: r.ExamplePrompts,
-		AIConfigID:     r.AIConfigID,
-		ChatModel:      r.ChatModel,
-		EmbeddingModel: r.EmbeddingModel,
-		RerankModel:    r.RerankModel,
-		TTSModel:       r.TTSModel,
-		SttModel:       r.SttModel,
-		StudioConfig:   r.StudioConfig,
-		CreatedAt:      r.CreatedAt,
-	}
+	return GlobalKBRow(r)
 }
 
 // globalKBEditorDBRow is an internal struct for scanning editor rows joined with users.
@@ -248,13 +231,7 @@ func (s *PGStore) ListGlobalKBEditors(ctx context.Context, kbID string) ([]Globa
 
 	result := make([]GlobalKBEditorRow, len(rows))
 	for i, r := range rows {
-		result[i] = GlobalKBEditorRow{
-			ID:        r.ID,
-			Username:  r.Username,
-			FirstName: r.FirstName,
-			LastName:  r.LastName,
-			CreatedAt: r.CreatedAt,
-		}
+		result[i] = GlobalKBEditorRow(r)
 	}
 	return result, nil
 }

@@ -37,14 +37,7 @@ type authProviderDBRow struct {
 }
 
 func toAuthProviderRow(r authProviderDBRow) AuthProviderRow {
-	return AuthProviderRow{
-		ID:        r.ID,
-		Type:      r.Type,
-		Name:      r.Name,
-		Config:    r.Config,
-		IsActive:  r.IsActive,
-		CreatedAt: r.CreatedAt,
-	}
+	return AuthProviderRow(r)
 }
 
 const authProviderSelectCols = `id, type, name, config, is_active, created_at`
@@ -188,6 +181,28 @@ func (s *PGStore) DeleteAuthProvider(ctx context.Context, id string) error {
 	}
 	if len(rows) == 0 {
 		return fmt.Errorf("auth_provider %s: %w", id, store.ErrNotFound)
+	}
+	return nil
+}
+
+// LogAuditAction inserts a row into admin_audit_logs. Mirrors the
+// adminconfigs / adminusers implementations.
+func (s *PGStore) LogAuditAction(ctx context.Context, operatorID, action, targetType, targetID string, diff any) error {
+	var diffJSON []byte
+	if diff != nil {
+		var err error
+		diffJSON, err = json.Marshal(diff)
+		if err != nil {
+			return fmt.Errorf("LogAuditAction marshal diff: %w", err)
+		}
+	}
+
+	const sql = `
+		INSERT INTO admin_audit_logs (operator_id, action, target_type, target_id, diff)
+		VALUES ($1, $2, $3, $4, $5)`
+
+	if _, err := s.pool.Exec(ctx, sql, operatorID, action, targetType, targetID, diffJSON); err != nil {
+		return fmt.Errorf("LogAuditAction exec: %w", err)
 	}
 	return nil
 }

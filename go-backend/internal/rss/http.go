@@ -182,7 +182,7 @@ func (h *Handler) CreateRSSFeed(w http.ResponseWriter, r *http.Request) {
 	// Fetch and parse the feed to confirm it is a real RSS/Atom feed.
 	feedTitle, err := h.validator.ValidateFeed(ctx, body.URL)
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "failed to fetch or parse feed: "+err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "failed to fetch or parse feed: "+httputil.SanitizeError(err))
 		return
 	}
 

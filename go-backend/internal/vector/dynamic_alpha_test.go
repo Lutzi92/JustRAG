@@ -23,7 +23,6 @@ func TestPredictHybridAlpha_DisabledSentinels(t *testing.T) {
 		{"over_one_base_pass_through", "anything", 1.5, 0.3, 1.5},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			got := PredictHybridAlpha(c.query, c.base, c.sensitivity)

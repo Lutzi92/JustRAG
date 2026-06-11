@@ -74,15 +74,7 @@ WHERE 1=1`
 
 	result := make([]AuditLogRow, len(rows))
 	for i, r := range rows {
-		result[i] = AuditLogRow{
-			ID:         r.ID,
-			OperatorID: r.OperatorID,
-			Action:     r.Action,
-			TargetType: r.TargetType,
-			TargetID:   r.TargetID,
-			Diff:       r.Diff,
-			CreatedAt:  r.CreatedAt,
-		}
+		result[i] = AuditLogRow(r)
 	}
 	return result, nil
 }

@@ -75,8 +75,6 @@ func (m *mockCascadeDeleter) DeleteGlobalKB(_ context.Context, kbID string) erro
 // Helpers
 // ---------------------------------------------------------------------------
 
-func strPtr(s string) *string { return &s }
-
 func makeKB(id, name string) adminglobalkbs.GlobalKBRow {
 	desc := "Test description"
 	return adminglobalkbs.GlobalKBRow{

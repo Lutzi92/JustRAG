@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/store"
 )
@@ -85,6 +86,18 @@ type Store interface {
 	CreateAuthProvider(ctx context.Context, data AuthProviderCreate) (*AuthProviderRow, error)
 	UpdateAuthProvider(ctx context.Context, id string, data AuthProviderUpdate) (*AuthProviderRow, error)
 	DeleteAuthProvider(ctx context.Context, id string) error
+	LogAuditAction(ctx context.Context, operatorID, action, targetType, targetID string, diff any) error
+}
+
+// operatorID extracts the authenticated admin's user ID from the request
+// context for audit-log attribution. Empty when unauthenticated, which cannot
+// happen behind the admin middleware.
+func operatorID(r *http.Request) string {
+	claims := auth.UserFromContext(r.Context())
+	if claims == nil {
+		return ""
+	}
+	return claims.ID
 }
 
 // providerSecretMask is the placeholder maskProviderConfig substitutes for
@@ -306,7 +319,7 @@ func (h *Handler) CreateAuthProvider(w http.ResponseWriter, r *http.Request) {
 		}
 		prepared, badField, err := h.prepareOIDCConfig(body.Config)
 		if err != nil {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, err.Error())
+			httputil.WriteInternalErrorCtx(r.Context(), w, err)
 			return
 		}
 		if badField != "" {
@@ -317,7 +330,7 @@ func (h *Handler) CreateAuthProvider(w http.ResponseWriter, r *http.Request) {
 	} else if body.Type == "ldap" {
 		prepared, err := h.prepareLDAPConfig(body.Config, nil)
 		if err != nil {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, err.Error())
+			httputil.WriteInternalErrorCtx(r.Context(), w, err)
 			return
 		}
 		cfgToStore = prepared
@@ -333,6 +346,9 @@ func (h *Handler) CreateAuthProvider(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to create auth provider")
 		return
 	}
+
+	// Audit log — never include the config (it carries encrypted secrets).
+	_ = h.store.LogAuditAction(r.Context(), operatorID(r), "auth_provider.create", "auth_provider", created.ID, map[string]any{"name": created.Name, "type": created.Type})
 
 	maskProviderConfig(created)
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusCreated, created)
@@ -400,7 +416,7 @@ func (h *Handler) UpdateAuthProvider(w http.ResponseWriter, r *http.Request) {
 		if body.Config != nil {
 			prepared, badField, err := h.prepareOIDCConfig(*body.Config)
 			if err != nil {
-				httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, err.Error())
+				httputil.WriteInternalErrorCtx(r.Context(), w, err)
 				return
 			}
 			if badField != "" {
@@ -425,7 +441,7 @@ func (h *Handler) UpdateAuthProvider(w http.ResponseWriter, r *http.Request) {
 		}
 		prepared, prepErr := h.prepareLDAPConfig(*body.Config, existingCfg)
 		if prepErr != nil {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, prepErr.Error())
+			httputil.WriteInternalErrorCtx(r.Context(), w, prepErr)
 			return
 		}
 		cfgForStore = &prepared
@@ -449,6 +465,9 @@ func (h *Handler) UpdateAuthProvider(w http.ResponseWriter, r *http.Request) {
 	if h.invalidateOIDCCache != nil {
 		h.invalidateOIDCCache(updated.ID)
 	}
+
+	// Audit log — never include the config (it carries encrypted secrets).
+	_ = h.store.LogAuditAction(r.Context(), operatorID(r), "auth_provider.update", "auth_provider", updated.ID, map[string]any{"name": updated.Name, "type": updated.Type, "isActive": updated.IsActive})
 
 	maskProviderConfig(updated)
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusOK, updated)
@@ -474,6 +493,8 @@ func (h *Handler) DeleteAuthProvider(w http.ResponseWriter, r *http.Request) {
 	if h.invalidateOIDCCache != nil {
 		h.invalidateOIDCCache(id)
 	}
+
+	_ = h.store.LogAuditAction(r.Context(), operatorID(r), "auth_provider.delete", "auth_provider", id, nil)
 
 	w.WriteHeader(http.StatusNoContent)
 }

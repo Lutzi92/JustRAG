@@ -6,6 +6,8 @@ import "context"
 
 // browserPool is a no-op type used in non-chromium builds. The real
 // rod-backed implementation lives in browser.go behind //go:build chromium.
+//
+//nolint:unused // used by the chromium build-tag variant (lint runs without the tag)
 type browserPool struct{}
 
 // fetchTier2 is a stub that returns ErrUnsupportedMode in non-chromium builds.

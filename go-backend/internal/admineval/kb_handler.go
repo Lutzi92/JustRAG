@@ -62,7 +62,7 @@ func (h *Handler) CreateGoldenSetForKB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseMultipartForm(5 << 20); err != nil {
-		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid multipart body: "+err.Error())
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid multipart body: "+httputil.SanitizeError(err))
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
@@ -88,7 +88,7 @@ func (h *Handler) CreateGoldenSetForKB(w http.ResponseWriter, r *http.Request) {
 	}
 	questions, err := eval.ParseGoldenSetJSONL(bytes.NewReader(raw))
 	if err != nil {
-		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "jsonl parse error: "+err.Error())
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "jsonl parse error: "+httputil.SanitizeError(err))
 		return
 	}
 	if len(questions) == 0 {
@@ -210,7 +210,7 @@ func (h *Handler) CreateRunForKB(w http.ResponseWriter, r *http.Request) {
 	var kreq kbCreateRunRequest
 	if r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&kreq); err != nil {
-			httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid JSON: "+httputil.SanitizeError(err))
 			return
 		}
 	}

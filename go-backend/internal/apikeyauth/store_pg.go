@@ -57,12 +57,7 @@ func (s *PGStore) GetApiKeysByPrefix(ctx context.Context, prefix string) ([]ApiK
 	}
 	result := make([]ApiKeyCandidate, len(rows))
 	for i, r := range rows {
-		result[i] = ApiKeyCandidate{
-			ID:        r.ID,
-			UserID:    r.UserID,
-			KeyHash:   r.KeyHash,
-			ExpiresAt: r.ExpiresAt,
-		}
+		result[i] = ApiKeyCandidate(r)
 	}
 	return result, nil
 }

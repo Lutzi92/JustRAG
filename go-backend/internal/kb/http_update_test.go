@@ -43,8 +43,6 @@ func (m *mockUpdateStore) GetKBChunkConfig(_ context.Context, _ string) (int, in
 // Helpers
 // ---------------------------------------------------------------------------
 
-func strPtr(s string) *string { return &s }
-
 // injectKBAccess returns a copy of r with a KBAccessResult injected into the
 // context, mirroring what kbaccess.RequireKBPermission does in production.
 func injectKBAccess(r *http.Request, kbID string) *http.Request {

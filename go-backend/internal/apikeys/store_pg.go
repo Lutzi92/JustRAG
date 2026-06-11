@@ -82,14 +82,7 @@ func (s *PGStore) GetApiKeysByUser(ctx context.Context, userID string) ([]ApiKey
 
 	result := make([]ApiKeyRow, len(rows))
 	for i, r := range rows {
-		result[i] = ApiKeyRow{
-			ID:         r.ID,
-			Name:       r.Name,
-			KeyPrefix:  r.KeyPrefix,
-			LastUsedAt: r.LastUsedAt,
-			ExpiresAt:  r.ExpiresAt,
-			CreatedAt:  r.CreatedAt,
-		}
+		result[i] = ApiKeyRow(r)
 	}
 	return result, nil
 }

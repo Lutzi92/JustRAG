@@ -268,17 +268,7 @@ func (h *Handler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	input := UpdateAIConfigInput{
-		Name:            body.Name,
-		APIKey:          body.APIKey,
-		BaseURL:         body.BaseURL,
-		ChatModels:      body.ChatModels,
-		EmbeddingModels: body.EmbeddingModels,
-		ReasoningModels: body.ReasoningModels,
-		RerankModels:    body.RerankModels,
-		TtsModels:       body.TtsModels,
-		SttModels:       body.SttModels,
-	}
+	input := UpdateAIConfigInput(body)
 
 	config, err := h.store.UpdateAIConfig(ctx, id, input)
 	if err != nil {

@@ -122,6 +122,10 @@ func RunServer(cfg *config.Config, version string) error {
 	defer apiLimiter.Shutdown()
 
 	var handler http.Handler = mux
+	// Innermost: rewrite ServeMux's plain-text 404/405 defaults (and direct
+	// http.NotFound calls) into the JSON error envelope on the API surface,
+	// so every error body under these prefixes is {"error": "..."}.
+	handler = middleware.JSONAPIErrors("/api/", "/openai/")(handler)
 	// Global body cap — only the upload routes enumerated in isUploadExempt
 	// are exempt; each sets its own larger http.MaxBytesReader / multipart
 	// cap internally.

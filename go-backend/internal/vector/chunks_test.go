@@ -11,11 +11,8 @@ import (
 func TestChunkInputSerialization(t *testing.T) {
 	t.Parallel()
 	chunk := ChunkInput{
-		Content:          "hello world",
 		ContextualPrefix: "[Context: greetings example]",
 		Embedding:        []float64{0.1, 0.2, 0.3},
-		KbID:             "kb-uuid",
-		FileID:           "file-uuid",
 		Metadata:         map[string]any{"page": 1, "source": "test.pdf"},
 	}
 	if chunk.ContextualPrefix == "" {

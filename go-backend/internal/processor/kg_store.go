@@ -120,6 +120,8 @@ func (s *kgStore) persistKGExtraction(ctx context.Context, kbID, chunkID string,
 // KB is deleted (cascade-deleter wires this in alongside the chunk
 // table cleanup) and when the operator opts to nuke the graph after
 // a re-ingestion that materially changed the corpus.
+//
+//nolint:unused // kept for KB-delete cascade cleanup and operator-initiated graph nuke (see doc comment); not wired in yet
 func (s *kgStore) deleteKGForKB(ctx context.Context, kbID string) error {
 	if s == nil || s.pool == nil {
 		return errors.New("kg_store: no DB pool configured")

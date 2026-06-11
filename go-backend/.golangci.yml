@@ -22,12 +22,11 @@ linters:
     # Formatting gate: `gofmt -l` must be empty so struct-literal alignment
     # and friends can't drift between contributors' editor setups.
     - gofmt
-  disable:
-    # TODO(arch-remediation): re-enable after cleanup — 24 gosimple findings (struct literal conversions)
+    # Re-enabled 2026-06-11 after the arch-remediation burn-down (findings
+    # fixed; chromium-build-tag false positives carry targeted //nolint
+    # comments in internal/fetcher).
     - gosimple
-    # TODO(arch-remediation): re-enable after cleanup — 21 unused findings (false-positives under chromium build tag)
     - unused
-    # TODO(arch-remediation): re-enable after cleanup — 9 copyloopvar findings (advisory "copy can be deleted")
     - copyloopvar
 
 linters-settings:
@@ -36,8 +35,6 @@ linters-settings:
     disable:
       - fieldalignment  # too noisy for a migration project
       - shadow          # common pattern in error handling
-      # TODO(arch-remediation): re-enable after cleanup — 12 unusedwrite findings (test struct literals)
-      - unusedwrite
 
   funlen:
     # Ratchet thresholds set just above today's worst offenders so the

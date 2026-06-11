@@ -415,10 +415,7 @@ func isPageUpdated(page ConfluencePage, files []ConfluenceFileRow) bool {
 	// Find the markdown file (the main page content).
 	for _, f := range files {
 		if f.Type == "text/markdown" {
-			if pageModified.After(f.CreatedAt) {
-				return true
-			}
-			return false
+			return pageModified.After(f.CreatedAt)
 		}
 	}
 

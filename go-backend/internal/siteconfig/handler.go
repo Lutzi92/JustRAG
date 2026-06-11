@@ -156,7 +156,7 @@ func (h *Handler) UpdateSiteConfig(w http.ResponseWriter, r *http.Request) {
 			existingMap[row.Key] = row.Value
 		}
 		if err := ValidateConflicts(existingMap, kvs); err != nil {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, err.Error())
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, httputil.SanitizeError(err))
 			return
 		}
 	}

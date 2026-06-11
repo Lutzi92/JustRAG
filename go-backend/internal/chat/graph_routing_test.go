@@ -225,7 +225,6 @@ func TestNeedsGraphTraversal(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			r := &fakeSiteConfigReader{values: tc.flags}
@@ -696,7 +695,6 @@ func TestTokeniseForGraph_Behaviour(t *testing.T) {
 		{"case_preserved", "foo Foo FOO", []string{"foo", "Foo", "FOO"}},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			got := tokeniseForGraph(c.in)

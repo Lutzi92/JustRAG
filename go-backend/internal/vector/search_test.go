@@ -143,7 +143,6 @@ func TestSearchResultFields(t *testing.T) {
 				RerankScore: 0.75,
 			},
 		},
-		EnhancedQuery: "improved query",
 	}
 
 	if len(sr.Chunks) != 1 {

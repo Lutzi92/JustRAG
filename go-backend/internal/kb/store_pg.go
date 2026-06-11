@@ -411,13 +411,7 @@ func (s *PGStore) ListKBShares(ctx context.Context, kbID string) ([]ShareRow, er
 
 	result := make([]ShareRow, len(rows))
 	for i, r := range rows {
-		result[i] = ShareRow{
-			ID:         r.ID,
-			UserID:     r.UserID,
-			Username:   r.Username,
-			Permission: r.Permission,
-			CreatedAt:  r.CreatedAt,
-		}
+		result[i] = ShareRow(r)
 	}
 	return result, nil
 }

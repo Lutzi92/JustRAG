@@ -79,7 +79,7 @@ func (h *Handler) PostReload(w http.ResponseWriter, r *http.Request) {
 	specs, err := h.loadSpecs(ctx)
 	if err != nil {
 		logctx.From(ctx).Warn("admin.mcp.reload: parse mcp_servers failed", "error", err)
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "mcp_servers is not a valid JSON array of {name,url,headers}: "+err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "mcp_servers is not a valid JSON array of {name,url,headers}: "+httputil.SanitizeError(err))
 		return
 	}
 	h.registry.ConfigureGlobal(ctx, specs)

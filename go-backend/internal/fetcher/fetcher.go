@@ -20,8 +20,8 @@ type Fetcher struct {
 	cfg     Config
 	reqC    *req.Client  // tier 1 client; nil until tier1Once fires
 	rl      *hostLimiter // per-host rate limiter for tier 1
-	browser *browserPool // tier 2 pool; only used in chromium builds
-	jf      *justFindCtx // tier 3 context; only used in chromium builds
+	browser *browserPool //nolint:unused // used by the chromium build-tag variant (lint runs without the tag)
+	jf      *justFindCtx //nolint:unused // used by the chromium build-tag variant (lint runs without the tag)
 
 	// Per-subsystem once guards. Each tier initialises its own resources
 	// lazily on first use, so a process that never calls Tier 2/3 never
@@ -30,11 +30,11 @@ type Fetcher struct {
 	// tier2Mu guards lazy creation of f.browser. Used in fetchTier2 and
 	// closePools so a concurrent first-call doesn't race a teardown reading
 	// f.browser.
-	tier2Mu sync.Mutex
+	tier2Mu sync.Mutex //nolint:unused // used by the chromium build-tag variant (lint runs without the tag)
 	// tier3Mu guards lazy creation of f.jf. Tier 3 init can fail (no
 	// writable user-data-dir, launcher errors, etc.) and we want to allow
 	// retries on subsequent calls — sync.Once would wedge us forever.
-	tier3Mu sync.Mutex
+	tier3Mu sync.Mutex //nolint:unused // used by the chromium build-tag variant (lint runs without the tag)
 }
 
 // ErrUnsupportedMode is returned when a Mode requires a build tag that

@@ -587,10 +587,10 @@ func (h *Handler) markConnectionAuthFailure(ctx context.Context, userID string, 
 func (h *Handler) writeConfluenceCallError(ctx context.Context, w http.ResponseWriter, userID, action string, err error) {
 	if errors.Is(err, ErrConfluenceAuthFailed) {
 		h.markConnectionAuthFailure(ctx, userID, err)
-		httputil.WriteErrorCtx(ctx, w, http.StatusUnauthorized, "Confluence rejected the token: "+err.Error())
+		httputil.WriteErrorCtx(ctx, w, http.StatusUnauthorized, "Confluence rejected the token: "+httputil.SanitizeError(err))
 		return
 	}
-	httputil.WriteErrorCtx(ctx, w, http.StatusBadGateway, action+": "+err.Error())
+	httputil.WriteErrorCtx(ctx, w, http.StatusBadGateway, action+": "+httputil.SanitizeError(err))
 }
 
 // confluenceClientForUser retrieves the user's connection, decrypts its token,
@@ -666,7 +666,7 @@ func (h *Handler) CreateConnection(w http.ResponseWriter, r *http.Request) {
 	// Verify token against the Confluence API.
 	client := NewConfluenceClient(*baseURL, body.Token)
 	if err := client.VerifyConnection(ctx); err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "token verification failed: "+err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "token verification failed: "+httputil.SanitizeError(err))
 		return
 	}
 
@@ -753,7 +753,7 @@ func (h *Handler) UpdateConnection(w http.ResponseWriter, r *http.Request) {
 
 		client := NewConfluenceClient(*baseURL, *body.Token)
 		if err := client.VerifyConnection(ctx); err != nil {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "token verification failed: "+err.Error())
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "token verification failed: "+httputil.SanitizeError(err))
 			return
 		}
 
@@ -871,7 +871,7 @@ func (h *Handler) ListSpaces(w http.ResponseWriter, r *http.Request) {
 
 	client, err := h.confluenceClientForUser(ctx, user.ID)
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, httputil.SanitizeError(err))
 		return
 	}
 
@@ -906,7 +906,7 @@ func (h *Handler) ListSpacePages(w http.ResponseWriter, r *http.Request) {
 
 	client, err := h.confluenceClientForUser(ctx, user.ID)
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, httputil.SanitizeError(err))
 		return
 	}
 
@@ -941,7 +941,7 @@ func (h *Handler) ListPageChildren(w http.ResponseWriter, r *http.Request) {
 
 	client, err := h.confluenceClientForUser(ctx, user.ID)
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, httputil.SanitizeError(err))
 		return
 	}
 
@@ -978,7 +978,7 @@ func (h *Handler) ListAllSpacePages(w http.ResponseWriter, r *http.Request) {
 
 	client, err := h.confluenceClientForUser(ctx, user.ID)
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, httputil.SanitizeError(err))
 		return
 	}
 

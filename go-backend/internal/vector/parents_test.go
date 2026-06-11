@@ -7,11 +7,7 @@ import (
 
 func TestParentChunkInput_ZeroValueIsValid(t *testing.T) {
 	t.Parallel()
-	in := ParentChunkInput{
-		KbID:    "00000000-0000-0000-0000-000000000001",
-		FileID:  "00000000-0000-0000-0000-000000000002",
-		Content: "parent content text",
-	}
+	in := ParentChunkInput{}
 	if in.ContextualPrefix != "" {
 		t.Errorf("ContextualPrefix default: got %q, want empty", in.ContextualPrefix)
 	}

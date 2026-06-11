@@ -45,14 +45,7 @@ func (s *PGStore) ListAllUsers(ctx context.Context) ([]UserListRow, error) {
 
 	result := make([]UserListRow, len(rows))
 	for i, r := range rows {
-		result[i] = UserListRow{
-			ID:        r.ID,
-			Username:  r.Username,
-			FirstName: r.FirstName,
-			LastName:  r.LastName,
-			Role:      r.Role,
-			CreatedAt: r.CreatedAt,
-		}
+		result[i] = UserListRow(r)
 	}
 	return result, nil
 }

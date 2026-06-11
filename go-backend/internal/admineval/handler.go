@@ -219,7 +219,6 @@ func (h *Handler) WithKBOverrides(l kbOverrideLister) *Handler {
 
 type resolvedRun struct {
 	kbID         uuid.UUID
-	kbName       string
 	goldenSetID  uuid.UUID
 	judgeEnabled bool
 	topK         int
@@ -342,7 +341,7 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 	var req CreateRunRequest
 	if r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid JSON: "+httputil.SanitizeError(err))
 			return
 		}
 	}
@@ -350,12 +349,12 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 	// 3. Resolve defaults.
 	resolved, err := h.resolveDefaults(ctx, req)
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, httputil.SanitizeError(err))
 		return
 	}
 
-	// 4. Validate KB exists and fetch its name.
-	name, found, err := h.kbStore.GetKBInfo(ctx, resolved.kbID)
+	// 4. Validate KB exists.
+	_, found, err := h.kbStore.GetKBInfo(ctx, resolved.kbID)
 	if err != nil {
 		log.Error("eval.create_run.kb_lookup", "error", err)
 		httputil.WriteInternalErrorCtx(r.Context(), w, err)
@@ -365,7 +364,6 @@ func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, fmt.Sprintf("kb_id %s not found", resolved.kbID))
 		return
 	}
-	resolved.kbName = name
 
 	// 5. Validate golden set exists and fetch its metadata.
 	if resolved.goldenSetID == uuid.Nil {
@@ -488,7 +486,7 @@ func (h *Handler) ListRuns(w http.ResponseWriter, r *http.Request) {
 	if raw := q.Get("kb_id"); raw != "" {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid kb_id: "+err.Error())
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid kb_id: "+httputil.SanitizeError(err))
 			return
 		}
 		kbIDPtr = &id
@@ -552,7 +550,7 @@ func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
 	rawID := r.PathValue("id")
 	id, err := uuid.Parse(rawID)
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid run id: "+err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid run id: "+httputil.SanitizeError(err))
 		return
 	}
 
@@ -589,7 +587,7 @@ func (h *Handler) ExportRun(w http.ResponseWriter, r *http.Request) {
 	rawID := r.PathValue("id")
 	id, err := uuid.Parse(rawID)
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid run id: "+err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid run id: "+httputil.SanitizeError(err))
 		return
 	}
 
@@ -609,7 +607,7 @@ func (h *Handler) ExportRun(w http.ResponseWriter, r *http.Request) {
 	if cmpRaw := r.URL.Query().Get("compare_with"); cmpRaw != "" {
 		cmpID, err := uuid.Parse(cmpRaw)
 		if err != nil {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid compare_with id: "+err.Error())
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid compare_with id: "+httputil.SanitizeError(err))
 			return
 		}
 
@@ -649,7 +647,7 @@ func (h *Handler) DeleteRun(w http.ResponseWriter, r *http.Request) {
 	rawID := r.PathValue("id")
 	id, err := uuid.Parse(rawID)
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid run id: "+err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid run id: "+httputil.SanitizeError(err))
 		return
 	}
 
@@ -682,7 +680,7 @@ func (h *Handler) DeleteRun(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateGoldenSet(w http.ResponseWriter, r *http.Request) {
 	// 1. Parse multipart form (max 5 MB).
 	if err := r.ParseMultipartForm(5 << 20); err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid multipart body: "+err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid multipart body: "+httputil.SanitizeError(err))
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
@@ -736,7 +734,7 @@ func (h *Handler) CreateGoldenSet(w http.ResponseWriter, r *http.Request) {
 	// 3. Parse and validate JSONL content.
 	questions, err := eval.ParseGoldenSetJSONL(bytes.NewReader(raw))
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "jsonl parse error: "+err.Error())
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "jsonl parse error: "+httputil.SanitizeError(err))
 		return
 	}
 	if len(questions) == 0 {

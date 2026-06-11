@@ -93,7 +93,7 @@ func (s *PGStore) GetHistoricalMetrics(ctx context.Context, metric string, from,
 
 	result := make([]HistoricalPoint, len(rows))
 	for i, r := range rows {
-		result[i] = HistoricalPoint{Timestamp: r.Timestamp, Value: r.Value}
+		result[i] = HistoricalPoint(r)
 	}
 	return result, nil
 }
