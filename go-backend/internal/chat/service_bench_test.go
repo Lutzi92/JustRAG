@@ -10,8 +10,7 @@ import (
 func BenchmarkTruncateChunksToFit_AllFit(b *testing.B) {
 	chunks := makeBenchChunks(30, 200)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		TruncateChunksToFit(chunks, 100_000)
 	}
 }
@@ -19,8 +18,7 @@ func BenchmarkTruncateChunksToFit_AllFit(b *testing.B) {
 func BenchmarkTruncateChunksToFit_NeedsTruncation(b *testing.B) {
 	chunks := makeBenchChunks(30, 200)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		TruncateChunksToFit(chunks, 2000)
 	}
 }
@@ -28,8 +26,7 @@ func BenchmarkTruncateChunksToFit_NeedsTruncation(b *testing.B) {
 func BenchmarkTruncateChunksToFit_LargeContext(b *testing.B) {
 	chunks := makeBenchChunks(100, 500)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		TruncateChunksToFit(chunks, 10_000)
 	}
 }

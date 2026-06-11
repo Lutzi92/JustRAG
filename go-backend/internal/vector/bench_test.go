@@ -44,8 +44,7 @@ func BenchmarkFormatEmbedding1536(b *testing.B) {
 		emb[i] = r.Float64()*2 - 1
 	}
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		formatEmbedding(emb)
 	}
 }
@@ -57,8 +56,7 @@ func BenchmarkFormatEmbedding4096(b *testing.B) {
 		emb[i] = r.Float64()*2 - 1
 	}
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		formatEmbedding(emb)
 	}
 }
@@ -66,8 +64,7 @@ func BenchmarkFormatEmbedding4096(b *testing.B) {
 func BenchmarkSanitizeUTF8Clean(b *testing.B) {
 	text := "This is perfectly valid UTF-8 text with no issues at all."
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sanitizeUTF8(text)
 	}
 }
@@ -84,8 +81,7 @@ func BenchmarkSanitizeUTF8Dirty(b *testing.B) {
 	}
 	text := string(dirty)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sanitizeUTF8(text)
 	}
 }
@@ -102,8 +98,7 @@ func BenchmarkApplyMMR(b *testing.B) {
 		}
 		b.Run(fmt.Sprintf("n=%d_k=%d", n, k), func(b *testing.B) {
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				ApplyMMR(docs, 0.7, k)
 			}
 		})
@@ -127,8 +122,7 @@ func BenchmarkFuseRRF(b *testing.B) {
 
 		b.Run(fmt.Sprintf("two_lists_n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				FuseRRF(60, listA, listB)
 			}
 		})
@@ -138,8 +132,7 @@ func BenchmarkFuseRRF(b *testing.B) {
 		r.Shuffle(len(listC), func(i, j int) { listC[i], listC[j] = listC[j], listC[i] })
 		b.Run(fmt.Sprintf("three_lists_n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				FuseRRF(60, listA, listB, listC)
 			}
 		})
@@ -164,15 +157,13 @@ func BenchmarkLoadSiteConfigCached(b *testing.B) {
 
 	b.Run("CacheHit", func(b *testing.B) {
 		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = svc.loadSiteConfigCached(ctx)
 		}
 	})
 
 	b.Run("ParallelHit", func(b *testing.B) {
 		b.ReportAllocs()
-		b.ResetTimer()
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
 				_ = svc.loadSiteConfigCached(ctx)
@@ -210,8 +201,7 @@ func BenchmarkBlendRerankScores(b *testing.B) {
 			// BlendRerankScores' own allocation count.
 			working := make([]RankedDoc, len(docs))
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				// Copy docs each iter so we measure the function on its
 				// "fresh" input shape, not on already-blended scores.
 				copy(working, docs)
@@ -238,8 +228,7 @@ func BenchmarkBuildRerankDocs(b *testing.B) {
 		}
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_ = buildRerankDocs(docs)
 			}
 		})
@@ -255,8 +244,7 @@ func BenchmarkDeduplicate(b *testing.B) {
 		docs := makeBenchDocs(n)
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				Deduplicate(docs, 0.9)
 			}
 		})
@@ -269,8 +257,7 @@ func BenchmarkDeduplicate(b *testing.B) {
 func BenchmarkSortedUniqueWords(b *testing.B) {
 	text := makeBenchDocs(1)[0].Content
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sortedUniqueWords(text)
 	}
 }
@@ -284,8 +271,7 @@ func BenchmarkJaccardSorted(b *testing.B) {
 	a := sortedUniqueWords(docs[0].Content)
 	c := sortedUniqueWords(docs[1].Content)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		jaccardSorted(a, c)
 	}
 }

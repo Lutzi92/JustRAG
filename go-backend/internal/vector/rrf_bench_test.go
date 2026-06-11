@@ -35,8 +35,7 @@ func BenchmarkFuseRRFWeighted(b *testing.B) {
 			weights := []float64{1.0, 1.0, 0.5, 0.5, 0.5}
 
 			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				_ = FuseRRFWeighted(60, weights, lists...)
 			}
 		})
@@ -71,8 +70,7 @@ func BenchmarkApplyBM25Floor(b *testing.B) {
 	}
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		// Copy final each iteration: ApplyBM25Floor mutates the input slice
 		// (in-place score boost) and we want each iteration to start from
 		// the same state. Sort allocations from final[i].Score writes are

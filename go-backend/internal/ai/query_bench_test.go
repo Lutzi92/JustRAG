@@ -25,8 +25,7 @@ func BenchmarkTruncateToTokens(b *testing.B) {
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				_ = truncateToTokens(tc.s, 100)
 			}
 		})

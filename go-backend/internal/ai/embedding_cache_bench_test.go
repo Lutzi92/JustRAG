@@ -15,8 +15,7 @@ func BenchmarkEmbCacheKey(b *testing.B) {
 	// can be longer but Get/Set is dominated by query-side calls.
 	text := strings.Repeat("the quick brown fox jumps over the lazy dog. ", 5)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = embCacheKey(model, text)
 	}
 }
@@ -31,8 +30,7 @@ func BenchmarkMarshalEmbeddingInto1536(b *testing.B) {
 	}
 	dst := make([]byte, 0, len(emb)*8)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		dst = marshalEmbeddingInto(dst[:0], emb)
 	}
 	_ = dst
@@ -46,8 +44,7 @@ func BenchmarkMarshalEmbeddingInto4096(b *testing.B) {
 	}
 	dst := make([]byte, 0, len(emb)*8)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		dst = marshalEmbeddingInto(dst[:0], emb)
 	}
 	_ = dst

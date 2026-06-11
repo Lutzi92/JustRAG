@@ -75,10 +75,8 @@ func extractProperNounPhrases(query string) []string {
 func trimTokenPunct(s string) (clean string, breakAfter bool) {
 	clean = s
 	for len(clean) > 0 {
-		r := []rune(clean)[len(clean)-1 : len(clean)]
 		// Inspect last byte cheaply — all break-after punct is ASCII.
 		last := clean[len(clean)-1]
-		_ = r
 		switch last {
 		case '.', ',', ';', ':', '!', '?', ')', ']', '}', '"', '\'':
 			breakAfter = true
