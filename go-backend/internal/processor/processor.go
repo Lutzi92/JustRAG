@@ -1028,6 +1028,17 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		}
 	}
 
+	// Cancellation is not success: the embedding pipeline exits its loops
+	// early when ctx dies mid-ingest, leaving the file partially embedded
+	// with failedBatches possibly still 0 — the switch below would then
+	// compute "completed" for a partially-ingested file (today only saved
+	// by pgx refusing the status write on a dead ctx). Mark it as error
+	// (detached write inside updateTerminalStatus) and let asynq retry.
+	if err := ctx.Err(); err != nil {
+		p.updateTerminalStatus(ctx, fileID, "error")
+		return fmt.Errorf("processor: ingestion cancelled before completion: %w", err)
+	}
+
 	// Step 7: set final status.
 	var finalStatus string
 	switch {
@@ -1184,11 +1195,20 @@ func (p *Processor) runKGExtractionStage(ctx context.Context, fileID, kbID, file
 	exts := make([]*ai.KGExtraction, len(chunks))
 	var extractWg sync.WaitGroup
 	sem := make(chan struct{}, maxKGExtractConcurrency)
+extract:
 	for i, c := range chunks {
 		if ctx.Err() != nil {
 			break
 		}
-		sem <- struct{}{}
+		// ctx-aware acquire (matching the enrichment pipeline's pattern):
+		// a bare `sem <- struct{}{}` would block on a full semaphore after
+		// cancellation, delaying shutdown until an in-flight LLM call frees
+		// a slot.
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break extract
+		}
 		extractWg.Add(1)
 		safego.GoCtx(ctx, func() {
 			defer extractWg.Done()

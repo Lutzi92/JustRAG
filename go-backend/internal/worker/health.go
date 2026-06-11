@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync/atomic"
+	"time"
 
 	"github.com/justrag/go-backend/internal/safego"
 )
@@ -37,6 +38,9 @@ func NewHealthServer(port int) *HealthServer {
 	hs.srv = &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
+		// Probe requests are tiny; without this a peer that opens a
+		// connection and never sends headers pins a goroutine forever.
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return hs
 }

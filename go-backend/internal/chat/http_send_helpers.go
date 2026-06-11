@@ -486,11 +486,23 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			sseFinished = true
 			return
 		}
+		var streamErr error
 		for event := range events {
 			if event.Done {
+				streamErr = event.Err
 				break
 			}
 			streamEmit(ai.StreamEvent{Content: event.Content, Reasoning: event.Reasoning})
+		}
+		if streamErr != nil {
+			// Mid-stream abort (connection reset, oversized SSE frame): the
+			// buffered content is truncated. Surface the error and bail
+			// instead of persisting it as a complete AI message.
+			logctx.From(ctx).Error("chat.send: AI stream aborted mid-answer", "error", streamErr, "chat_id", p.chatID, "kb_id", p.kbID)
+			writeSSE(w, map[string]string{"error": "AI stream interrupted"})
+			writeSSEDone(w)
+			sseFinished = true
+			return
 		}
 	}
 

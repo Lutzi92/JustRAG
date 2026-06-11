@@ -414,8 +414,15 @@ func (s *SearchService) CloneWithSiteConfigReader(r SiteConfigReader) *SearchSer
 		chunkSvc:       s.chunkSvc,
 		hype:           s.hype,
 		queryCache:     s.queryCache,
+		// feedback is set post-construction via SetFeedbackReader, so it is
+		// easy to forget here — omitting it silently turns the feedback
+		// boost off for exactly the per-KB-override KBs that take this
+		// clone path (nil reader = boost off, fail-open).
+		feedback: s.feedback,
 		// rerankDefaultNoticeOnce, kbTableCache, siteConfigCache, siteConfigSF,
 		// kbLangCachePtr, kbLangSF: zero values — fresh, independent caches.
+		// NOTE for future fields: every new dependency field must be copied
+		// here explicitly or per-KB-override KBs silently lose it.
 	}
 }
 

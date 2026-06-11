@@ -70,9 +70,33 @@ func WriteInternalError(w http.ResponseWriter, err error) {
 	WriteError(w, http.StatusInternalServerError, SanitizeError(err))
 }
 
+// SSEWriteTimeout is the sliding per-frame write deadline for SSE streams.
+// It replaces the server-wide WriteTimeout (which EnableSSE opts out of)
+// with a bound on how long a single frame write may block: a half-open
+// client that stopped reading without sending a FIN otherwise blocks
+// w.Write forever once the kernel send buffer fills — pinning the handler
+// goroutine and, on relay paths, keeping the worker producing into a dead
+// connection.
+//
+// The window must comfortably exceed the longest legitimate gap between
+// frames on ANY SSE path, because http.ResponseController write deadlines
+// cannot be extended once exceeded — an expired deadline poisons the
+// connection even if no write was attempted while it was expired. Current
+// worst cases: sserelay heartbeats every 15s; chat streams abort after
+// 120s of upstream inactivity. 5 minutes clears both with a wide margin.
+const SSEWriteTimeout = 5 * time.Minute
+
+// RearmSSEWriteDeadline slides the SSE write deadline forward. Call before
+// each SSE frame write. The SetWriteDeadline error is ignored for the same
+// reason as in EnableSSE.
+func RearmSSEWriteDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(SSEWriteTimeout))
+}
+
 // EnableSSE prepares w for Server-Sent Events: it sets the standard SSE
 // response headers (including X-Accel-Buffering: no so nginx does not buffer
-// the stream) and opts this connection out of the server-wide WriteTimeout.
+// the stream) and swaps the server-wide WriteTimeout for the first sliding
+// SSEWriteTimeout window (frame writers re-arm it via RearmSSEWriteDeadline).
 // SSE streams stay open far longer than any request timeout; per-handler
 // inactivity / context cancellation governs their lifetime instead. Call once,
 // before writing any event. The returned ResponseController can be used to
@@ -87,7 +111,7 @@ func EnableSSE(w http.ResponseWriter) *http.ResponseController {
 	// SetWriteDeadline only errors when the ResponseWriter doesn't support
 	// deadlines, which never happens for the stdlib server these handlers run
 	// under; match the prior call sites and ignore it.
-	_ = rc.SetWriteDeadline(time.Time{})
+	_ = rc.SetWriteDeadline(time.Now().Add(SSEWriteTimeout))
 	return rc
 }
 

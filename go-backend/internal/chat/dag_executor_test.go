@@ -120,6 +120,33 @@ func TestExecuteDAG_DependentNodeInterpolatesParentExcerpt(t *testing.T) {
 	}
 }
 
+// TestExecuteDAG_NoRaceOnSiblingLaunch exercises the launch-loop timing
+// window: every node on a level ≥ 1 reads the shared results map inside
+// buildNodeQuery while siblings launched earlier on the same level are
+// already writing their own entries. With an instant runner and a wide
+// level the read and the writes overlap, which `go test -race` flags if
+// the launch loop touches the map unsynchronized. Many iterations widen
+// the window; the race detector only needs one overlap.
+func TestExecuteDAG_NoRaceOnSiblingLaunch(t *testing.T) {
+	nodes := []ai.PlanNode{{ID: "p", Query: "parent"}}
+	for i := range 5 {
+		nodes = append(nodes, ai.PlanNode{
+			ID:        "c" + itoa(i),
+			Query:     "child " + itoa(i),
+			DependsOn: []string{"p"},
+		})
+	}
+	plan := ai.Plan{Nodes: nodes}
+	run := func(_ context.Context, q string, _ []string, _ string) ([]vector.SearchChunk, error) {
+		return []vector.SearchChunk{dagChunk(q, 0.9)}, nil
+	}
+	for i := range 50 {
+		if _, err := ExecuteDAG(context.Background(), DAGExecuteParams{Plan: plan}, run); err != nil {
+			t.Fatalf("iteration %d: %v", i, err)
+		}
+	}
+}
+
 func TestExecuteDAG_RejectsSelfReference(t *testing.T) {
 	plan := ai.Plan{Nodes: []ai.PlanNode{
 		{ID: "n1", Query: "loops back", DependsOn: []string{"n1"}},

@@ -90,12 +90,27 @@ type (
 	}
 )
 
+// postResponseTimeout bounds the detached post-response work below. Two
+// minutes covers the worst case (verifier LLM + refine LLM sequentially)
+// while capping how long an abandoned turn can keep spending tokens.
+const postResponseTimeout = 2 * time.Minute
+
 func (h *Handler) runPostResponseTasks(
 	ctx context.Context,
 	userMessage, aiResponse, contextText, kbID, lang, aiMsgID string,
 	sources []ChatSource,
 	emit func(map[string]any),
 ) ([]string, *MessageVerification, string) {
+	// Detach from client disconnect: the AI message is already persisted by
+	// the time we run, so letting a disconnect cancel this work would
+	// silently lose the verification badge and longmem memories of a
+	// message that exists (the user sees it on reload). WithoutCancel keeps
+	// every request-scoped value — logctx logger, auth user, OTel span —
+	// unlike detachedContext, which only carries the span. The emit
+	// callback tolerates a dead client (writeSSE logs and drops).
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postResponseTimeout)
+	defer cancel()
+
 	var (
 		fuRes  followUpResult
 		fcRes  factcheckOutcome

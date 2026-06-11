@@ -53,10 +53,11 @@ func NewWorker(
 
 // HandleRun is the asynq task handler for TypeEvalRun tasks.
 //
-// Advisory lock semantics: at most one eval runs across the deployment at any
-// time. If a run is already in flight, pg_try_advisory_lock returns false and
-// this handler returns a non-nil error so asynq retries with exponential
-// backoff (see EnqueueRun's MaxRetry setting).
+// Advisory lock semantics: at most evalGlobalSlots evals run across the
+// deployment at any time, and at most one per KB. If no slot (or the KB lock)
+// is available, pg_try_advisory_lock returns false and this handler returns a
+// non-nil error so asynq retries with exponential backoff (see EnqueueRun's
+// MaxRetry setting).
 //
 // Failure handling: once the row is marked running, all subsequent errors are
 // recorded via MarkFailed and the handler returns nil so asynq does NOT retry
@@ -110,9 +111,21 @@ func (w *Worker) HandleRun(ctx context.Context, t *asynq.Task) error {
 		log.Info("eval.run.requeued", "reason", "another run holds this KB's lock", "kb_id", run.KBID)
 		return fmt.Errorf("another eval run is in flight for this KB; will retry")
 	}
-	defer func() {
-		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", kbLockArg)
-	}()
+	// Session advisory locks survive conn.Release() — a failed unlock on a
+	// pooled connection would strand the lock until the conn happens to be
+	// closed, blocking every future eval for this KB (and below, leaking one
+	// of the evalGlobalSlots). On unlock failure, destroy the underlying
+	// connection so the lock dies with the session; the Release defer above
+	// then discards the closed conn instead of pooling it.
+	unlockOrDestroy := func(sql string, arg any) {
+		uctx, ucancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ucancel()
+		if _, err := conn.Exec(uctx, sql, arg); err != nil {
+			log.Warn("eval.run.advisory_unlock_failed; destroying connection so the session lock is not pooled", "error", err)
+			_ = conn.Conn().Close(uctx)
+		}
+	}
+	defer unlockOrDestroy("SELECT pg_advisory_unlock(hashtextextended($1, 0))", kbLockArg)
 
 	// 3b. Global cap: grab one of N slots; requeue if all are taken.
 	slot := int64(-1)
@@ -130,9 +143,7 @@ func (w *Worker) HandleRun(ctx context.Context, t *asynq.Task) error {
 		log.Info("eval.run.requeued", "reason", "global eval concurrency cap reached", "cap", evalGlobalSlots)
 		return fmt.Errorf("global eval concurrency cap reached; will retry")
 	}
-	defer func() {
-		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", slot)
-	}()
+	defer unlockOrDestroy("SELECT pg_advisory_unlock($1)", slot)
 
 	// 4. Mark running and proceed. (run is already loaded above.)
 	if err := w.store.MarkRunning(ctx, p.RunID); err != nil {

@@ -22,6 +22,12 @@ type StreamEvent struct {
 	Content   string
 	Reasoning string
 	Done      bool
+
+	// Err mirrors StreamChunk.Err: non-nil on the terminal Done event when
+	// the underlying stream aborted mid-flight (connection reset, oversized
+	// SSE frame). Content received before this event is truncated output —
+	// callers must not persist it as a complete answer.
+	Err error
 }
 
 // StreamCompletion resolves the AI config for kbID, builds a chat request, and
@@ -115,7 +121,7 @@ func StreamCompletion(ctx context.Context, resolver *ConfigResolver, prompt, sys
 
 		for chunk := range rawCh {
 			if chunk.Done {
-				send(StreamEvent{Done: true})
+				send(StreamEvent{Done: true, Err: chunk.Err})
 				return
 			}
 

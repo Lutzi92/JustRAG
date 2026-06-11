@@ -181,6 +181,10 @@ var (
 // client is gone and the relay loop should stop instead of draining the rest
 // of the worker's events into a dead connection.
 func writeSSEEvent(w http.ResponseWriter, data string) error {
+	// Slide the write deadline forward so a half-open client can only
+	// block this write for SSEWriteTimeout, not forever (while blocked
+	// here, the inactivity/heartbeat select can't fire).
+	httputil.RearmSSEWriteDeadline(w)
 	if _, err := w.Write(sseDataPrefix); err != nil {
 		return err
 	}

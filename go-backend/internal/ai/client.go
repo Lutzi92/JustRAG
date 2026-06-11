@@ -28,10 +28,11 @@ import (
 //
 // The pool holds *[]byte so Get/Put avoid the boxing allocation that
 // `any` of a value-type slice header would otherwise incur. The 1 MB
-// max-token cap passed to scanner.Buffer is unchanged — bufio grows the
-// scratch beyond the initial cap as needed; the next Put returns the
-// grown buffer to the pool, so the pool naturally heals upward to fit
-// the largest SSE frame any caller has seen.
+// max-token cap passed to scanner.Buffer is unchanged. Note: when a frame
+// exceeds 64 KB, bufio.Scanner allocates a larger buffer INTERNALLY — it
+// never writes back through our *[]byte — so the pool always recycles the
+// original 64 KB array. Oversized frames simply pay a one-off allocation;
+// the pool only amortizes the common small-frame case.
 var streamScannerBufPool = sync.Pool{
 	New: func() any { b := make([]byte, 64*1024); return &b },
 }
@@ -334,6 +335,13 @@ type StreamChunk struct {
 	// "length" (max_tokens hit). Only the final chunk carries it; intermediate
 	// chunks leave it empty.
 	FinishReason string
+
+	// Err is non-nil when the stream terminated abnormally — a transport
+	// error mid-stream (connection reset) or an SSE frame exceeding the
+	// scanner cap (bufio.ErrTooLong). Only ever set on a chunk with
+	// Done=true. Content delivered before this chunk is TRUNCATED output:
+	// callers must not persist it as a complete AI message.
+	Err error
 }
 
 // streamChatRequest is an internal wrapper that adds stream:true to a ChatRequest
@@ -528,13 +536,10 @@ func (c *Client) StreamChatCompletion(ctx context.Context, req ChatRequest) (<-c
 		// 64 KB comes from streamScannerBufPool so we reuse buffers across
 		// concurrent streaming sessions instead of allocating fresh per stream.
 		bufPtr := streamScannerBufPool.Get().(*[]byte)
-		defer func() {
-			// bufio.Scanner may have grown the buffer past 64 KB to fit a
-			// frame; the pool will hold the larger backing array, which
-			// shrinks effective GC pressure across streams that see the
-			// same maximum frame size.
-			streamScannerBufPool.Put(bufPtr)
-		}()
+		// Always returns the original 64 KB array: bufio.Scanner grows its
+		// buffer internally without writing back through bufPtr (see the
+		// pool's doc comment).
+		defer streamScannerBufPool.Put(bufPtr)
 		scanner.Buffer((*bufPtr)[:0], 1024*1024)
 		for scanner.Scan() {
 			// Every send to ch must select on ctx.Done() — otherwise a
@@ -641,6 +646,20 @@ func (c *Client) StreamChatCompletion(ctx context.Context, req ChatRequest) (<-c
 			case <-ctx.Done():
 				return
 			}
+		}
+
+		// A scan failure (connection reset mid-stream, or a frame over the
+		// 1 MB cap → bufio.ErrTooLong) ends the loop exactly like clean EOF.
+		// Without checking scanner.Err() here, a truncated stream would be
+		// reported as a clean completion and downstream callers would
+		// persist the partial answer as a complete AI message.
+		if err := scanner.Err(); err != nil {
+			slog.Warn("stream scan error — content truncated", "error", err)
+			select {
+			case ch <- StreamChunk{Done: true, Err: fmt.Errorf("ai: stream read: %w", err)}:
+			case <-ctx.Done():
+			}
+			return
 		}
 
 		// Scanner exhausted without [DONE] — send Done anyway.

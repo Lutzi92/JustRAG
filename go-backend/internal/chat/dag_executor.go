@@ -232,13 +232,21 @@ func ExecuteDAG(ctx context.Context, params DAGExecuteParams, run runNodeFn) (DA
 		// (run every sibling to completion regardless of peers) is ever
 		// wanted, swap errgroup for a sync.WaitGroup + per-node error slice.
 		g, gctx := errgroup.WithContext(ctx)
-		for _, node := range lvl {
-			// Build the dependent-node interpolation. Deterministic — no
-			// extra LLM call. Parents may have errored on this level;
-			// in that case we proceed with whatever excerpts we do have
-			// (a missing parent excerpt just means the original query
-			// gets passed through verbatim).
-			query := buildNodeQuery(node, results)
+		// Build every dependent-node interpolation BEFORE launching any
+		// sibling goroutine: buildNodeQuery reads the shared results map
+		// unsynchronized, and the goroutines launched below write to it
+		// under resultsMu. Interleaving the build with the launches would
+		// race a map read against a sibling's map write. Deterministic —
+		// no extra LLM call. Parents may have errored on an earlier
+		// level; in that case we proceed with whatever excerpts we do
+		// have (a missing parent excerpt just means the original query
+		// gets passed through verbatim).
+		queries := make([]string, len(lvl))
+		for i, node := range lvl {
+			queries[i] = buildNodeQuery(node, results)
+		}
+		for i, node := range lvl {
+			query := queries[i]
 			g.Go(func() (rerr error) {
 				// errgroup.Go has no panic recovery — a nil deref deep in
 				// the search path would crash the process mid-plan. Convert

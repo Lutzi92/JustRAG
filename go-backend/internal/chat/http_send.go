@@ -95,6 +95,9 @@ func writeSSE(w http.ResponseWriter, data any) {
 	buf.WriteString("data: ")
 	buf.Write(payload)
 	buf.WriteString("\n\n")
+	// Sliding per-frame deadline: bounds how long a half-open client can
+	// block this goroutine (see httputil.SSEWriteTimeout).
+	httputil.RearmSSEWriteDeadline(w)
 	if _, werr := w.Write(buf.Bytes()); werr != nil {
 		slog.Debug("chat: writeSSE write failed (likely client disconnect)", "error", werr)
 		return
@@ -107,6 +110,7 @@ func writeSSE(w http.ResponseWriter, data any) {
 // writeSSEDone writes the SSE stream terminator and flushes. Write errors
 // are observed at debug level — see writeSSE for the rationale.
 func writeSSEDone(w http.ResponseWriter) {
+	httputil.RearmSSEWriteDeadline(w)
 	if _, werr := fmt.Fprint(w, "data: [DONE]\n\n"); werr != nil {
 		slog.Debug("chat: writeSSEDone write failed (likely client disconnect)", "error", werr)
 		return
@@ -649,11 +653,23 @@ func (h *Handler) tryDeepChat(
 			sseFinished = true
 			return true
 		}
+		var streamErr error
 		for event := range events {
 			if event.Done {
+				streamErr = event.Err
 				break
 			}
 			streamEmit(ai.StreamEvent{Content: event.Content, Reasoning: event.Reasoning})
+		}
+		if streamErr != nil {
+			// Mid-stream abort (connection reset, oversized SSE frame): the
+			// buffered content is truncated. Surface the error and bail
+			// instead of persisting it as a complete AI message.
+			logctx.From(ctx).Error("chat.send: AI stream aborted mid-answer", "error", streamErr, "chat_id", chatID, "kb_id", kbID)
+			writeSSE(w, map[string]string{"error": "AI stream interrupted"})
+			writeSSEDone(w)
+			sseFinished = true
+			return true
 		}
 	}
 

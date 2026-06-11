@@ -166,6 +166,10 @@ type roundStreamEvent struct {
 	ToolCallDeltas []ai.ToolCallDelta
 	FinishReason   string
 	Done           bool
+	// Err mirrors ai.StreamChunk.Err: non-nil on the terminal Done event
+	// when the upstream stream aborted mid-flight. The round must fail
+	// rather than treat the truncated content as a finished answer.
+	Err error
 }
 
 // streamOneRound consumes one upstream round of streaming events,
@@ -213,6 +217,14 @@ loop:
 				deltas = append(deltas, chunk.ToolCallDeltas...)
 			}
 			if chunk.Done {
+				// Abnormal termination: the upstream stream died mid-round
+				// (connection reset, oversized SSE frame). Failing the round
+				// surfaces through RunAnswerWithTools' error return, so the
+				// caller emits a stream error instead of persisting the
+				// truncated content as a finished answer.
+				if chunk.Err != nil {
+					return nil, finishReason, fmt.Errorf("answer stream aborted: %w", chunk.Err)
+				}
 				break loop
 			}
 		}
@@ -562,6 +574,7 @@ func (r *liveRoundRunner) Run(ctx context.Context, messages []ai.ChatMessage, to
 					ToolCallDeltas: chunk.ToolCallDeltas,
 					FinishReason:   chunk.FinishReason,
 					Done:           chunk.Done,
+					Err:            chunk.Err,
 				}
 				if !send(evt) {
 					return
@@ -590,6 +603,7 @@ func (r *liveRoundRunner) Run(ctx context.Context, messages []ai.ChatMessage, to
 					evt.ToolCallDeltas = chunk.ToolCallDeltas
 					evt.FinishReason = chunk.FinishReason
 					evt.Done = chunk.Done
+					evt.Err = chunk.Err
 				}
 				if !send(evt) {
 					return
@@ -603,6 +617,7 @@ func (r *liveRoundRunner) Run(ctx context.Context, messages []ai.ChatMessage, to
 					ToolCallDeltas: chunk.ToolCallDeltas,
 					FinishReason:   chunk.FinishReason,
 					Done:           chunk.Done,
+					Err:            chunk.Err,
 				}) {
 					return
 				}

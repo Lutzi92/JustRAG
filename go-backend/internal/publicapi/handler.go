@@ -128,6 +128,9 @@ func truncateGoal(s string) string {
 // flushing the response writer if it supports http.Flusher.
 func writeSSE(w http.ResponseWriter, data any) {
 	b, _ := json.Marshal(data)
+	// Sliding per-frame deadline: bounds how long a half-open client can
+	// block this goroutine (see httputil.SSEWriteTimeout).
+	httputil.RearmSSEWriteDeadline(w)
 	fmt.Fprintf(w, "data: %s\n\n", b)
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
@@ -136,6 +139,7 @@ func writeSSE(w http.ResponseWriter, data any) {
 
 // writeSSEDone writes the SSE stream terminator and flushes.
 func writeSSEDone(w http.ResponseWriter) {
+	httputil.RearmSSEWriteDeadline(w)
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
@@ -447,8 +451,10 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var fullResponse, fullReasoning string
+		var streamErr error
 		for event := range events {
 			if event.Done {
+				streamErr = event.Err
 				break
 			}
 			if event.Content != "" {
@@ -459,6 +465,14 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 				fullReasoning += event.Reasoning
 				writeSSE(w, map[string]string{"reasoning": event.Reasoning})
 			}
+		}
+		if streamErr != nil {
+			// Mid-stream abort: fullResponse is truncated — don't persist it
+			// as a complete AI message.
+			logctx.From(ctx).Error("publicapi: AI stream aborted mid-answer", "error", streamErr, "kbId", kbID)
+			writeSSE(w, map[string]string{"error": "AI stream interrupted"})
+			writeSSEDone(w)
+			return
 		}
 
 		var reasoningPtr *string

@@ -92,6 +92,12 @@ func RunServer(cfg *config.Config, version string) error {
 	var schedulerWg sync.WaitGroup
 	schedulerWg.Add(1)
 	defer schedulerWg.Wait()
+	// Registered AFTER the Wait above so it runs BEFORE it (LIFO): an
+	// early error return (e.g. setupRoutes failing) must cancel ctx
+	// first, or the Wait blocks forever on a scheduler goroutine that
+	// only exits on ctx.Done(). The outer `defer cancel()` at the top
+	// of this function runs too late — after this Wait. Idempotent.
+	defer cancel()
 	safego.Go(func() {
 		defer schedulerWg.Done()
 		startSchedulers(ctx, infra)
@@ -215,6 +221,12 @@ func RunServer(cfg *config.Config, version string) error {
 	var sigWg sync.WaitGroup
 	sigWg.Add(1)
 	defer sigWg.Wait()
+	// Registered AFTER the Wait above so it runs BEFORE it (LIFO): the
+	// signal goroutine's ctx.Done() escape hatch only works if ctx is
+	// actually cancelled before we block on Wait. Without this, a
+	// ListenAndServe failure (e.g. EADDRINUSE) deadlocks here until a
+	// manual SIGTERM. Idempotent.
+	defer cancel()
 	// safego.Go provides panic recovery so a nil-deref during shutdown
 	// (the worst possible moment to crash) doesn't bypass deferred cleanup.
 	safego.Go(func() {

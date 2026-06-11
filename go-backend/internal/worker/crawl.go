@@ -68,7 +68,15 @@ func NewCrawlHandler(deps CrawlDeps) func(ctx context.Context, task *asynq.Task)
 			}
 			b, _ := json.Marshal(data)
 			if deps.Redis != nil {
-				deps.Redis.Set(ctx, progressKey, string(b), crawlProgressTTL)
+				// Detached from the task ctx: the terminal "failed"/"completed"
+				// publishes run after runCrawl returned — on a cancelled task
+				// ctx a plain Set would silently no-op and the HTTP status
+				// endpoint would show the job as active forever (until TTL).
+				wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				defer cancel()
+				if err := deps.Redis.Set(wctx, progressKey, string(b), crawlProgressTTL).Err(); err != nil {
+					slog.Warn("crawl: progress publish failed", "jobId", jobID, "state", state, "error", err)
+				}
 			}
 		}
 

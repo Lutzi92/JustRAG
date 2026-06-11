@@ -177,6 +177,54 @@ func TestStreamChatCompletion_ContextCancelled(t *testing.T) {
 	}
 }
 
+// TestStreamChatCompletion_ScannerErrorSurfaced: a single SSE frame larger
+// than the 1 MB scanner cap aborts the scan loop with bufio.ErrTooLong.
+// The terminal chunk must carry Err so consumers can distinguish a
+// truncated stream from a clean completion (and avoid persisting the
+// partial content as a finished AI message).
+func TestStreamChatCompletion_ScannerErrorSurfaced(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		// A valid content frame first, then a frame over the scanner cap.
+		fmt.Fprintf(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")
+		flusher.Flush()
+		fmt.Fprintf(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"%s\"}}]}\n\n",
+			strings.Repeat("x", 2<<20))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL+"/v1/", "test-key")
+	req := ChatRequest{Model: "gpt-4", Messages: []ChatMessage{{Role: "user", Content: "hi"}}}
+
+	ch, err := client.StreamChatCompletion(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var contents []string
+	var terminal *StreamChunk
+	for c := range ch {
+		if c.Done {
+			cc := c
+			terminal = &cc
+			continue
+		}
+		contents = append(contents, c.Content)
+	}
+	if terminal == nil {
+		t.Fatal("expected a terminal Done chunk")
+	}
+	if terminal.Err == nil {
+		t.Fatal("terminal chunk after scanner failure must carry Err — truncated stream was reported as clean completion")
+	}
+	if len(contents) != 1 || contents[0] != "partial" {
+		t.Errorf("expected the one pre-failure content chunk, got %v", contents)
+	}
+}
+
 func TestStreamChatCompletion_APIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)

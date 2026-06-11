@@ -496,6 +496,9 @@ func (h *Handler) nonStreamResponse(
 
 func writeSSEChunk(w http.ResponseWriter, chunk completionChunk) {
 	b, _ := json.Marshal(chunk)
+	// Sliding per-frame deadline: bounds how long a half-open client can
+	// block this goroutine (see httputil.SSEWriteTimeout).
+	httputil.RearmSSEWriteDeadline(w)
 	fmt.Fprintf(w, "data: %s\n\n", b)
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
@@ -503,6 +506,7 @@ func writeSSEChunk(w http.ResponseWriter, chunk completionChunk) {
 }
 
 func writeSSEDone(w http.ResponseWriter) {
+	httputil.RearmSSEWriteDeadline(w)
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
@@ -555,8 +559,10 @@ func (h *Handler) streamResponse(
 		return
 	}
 
+	var streamErr error
 	for event := range events {
 		if event.Done {
+			streamErr = event.Err
 			break
 		}
 		if event.Content != "" {
@@ -574,6 +580,27 @@ func (h *Handler) streamResponse(
 				},
 			})
 		}
+	}
+
+	if streamErr != nil {
+		// Mid-stream abort: don't pretend the completion finished with
+		// "stop" — emit an OpenAI-compat error object so clients see a
+		// diagnostic instead of a silently truncated answer.
+		logctx.From(ctx).Error("openaicompat: AI stream aborted mid-answer",
+			"error", streamErr,
+			"kbId", kbID,
+		)
+		errPayload, _ := json.Marshal(apiError{Error: apiErrorDetail{
+			Message: streamErr.Error(),
+			Type:    "internal_error",
+			Code:    "stream_interrupted",
+		}})
+		fmt.Fprintf(w, "data: %s\n\n", errPayload)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		writeSSEDone(w)
+		return
 	}
 
 	// Final chunk with finish_reason.

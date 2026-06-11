@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -25,6 +26,15 @@ var numericRe = regexp.MustCompile(`/\d+(?:/|$)`)
 // a RWMutex for this read-mostly workload — once warmed up, every lookup
 // is a single atomic load on the happy path.
 var routeCache sync.Map // map[string]string
+
+// routeCacheSize bounds routeCache. Legitimate traffic only ever produces
+// route-template-shaped paths (dozens), but scanner probes (/wp-admin/x,
+// /.env, …) mint a fresh non-UUID, non-numeric path per request; without a
+// cap each probe would add a cache entry forever. Past the cap we still
+// normalize — we just stop memoizing new paths.
+var routeCacheSize atomic.Int64
+
+const routeCacheMax = 4096
 
 var (
 	httpRequestDuration = promauto.NewHistogramVec(
@@ -63,7 +73,11 @@ func normalizeRoute(path string) string {
 		}
 		return "/{id}"
 	})
-	routeCache.Store(path, normalized)
+	if routeCacheSize.Load() < routeCacheMax {
+		if _, loaded := routeCache.LoadOrStore(path, normalized); !loaded {
+			routeCacheSize.Add(1)
+		}
+	}
 	return normalized
 }
 
@@ -81,8 +95,19 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 
 		defer func() {
 			duration := time.Since(start).Seconds()
-			route := normalizeRoute(r.URL.Path)
 			status := strconv.Itoa(wrapped.statusCode)
+			// Unmatched routes (scanner probes hitting 404/405) would mint a
+			// new `route` label value per random path — unbounded Prometheus
+			// label cardinality. Collapse them into one bucket; real routes
+			// never 404 by path shape (they 404 by missing resource AFTER
+			// UUID/numeric segments were normalized to {id}).
+			var route string
+			switch wrapped.statusCode {
+			case http.StatusNotFound, http.StatusMethodNotAllowed:
+				route = "unmatched"
+			default:
+				route = normalizeRoute(r.URL.Path)
+			}
 
 			httpRequestDuration.WithLabelValues(r.Method, route, status).Observe(duration)
 			httpRequestsTotal.WithLabelValues(r.Method, route, status).Inc()

@@ -14,6 +14,8 @@ import (
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
 	"github.com/go-rod/rod/lib/proto"
+
+	"github.com/justrag/go-backend/internal/safego"
 )
 
 // browserPool owns one warm *rod.Browser and serialises access to it via
@@ -332,7 +334,10 @@ func (f *Fetcher) fetchTier2(ctx context.Context, rawURL string, opts Options) (
 		}
 		h.ContinueRequest(&proto.FetchContinueRequest{})
 	})
-	go router.Run()
+	// safego: rod panics internally on protocol hiccups, and this goroutine
+	// runs inside the long-lived server/worker process — an unrecovered
+	// panic here would crash it mid-fetch.
+	safego.Go(router.Run)
 	defer router.Stop() //nolint:errcheck
 
 	if err := page.Context(ctx).Navigate(rawURL); err != nil {

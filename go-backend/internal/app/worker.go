@@ -375,6 +375,11 @@ func RunWorker(cfg *config.Config) error {
 	var sigWg sync.WaitGroup
 	sigWg.Add(1)
 	defer sigWg.Wait()
+	// Registered AFTER the Wait above so it runs BEFORE it (LIFO): the
+	// signal goroutine's ctx.Done() escape hatch only works if ctx is
+	// actually cancelled before we block on Wait. Without this, an
+	// srv.Run failure deadlocks here until a manual SIGTERM. Idempotent.
+	defer cancel()
 	// Graceful shutdown on signal — cancel context so schedulers, maintenance,
 	// and in-flight handlers all stop. Deferred cleanup handles the rest.
 	// Escape on ctx.Done so an early srv.Run failure doesn't leak this

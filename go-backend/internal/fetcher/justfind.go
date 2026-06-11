@@ -13,6 +13,8 @@ import (
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
 	"github.com/go-rod/rod/lib/proto"
+
+	"github.com/justrag/go-backend/internal/safego"
 )
 
 // justFindCtx owns a single dedicated rod browser with a persistent
@@ -136,7 +138,10 @@ func (f *Fetcher) fetchTier3(ctx context.Context, rawURL string, opts Options) (
 	}); err != nil {
 		return nil, fmt.Errorf("tier3: hijack add: %w", err)
 	}
-	go router.Run()
+	// safego: rod panics internally on protocol hiccups, and this goroutine
+	// runs inside the long-lived server/worker process — an unrecovered
+	// panic here would crash it mid-fetch.
+	safego.Go(router.Run)
 	defer router.Stop() //nolint:errcheck
 
 	// Capture the HTTP status of the main-frame response. Rod's Navigate
@@ -149,7 +154,7 @@ func (f *Fetcher) fetchTier3(ctx context.Context, rawURL string, opts Options) (
 		mainReqID  proto.NetworkRequestID
 		haveReqID  bool
 	)
-	go page.Context(ctx).EachEvent(func(e *proto.NetworkRequestWillBeSent) {
+	waitEvents := page.Context(ctx).EachEvent(func(e *proto.NetworkRequestWillBeSent) {
 		if e.Type != proto.NetworkResourceTypeDocument {
 			return
 		}
@@ -165,7 +170,10 @@ func (f *Fetcher) fetchTier3(ctx context.Context, rawURL string, opts Options) (
 		if haveReqID && e.RequestID == mainReqID {
 			mainStatus = e.Response.Status
 		}
-	})()
+	})
+	// safego for the same reason as router.Run above — rod's event pump
+	// can panic on protocol-level surprises.
+	safego.Go(waitEvents)
 
 	if err := page.Context(ctx).Navigate(rawURL); err != nil {
 		return nil, fmt.Errorf("tier3: navigate: %w", err)

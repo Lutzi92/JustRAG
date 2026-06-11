@@ -269,6 +269,16 @@ dispatch:
 	}
 	importWg.Wait()
 
+	// Cancellation is not success: without this check we would fall
+	// through to finalize on the dead ctx (every UpdateConfluenceSource
+	// below fails silently), return nil, and Asynq would record the task
+	// as succeeded — stranding the source in status='syncing' until the
+	// next scheduled tick. Returning the ctx error lets Asynq retry.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("confluence sync cancelled after %d/%d pages: %w",
+			successCount.Load(), len(jobs), err)
+	}
+
 	// 3. Finalize: set pageCount to signal import loop is done, reconcile
 	// sync_total/sync_progress against actual DB file counts, and decide
 	// whether to mark the source active now or leave it for the post-file
