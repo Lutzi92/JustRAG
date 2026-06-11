@@ -42,6 +42,10 @@ func BuildPoolConfig(cfg config.DBConfig) (*pgxpool.Config, error) {
 		return nil, fmt.Errorf("parsing pool config: %w", err)
 	}
 
+	// Narrowing is safe: config validation bounds MaxConns to [1, MaxInt32]
+	// and MinConns to [0, MaxConns] before any pool is built (config.go,
+	// validatePoolSizing). Test fixtures constructing DBConfig directly
+	// bypass that check and own the consequences.
 	poolCfg.MaxConns = int32(cfg.MaxConns)
 	poolCfg.MinConns = int32(cfg.MinConns)
 	poolCfg.MaxConnIdleTime = cfg.IdleTimeout
@@ -206,7 +210,10 @@ func Connect(ctx context.Context, mainCfg, vectorCfg config.DBConfig) (*DB, erro
 	// User + Password are part of the equivalence check so deployments that
 	// run pgvector under a separate role (read-only vector user, RLS scoping)
 	// don't silently reuse the main pool's credentials. Same host:port/db
-	// with different creds means open a second pool.
+	// with different creds means open a second pool. The comparison is
+	// string-literal, so aliases of the same server (localhost vs 127.0.0.1,
+	// short vs FQDN) open two pools to one DB — harmless, just doubles the
+	// connection budget; align the env vars to share.
 	if vectorCfg.Host == mainCfg.Host &&
 		vectorCfg.Port == mainCfg.Port &&
 		vectorCfg.Name == mainCfg.Name &&
@@ -237,6 +244,25 @@ func Connect(ctx context.Context, mainCfg, vectorCfg config.DBConfig) (*DB, erro
 // A non-nil error here is non-fatal for the server: the caller falls back to
 // a disabled sql_query stub rather than refusing to start.
 func ConnectReadOnly(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	poolCfg, err := buildReadOnlyPoolConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		return nil, fmt.Errorf("open read-only pool: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping read-only pool: %w", err)
+	}
+	return pool, nil
+}
+
+// buildReadOnlyPoolConfig holds ConnectReadOnly's config policy, split out so
+// the defaults and operator-override behavior are unit-testable without a DB.
+func buildReadOnlyPoolConfig(dsn string) (*pgxpool.Config, error) {
 	poolCfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse read-only DSN: %w", err)
@@ -273,16 +299,16 @@ func ConnectReadOnly(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if _, ok := poolCfg.ConnConfig.RuntimeParams["statement_timeout"]; !ok {
 		poolCfg.ConnConfig.RuntimeParams["statement_timeout"] = "5000"
 	}
-
-	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
-	if err != nil {
-		return nil, fmt.Errorf("open read-only pool: %w", err)
+	// Reject writes at the session layer too. The SELECT-only role's grants
+	// are the security boundary, but a fat-fingered GRANT (or a future schema
+	// whose default privileges leak) would otherwise go unnoticed; with this
+	// set, any write on the pool fails with "cannot execute ... in a
+	// read-only transaction" regardless of grants. Same override pattern as
+	// statement_timeout: an explicit value in the operator's DSN wins.
+	if _, ok := poolCfg.ConnConfig.RuntimeParams["default_transaction_read_only"]; !ok {
+		poolCfg.ConnConfig.RuntimeParams["default_transaction_read_only"] = "on"
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("ping read-only pool: %w", err)
-	}
-	return pool, nil
+	return poolCfg, nil
 }
 
 // dsnHasPoolMaxConns reports whether the operator's DSN explicitly sets

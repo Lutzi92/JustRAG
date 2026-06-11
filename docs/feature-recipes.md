@@ -200,7 +200,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE <db_user> IN SCHEMA tabular
 
 `<db_user>` = `DB_USER` (Go worker/server role that creates the per-sheet tables). `<readonly_role>` = role behind `JUSTRAG_DB_URL_READONLY`.
 
-**SECURITY:** the read-only role's `search_path` must **NOT** include `tabular`. Per-KB isolation depends on schema-qualified `tabular.<name>` references — unqualified table names must fail to resolve so a prompt-injected bare name cannot bypass the catalog allowlist.
+**SECURITY:** the read-only role's `search_path` must **NOT** include `tabular`. Per-KB isolation depends on schema-qualified `tabular.<name>` references — unqualified table names must fail to resolve so a prompt-injected bare name cannot bypass the catalog allowlist. The pool additionally sets `default_transaction_read_only=on` per session (writes fail even if the role's grants are ever fat-fingered); an explicit `default_transaction_read_only` in the `JUSTRAG_DB_URL_READONLY` DSN overrides it, same as `statement_timeout`.
 
 **Phase 1 limits:** first row = header; multi-row headers / merged cells / legacy BIFF `.xls` fall back to text; sheet buffered in memory before `COPY` (multi-hundred-MB spike at 1M rows). **Phase 2:** synthetic `_rowid bigint` + per-row embeddings for heuristic-selected TEXT columns; fuzzy hit → `table_query WHERE _rowid IN (...)`. **Phase 3:** prompt-guidance only — Recharts JSON in a ` ```chart ` block rendered by the frontend ChartRenderer; non-SQL reshapes use code_exec (gated by `chat_code_exec_enabled`). Specs in `docs/superpowers/specs/2026-05-28-tabular-data-qa-design.md` (+phase2/3).
 

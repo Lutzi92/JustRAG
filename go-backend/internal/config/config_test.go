@@ -152,6 +152,12 @@ func TestVectorDBFallsBackToMainDB(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret-that-is-at-least-32-characters-long")
 	t.Setenv("DB_HOST", "main-db")
 	t.Setenv("DB_USER", "mainuser")
+	// The fallback only fires when no VECTOR_DB_* override is present; CI
+	// exports these for the DB-backed integration steps, so clear them here
+	// (envOr/envInt treat empty as unset, and t.Setenv restores afterwards).
+	for _, k := range []string{"VECTOR_DB_HOST", "VECTOR_DB_PORT", "VECTOR_DB_USER", "VECTOR_DB_PASSWORD", "VECTOR_DB_NAME"} {
+		t.Setenv(k, "")
+	}
 
 	cfg, err := config.Load()
 	if err != nil {

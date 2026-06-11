@@ -78,6 +78,10 @@ jobs:
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: '1'
+          # Trivy's default 5m timeout is flaky on cold-cache runs — a full
+          # image scan with a fresh vuln-DB download has hit the deadline
+          # mid-layer-analysis on slow runners.
+          timeout: 15m
         env:
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
