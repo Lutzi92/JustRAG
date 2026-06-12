@@ -146,10 +146,13 @@ func (s *Supervisor) RunMulti(ctx context.Context, in Input) (SupervisorResult, 
 	// confirmed by the module's `go 1.26` directive), so the closure captures
 	// each iteration's own values without explicit parameter passing — matching
 	// the convention in chat/multipass.go and ai/rerank_qwen3.go.
+	//
+	// wg.Go (not safego.GoCtx) on purpose: a specialist panic must surface
+	// as results[i].err so the failure-counting fallback below sees it —
+	// RecoverError captures it as an error, whereas GoCtx would only log it
+	// and leave results[i] looking like a silent success.
 	for i, sp := range specialists {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer safego.RecoverError(&results[i].err)
 
 			// Per-specialist timeout; intentionally layers UNDER any parent
@@ -170,7 +173,7 @@ func (s *Supervisor) RunMulti(ctx context.Context, in Input) (SupervisorResult, 
 				return
 			}
 			observability.RecordAgentDispatch(sp.Name(), "ok")
-		}()
+		})
 	}
 	wg.Wait()
 

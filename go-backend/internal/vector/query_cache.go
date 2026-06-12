@@ -226,6 +226,7 @@ func (c *QueryCache) Store(ctx context.Context, kbID string, hash []byte, embedd
 		return nil
 	default:
 		observability.RecordQueryCacheWriteDropped()
+		logctx.From(ctx).Warn("query_cache: write buffer full, dropping cache write", "kb_id", kbID)
 		return nil
 	}
 }

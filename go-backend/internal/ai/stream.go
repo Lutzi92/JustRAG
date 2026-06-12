@@ -99,6 +99,7 @@ func StreamCompletion(ctx context.Context, resolver *ConfigResolver, prompt, sys
 				select {
 				case out <- StreamEvent{Done: true}:
 				default:
+					slog.Warn("stream consumer already departed; terminal event after panic recovery dropped")
 				}
 			}
 		}()
@@ -178,11 +179,7 @@ func StreamCompletion(ctx context.Context, resolver *ConfigResolver, prompt, sys
 // longestSuffix returns the length of the longest suffix of s that is a prefix
 // of needle. Used to detect partial tag boundaries across chunk boundaries.
 func longestSuffix(s, needle string) int {
-	max := len(needle)
-	if max > len(s) {
-		max = len(s)
-	}
-	for l := max; l > 0; l-- {
+	for l := min(len(needle), len(s)); l > 0; l-- {
 		if strings.HasSuffix(s, needle[:l]) {
 			return l
 		}
