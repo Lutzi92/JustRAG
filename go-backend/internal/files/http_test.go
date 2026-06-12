@@ -42,6 +42,29 @@ type mockStore struct {
 	createErr       error
 	kbFileLimits    *files.KBFileLimits
 	kbFileLimitsErr error
+	resetOK         bool
+	resetCalled     bool
+	resetCount      int
+	resetErr        error
+	errorFiles      []*files.FileInfo
+	markedStage     string
+	markedMsg       string
+}
+
+func (m *mockStore) ResetFileForRetry(_ context.Context, _ string) (bool, error) {
+	m.resetCalled = true
+	m.resetCount++
+	return m.resetOK, m.resetErr
+}
+
+func (m *mockStore) ListErrorFiles(_ context.Context, _ string) ([]*files.FileInfo, error) {
+	return m.errorFiles, nil
+}
+
+func (m *mockStore) MarkFileError(_ context.Context, _ string, stage, message string) error {
+	m.markedStage = stage
+	m.markedMsg = message
+	return nil
 }
 
 func (m *mockStore) GetFileByID(_ context.Context, _ string) (*files.FileInfo, error) {

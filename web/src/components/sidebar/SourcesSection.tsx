@@ -24,13 +24,29 @@ interface SourcesSectionProps {
     onUpdateConfluenceSource: (sourceId: string, updates: { includeAttachments?: boolean; syncInterval?: number | null; status?: 'active' | 'paused' }) => void;
     onDeleteConfluenceSource: (sourceId: string) => void;
     onSyncConfluenceNow: (sourceId: string) => void;
+    onRetryFile: (id: string) => void;
+    onRetryAllFailed: () => void;
 }
+
+// Maps files.error_stage values (backend vocabulary, see
+// files.PGStore.MarkFileError) to translation keys. Unknown stages fall
+// back to the raw errorMessage, then to fileErrorUnknown.
+const ERROR_STAGE_KEYS: Record<string, string> = {
+    unsupported_type: 'fileErrorUnsupportedType',
+    parse: 'fileErrorParse',
+    embedding: 'fileErrorEmbedding',
+    canceled: 'fileErrorCanceled',
+    processing: 'fileErrorProcessing',
+    timeout: 'fileErrorTimeout',
+    queue: 'fileErrorQueue',
+};
 
 const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
     files, onPreviewSource, onToggleFileSelection, onToggleFilesSelection,
     onDownloadFile, onDeleteFile,
     rssFeeds, onUpdateRssFeed, onDeleteRssFeed, onPollFeedNow, onViewFeed,
-    confluenceSources, onUpdateConfluenceSource, onDeleteConfluenceSource, onSyncConfluenceNow
+    confluenceSources, onUpdateConfluenceSource, onDeleteConfluenceSource, onSyncConfluenceNow,
+    onRetryFile, onRetryAllFailed
 }) => {
     const { t } = useTheme();
     const reducedMotion = useReducedMotion();
@@ -38,10 +54,25 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
     const nonRssFiles = files.filter(f => f.origin !== 'rss' && f.origin !== 'confluence');
     const rssFeedFiles = (feedId: string) => files.filter(f => f.rssFeedId === feedId);
 
+    const failedCount = files.filter(f => f.status === 'error').length;
+    const errorLabel = (file: FileEntry) => {
+        if (file.errorStage && ERROR_STAGE_KEYS[file.errorStage]) return t(ERROR_STAGE_KEYS[file.errorStage]);
+        return file.errorMessage || t('fileErrorUnknown');
+    };
+
     return (
         <div className="sidebar-left__files-section">
             <div className="sidebar-left__files-header sidebar-ui__section-header">
                 <h2 className="sidebar-left__files-title">{t('sources')}</h2>
+                {failedCount > 0 && (
+                    <button
+                        onClick={onRetryAllFailed}
+                        className="text-button sidebar-left__retry-all-failed"
+                        title={t('retryAllFailed')}
+                    >
+                        <RefreshCw size={12} aria-hidden="true" /> {t('retryAllFailed')} ({failedCount})
+                    </button>
+                )}
             </div>
 
             <ul className="sidebar-left__files-list sidebar-ui__list">
@@ -67,6 +98,16 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                         {file.name}
                                     </button>
                                     <div className="sidebar-left__file-actions">
+                                        {file.status === 'error' && (
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); onRetryFile(file.id); }}
+                                                className="settings-toggle sidebar-left__file-action sidebar-ui__item-delete"
+                                                title={t('retrySource')}
+                                                aria-label={`${t('retrySource')} ${file.name}`}
+                                            >
+                                                <RefreshCw size={14} />
+                                            </button>
+                                        )}
                                         <button
                                             onClick={(e) => { e.stopPropagation(); onDownloadFile(file.id); }}
                                             className="settings-toggle sidebar-left__file-action sidebar-ui__item-delete"
@@ -97,6 +138,14 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                         </div>
                                     )}
                                 </div>
+                                {file.status === 'error' && (
+                                    <div
+                                        className="sidebar-left__rss-feed-error"
+                                        title={file.errorMessage || undefined}
+                                    >
+                                        {errorLabel(file)}
+                                    </div>
+                                )}
                                 {file.status === 'processing' && (
                                     <div
                                         role="progressbar"

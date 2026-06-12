@@ -119,6 +119,32 @@ export function useFileManagement({ currentKb }: UseFileManagementParams) {
     }
   }, [showConfirm, t, toast]);
 
+  const retryFile = useCallback(async (fileId: string) => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/files/${fileId}/retry`);
+      // Flip to pending locally — this re-arms the 2s polling effect above.
+      setFiles(prev => prev.map(f =>
+        f.id === fileId
+          ? { ...f, status: 'pending' as const, progress: 0, errorStage: undefined, errorMessage: undefined }
+          : f
+      ));
+    } catch (err: unknown) {
+      console.error('Retry failed:', err);
+      toast.error(getApiErrorMessage(err, t('retryRequestFailed')));
+    }
+  }, [t, toast]);
+
+  const retryAllFailed = useCallback(async () => {
+    if (!currentKb) return;
+    try {
+      await axios.post(`${API_BASE_URL}/api/kb/${currentKb.id}/files/retry-failed`);
+      await fetchFiles(currentKb.id);
+    } catch (err: unknown) {
+      console.error('Retry all failed:', err);
+      toast.error(getApiErrorMessage(err, t('retryRequestFailed')));
+    }
+  }, [currentKb, fetchFiles, t, toast]);
+
   const handleToggleFileSelection = useCallback((fileId: string, e: React.SyntheticEvent) => {
     e.stopPropagation();
     setFiles(prev => prev.map(f =>
@@ -218,7 +244,7 @@ export function useFileManagement({ currentKb }: UseFileManagementParams) {
   return useMemo(() => ({
     files, uploading, hasFiles, selectedFileCount, fileInputRef,
     fetchFiles, handleFileUpload, handleDeleteFile, handleToggleFileSelection, handleToggleFilesSelection,
-    handleDownloadFile, openUploadModal,
+    handleDownloadFile, openUploadModal, retryFile, retryAllFailed,
     showUploadModal, setShowUploadModal,
     isDragging, textSourceTitle, setTextSourceTitle,
     textSourceContent, setTextSourceContent,
@@ -227,7 +253,7 @@ export function useFileManagement({ currentKb }: UseFileManagementParams) {
     files, uploading, hasFiles, selectedFileCount,
     showUploadModal, isDragging, textSourceTitle, textSourceContent,
     fetchFiles, handleFileUpload, handleDeleteFile, handleToggleFileSelection, handleToggleFilesSelection,
-    handleDownloadFile, openUploadModal,
+    handleDownloadFile, openUploadModal, retryFile, retryAllFailed,
     handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleTextSourceAdd
   ]);
 }

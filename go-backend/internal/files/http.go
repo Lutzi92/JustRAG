@@ -79,6 +79,10 @@ type Store interface {
 	GetKBShare(ctx context.Context, kbID, userID string) (*kbaccess.KBShare, error)
 	CreateFile(ctx context.Context, data CreateFileData) (*FileRecord, error)
 	GetKBFileLimits(ctx context.Context, kbID string) (*KBFileLimits, error)
+	// Retry support (see http_retry.go).
+	ResetFileForRetry(ctx context.Context, fileID string) (bool, error)
+	ListErrorFiles(ctx context.Context, kbID string) ([]*FileInfo, error)
+	MarkFileError(ctx context.Context, fileID, stage, message string) error
 }
 
 // ChunkDeleter abstracts deleting vector chunks for a file across every

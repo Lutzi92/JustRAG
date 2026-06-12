@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -108,10 +109,12 @@ func (c *QueryCache) StartWriter(ctx context.Context) {
 	c.once.Do(func() {
 		ch := make(chan queryCacheWrite, queryCacheWriteBuffer)
 		c.writeCh.Store(&ch)
-		// safego.Go isolates a panic in writeOne (nil pool, pgx driver
-		// bug, etc.) so a background write failure can't crash the
-		// process — the chat hot path already drops on overflow, that
-		// best-effort contract should hold for panics too.
+		// Per-write panics (nil pool, pgx driver bug, etc.) are recovered
+		// inside processWrite so the writer survives a poisoned item —
+		// otherwise one panic would permanently downgrade every later
+		// Store() to a channel-overflow drop. safego.Go stays as the
+		// last-resort backstop for a panic outside processWrite, so a
+		// background write failure can never crash the process.
 		safego.Go(func() { c.writeLoop(ctx, ch) })
 	})
 }
@@ -144,11 +147,23 @@ func (c *QueryCache) writeLoop(ctx context.Context, writeCh chan queryCacheWrite
 // Extracted so defer cancel() fires per iteration — a defer inside the
 // select case body would accumulate until writeLoop returns.
 //
+// Panics are recovered HERE, per item, not just at the safego.Go backstop
+// around writeLoop: a panic that escaped to the backstop would kill the
+// writer goroutine permanently, silently degrading every later Store()
+// into a channel-overflow drop for the rest of the process lifetime. A
+// poisoned single write must not take the writer with it.
+//
 // The writeLoop's ctx is the application-lifetime context, not a request
 // context, so it doesn't carry a trace span — but if a span did make it
 // onto the loop ctx (test setups, future per-request workers), propagate
 // it onto the detached write so the insert still appears in the trace.
 func (c *QueryCache) processWrite(ctx context.Context, w queryCacheWrite) {
+	defer func() {
+		if r := recover(); r != nil {
+			logctx.From(ctx).Error("query_cache: async write panicked; writer continues",
+				"panic", fmt.Sprint(r), "kb_id", w.kbID, "stack", string(debug.Stack()))
+		}
+	}()
 	span := trace.SpanFromContext(ctx)
 	bg := trace.ContextWithSpan(context.Background(), span)
 	writeCtx, cancel := context.WithTimeout(bg, 5*time.Second)

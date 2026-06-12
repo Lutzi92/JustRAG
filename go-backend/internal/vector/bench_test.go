@@ -275,3 +275,66 @@ func BenchmarkJaccardSorted(b *testing.B) {
 		jaccardSorted(a, c)
 	}
 }
+
+// BenchmarkSearchPipeline composes the post-retrieval pipeline in production
+// stage order (search.go steps 9–13b): RRF fusion → rerank-score blend →
+// dedup → snapshot → MMR → trim → BM25 floor. The per-stage benchmarks above
+// guard each component; this one guards the composition and is the
+// regression baseline for pipeline-level changes. Network stages (embedding,
+// pgvector query, reranker call) are excluded — rerank scores are
+// synthesized deterministically per fused index. The snapshot and score maps
+// are hoisted and clear()ed per iteration to mirror the pooled scratch maps
+// the production path borrows.
+func BenchmarkSearchPipeline(b *testing.B) {
+	const limit = 10
+	for _, n := range []int{50, 200} {
+		b.Run(fmt.Sprintf("docs_per_list=%d", n), func(b *testing.B) {
+			docs := makeBenchDocs(n)
+			vec := make([]RankedDoc, len(docs))
+			copy(vec, docs)
+			// Keyword arm: same corpus in a different rank order, as BM25
+			// and vector search typically agree on membership more than on
+			// order. Index 0 = best BM25 hit, which ApplyBM25Floor assumes.
+			kw := make([]RankedDoc, len(docs))
+			copy(kw, docs)
+			r := rand.New(rand.NewSource(3))
+			r.Shuffle(len(kw), func(i, j int) { kw[i], kw[j] = kw[j], kw[i] })
+			for i := range kw {
+				kw[i].Score = float64(len(kw) - i)
+			}
+			weights := []float64{1.0, 1.0}
+			scoreMap := make(map[int]float64, 2*n)
+			snapshot := make(map[string]RankedDoc, 2*n)
+
+			b.ReportAllocs()
+			for b.Loop() {
+				fused := FuseRRFWeighted(60, weights, vec, kw)
+				clear(scoreMap)
+				for i := range fused {
+					// Deterministic stand-in for cross-encoder output,
+					// decorrelated from RRF order so the blend pass does
+					// real re-sorting work.
+					scoreMap[i] = float64((i*7919)%101) / 100.0
+				}
+				fused = BlendRerankScores(fused, scoreMap, 0.7)
+				fused = Deduplicate(fused, 0.85)
+				clear(snapshot)
+				for _, d := range fused {
+					snapshot[d.ID] = d
+				}
+				if len(fused) > limit {
+					pool := limit * 2
+					if pool > len(fused) {
+						pool = len(fused)
+					}
+					fused = ApplyMMR(fused[:pool], 0.7, limit)
+				}
+				if len(fused) > limit {
+					fused = fused[:limit]
+				}
+				fused, _ = ApplyBM25Floor(fused, kw, snapshot, limit, BM25FloorMaxFilesFor(limit))
+				_ = fused
+			}
+		})
+	}
+}

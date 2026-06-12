@@ -42,17 +42,25 @@ func TestInstrument_RecordsSuccessAndError(t *testing.T) {
 	}
 }
 
-// fakeStatusStore records UpdateFileStatus calls for MarkErrorOnExhaustion tests.
+// fakeStatusStore records MarkFileErrorIfUnset calls for MarkErrorOnExhaustion tests.
 type fakeStatusStore struct {
 	lastStatus map[string]string
+	lastStage  map[string]string
+	lastMsg    map[string]string
 }
 
 func newFakeStatusStore() *fakeStatusStore {
-	return &fakeStatusStore{lastStatus: make(map[string]string)}
+	return &fakeStatusStore{
+		lastStatus: make(map[string]string),
+		lastStage:  make(map[string]string),
+		lastMsg:    make(map[string]string),
+	}
 }
 
-func (f *fakeStatusStore) UpdateFileStatus(_ context.Context, fileID, status string) error {
-	f.lastStatus[fileID] = status
+func (f *fakeStatusStore) MarkFileErrorIfUnset(_ context.Context, fileID, stage, message string) error {
+	f.lastStatus[fileID] = "error"
+	f.lastStage[fileID] = stage
+	f.lastMsg[fileID] = message
 	return nil
 }
 
@@ -97,6 +105,12 @@ func TestMarkErrorOnExhaustion_FinalAttemptMarksError(t *testing.T) {
 	}
 	if got := store.lastStatus["file-123"]; got != "error" {
 		t.Errorf("expected file-123 status=error, got %q", got)
+	}
+	if got := store.lastStage["file-123"]; got != "processing" {
+		t.Errorf("stage: want processing, got %q", got)
+	}
+	if got := store.lastMsg["file-123"]; got != "Processing failed after 3 attempts" {
+		t.Errorf("message: got %q", got)
 	}
 }
 

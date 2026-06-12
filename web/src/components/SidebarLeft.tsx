@@ -42,6 +42,7 @@ const SidebarLeftComp: React.FC = () => {
         files, fileInputRef,
         handleToggleFileSelection, handleToggleFilesSelection,
         handleDownloadFile, handleDeleteFile, handleFileUpload,
+        retryFile, retryAllFailed,
         isDragging, textSourceTitle, setTextSourceTitle,
         textSourceContent, setTextSourceContent,
         handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleTextSourceAdd,
@@ -211,6 +212,8 @@ const SidebarLeftComp: React.FC = () => {
                     onUpdateConfluenceSource={updateConfluenceSource}
                     onDeleteConfluenceSource={deleteConfluenceSource}
                     onSyncConfluenceNow={syncConfluenceNow}
+                    onRetryFile={retryFile}
+                    onRetryAllFailed={retryAllFailed}
                 />
             </div>
 

@@ -121,11 +121,20 @@ func RunServer(cfg *config.Config, version string) error {
 	apiLimiter := middleware.NewRateLimiter(ctx, cfg.RateLimitAPI)
 	defer apiLimiter.Shutdown()
 
+	compress, err := middleware.Compression()
+	if err != nil {
+		return fmt.Errorf("compression middleware: %w", err)
+	}
+
 	var handler http.Handler = mux
 	// Innermost: rewrite ServeMux's plain-text 404/405 defaults (and direct
 	// http.NotFound calls) into the JSON error envelope on the API surface,
 	// so every error body under these prefixes is {"error": "..."}.
 	handler = middleware.JSONAPIErrors("/api/", "/openai/")(handler)
+	// Outside JSONAPIErrors so rewritten error bodies are still compressible;
+	// inside Logging/Metrics so recorded response sizes are wire bytes. SSE
+	// (text/event-stream) passes through uncompressed — see Compression docs.
+	handler = compress(handler)
 	// Global body cap — only the upload routes enumerated in isUploadExempt
 	// are exempt; each sets its own larger http.MaxBytesReader / multipart
 	// cap internally.

@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/justrag/go-backend/internal/parser"
@@ -17,6 +18,8 @@ var _ ProcessorStore = (*mockStore)(nil)
 type mockStore struct {
 	statuses   []string
 	progresses []int
+	errStages  []string
+	errMsgs    []string
 }
 
 func (m *mockStore) UpdateFileStatus(_ context.Context, _ string, status string) error {
@@ -26,6 +29,13 @@ func (m *mockStore) UpdateFileStatus(_ context.Context, _ string, status string)
 
 func (m *mockStore) UpdateFileProgress(_ context.Context, _ string, progress int) error {
 	m.progresses = append(m.progresses, progress)
+	return nil
+}
+
+func (m *mockStore) MarkFileError(_ context.Context, _ string, stage, message string) error {
+	m.statuses = append(m.statuses, "error")
+	m.errStages = append(m.errStages, stage)
+	m.errMsgs = append(m.errMsgs, message)
 	return nil
 }
 
@@ -39,6 +49,11 @@ func (s *contextCapturingStore) UpdateFileStatus(ctx context.Context, _ string, 
 }
 
 func (s *contextCapturingStore) UpdateFileProgress(context.Context, string, int) error {
+	return nil
+}
+
+func (s *contextCapturingStore) MarkFileError(ctx context.Context, _, _, _ string) error {
+	s.statusCtxErrs = append(s.statusCtxErrs, ctx.Err())
 	return nil
 }
 
@@ -143,6 +158,12 @@ func TestProcessFileNoParser(t *testing.T) {
 	}
 	if store.statuses[1] != "error" {
 		t.Errorf("second status: want %q, got %q", "error", store.statuses[1])
+	}
+	if len(store.errStages) != 1 || store.errStages[0] != "unsupported_type" {
+		t.Errorf("error stage: want [unsupported_type], got %v", store.errStages)
+	}
+	if len(store.errMsgs) != 1 || !strings.Contains(store.errMsgs[0], "application/octet-stream") {
+		t.Errorf("error message should name the mime type, got %v", store.errMsgs)
 	}
 }
 
@@ -298,7 +319,7 @@ func TestResolveKGExtractionModel_TierFallback(t *testing.T) {
 	}
 }
 
-func TestUpdateTerminalStatusUsesLiveContext(t *testing.T) {
+func TestMarkTerminalErrorUsesLiveContext(t *testing.T) {
 	store := &contextCapturingStore{}
 	p := NewProcessor(nil, nil, nil, store)
 
@@ -308,7 +329,9 @@ func TestUpdateTerminalStatusUsesLiveContext(t *testing.T) {
 	if err := p.store.UpdateFileStatus(ctx, "file-1", "processing"); err != nil {
 		t.Fatalf("unexpected error updating processing status: %v", err)
 	}
-	p.updateTerminalStatus(context.Background(), "file-1", "error")
+	// markTerminalError must detach cancellation via context.WithoutCancel —
+	// passing the cancelled ctx makes the test fail if that detachment is ever removed.
+	p.markTerminalError(ctx, "file-1", "canceled", "Processing was interrupted")
 
 	if len(store.statusCtxErrs) != 2 {
 		t.Fatalf("expected 2 status calls, got %d", len(store.statusCtxErrs))

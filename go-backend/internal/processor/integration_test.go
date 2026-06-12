@@ -126,6 +126,10 @@ func (f *fakeFileStore) UpdateFileProgress(ctx context.Context, fileID string, p
 	return nil
 }
 
+func (f *fakeFileStore) MarkFileError(ctx context.Context, fileID, _, _ string) error {
+	return f.UpdateFileStatus(ctx, fileID, "error")
+}
+
 func (f *fakeFileStore) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()

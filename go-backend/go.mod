@@ -45,6 +45,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/extrame/xls v0.0.1
 	github.com/imroc/req/v3 v3.57.0
+	github.com/klauspost/compress v1.18.4
 	github.com/pgvector/pgvector-go v0.4.0
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/prometheus/client_golang v1.23.2
@@ -104,7 +105,6 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jalaali/go-jalaali v0.0.0-20210801064154-80525e88d958 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.4 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/markusmobius/go-dateparser v1.2.3 // indirect
 	github.com/markusmobius/go-domdistiller v0.0.0-20240926050704-25b8d046ffb4 // indirect

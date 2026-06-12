@@ -41,6 +41,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 | 0048 | tabular schema + `tabular_catalog` (structured spreadsheet Q&A) |
 | 0049 | `eval_golden_set_jobs` (async corpus → golden-set generation status) |
 | 0052 | `message_chunks` (answer→chunk links for the online feedback loop) |
+| 0054 | `files.error_stage` + `error_message` (ingestion error visibility + per-file/per-KB retry) |
 
 **Vector tables** are dim-keyed (`document_chunks_2560`, `document_chunks_4096`, …); switching the embedder requires a re-ingest.
 
@@ -112,7 +113,7 @@ Required env vars (load via `.env`; docker compose reads it via `env_file`):
 - **Postgres (main):** `DB_HOST`, `DB_PORT` (default 5432), `DB_USER`, `DB_PASSWORD`, `DB_NAME`
 - **Postgres (vector):** `VECTOR_DB_HOST` etc. (defaults to `DB_*` when unset — single-DB setups work out of the box)
 - **Postgres (read-only, optional):** `JUSTRAG_DB_URL_READONLY` — raw DSN for a least-privilege SELECT-only role backing the `sql_query` and `table_query` MCP tools. **Required when `chat_tabular_query_enabled = true`** (and recommended whenever the `sql_query` tool is enabled); the tool falls back to a disabled stub when unset. See the Structured spreadsheet Q&A recipe in `docs/feature-recipes.md` for the SELECT-grant prerequisite.
-- **Redis:** `REDIS_HOST`, `REDIS_PORT`, optional `REDIS_PASSWORD`
+- **Redis:** `REDIS_HOST`, `REDIS_PORT`, optional `REDIS_PASSWORD`. Non-compose deployments (k8s, managed Redis) must replicate the compose files' `--maxmemory <size> --maxmemory-policy volatile-lru`: the embedding cache is bounded only by per-entry TTL + eviction, so without a maxmemory policy it grows until Redis OOMs. Keep `volatile-lru` specifically — `allkeys-lru` risks silent Asynq task loss, `noeviction` breaks task-lease renewal (rationale comment in `docker-compose.yml`).
 - **Auth:** `JWT_SECRET` (required at startup, ≥32 chars; a low-entropy secret — fewer than 3 character classes — logs a startup WARN). `ALLOWED_ORIGINS` (comma-list) is **required in production** — startup fails if unset, because an empty CORS allowlist makes `rs/cors` reflect any origin with credentials. Set it explicitly on staging/UAT too: the localhost fallback (`http://localhost:5173`, `http://localhost:3000`) applies whenever `GO_ENV != production` (`NODE_ENV` is a deprecated fallback), so a shared non-prod host without it silently rejects every real origin. `AUTH_PROVIDER_SECRET_KEY` (base64 32 bytes) encrypts auth-provider secrets at rest — OIDC `client_secret` **and** LDAP `bindCredentials`; required once any OIDC row exists or any LDAP provider is saved with bind credentials (legacy plaintext rows keep working at login until re-saved).
 - **Object storage (optional):** `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_REGION` — when unset, files land on local disk
 - **Worker:** `WORKER_QUEUES` (comma-list, defaults to all), `WORKER_MAINTENANCE` (`false` to disable the maintenance queue)

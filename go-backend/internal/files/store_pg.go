@@ -203,9 +203,12 @@ func (s *PGStore) GetKBFileLimits(ctx context.Context, kbID string) (*KBFileLimi
 // processor.ProcessorStore — UpdateFileStatus / UpdateFileProgress
 // ---------------------------------------------------------------------------
 
-// UpdateFileStatus sets the status column for the given file ID.
+// UpdateFileStatus sets the status column for the given file ID and clears
+// any recorded error detail — every non-error transition (pending,
+// processing, completed, partial) invalidates a previous failure reason.
+// Error transitions go through MarkFileError / MarkFileErrorIfUnset instead.
 func (s *PGStore) UpdateFileStatus(ctx context.Context, fileID, status string) error {
-	const sql = `UPDATE files SET status = $1 WHERE id = $2`
+	const sql = `UPDATE files SET status = $1, error_stage = NULL, error_message = NULL WHERE id = $2`
 	_, err := s.pool.Exec(ctx, sql, status, fileID)
 	if err != nil {
 		return fmt.Errorf("UpdateFileStatus: %w", err)
@@ -221,4 +224,81 @@ func (s *PGStore) UpdateFileProgress(ctx context.Context, fileID string, progres
 		return fmt.Errorf("UpdateFileProgress: %w", err)
 	}
 	return nil
+}
+
+// MarkFileError sets status='error' and records the failing stage plus a
+// short, sanitized, user-facing message. Overwrites previous detail — call
+// sites record the most recent attempt's failure. The raw Go error must
+// never be passed as message; it stays in logs (request_id-joinable).
+//
+// Stage vocabulary: unsupported_type, parse, embedding, canceled,
+// processing, timeout, queue. The frontend maps stages to translated
+// labels, so additions need a matching key in web/src/translations.ts.
+func (s *PGStore) MarkFileError(ctx context.Context, fileID, stage, message string) error {
+	const sql = `UPDATE files SET status = 'error', error_stage = $1, error_message = $2 WHERE id = $3`
+	_, err := s.pool.Exec(ctx, sql, stage, message, fileID)
+	if err != nil {
+		return fmt.Errorf("MarkFileError: %w", err)
+	}
+	return nil
+}
+
+// MarkFileErrorIfUnset sets status='error' but keeps an already-recorded
+// stage/message. Used by the retry-exhaustion wrapper, which fires after
+// the final attempt's handler already recorded the specific reason — its
+// generic message must not clobber that. Files that already reached a
+// successful terminal state (completed/partial) are left untouched: a
+// late-firing exhaustion wrapper must not regress a successful ingest.
+func (s *PGStore) MarkFileErrorIfUnset(ctx context.Context, fileID, stage, message string) error {
+	const sql = `
+		UPDATE files SET status = 'error',
+		       error_stage   = COALESCE(error_stage, $1),
+		       error_message = COALESCE(error_message, $2)
+		WHERE id = $3 AND status NOT IN ('completed', 'partial')`
+	_, err := s.pool.Exec(ctx, sql, stage, message, fileID)
+	if err != nil {
+		return fmt.Errorf("MarkFileErrorIfUnset: %w", err)
+	}
+	return nil
+}
+
+// ResetFileForRetry atomically flips an errored file back to 'pending' and
+// clears its error detail. Returns false when the file is not in 'error'
+// status (already retried, deleted, or still processing) — the WHERE
+// clause doubles as the double-click / concurrent-retry guard.
+func (s *PGStore) ResetFileForRetry(ctx context.Context, fileID string) (bool, error) {
+	const sql = `
+		UPDATE files SET status = 'pending', progress = 0,
+		       error_stage = NULL, error_message = NULL
+		WHERE id = $1 AND status = 'error'`
+	tag, err := s.pool.Exec(ctx, sql, fileID)
+	if err != nil {
+		return false, fmt.Errorf("ResetFileForRetry: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ListErrorFiles returns the FileInfo of every file in kbID with
+// status='error', oldest first (stable bulk-retry order).
+func (s *PGStore) ListErrorFiles(ctx context.Context, kbID string) ([]*FileInfo, error) {
+	const sql = `
+		SELECT id, kb_id, name, type, storage_path
+		FROM files
+		WHERE kb_id = $1 AND status = 'error'
+		ORDER BY created_at`
+	rows, err := pgxutil.QueryRows[fileInfoDBRow](ctx, s.pool, sql, kbID)
+	if err != nil {
+		return nil, fmt.Errorf("ListErrorFiles: %w", err)
+	}
+	out := make([]*FileInfo, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, &FileInfo{
+			ID:          r.ID,
+			KbID:        r.KbID,
+			Name:        r.Name,
+			Type:        r.Type,
+			StoragePath: r.StoragePath,
+		})
+	}
+	return out, nil
 }

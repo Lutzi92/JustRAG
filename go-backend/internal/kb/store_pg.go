@@ -324,6 +324,8 @@ type fileDBRow struct {
 	Status             string    `db:"status"`
 	Progress           int       `db:"progress"`
 	Origin             string    `db:"origin"`
+	ErrorStage         *string   `db:"error_stage"`
+	ErrorMessage       *string   `db:"error_message"`
 	RSSFeedID          *string   `db:"rss_feed_id"`
 	ConfluenceSourceID *string   `db:"confluence_source_id"`
 	CreatedAt          time.Time `db:"created_at"`
@@ -338,6 +340,7 @@ type fileDBRow struct {
 func (s *PGStore) ListFiles(ctx context.Context, kbID string, limit, offset int) ([]FileRow, int, error) {
 	const listSQL = `
 		SELECT id, name, type, size, status, progress, origin,
+		       error_stage, error_message,
 		       rss_feed_id, confluence_source_id, created_at,
 		       COUNT(*) OVER ()::int AS total_count
 		FROM files
@@ -374,6 +377,8 @@ func (s *PGStore) ListFiles(ctx context.Context, kbID string, limit, offset int)
 			Status:             r.Status,
 			Progress:           r.Progress,
 			Origin:             r.Origin,
+			ErrorStage:         r.ErrorStage,
+			ErrorMessage:       r.ErrorMessage,
 			RSSFeedID:          r.RSSFeedID,
 			ConfluenceSourceID: r.ConfluenceSourceID,
 			CreatedAt:          r.CreatedAt,

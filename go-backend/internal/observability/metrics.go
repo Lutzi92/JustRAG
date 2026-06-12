@@ -9,6 +9,8 @@ import (
 	"context"
 	"runtime"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/justrag/go-backend/internal/logctx"
@@ -2076,17 +2078,41 @@ var onlineFaithfulness = promauto.NewHistogramVec(
 	[]string{"kb_id"},
 )
 
+// onlineFaithfulnessMaxKBs caps the number of distinct kb_id label values
+// the histogram will ever emit. Production deployments rarely exceed
+// hundreds of KBs, but nothing upstream enforces that — a runaway KB
+// creator (scripted API use, a misbehaving test tenant) would otherwise
+// grow Prometheus series without bound on the one metric in this package
+// that doesn't use a closed-enum label. KBs observed after the cap fold
+// into the "overflow" label; per-KB resolution for those lives in
+// structured logs as usual.
+const onlineFaithfulnessMaxKBs = 500
+
+var (
+	onlineFaithfulnessKBSeen  sync.Map // kb_id → struct{}
+	onlineFaithfulnessKBCount atomic.Int64
+)
+
 // ObserveOnlineFaithfulness records one per-turn faithfulness
-// observation. score is clamped to [0, 1] defensively. kbID gets
-// emitted as-is (UUID strings are high-cardinality but bounded —
-// production deployments rarely exceed hundreds of KBs and
-// Prometheus tolerates that on a histogram).
+// observation. score is clamped to [0, 1] defensively. kbID is emitted
+// as-is up to onlineFaithfulnessMaxKBs distinct values, then folds into
+// "overflow". The Load-then-LoadOrStore pair is best-effort: concurrent
+// first observations of different KBs can overshoot the cap by a few
+// series, which is fine — the cap guards against unbounded growth, not
+// an exact census.
 func ObserveOnlineFaithfulness(kbID string, score float64) {
 	if score < 0 {
 		score = 0
 	}
 	if score > 1 {
 		score = 1
+	}
+	if _, seen := onlineFaithfulnessKBSeen.Load(kbID); !seen {
+		if onlineFaithfulnessKBCount.Load() >= onlineFaithfulnessMaxKBs {
+			kbID = "overflow"
+		} else if _, loaded := onlineFaithfulnessKBSeen.LoadOrStore(kbID, struct{}{}); !loaded {
+			onlineFaithfulnessKBCount.Add(1)
+		}
 	}
 	onlineFaithfulness.WithLabelValues(kbID).Observe(score)
 }

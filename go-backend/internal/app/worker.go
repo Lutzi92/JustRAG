@@ -233,7 +233,10 @@ func RunWorker(cfg *config.Config) error {
 	})))
 
 	// Re-embedding: delete old chunks first, then re-process the file.
-	mux.HandleFunc(jobs.TypeReEmbedding, worker.Instrument(func(ctx context.Context, task *asynq.Task) error {
+	// Wrapped in MarkErrorOnExhaustion like file-processing so a failed
+	// retry surfaces as status='error' with a reason instead of sitting in
+	// 'processing' until the stuck-file sweep.
+	reembedHandler := asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
 		var payload jobs.FileProcessingPayload
 		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
 			return fmt.Errorf("unmarshal re-embedding payload: %w", err)
@@ -263,7 +266,8 @@ func RunWorker(cfg *config.Config) error {
 		// the explicit chunk-deletion above also justifies an immediate
 		// invalidation, but this is captured by the post-ProcessFile hook.
 		return worker.NewFileProcessingHandler(proc, kbStore, searchService, stor)(ctx, task)
-	}))
+	})
+	mux.HandleFunc(jobs.TypeReEmbedding, worker.Instrument(worker.MarkErrorOnExhaustion(reembedHandler, filesStore)))
 
 	// Confluence sync: fetch pages, convert to markdown, enqueue file processing.
 	mux.HandleFunc(jobs.TypeConfluenceSync, worker.Instrument(confluence.NewSyncHandler(confluence.SyncDeps{

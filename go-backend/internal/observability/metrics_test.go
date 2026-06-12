@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -468,5 +469,33 @@ func TestRecordCitationAttribution_ByResultAndMethod(t *testing.T) {
 	}
 	if afterU-beforeU != 2 {
 		t.Errorf("unverified/none: expected +2 (empty + garbage normalize to none), got %v", afterU-beforeU)
+	}
+}
+
+func TestObserveOnlineFaithfulness_CapsKBCardinality(t *testing.T) {
+	// Saturate the per-KB label budget. Earlier tests don't touch this
+	// metric, but the guard holds regardless of prior state: after
+	// onlineFaithfulnessMaxKBs unique IDs the counter is at (or past) the
+	// cap, so every later first-seen KB must fold into "overflow".
+	for i := range onlineFaithfulnessMaxKBs {
+		ObserveOnlineFaithfulness(fmt.Sprintf("cap-test-kb-%d", i), 0.9)
+	}
+	seriesAtCap := testutil.CollectAndCount(onlineFaithfulness, "rag_online_faithfulness")
+
+	ObserveOnlineFaithfulness("cap-test-kb-beyond-a", 0.9)
+	ObserveOnlineFaithfulness("cap-test-kb-beyond-b", 0.9)
+	after := testutil.CollectAndCount(onlineFaithfulness, "rag_online_faithfulness")
+
+	// At most one new series (the shared "overflow" label) may appear; two
+	// would mean post-cap KBs still mint their own series.
+	if after > seriesAtCap+1 {
+		t.Errorf("series grew from %d to %d after cap; post-cap KBs must fold into overflow", seriesAtCap, after)
+	}
+
+	// A KB admitted before the cap keeps its own series.
+	preCapSeries := testutil.CollectAndCount(onlineFaithfulness, "rag_online_faithfulness")
+	ObserveOnlineFaithfulness("cap-test-kb-0", 0.5)
+	if got := testutil.CollectAndCount(onlineFaithfulness, "rag_online_faithfulness"); got != preCapSeries {
+		t.Errorf("observing an already-admitted KB changed series count %d -> %d", preCapSeries, got)
 	}
 }

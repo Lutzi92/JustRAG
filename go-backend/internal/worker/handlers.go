@@ -21,7 +21,9 @@ var getMaxRetry = asynq.GetMaxRetry
 
 // statusStore is the minimal surface MarkErrorOnExhaustion needs.
 type statusStore interface {
-	UpdateFileStatus(ctx context.Context, fileID, status string) error
+	// MarkFileErrorIfUnset transitions to status='error' without clobbering
+	// a stage/message the final attempt's handler already recorded.
+	MarkFileErrorIfUnset(ctx context.Context, fileID, stage, message string) error
 }
 
 // MarkErrorOnExhaustion wraps a file-processing handler so that when it returns
@@ -39,7 +41,7 @@ func MarkErrorOnExhaustion(h asynq.HandlerFunc, store statusStore) asynq.Handler
 		if retried >= maxRetry {
 			var p jobs.FileProcessingPayload
 			if jsonErr := json.Unmarshal(task.Payload(), &p); jsonErr == nil && p.FileID != "" {
-				if uErr := store.UpdateFileStatus(ctx, p.FileID, "error"); uErr != nil {
+				if uErr := store.MarkFileErrorIfUnset(ctx, p.FileID, "processing", "Processing failed after 3 attempts"); uErr != nil {
 					logctx.From(ctx).Error("worker: failed to mark file error on retry exhaustion", "fileId", p.FileID, "error", uErr)
 				} else {
 					logctx.From(ctx).Warn("worker: file marked error after retry exhaustion", "fileId", p.FileID)

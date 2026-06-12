@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,5 +246,35 @@ func TestListFiles_EmptyResult(t *testing.T) {
 	}
 	if len(files) != 0 {
 		t.Errorf("expected 0 files, got %d", len(files))
+	}
+}
+
+// TestListFiles_ErrorFieldsSerialized checks that errorStage/errorMessage are
+// emitted for errored files and omitted entirely for healthy ones.
+func TestListFiles_ErrorFieldsSerialized(t *testing.T) {
+	stage, msg := "parse", "The file could not be parsed"
+	bad := makeFileRow("f-bad", "broken.pdf")
+	bad.Status = "error"
+	bad.ErrorStage = &stage
+	bad.ErrorMessage = &msg
+	good := makeFileRow("f-good", "fine.pdf")
+
+	store := &mockUpdateStore{files: []kb.FileRow{bad, good}, total: 2}
+	h := kb.NewUpdateHandler(store, nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/kb/kb-1/files", nil)
+	r = injectKBAccess(r, "kb-1")
+	w := httptest.NewRecorder()
+	h.ListFiles(w, r)
+
+	body := w.Body.String()
+	if !strings.Contains(body, `"errorStage":"parse"`) {
+		t.Errorf("errorStage missing from response: %s", body)
+	}
+	if !strings.Contains(body, `"errorMessage":"The file could not be parsed"`) {
+		t.Errorf("errorMessage missing from response: %s", body)
+	}
+	if strings.Count(body, "errorStage") != 1 {
+		t.Errorf("errorStage must be omitted for non-error files: %s", body)
 	}
 }

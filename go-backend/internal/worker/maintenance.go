@@ -231,7 +231,9 @@ func checkStuckFiles(ctx context.Context, mainDB *pgxpool.Pool, timeout time.Dur
 	cutoff := time.Now().Add(-timeout)
 
 	const sql = `
-		UPDATE files SET status = 'error'
+		UPDATE files SET status = 'error',
+		       error_stage   = COALESCE(error_stage, 'timeout'),
+		       error_message = COALESCE(error_message, 'Processing timed out')
 		WHERE status = 'processing'
 		  AND (
 		    (progress_updated_at IS NOT NULL AND progress_updated_at < $1)

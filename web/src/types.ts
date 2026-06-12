@@ -241,6 +241,8 @@ export interface FileEntry {
     createdAt: string;
     selected?: boolean;
     rssFeedId?: string;
+    errorStage?: string;
+    errorMessage?: string;
 }
 
 export interface ChatEntry {

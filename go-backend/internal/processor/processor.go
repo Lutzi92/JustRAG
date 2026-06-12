@@ -144,6 +144,9 @@ func dedupBatch(ctx context.Context, chunkSvc HashLookup, kbID string, dimension
 type ProcessorStore interface {
 	UpdateFileStatus(ctx context.Context, fileID, status string) error
 	UpdateFileProgress(ctx context.Context, fileID string, progress int) error
+	// MarkFileError sets status='error' with a sanitized user-facing
+	// stage + message (see files.PGStore.MarkFileError for the vocabulary).
+	MarkFileError(ctx context.Context, fileID, stage, message string) error
 }
 
 // SiteConfigReader reads individual site config values.
@@ -600,7 +603,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// Step 2: select parser.
 	par := p.factory.GetParser(mimeType, fileName)
 	if par == nil {
-		_ = p.store.UpdateFileStatus(ctx, fileID, "error")
+		_ = p.store.MarkFileError(ctx, fileID, "unsupported_type", "Unsupported file type: "+mimeType)
 		return fmt.Errorf("processor: no parser for mimeType=%s fileName=%s", mimeType, fileName)
 	}
 
@@ -615,7 +618,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		ChunkSize: chunkSize,
 	})
 	if err != nil {
-		_ = p.store.UpdateFileStatus(ctx, fileID, "error")
+		_ = p.store.MarkFileError(ctx, fileID, "parse", "The file could not be parsed")
 		return fmt.Errorf("processor: parse file: %w", err)
 	}
 
@@ -767,7 +770,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		}
 		if err := p.runParentChildIngest(ctx, fileID, kbID, fileName, groups,
 			enrichmentEnabled, enrichmentModel, pgConfig); err != nil {
-			p.updateTerminalStatus(ctx, fileID, "error")
+			p.markTerminalError(ctx, fileID, "processing", "Processing failed unexpectedly")
 			return err
 		}
 		_ = p.store.UpdateFileStatus(ctx, fileID, "completed")
@@ -793,7 +796,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		if err := p.runLateChunkedIngest(ctx, fileID, kbID, fileName, chunks,
 			ichunks, result.Text, sectionIndex, &sectionSearchOffset,
 			enrichmentEnabled, enrichmentModel, maxInputTokens, pgConfig); err != nil {
-			p.updateTerminalStatus(ctx, fileID, "error")
+			p.markTerminalError(ctx, fileID, "processing", "Processing failed unexpectedly")
 			return err
 		}
 		_ = p.store.UpdateFileStatus(ctx, fileID, "completed")
@@ -825,7 +828,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		// Fast path — no enrichment, embed in simple batches.
 		for _, batch := range batches(chunks, embeddingBatchSize) {
 			if ctx.Err() != nil {
-				p.updateTerminalStatus(ctx, fileID, "error")
+				p.markTerminalError(ctx, fileID, "canceled", "Processing was interrupted")
 				return fmt.Errorf("processor: context cancelled: %w", ctx.Err())
 			}
 			totalBatches++
@@ -963,7 +966,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			// Mirror the non-enrichment path: honour ctx cancellation before
 			// spending any more embedding budget on a torn-down job.
 			if ctx.Err() != nil {
-				p.updateTerminalStatus(ctx, fileID, "error")
+				p.markTerminalError(ctx, fileID, "canceled", "Processing was interrupted")
 				return fmt.Errorf("processor: context cancelled: %w", ctx.Err())
 			}
 			pending[ec.globalIdx] = ec
@@ -1023,7 +1026,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			}
 		}
 		if producerErr != nil {
-			p.updateTerminalStatus(ctx, fileID, "error")
+			p.markTerminalError(ctx, fileID, "processing", "Processing failed unexpectedly")
 			return fmt.Errorf("processor: enrichment producer panicked: %w", producerErr)
 		}
 	}
@@ -1033,9 +1036,9 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// with failedBatches possibly still 0 — the switch below would then
 	// compute "completed" for a partially-ingested file (today only saved
 	// by pgx refusing the status write on a dead ctx). Mark it as error
-	// (detached write inside updateTerminalStatus) and let asynq retry.
+	// (detached write inside markTerminalError) and let asynq retry.
 	if err := ctx.Err(); err != nil {
-		p.updateTerminalStatus(ctx, fileID, "error")
+		p.markTerminalError(ctx, fileID, "canceled", "Processing was interrupted")
 		return fmt.Errorf("processor: ingestion cancelled before completion: %w", err)
 	}
 
@@ -1050,7 +1053,11 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		finalStatus = "partial"
 	}
 
-	if err := p.store.UpdateFileStatus(ctx, fileID, finalStatus); err != nil {
+	if finalStatus == "error" {
+		if err := p.store.MarkFileError(ctx, fileID, "embedding", "Embedding service unavailable"); err != nil {
+			return fmt.Errorf("processor: update final status: %w", err)
+		}
+	} else if err := p.store.UpdateFileStatus(ctx, fileID, finalStatus); err != nil {
 		return fmt.Errorf("processor: update final status: %w", err)
 	}
 
@@ -1830,16 +1837,16 @@ func (p *Processor) runLateChunkedIngest(
 	return nil
 }
 
-func (p *Processor) updateTerminalStatus(ctx context.Context, fileID, status string) {
-	// Detach cancellation only — status update must run to completion even
-	// when the parent task is being torn down — but keep tracing/request-id
-	// values by using context.WithoutCancel(ctx).
+func (p *Processor) markTerminalError(ctx context.Context, fileID, stage, message string) {
+	// Detach cancellation only — the error must be recorded even when the
+	// parent task is being torn down — but keep tracing/request-id values
+	// by using context.WithoutCancel(ctx).
 	statusCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminalStatusTimeout)
 	defer cancel()
-	if err := p.store.UpdateFileStatus(statusCtx, fileID, status); err != nil {
-		logctx.From(statusCtx).Warn("processor: failed to update terminal status",
+	if err := p.store.MarkFileError(statusCtx, fileID, stage, message); err != nil {
+		logctx.From(statusCtx).Warn("processor: failed to record terminal error",
 			"fileId", fileID,
-			"status", status,
+			"stage", stage,
 			"error", err,
 		)
 	}
