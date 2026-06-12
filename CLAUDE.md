@@ -55,6 +55,7 @@ CLAUDE.md is the operational reference (commands, env, architecture, feature ind
 - **`docs/presentation/tuning-knobs.md`** — admin-UI knob reference, oriented toward operations rather than mechanism.
 - **`docs/observability/docling.md`** — opt-in Docling sidecar for layout-aware PDF parsing.
 - **`docs/runbooks/hnsw-reindex.md`** — operator runbook for the T0-1 HNSW iterative-scan path (rebuilding the index after pgvector upgrade).
+- **`docs/runbooks/migration-rollback.md`** — operator runbook for rolling back a migration with the goose CLI (`cmd/migrate` is up-only by design).
 
 ## Current Commands
 

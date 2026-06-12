@@ -845,9 +845,14 @@ func registerResearchRoutes(rc *routeCtx, researchRL *middleware.RedisRateLimite
 
 	// Misc endpoints — enhance, export (auth required)
 	miscHandler := misc.NewHandler(rc.aiResolver)
-	rc.mux.Handle("POST /api/enhance", rc.authMw.Authenticate(http.HandlerFunc(miscHandler.Enhance)))
+	// Both routes block on a single synchronous LLM call. The 90s ceiling
+	// cancels the upstream call and returns a 503 before the server's 120s
+	// WriteTimeout would silently drop the connection with the call still
+	// running.
+	llmTimeout := middleware.Timeout(90 * time.Second)
+	rc.mux.Handle("POST /api/enhance", rc.authMw.Authenticate(llmTimeout(http.HandlerFunc(miscHandler.Enhance))))
 	miscHandler.SetSiteConfig(rc.chatStore)
-	rc.mux.Handle("POST /api/describe-image", rc.authMw.Authenticate(http.HandlerFunc(miscHandler.DescribeImage)))
+	rc.mux.Handle("POST /api/describe-image", rc.authMw.Authenticate(llmTimeout(http.HandlerFunc(miscHandler.DescribeImage))))
 	// Export endpoints matching the frontend contract (POST /api/kb/{id}/export/...).
 	rc.mux.Handle("POST /api/kb/{id}/export/docx", rc.kbViewChain(miscHandler.ExportDocx))
 	rc.mux.Handle("POST /api/kb/{id}/export/bibtex", rc.kbViewChain(miscHandler.ResearchBibtex))

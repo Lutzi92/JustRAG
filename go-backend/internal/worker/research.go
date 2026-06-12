@@ -69,7 +69,7 @@ func NewResearchExecutionHandler(
 		abortKey := "research:abort:" + payload.ResearchID
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		safego.Go(func() {
+		safego.GoCtx(ctx, func() {
 			watchAbortKey(ctx, cancel, rdb, abortKey)
 		})
 

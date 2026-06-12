@@ -4,7 +4,6 @@ package apikeyauth
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -178,13 +177,13 @@ func (m *Middleware) maybeUpdateLastUsed(ctx context.Context, keyID string) {
 
 	// Fire-and-forget in background with a short timeout so it doesn't block
 	// the request or pile up on a slow database.
-	safego.Go(func() {
+	safego.GoCtx(ctx, func() {
 		// Detach cancellation (the update should outlive the request) but keep
 		// tracing + request-id values from ctx for observability.
 		tctx, tcancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer tcancel()
 		if err := m.store.UpdateApiKeyLastUsed(tctx, keyID); err != nil {
-			slog.Warn("apikeyauth: update last_used failed", "key_id", keyID, "error", err)
+			logctx.From(tctx).Warn("apikeyauth: update last_used failed", "key_id", keyID, "error", err)
 		}
 	})
 }

@@ -375,6 +375,17 @@ func Load() (*Config, error) {
 		}
 	}
 	cfg.WorkerConcurrency = mustInt("WORKER_CONCURRENCY", 8)
+	if cfg.WorkerConcurrency < 1 {
+		errs = append(errs, fmt.Sprintf("WORKER_CONCURRENCY=%d must be at least 1", cfg.WorkerConcurrency))
+	} else if cfg.Redis.PoolSize < cfg.WorkerConcurrency*2 {
+		// Coherence check for the sizing rule documented on RedisConfig.PoolSize:
+		// an Asynq pool smaller than ~2× the worker goroutine count stalls task
+		// processing on pool waits, which surfaces as mysterious slowness rather
+		// than an error anywhere.
+		slog.Warn("REDIS_POOL_SIZE is below 2×WORKER_CONCURRENCY; worker tasks may stall on Redis pool waits",
+			"redis_pool_size", cfg.Redis.PoolSize,
+			"worker_concurrency", cfg.WorkerConcurrency)
+	}
 	cfg.WorkerHealthPort = mustInt("WORKER_HEALTH_PORT", 8081)
 	cfg.WorkerMaintenance = os.Getenv("WORKER_MAINTENANCE") != "false"
 	workerDBStatementTimeoutMs := mustInt("WORKER_DB_STATEMENT_TIMEOUT_MS", 0)

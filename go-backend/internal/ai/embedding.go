@@ -180,7 +180,7 @@ func GenerateEmbeddings(ctx context.Context, resolver *ConfigResolver, texts []s
 					batchTexts[j] = texts[idx]
 					batchVecs[j] = embeddings[j]
 				}
-				safego.Go(func() {
+				safego.GoCtx(ctx, func() {
 					defer bgCancel()
 					cache.SetMany(bgCtx, cfg.EmbeddingModel, batchTexts, batchVecs)
 				})

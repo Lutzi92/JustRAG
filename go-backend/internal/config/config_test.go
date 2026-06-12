@@ -186,6 +186,9 @@ func TestPoolSizingValidation(t *testing.T) {
 		{"vector min above max rejected", map[string]string{"VECTOR_DB_POOL_MAX": "2", "VECTOR_DB_POOL_MIN": "10"}, true},
 		{"min equals max accepted", map[string]string{"DB_POOL_MAX": "8", "DB_POOL_MIN": "8"}, false},
 		{"min zero accepted", map[string]string{"DB_POOL_MIN": "0"}, false},
+		{"worker concurrency zero rejected", map[string]string{"WORKER_CONCURRENCY": "0"}, true},
+		{"worker concurrency negative rejected", map[string]string{"WORKER_CONCURRENCY": "-4"}, true},
+		{"worker concurrency one accepted", map[string]string{"WORKER_CONCURRENCY": "1"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
