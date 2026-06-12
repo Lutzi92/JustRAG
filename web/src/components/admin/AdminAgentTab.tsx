@@ -24,6 +24,7 @@ const SECTION_CONFIGS = [
     { id: 'crag', titleKey: 'agentSectionCragAdaptive', i18nKeys: ['cragEnabled', 'cragMinRelevantChunks', 'adaptiveRoutingEnabled'], settingKeys: ['crag_enabled', 'crag_min_relevant_chunks', 'adaptive_routing_enabled'] },
     { id: 'graph', titleKey: 'agentSectionGraph', i18nKeys: ['kgExtractionEnabled', 'chatGraphRoutingEnabled', 'chatGraphRoutingInjectChunks', 'chatGraphRoutingMaxChunks', 'chatGraphRoutingPathMode', 'chatGraphRoutingPPRDamping', 'chatGraphRoutingPPRMaxIter', 'chatGraphRoutingPPRTopEntities', 'chatGraphRoutingPathsMaxLen', 'chatGraphRoutingPathsMaxPaths'], settingKeys: ['kg_extraction_enabled', 'chat_graph_routing_enabled', 'chat_graph_routing_inject_chunks', 'chat_graph_routing_max_chunks', 'chat_graph_routing_path_mode', 'chat_graph_routing_ppr_damping', 'chat_graph_routing_ppr_max_iter', 'chat_graph_routing_ppr_top_entities', 'chat_graph_routing_paths_max_len', 'chat_graph_routing_paths_max_paths'] },
     { id: 'multistep', titleKey: 'agentSectionMultiStep', i18nKeys: ['chatKBRouterEnabled', 'chatKBRouterMinConfidence', 'chatTurnBudgetSeconds', 'chatTurnBudgetTokens', 'chatTurnBudgetToolCalls', 'chatAgenticEnabled', 'chatAgenticMaxHops', 'chatPlanExecuteEnabled', 'chatPlanExecuteMaxSubQueries', 'chatPlanExecuteMaxIterations', 'chatPlanExecuteTokenBudget', 'chatPlanExecuteToolAware', 'chatPlanExecuteDAGIterative', 'chatAnswerToolsEnabled', 'chatAnswerToolsMaxRounds', 'chatSupervisorEnabled', 'chatSupervisorMultiSpecialist'], settingKeys: ['chat_kb_router_enabled', 'chat_kb_router_min_confidence', 'chat_turn_budget_seconds', 'chat_turn_budget_tokens', 'chat_turn_budget_tool_calls', 'chat_agentic_enabled', 'chat_agentic_max_hops', 'chat_plan_execute_enabled', 'chat_plan_execute_max_sub_queries', 'chat_plan_execute_max_iterations', 'chat_plan_execute_token_budget', 'chat_plan_execute_tool_aware', 'chat_plan_execute_dag_iterative', 'chat_answer_tools_enabled', 'chat_answer_tools_max_rounds', 'chat_supervisor_enabled', 'chat_supervisor_multi_specialist'] },
+    { id: 'conversation', titleKey: 'agentSectionConversation', i18nKeys: ['chatAnswerHistoryEnabled', 'chatAnswerHistoryMessages', 'chatAnswerHistoryMaxChars', 'chatTransformFollowupEnabled'], settingKeys: ['chat_answer_history_enabled', 'chat_answer_history_messages', 'chat_answer_history_max_chars', 'chat_transform_followup_enabled'] },
     { id: 'corpusTable', titleKey: 'agentSectionCorpusTable', i18nKeys: ['chatCorpusTableEnabled', 'chatCorpusTableModel', 'chatCorpusTableMaxFiles', 'chatCorpusTableConcurrency', 'chatCorpusTableRouterLlmEnabled'], settingKeys: ['chat_corpus_table_enabled', 'chat_corpus_table_model', 'chat_corpus_table_max_files', 'chat_corpus_table_concurrency', 'chat_corpus_table_router_llm_enabled'] },
     { id: 'longmem', titleKey: 'agentSectionLongmem', i18nKeys: ['chatLongmemEnabled', 'chatLongmemMinSalience', 'chatLongmemRecallTopK', 'chatLongmemDecayDays', 'chatLongmemRecallSemantic', 'chatLongmemConflictResolution', 'chatLongmemConflictModel', 'chatLongmemConflictCandidates'], settingKeys: ['chat_longmem_enabled', 'chat_longmem_min_salience', 'chat_longmem_recall_top_k', 'chat_longmem_decay_days', 'chat_longmem_recall_semantic', 'chat_longmem_conflict_resolution', 'chat_longmem_conflict_model', 'chat_longmem_conflict_candidates'] },
     { id: 'validation', titleKey: 'agentSectionValidation', i18nKeys: ['factcheckInChat', 'citationValidationEnabled', 'citationValidationSemanticThreshold', 'chatFactualityGateEnabled', 'chatFactualityGateMaxRefines', 'chatSelfRAGEnabled', 'ragasSamplingEnabled', 'ragasSamplingRate'], settingKeys: ['factcheck_in_chat', 'citation_validation_enabled', 'citation_validation_semantic_threshold', 'chat_factuality_gate_enabled', 'chat_factuality_gate_max_refines', 'chat_self_rag_enabled', 'ragas_sampling_enabled', 'ragas_sampling_rate'] },
@@ -1228,6 +1229,66 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             {t('chatSupervisorMultiSpecialist')}
                         </label>
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatSupervisorMultiSpecialistHelp')}</p>
+                    </div>
+                </Section>
+
+                <Section title={t('agentSectionConversation')} {...sectionState('conversation')}>
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-answer-history-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="chat-answer-history-enabled"
+                                type="checkbox"
+                                checked={siteConfigs.chat_answer_history_enabled !== 'false' && siteConfigs.chat_answer_history_enabled !== '0'}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, chat_answer_history_enabled: e.target.checked ? 'true' : 'false' }))}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('chatAnswerHistoryEnabled')}
+                        </label>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatAnswerHistoryEnabledHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-answer-history-messages">{t('chatAnswerHistoryMessages')}</label>
+                        <input
+                            id="chat-answer-history-messages"
+                            type="number"
+                            min="1"
+                            max="50"
+                            step="1"
+                            value={siteConfigs.chat_answer_history_messages || '6'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_answer_history_messages: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatAnswerHistoryMessagesHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-answer-history-max-chars">{t('chatAnswerHistoryMaxChars')}</label>
+                        <input
+                            id="chat-answer-history-max-chars"
+                            type="number"
+                            min="200"
+                            max="32000"
+                            step="100"
+                            value={siteConfigs.chat_answer_history_max_chars || '4000'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_answer_history_max_chars: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatAnswerHistoryMaxCharsHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-transform-followup-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="chat-transform-followup-enabled"
+                                type="checkbox"
+                                checked={siteConfigs.chat_transform_followup_enabled !== 'false' && siteConfigs.chat_transform_followup_enabled !== '0'}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, chat_transform_followup_enabled: e.target.checked ? 'true' : 'false' }))}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('chatTransformFollowupEnabled')}
+                        </label>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatTransformFollowupEnabledHelp')}</p>
                     </div>
                 </Section>
 

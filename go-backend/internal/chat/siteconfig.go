@@ -843,6 +843,39 @@ func ChatCodeExecEnabled(ctx context.Context, reader SiteConfigReader) bool {
 	return readBool(ctx, reader, "chat_code_exec_enabled", false)
 }
 
+// ChatAnswerHistoryEnabled gates passing recent conversation turns to the
+// answer LLM (all paths: standard stream/JSON, orchestrators, answer-tools).
+// Default TRUE — this is a correctness fix, not an opt-in feature: without
+// it the answer model is single-turn and cannot resolve follow-ups that
+// reference the previous answer. Kill switch via
+// "chat_answer_history_enabled".
+func ChatAnswerHistoryEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_answer_history_enabled", true)
+}
+
+// ChatAnswerHistoryMessages is how many recent messages are passed to the
+// answer LLM. Default 6 (3 turns), clamped to [1, 50]. Tunable via
+// "chat_answer_history_messages".
+func ChatAnswerHistoryMessages(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_answer_history_messages", 6, 1, 50)
+}
+
+// ChatAnswerHistoryMaxChars caps each history message passed to the answer
+// LLM (rune count). Default 4000, clamped to [200, 32000]. Tunable via
+// "chat_answer_history_max_chars".
+func ChatAnswerHistoryMaxChars(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_answer_history_max_chars", 4000, 200, 32000)
+}
+
+// ChatTransformFollowupEnabled gates the transform-follow-up route: messages
+// like "kannst du das als Tabelle erstellen?" skip retrieval and reformat
+// the previous answer instead of re-searching the corpus. Default TRUE
+// (correctness fix — see IsTransformFollowUpQuery). Kill switch via
+// "chat_transform_followup_enabled".
+func ChatTransformFollowupEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_transform_followup_enabled", true)
+}
+
 // ChatTabularQueryEnabled gates the tabular-data Q&A feature. Default
 // false. Tunable via "chat_tabular_query_enabled".
 func ChatTabularQueryEnabled(ctx context.Context, reader SiteConfigReader) bool {

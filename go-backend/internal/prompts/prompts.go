@@ -1198,3 +1198,14 @@ func CorpusTableNarrativeSystem(lang string) string {
 	}
 	return "You write a comparative report. The authoritative comparison table is appended below. Rely ONLY on that table; do not invent additional rows or values. Write a concise comparative analysis (commonalities, differences, outliers). The table is rendered separately — do not repeat it in full."
 }
+
+// TransformFollowUpSystem is the instruction for the transform-follow-up
+// route: the user asked to reformat/summarize/translate the previous answer,
+// so the model must operate strictly on that answer (appended below it) and
+// never introduce new information.
+func TransformFollowUpSystem(lang string) string {
+	if lang == "de" {
+		return "Der Nutzer bittet darum, deine vorherige Antwort umzuformen (z. B. als Tabelle, Zusammenfassung, Übersetzung oder Stichpunkte). Die vorherige Antwort ist unten angefügt und ist die EINZIGE Grundlage: Übernimm ausschließlich Inhalte aus ihr, füge keine neuen Informationen hinzu und lasse nichts Wesentliches weg. Behalte vorhandene Quellenverweise wie [1] bei den jeweiligen Inhalten bei. Falls sich die Bitte nicht aus der vorherigen Antwort erfüllen lässt, sage das kurz, statt zu raten."
+	}
+	return "The user asks you to transform your previous answer (e.g. as a table, summary, translation, or bullet points). The previous answer is appended below and is the ONLY source: use exclusively its content, add no new information, and omit nothing essential. Keep existing citation markers like [1] attached to their content. If the request cannot be fulfilled from the previous answer, say so briefly instead of guessing."
+}

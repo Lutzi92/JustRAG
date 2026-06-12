@@ -7,6 +7,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 **Site_config flag namespaces** (admin Agent panel; long-form mechanism docs in `docs/retrieval.md` and `docs/agent-orchestration.md`):
 
 - `chat_*` — chat orchestrators, gates, post-response
+- `chat_answer_history_*`, `chat_transform_followup_enabled` — answer-time conversation history (the answer LLM was single-turn until 2026-06) + retrieval-free reformat follow-ups ("das als Tabelle"); both **default ON** (correctness fixes; the keys are kill switches)
 - `chat_longmem_*` — per-user long-term memory (incl. `_recall_semantic`, `_conflict_*` for ANN + Mem0 conflict resolution)
 - `chat_longcontext_*` — System-2 long-context routing for global-synthesis queries
 - `chat_context_compression_*` — ECoRAG evidentiality-based post-rerank filtering

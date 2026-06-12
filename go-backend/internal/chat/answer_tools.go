@@ -464,9 +464,12 @@ type AnswerToolsParams struct {
 	ChatID       string
 	SystemPrompt string
 	UserPrompt   string
-	Tools        []ai.ChatTool
-	Dispatcher   ToolDispatcher
-	MaxRounds    int
+	// History is the recent-conversation block inserted between the system
+	// prompt and the user message (see ai.BuildAnswerMessages). Optional.
+	History    []ai.ChatHistoryEntry
+	Tools      []ai.ChatTool
+	Dispatcher ToolDispatcher
+	MaxRounds  int
 }
 
 // RunAnswerWithTools is the production entry point for the answer-time
@@ -499,11 +502,7 @@ func RunAnswerWithTools(
 			systemPrompt = systemPrompt + "\n\n" + hint
 		}
 	}
-	var messages []ai.ChatMessage
-	if systemPrompt != "" {
-		messages = append(messages, ai.ChatMessage{Role: "system", Content: systemPrompt})
-	}
-	messages = append(messages, ai.ChatMessage{Role: "user", Content: p.UserPrompt})
+	messages := ai.BuildAnswerMessages(systemPrompt, config.ChatModel, p.History, p.UserPrompt)
 	runner := &liveRoundRunner{config: config}
 	return runAnswerWithToolsWithRunner(ctx, runAnswerInput{
 		KbID:       p.KbID,

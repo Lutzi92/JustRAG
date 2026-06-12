@@ -39,6 +39,15 @@ type StreamEvent struct {
 // turns, use Client.StreamChatCompletion directly with Tools/ToolChoice set
 // and consume StreamChunk values (which carry ToolCallDeltas + FinishReason).
 func StreamCompletion(ctx context.Context, resolver *ConfigResolver, prompt, systemPrompt, kbID string, wantReasoning bool) (<-chan StreamEvent, error) {
+	return StreamCompletionWithHistory(ctx, resolver, nil, prompt, systemPrompt, kbID, wantReasoning)
+}
+
+// StreamCompletionWithHistory is StreamCompletion plus recent conversation
+// turns inserted between the system prompt and the current user message, so
+// follow-ups that reference the previous answer ("can you show this as a
+// table?") have something to refer to. A nil/empty history is byte-identical
+// to StreamCompletion.
+func StreamCompletionWithHistory(ctx context.Context, resolver *ConfigResolver, history []ChatHistoryEntry, prompt, systemPrompt, kbID string, wantReasoning bool) (<-chan StreamEvent, error) {
 	config, err := resolver.Resolve(ctx, kbID)
 	if err != nil {
 		return nil, fmt.Errorf("ai: resolve config: %w", err)
@@ -50,12 +59,7 @@ func StreamCompletion(ctx context.Context, resolver *ConfigResolver, prompt, sys
 	})
 	endSpan := func() { span.End() }
 
-	// Build messages — skip system role for o1-family models.
-	var messages []ChatMessage
-	if systemPrompt != "" && !modelRejectsSystemRole(config.ChatModel) {
-		messages = append(messages, ChatMessage{Role: "system", Content: systemPrompt})
-	}
-	messages = append(messages, ChatMessage{Role: "user", Content: prompt})
+	messages := BuildAnswerMessages(systemPrompt, config.ChatModel, history, prompt)
 
 	temp := 0.2
 	req := ChatRequest{

@@ -804,6 +804,27 @@ export const translations = {
     agentSectionCragAdaptive: { de: 'CRAG & Adaptives Routing', en: 'CRAG & Adaptive Routing' },
     agentSectionGraph: { de: 'Wissensgraph (GraphRAG)', en: 'Knowledge Graph (GraphRAG)' },
     agentSectionMultiStep: { de: 'Mehrschritt-Pipelines', en: 'Multi-step Pipelines' },
+    agentSectionConversation: { de: 'Konversation & Folgefragen', en: 'Conversation & follow-ups' },
+    chatAnswerHistoryEnabled: { de: 'Chat-Verlauf an Antwort-LLM', en: 'Conversation history to answer LLM' },
+    chatAnswerHistoryEnabledHelp: {
+        de: 'Übergibt die letzten Gesprächsrunden an das Antwort-Modell, damit Folgefragen wie „kannst du das als Tabelle erstellen?" sich auf die vorherige Antwort beziehen können. Standard: an (Korrektheits-Fix, kein Opt-in-Feature).',
+        en: 'Passes the recent conversation turns to the answer model so follow-ups like "can you show this as a table?" can refer to the previous answer. Default: on (correctness fix, not an opt-in feature).',
+    },
+    chatAnswerHistoryMessages: { de: 'Verlauf: max. Nachrichten', en: 'History: max messages' },
+    chatAnswerHistoryMessagesHelp: {
+        de: 'Wie viele der letzten Nachrichten mitgegeben werden (Standard 6 = 3 Runden).',
+        en: 'How many recent messages are passed along (default 6 = 3 turns).',
+    },
+    chatAnswerHistoryMaxChars: { de: 'Verlauf: max. Zeichen pro Nachricht', en: 'History: max chars per message' },
+    chatAnswerHistoryMaxCharsHelp: {
+        de: 'Kürzt jede Verlaufs-Nachricht auf diese Zeichenzahl, um die Token-Kosten zu begrenzen (Standard 4000).',
+        en: 'Truncates each history message to this many characters to bound token cost (default 4000).',
+    },
+    chatTransformFollowupEnabled: { de: 'Umform-Folgefragen ohne Retrieval', en: 'Transform follow-ups without retrieval' },
+    chatTransformFollowupEnabledHelp: {
+        de: 'Folgefragen wie „das als Tabelle / fasse das zusammen / übersetze das" formen die vorherige Antwort um, statt den Korpus neu zu durchsuchen (eine neue Suche würde den Umfang neu definieren — z. B. ALLE Veranstaltungen statt der gerade gezeigten). Quellen der vorherigen Antwort werden übernommen. Standard: an.',
+        en: 'Follow-ups like "show that as a table / summarize that / translate that" reformat the previous answer instead of re-searching the corpus (a fresh search would redefine the scope — e.g. ALL events instead of the ones just shown). The previous answer\'s sources are carried over. Default: on.',
+    },
     agentSectionCorpusTable: { de: 'Korpus-Vergleichstabellen', en: 'Corpus comparison tables' },
     agentSectionValidation: { de: 'Validierung & QA', en: 'Validation & QA' },
     agentSectionIngestion: { de: 'Ingestion & Parsing', en: 'Ingestion & Parsing' },

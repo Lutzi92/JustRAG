@@ -191,6 +191,27 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	if body.ParentMessageID != "" {
 		parentMsgID = &body.ParentMessageID
 	}
+
+	// Recent turns, loaded once: the answer-history block (every answer
+	// path) and the transform-follow-up route both need them. CondenseFollowUp
+	// keeps its own load because its signature is shared with publicapi.
+	convRows := h.loadConversationRows(ctx, chatID, parentMsgID)
+	answerHistory := h.answerHistory(ctx, convRows)
+
+	// Transform follow-up: "kannst du das als Tabelle erstellen?" asks to
+	// reformat the PREVIOUS ANSWER. Re-retrieving here is wrong twice over —
+	// a fresh corpus search redefines the scope (all events instead of the
+	// ones just shown), and the condensed query can even hijack the
+	// corpus-table map-reduce. Route the turn to a retrieval-free completion
+	// over the previous answer instead. Checked before CondenseFollowUp so a
+	// positive saves the condense LLM call.
+	if body.Enhance == "" && ChatTransformFollowupEnabled(ctx, h.siteConfigReader) && IsTransformFollowUpQuery(body.Message) {
+		if prev := lastAIMessage(convRows); prev != nil {
+			h.handleTransformFollowUp(ctx, w, span, body, chatID, kbID, lang, user.ID, parentMsgID, prev, convRows, streamMode)
+			return
+		}
+	}
+
 	searchQuery, _ := CondenseFollowUp(ctx, h.aiResolver, h.store, chatID, parentMsgID, body.Message, kbID, lang)
 
 	cls := h.classifyQuery(ctx, searchQuery, body.Enhance, kbID, lang)
@@ -209,7 +230,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// Deep chat: complex streaming queries get a 2-step research agent.
 	isComplex := cls.UseHyDE && cls.UseMultiQuery
 	if isComplex && streamMode {
-		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs); handled {
+		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, answerHistory); handled {
 			return
 		}
 		// Deep chat failed — fall through to standard path.
@@ -299,6 +320,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		chatCtx:            chatCtx,
 		bufferedTrajectory: bufferedTrajectory,
 		chatStartTime:      time.Now(),
+		history:            answerHistory,
 	}
 	if streamMode {
 		h.writeStreamingResponse(ctx, w, rp)
@@ -323,6 +345,7 @@ func (h *Handler) tryDeepChat(
 	parentMsgID *string,
 	graphDec GraphTraversalDecision,
 	graphChunkIDs []string,
+	answerHistory []ai.ChatHistoryEntry,
 ) bool {
 	ctx, span := observability.Tracer().Start(ctx, "chat.deep_chat")
 	defer span.End()
@@ -635,6 +658,7 @@ func (h *Handler) tryDeepChat(
 			ChatID:       chatID,
 			SystemPrompt: chatCtx.SystemPrompt,
 			UserPrompt:   body.Message,
+			History:      answerHistory,
 			Tools:        catalog,
 			Dispatcher:   h.toolDispatcher,
 			MaxRounds:    ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
@@ -646,7 +670,7 @@ func (h *Handler) tryDeepChat(
 			return true
 		}
 	} else {
-		events, sErr := ai.StreamCompletion(ctx, h.aiResolver, body.Message, chatCtx.SystemPrompt, kbID, reasoningLevel != "")
+		events, sErr := ai.StreamCompletionWithHistory(ctx, h.aiResolver, answerHistory, body.Message, chatCtx.SystemPrompt, kbID, reasoningLevel != "")
 		if sErr != nil {
 			writeSSE(w, map[string]string{"error": "failed to start AI stream"})
 			writeSSEDone(w)

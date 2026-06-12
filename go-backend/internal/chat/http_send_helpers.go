@@ -391,6 +391,81 @@ type chatResponseParams struct {
 	chatCtx            *ChatContext
 	bufferedTrajectory []map[string]any
 	chatStartTime      time.Time
+	// history is the recent-conversation block passed to the answer LLM
+	// (ai.BuildAnswerMessages). Nil when chat_answer_history_enabled is off
+	// or the chat has no prior turns.
+	history []ai.ChatHistoryEntry
+	// agentMode overrides the mode recorded in agent_decisions; empty means
+	// the legacy "crag" (standard path).
+	agentMode string
+}
+
+// handleTransformFollowUp answers a transform follow-up ("kannst du das als
+// Tabelle erstellen?") without any retrieval: the system prompt embeds the
+// previous AI answer verbatim (BuildTransformChatContext) and the sources of
+// that answer are carried over. The previous answer is excluded from the
+// answer-history block — it is already in the system prompt in full, while
+// the history block caps each message.
+func (h *Handler) handleTransformFollowUp(
+	ctx context.Context,
+	w http.ResponseWriter,
+	span trace.Span,
+	body sendMessageRequest,
+	chatID, kbID, lang, userID string,
+	parentMsgID *string,
+	prev *MessageRow,
+	convRows []MessageRow,
+	streamMode bool,
+) {
+	ctx, kbSystemPrompt := h.assembleSystemPrompt(ctx, chatID, kbID, userID, lang, body.Message)
+	chatCtx := BuildTransformChatContext(*prev, kbSystemPrompt, lang)
+
+	logctx.From(ctx).Info("rag.transform_followup.dispatch",
+		"prev_message_id", prev.ID,
+		"prev_answer_len", len(prev.Content),
+		"source_count", len(chatCtx.Sources))
+
+	userMsg, err := h.store.AddMessage(ctx, AddMessageParams{
+		ChatID:          chatID,
+		Role:            "user",
+		Content:         body.Message,
+		ParentMessageID: parentMsgID,
+	})
+	if err != nil {
+		logctx.From(ctx).Error("chat.send: save user message (transform)", "error", err, "chat_id", chatID, "kb_id", kbID)
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to save user message")
+		return
+	}
+
+	var bufferedTrajectory []map[string]any
+	if streamMode {
+		emitTrajectory(func(d map[string]any) { bufferedTrajectory = append(bufferedTrajectory, d) },
+			TrajectoryEvent{
+				Stage:    "decision",
+				Decision: "transform_followup",
+				Reason:   "reformat previous answer; retrieval skipped",
+			}, nil)
+	}
+
+	rp := chatResponseParams{
+		span:               span,
+		chatID:             chatID,
+		kbID:               kbID,
+		lang:               lang,
+		userMessage:        body.Message,
+		reasoningLevel:     resolveReasoningLevel(body),
+		userMsgID:          userMsg.ID,
+		chatCtx:            chatCtx,
+		bufferedTrajectory: bufferedTrajectory,
+		chatStartTime:      time.Now(),
+		history:            h.answerHistory(ctx, historyRowsExcluding(convRows, prev.ID)),
+		agentMode:          "transform_followup",
+	}
+	if streamMode {
+		h.writeStreamingResponse(ctx, w, rp)
+		return
+	}
+	h.writeJSONResponse(ctx, w, rp)
 }
 
 // writeStreamingResponse handles the SSE branch of SendMessage: sets
@@ -466,6 +541,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			ChatID:       p.chatID,
 			SystemPrompt: systemPrompt,
 			UserPrompt:   p.userMessage,
+			History:      p.history,
 			Tools:        catalog,
 			Dispatcher:   h.toolDispatcher,
 			MaxRounds:    ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
@@ -478,7 +554,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			return
 		}
 	} else {
-		events, err := ai.StreamCompletion(ctx, h.aiResolver, p.userMessage, systemPrompt, p.kbID, p.reasoningLevel != "")
+		events, err := ai.StreamCompletionWithHistory(ctx, h.aiResolver, p.history, p.userMessage, systemPrompt, p.kbID, p.reasoningLevel != "")
 		if err != nil {
 			logctx.From(ctx).Error("chat.send: start AI stream", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
 			writeSSE(w, map[string]string{"error": "failed to start AI stream"})
@@ -585,7 +661,11 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	if stdOutcome == "" {
 		stdOutcome = "answered"
 	}
-	h.recordAgentDecision(ctx, p.kbID, "crag", stdOutcome, 0, 0, time.Since(p.chatStartTime).Milliseconds())
+	mode := p.agentMode
+	if mode == "" {
+		mode = "crag"
+	}
+	h.recordAgentDecision(ctx, p.kbID, mode, stdOutcome, 0, 0, time.Since(p.chatStartTime).Milliseconds())
 
 	writeSSEDone(w)
 	sseFinished = true
@@ -602,7 +682,7 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 	systemPrompt := p.chatCtx.SystemPrompt
 
 	nonStreamStart := time.Now()
-	result, err := ai.GenerateCompletion(ctx, h.aiResolver, p.userMessage, systemPrompt, p.kbID, p.reasoningLevel != "")
+	result, err := ai.GenerateCompletionWithHistory(ctx, h.aiResolver, p.history, p.userMessage, systemPrompt, p.kbID, p.reasoningLevel != "")
 	if err != nil {
 		logctx.From(ctx).Error("chat.send: generate completion", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
 		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to generate response")

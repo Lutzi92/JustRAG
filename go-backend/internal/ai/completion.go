@@ -43,11 +43,19 @@ type CompletionResult struct {
 // GenerateCompletion sends a non-streaming chat request with retry logic.
 // wantReasoning enables extraction from ReasoningContent or <think> tags.
 func GenerateCompletion(ctx context.Context, resolver *ConfigResolver, prompt, systemPrompt, kbID string, wantReasoning bool) (*CompletionResult, error) {
+	return GenerateCompletionWithHistory(ctx, resolver, nil, prompt, systemPrompt, kbID, wantReasoning)
+}
+
+// GenerateCompletionWithHistory is GenerateCompletion plus recent
+// conversation turns inserted between the system prompt and the current user
+// message (see BuildAnswerMessages). A nil/empty history is byte-identical
+// to GenerateCompletion.
+func GenerateCompletionWithHistory(ctx context.Context, resolver *ConfigResolver, history []ChatHistoryEntry, prompt, systemPrompt, kbID string, wantReasoning bool) (*CompletionResult, error) {
 	config, err := resolver.Resolve(ctx, kbID)
 	if err != nil {
 		return nil, fmt.Errorf("ai: resolve config: %w", err)
 	}
-	return generateCompletionInner(ctx, config, prompt, systemPrompt, config.ChatModel, wantReasoning, 0.2)
+	return generateCompletionHistoryInner(ctx, config, history, prompt, systemPrompt, config.ChatModel, wantReasoning, 0.2)
 }
 
 // GenerateCompletionWithModel is like GenerateCompletion but lets the caller
@@ -131,7 +139,7 @@ func GenerateCompletionStructured(ctx context.Context, resolver *ConfigResolver,
 				"fallback", config.ChatModel)
 		}
 	}
-	return generateCompletionStructuredInner(ctx, config, prompt, systemPrompt, model, false, 0.0, spec)
+	return generateCompletionStructuredInner(ctx, config, nil, prompt, systemPrompt, model, false, 0.0, spec)
 }
 
 // structuredCompletionFn is the Structured-Outputs sibling of completionFn:
@@ -150,23 +158,21 @@ func (r *ConfigResolver) structuredCompletionFn(ctx context.Context, prompt, sys
 // the supplied resolved config and model name. The model parameter replaces
 // any reference to config.ChatModel so callers can override it.
 func generateCompletionInner(ctx context.Context, config *ResolvedConfig, prompt, systemPrompt, model string, wantReasoning bool, temperature float64) (*CompletionResult, error) {
-	return generateCompletionStructuredInner(ctx, config, prompt, systemPrompt, model, wantReasoning, temperature, nil)
+	return generateCompletionHistoryInner(ctx, config, nil, prompt, systemPrompt, model, wantReasoning, temperature)
 }
 
-func generateCompletionStructuredInner(ctx context.Context, config *ResolvedConfig, prompt, systemPrompt, model string, wantReasoning bool, temperature float64, structured *StructuredSpec) (*CompletionResult, error) {
+func generateCompletionHistoryInner(ctx context.Context, config *ResolvedConfig, history []ChatHistoryEntry, prompt, systemPrompt, model string, wantReasoning bool, temperature float64) (*CompletionResult, error) {
+	return generateCompletionStructuredInner(ctx, config, history, prompt, systemPrompt, model, wantReasoning, temperature, nil)
+}
+
+func generateCompletionStructuredInner(ctx context.Context, config *ResolvedConfig, history []ChatHistoryEntry, prompt, systemPrompt, model string, wantReasoning bool, temperature float64, structured *StructuredSpec) (*CompletionResult, error) {
 	ctx, span := observability.StartGenerationSpan(ctx, "rag.llm_completion", observability.GenerationAttrs{
 		System: observability.ProviderSystemFromBaseURL(config.BaseURL),
 		Model:  model,
 	})
 	defer span.End()
 
-	// Build messages. Pre-size to 2 (system + user) so the second append
-	// doesn't grow-and-copy: every LLM call goes through this path.
-	messages := make([]ChatMessage, 0, 2)
-	if systemPrompt != "" && !modelRejectsSystemRole(model) {
-		messages = append(messages, ChatMessage{Role: "system", Content: systemPrompt})
-	}
-	messages = append(messages, ChatMessage{Role: "user", Content: prompt})
+	messages := BuildAnswerMessages(systemPrompt, model, history, prompt)
 
 	req := &ChatRequest{
 		Model:       model,

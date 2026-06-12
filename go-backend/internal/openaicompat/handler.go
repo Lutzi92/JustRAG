@@ -445,12 +445,41 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	completionID := newCompletionID()
 	created := time.Now().Unix()
 
+	// Pass the (capped) client-supplied conversation history through to the
+	// answer call — OpenAI-compat clients (ILIAS, OpenWebUI) send the full
+	// transcript and expect multi-turn semantics; dropping it made the model
+	// claim it had no previous conversation on follow-ups.
+	answerHistory := capAnswerHistory(history)
+
 	if body.Stream {
-		h.streamResponse(w, ctx, lastUserMessage, chatCtx.SystemPrompt, kbID, body.Model, completionID, created)
+		h.streamResponse(w, ctx, answerHistory, lastUserMessage, chatCtx.SystemPrompt, kbID, body.Model, completionID, created)
 		return
 	}
 
-	h.nonStreamResponse(w, ctx, lastUserMessage, chatCtx.SystemPrompt, kbID, body.Model, completionID, created)
+	h.nonStreamResponse(w, ctx, answerHistory, lastUserMessage, chatCtx.SystemPrompt, kbID, body.Model, completionID, created)
+}
+
+// capAnswerHistory bounds the client-supplied history before it reaches the
+// answer LLM: last 6 messages, each truncated to 4000 runes — the same
+// defaults as the in-app chat's chat_answer_history_* knobs (this endpoint
+// has no site-config reader, so the caps are fixed).
+func capAnswerHistory(history []ai.ChatHistoryEntry) []ai.ChatHistoryEntry {
+	const maxMessages, maxRunes = 6, 4000
+	if len(history) == 0 {
+		return nil
+	}
+	if len(history) > maxMessages {
+		history = history[len(history)-maxMessages:]
+	}
+	out := make([]ai.ChatHistoryEntry, 0, len(history))
+	for _, h := range history {
+		content := h.Content
+		if r := []rune(content); len(r) > maxRunes {
+			content = string(r[:maxRunes])
+		}
+		out = append(out, ai.ChatHistoryEntry{Role: h.Role, Content: content})
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -460,10 +489,11 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) nonStreamResponse(
 	w http.ResponseWriter,
 	ctx context.Context,
+	history []ai.ChatHistoryEntry,
 	prompt, systemPrompt, kbID, model, completionID string,
 	created int64,
 ) {
-	result, err := ai.GenerateCompletion(ctx, h.aiResolver, prompt, systemPrompt, kbID, false)
+	result, err := ai.GenerateCompletionWithHistory(ctx, h.aiResolver, history, prompt, systemPrompt, kbID, false)
 	if err != nil {
 		writeAPIError(ctx, w, http.StatusInternalServerError, "failed to generate response")
 		return
@@ -516,6 +546,7 @@ func writeSSEDone(w http.ResponseWriter) {
 func (h *Handler) streamResponse(
 	w http.ResponseWriter,
 	ctx context.Context,
+	history []ai.ChatHistoryEntry,
 	prompt, systemPrompt, kbID, model, completionID string,
 	created int64,
 ) {
@@ -536,7 +567,7 @@ func (h *Handler) streamResponse(
 		},
 	})
 
-	events, err := ai.StreamCompletion(ctx, h.aiResolver, prompt, systemPrompt, kbID, false)
+	events, err := ai.StreamCompletionWithHistory(ctx, h.aiResolver, history, prompt, systemPrompt, kbID, false)
 	if err != nil {
 		// The initial assistant-role chunk has already gone out, so we can't
 		// fall back to an HTTP error. Log for operators and emit an
