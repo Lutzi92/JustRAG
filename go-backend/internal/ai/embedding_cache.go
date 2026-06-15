@@ -123,6 +123,44 @@ func (c *EmbeddingCache) Get(ctx context.Context, model, text string) ([]float64
 	return vec, true
 }
 
+// GetMany retrieves cached embeddings for many texts in a single Redis
+// round-trip (MGET). It returns a slice parallel to texts: a hit holds the
+// decoded vector, a miss holds nil. A nil/disabled cache, an empty input, or
+// any Redis error yields an all-nil slice so callers transparently fall back
+// to the API for every text. Mirrors SetMany on the write side — the per-text
+// Get loop it replaces issued one serial GET per text (N round-trips for an
+// N-text ingestion batch).
+func (c *EmbeddingCache) GetMany(ctx context.Context, model string, texts []string) [][]float64 {
+	out := make([][]float64, len(texts))
+	if c == nil || c.rdb == nil || len(texts) == 0 {
+		return out
+	}
+
+	keys := make([]string, len(texts))
+	for i, t := range texts {
+		keys[i] = embCacheKey(model, t)
+	}
+
+	vals, err := c.rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return out
+	}
+
+	for i, v := range vals {
+		// Present entries decode to string (we stored []byte); a miss is nil.
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		if vec, ok := unmarshalEmbedding([]byte(s)); ok {
+			out[i] = vec
+		} else {
+			slog.Warn("embedding cache: malformed binary entry", "len", len(s))
+		}
+	}
+	return out
+}
+
 // Set stores an embedding vector in the cache. Errors are logged as warnings
 // but never returned.
 func (c *EmbeddingCache) Set(ctx context.Context, model, text string, vec []float64) {

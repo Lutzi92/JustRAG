@@ -257,3 +257,19 @@ func TestSQLQueryHandler_RejectsBeforeExecutor(t *testing.T) {
 		t.Errorf("validator failed-open: executor was called with %q", exec.gotQuery)
 	}
 }
+
+// BenchmarkValidateReadOnlyShape guards the precompiled deniedKeywordRe: the
+// validator runs on every sql_query / table_query call, and it previously
+// rebuilt 24 regexes per invocation. A regression to per-call MustCompile
+// shows up here as a large allocs/op jump.
+func BenchmarkValidateReadOnlyShape(b *testing.B) {
+	// A realistic accepted query (walks the full keyword scan without an early
+	// reject) plus one rejected near the end of the keyword list.
+	const accepted = "SELECT m.id, c.title FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.created_at > '2026-01-01' ORDER BY m.created_at DESC"
+	const rejected = "SELECT * FROM messages WHERE id = 'x' DEALLOCATE all"
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = validateReadOnlyShape(accepted)
+		_ = validateReadOnlyShape(rejected)
+	}
+}

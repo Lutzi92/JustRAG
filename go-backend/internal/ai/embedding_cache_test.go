@@ -64,6 +64,65 @@ func TestEmbeddingCache_DifferentModel(t *testing.T) {
 	}
 }
 
+func TestEmbeddingCache_GetMany(t *testing.T) {
+	cache, _ := newTestCache(t)
+	ctx := context.Background()
+
+	a := []float64{0.1, 0.2, 0.3}
+	c := []float64{0.7, 0.8, 0.9}
+	cache.Set(ctx, "model-a", "alpha", a)
+	cache.Set(ctx, "model-a", "gamma", c)
+
+	// "beta" is never stored — it must read back as a nil (miss) slot, while
+	// hits decode to their stored vectors, all in one round-trip.
+	got := cache.GetMany(ctx, "model-a", []string{"alpha", "beta", "gamma"})
+	if len(got) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(got))
+	}
+	if got[1] != nil {
+		t.Errorf("expected miss (nil) for uncached text, got %v", got[1])
+	}
+	for i, want := range [][]float64{a, nil, c} {
+		if want == nil {
+			continue
+		}
+		if len(got[i]) != len(want) {
+			t.Fatalf("slot %d: want %d elements, got %d", i, len(want), len(got[i]))
+		}
+		for j := range want {
+			if got[i][j] != want[j] {
+				t.Errorf("slot %d elem %d: want %f, got %f", i, j, want[j], got[i][j])
+			}
+		}
+	}
+}
+
+func TestEmbeddingCache_GetMany_DifferentModelMisses(t *testing.T) {
+	cache, _ := newTestCache(t)
+	ctx := context.Background()
+
+	cache.Set(ctx, "model-a", "alpha", []float64{1, 2, 3})
+
+	got := cache.GetMany(ctx, "model-b", []string{"alpha"})
+	if len(got) != 1 || got[0] != nil {
+		t.Fatalf("expected single miss for different model, got %v", got)
+	}
+}
+
+func TestEmbeddingCache_GetMany_NilAndEmpty(t *testing.T) {
+	ctx := context.Background()
+
+	var nilCache *EmbeddingCache
+	if got := nilCache.GetMany(ctx, "m", []string{"a", "b"}); len(got) != 2 || got[0] != nil || got[1] != nil {
+		t.Fatalf("nil cache: expected all-miss slice, got %v", got)
+	}
+
+	cache, _ := newTestCache(t)
+	if got := cache.GetMany(ctx, "m", nil); len(got) != 0 {
+		t.Fatalf("empty input: expected empty slice, got %v", got)
+	}
+}
+
 func TestEmbeddingCache_NilRedis(t *testing.T) {
 	cache := NewEmbeddingCache(nil, 1*time.Hour)
 	ctx := context.Background()

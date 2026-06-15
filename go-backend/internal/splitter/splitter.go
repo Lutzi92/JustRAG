@@ -2,6 +2,7 @@ package splitter
 
 import (
 	"strings"
+	"unicode/utf8"
 )
 
 // Config holds parameters for text splitting.
@@ -51,13 +52,15 @@ func Split(text string, cfg Config) []string {
 	if text == "" {
 		return nil
 	}
-	if estimateTokens(text) <= cfg.ChunkSize {
-		return []string{text}
-	}
+	// splitRecursive applies the same `estimateTokens(text) <= ChunkSize`
+	// short-circuit and returns the trimmed single chunk, so checking it here
+	// too would tokenize the whole text twice on the fits-in-one-chunk path.
 	return splitRecursive(text, cfg.Separators, cfg.ChunkSize, cfg.ChunkOverlap)
 }
 
 // splitRecursive implements the recursive character text split algorithm.
+// It tokenizes text once to decide whether it already fits in a chunk;
+// oversized text is handed to splitOversized.
 func splitRecursive(text string, separators []string, chunkSize, chunkOverlap int) []string {
 	if t := strings.TrimSpace(text); t == "" {
 		return nil
@@ -68,7 +71,15 @@ func splitRecursive(text string, separators []string, chunkSize, chunkOverlap in
 		}
 		return nil
 	}
+	return splitOversized(text, separators, chunkSize, chunkOverlap)
+}
 
+// splitOversized splits text the caller has ALREADY determined exceeds
+// chunkSize. Keeping the size check out of this function lets callers that
+// just measured the token count (mergeSplits, the no-separator fallback)
+// recurse without re-running BPE tokenization on the same text — the splitter
+// runs on every ingested document, so the duplicated Encode adds up.
+func splitOversized(text string, separators []string, chunkSize, chunkOverlap int) []string {
 	// Find the first separator in the hierarchy that actually splits the text.
 	var sep string
 	var parts []string
@@ -90,8 +101,10 @@ func splitRecursive(text string, separators []string, chunkSize, chunkOverlap in
 
 	if !foundSep {
 		// No separator produced a split; try remaining separators or char-split.
+		// text is still the same oversized string, so skip back to splitOversized
+		// rather than splitRecursive to avoid re-tokenizing it.
 		if len(separators) > 1 {
-			return splitRecursive(text, separators[1:], chunkSize, chunkOverlap)
+			return splitOversized(text, separators[1:], chunkSize, chunkOverlap)
 		}
 		return splitByChars(text, chunkSize, chunkOverlap)
 	}
@@ -143,9 +156,11 @@ func mergeSplits(parts []string, sep string, chunkSize, chunkOverlap int, nextSe
 			current.Reset()
 			currentTokens = 0
 
+			// partTokens > chunkSize was just measured above, so recurse via
+			// splitOversized to avoid tokenizing part a second time.
 			var sub []string
 			if len(nextSeparators) > 0 {
-				sub = splitRecursive(part, nextSeparators, chunkSize, chunkOverlap)
+				sub = splitOversized(part, nextSeparators, chunkSize, chunkOverlap)
 			} else {
 				sub = splitByChars(part, chunkSize, chunkOverlap)
 			}
@@ -203,6 +218,11 @@ func tailByTokens(text string, n int) string {
 
 // splitByChars splits text into character-level chunks of chunkSize tokens
 // with chunkOverlap token overlap. This is the last-resort splitter.
+//
+// chunkChars/overlapChars are byte budgets, but the cut points are snapped to
+// UTF-8 rune boundaries so a chunk never ends — and the next never begins —
+// mid-rune. This matters for the German-heavy corpus where ä/ö/ü/ß occupy two
+// bytes each: a raw byte slice would emit invalid UTF-8 at every boundary.
 func splitByChars(text string, chunkSize, chunkOverlap int) []string {
 	chunkChars := chunkSize * 4
 	overlapChars := chunkOverlap * 4
@@ -215,22 +235,46 @@ func splitByChars(text string, chunkSize, chunkOverlap int) []string {
 	chunks := make([]string, 0, estChunks)
 	for start := 0; start < len(text); {
 		end := start + chunkChars
-		if end > len(text) {
+		if end >= len(text) {
 			end = len(text)
+		} else {
+			end = alignRuneBoundary(text, start, end)
 		}
 		chunk := strings.TrimSpace(text[start:end])
 		if chunk != "" {
 			chunks = append(chunks, chunk)
 		}
-		if end == len(text) {
+		if end >= len(text) {
 			break
 		}
-		// Advance by chunkSize minus overlap.
+		// Advance by chunkSize minus overlap, snapped to a rune boundary so the
+		// next chunk also starts cleanly.
 		advance := chunkChars - overlapChars
 		if advance <= 0 {
 			advance = chunkChars
 		}
-		start += advance
+		next := start + advance
+		if next < len(text) {
+			next = alignRuneBoundary(text, start, next)
+		}
+		if next <= start {
+			next = end // guarantee forward progress on pathological input
+		}
+		start = next
 	}
 	return chunks
+}
+
+// alignRuneBoundary returns the largest index in (lo, hi] at which a UTF-8 rune
+// begins, so text[lo:result] never ends in the middle of a rune. hi must be a
+// valid index into text (hi < len(text)). A boundary is always found within
+// utf8.UTFMax-1 bytes of hi for valid UTF-8; the hi fallback only triggers on
+// malformed input, where callers guarantee forward progress separately.
+func alignRuneBoundary(text string, lo, hi int) int {
+	for i := hi; i > lo; i-- {
+		if utf8.RuneStart(text[i]) {
+			return i
+		}
+	}
+	return hi
 }

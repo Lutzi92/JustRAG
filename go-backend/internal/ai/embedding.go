@@ -123,14 +123,18 @@ func GenerateEmbeddings(ctx context.Context, resolver *ConfigResolver, texts []s
 
 	if cache != nil {
 		uncachedTexts = make([]string, 0, len(texts))
-		for i, t := range texts {
-			if vec, ok := cache.Get(ctx, cfg.EmbeddingModel, t); ok {
+		// One pipelined MGET for the whole batch instead of len(texts) serial
+		// GETs — the cold-start ingestion path (a 100-text batch, every text a
+		// miss) previously paid 100 round-trips just to discover they all miss.
+		cached := cache.GetMany(ctx, cfg.EmbeddingModel, texts)
+		for i := range texts {
+			if cached[i] != nil {
 				observability.RecordEmbeddingCacheHit()
-				result[i] = vec
+				result[i] = cached[i]
 			} else {
 				observability.RecordEmbeddingCacheMiss()
 				uncachedIndices = append(uncachedIndices, i)
-				uncachedTexts = append(uncachedTexts, t)
+				uncachedTexts = append(uncachedTexts, texts[i])
 			}
 		}
 	} else {

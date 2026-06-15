@@ -3,7 +3,45 @@ package splitter
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+// splitByChars is the last-resort splitter and operates on byte budgets; it
+// must never cut a multibyte UTF-8 rune at a chunk boundary (the corpus is
+// German-heavy: ä/ö/ü/ß are two bytes each).
+func TestSplitByCharsRuneBoundaries(t *testing.T) {
+	t.Parallel()
+	// A long run of multibyte runes with no separator forces the char splitter
+	// across many boundaries. Small chunk/overlap so boundaries land often.
+	text := strings.Repeat("äöüß", 500)
+	chunks := splitByChars(text, 3, 1)
+	if len(chunks) < 2 {
+		t.Fatalf("expected the input to split into multiple chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if !utf8.ValidString(c) {
+			t.Errorf("chunk %d is not valid UTF-8: %q", i, c)
+		}
+	}
+	// Reassembling without overlap is lossy, but every chunk individually being
+	// valid UTF-8 is the invariant the byte-slice version violated.
+}
+
+// The same invariant must hold when char-splitting is reached through the
+// public Split entrypoint (a long token-dense string with no usable separator).
+func TestSplitRuneBoundariesEndToEnd(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("Grüße", 2000) // no spaces/newlines → char fallback
+	chunks := Split(text, DefaultConfig())
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if !utf8.ValidString(c) {
+			t.Errorf("chunk %d is not valid UTF-8: %q", i, c)
+		}
+	}
+}
 
 // 1. Short text — fits in a single chunk, returned as-is.
 func TestShortText(t *testing.T) {

@@ -59,6 +59,12 @@ var deniedKeywords = []string{
 	"LISTEN", "UNLISTEN", "PREPARE", "DEALLOCATE",
 }
 
+// deniedKeywordRe matches any denied keyword as a whole word, case-insensitive.
+// Compiled once at package init rather than rebuilding 24 separate regexes on
+// every sql_query / table_query invocation (validateReadOnlyShape runs per
+// tool call). A single alternation also short-circuits on the first match.
+var deniedKeywordRe = regexp.MustCompile(`(?i)\b(?:` + strings.Join(deniedKeywords, "|") + `)\b`)
+
 var fromOrJoinRe = regexp.MustCompile(`(?i)\b(?:from|join|into|update)\s+(?:only\s+)?["]?([a-zA-Z_][a-zA-Z0-9_]*)["]?`)
 
 // SQLExecutor is the abstraction the tool talks to. The production
@@ -225,10 +231,8 @@ func validateReadOnlyShape(q string) error {
 	if strings.Contains(trimmed, "--") || strings.Contains(trimmed, "/*") {
 		return fmt.Errorf("comments are not allowed")
 	}
-	for _, kw := range deniedKeywords {
-		if regexp.MustCompile(`(?i)\b` + kw + `\b`).MatchString(trimmed) {
-			return fmt.Errorf("disallowed keyword: %s", kw)
-		}
+	if m := deniedKeywordRe.FindString(trimmed); m != "" {
+		return fmt.Errorf("disallowed keyword: %s", strings.ToUpper(m))
 	}
 	return nil
 }
