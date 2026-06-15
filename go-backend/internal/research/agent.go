@@ -13,6 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/justrag/go-backend/internal/ai"
+	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/safego"
 	"github.com/justrag/go-backend/internal/vector"
 )
@@ -725,6 +726,7 @@ func (a *Agent) emit(evt ProgressEvent) {
 	select {
 	case a.events <- evt:
 	default:
+		observability.RecordResearchEventDropped()
 		slog.Warn("research agent dropped progress event (buffer full)",
 			"kbId", a.kbID,
 			"step", a.state.StepsTaken,

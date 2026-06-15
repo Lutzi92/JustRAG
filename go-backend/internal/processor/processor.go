@@ -531,11 +531,17 @@ func resolveLateChunkingMaxInputTokens(ctx context.Context, reader SiteConfigRea
 // requires — so it is operator-tunable like the other ingestion knobs.
 // Default 20; non-positive or unparsable values fall back to it.
 func resolveEmbeddingBatchSize(ctx context.Context, reader SiteConfigReader) int {
-	const def = 20
+	return resolvePositiveIntConfig(ctx, reader, "embedding_batch_size", 20)
+}
+
+// resolvePositiveIntConfig reads a positive-integer site_config knob, falling
+// back to def when the reader is nil, the key is unset/blank, or the value is
+// not a parseable positive integer.
+func resolvePositiveIntConfig(ctx context.Context, reader SiteConfigReader, key string, def int) int {
 	if reader == nil {
 		return def
 	}
-	val, err := reader.GetSiteConfigValue(ctx, "embedding_batch_size")
+	val, err := reader.GetSiteConfigValue(ctx, key)
 	if err != nil || val == nil || *val == "" {
 		return def
 	}
@@ -544,6 +550,23 @@ func resolveEmbeddingBatchSize(ctx context.Context, reader SiteConfigReader) int
 		return def
 	}
 	return n
+}
+
+// resolveEnrichConcurrency caps the parallel per-chunk contextual-enrichment
+// LLM calls per file-processing task (site_config: ingest_enrich_concurrency,
+// default 10). Hoisted from a const so operators whose model backend is the
+// bottleneck can dial ingest fan-out down without a rebuild; the per-task cap
+// still compounds across concurrent worker tasks, so keep AI_MAX_CONCURRENT_REQUESTS
+// in mind for the global ceiling (see internal/ai/concurrency.go).
+func resolveEnrichConcurrency(ctx context.Context, reader SiteConfigReader) int {
+	return resolvePositiveIntConfig(ctx, reader, "ingest_enrich_concurrency", 10)
+}
+
+// resolveKGExtractConcurrency caps the parallel per-chunk KG-extraction LLM
+// calls per file (site_config: kg_extraction_concurrency, default 4). Same
+// rationale as resolveEnrichConcurrency.
+func resolveKGExtractConcurrency(ctx context.Context, reader SiteConfigReader) int {
+	return resolvePositiveIntConfig(ctx, reader, "kg_extraction_concurrency", 4)
 }
 
 // ProcessFileInput bundles ProcessFile's positional arguments. The five string
@@ -812,7 +835,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// enriched chunks is ready, while remaining chunks are still being
 	// enriched.
 	embeddingBatchSize := resolveEmbeddingBatchSize(ctx, p.siteConfigReader)
-	const maxEnrichConcurrency = 10
+	maxEnrichConcurrency := resolveEnrichConcurrency(ctx, p.siteConfigReader)
 	totalChunks := len(chunks)
 	processed := 0
 	failedBatches := 0
@@ -1198,7 +1221,7 @@ func (p *Processor) runKGExtractionStage(ctx context.Context, fileID, kbID, file
 
 	// Extract in parallel (LLM-bound, ~all of the stage's wall-clock),
 	// then persist serially below. nil slot = extraction failed/skipped.
-	const maxKGExtractConcurrency = 4
+	maxKGExtractConcurrency := resolveKGExtractConcurrency(ctx, p.siteConfigReader)
 	exts := make([]*ai.KGExtraction, len(chunks))
 	var extractWg sync.WaitGroup
 	sem := make(chan struct{}, maxKGExtractConcurrency)
@@ -1689,7 +1712,7 @@ func (p *Processor) runLateChunkedIngest(
 
 	// Stage 1: contextual enrichment for all chunks (parallel, bounded
 	// concurrency). When disabled, prefixes stay empty strings.
-	const maxEnrichConcurrency = 10
+	maxEnrichConcurrency := resolveEnrichConcurrency(ctx, p.siteConfigReader)
 	prefixes := make([]string, totalChunks)
 	if enrichmentEnabled {
 		document := fullText

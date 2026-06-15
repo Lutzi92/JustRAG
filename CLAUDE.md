@@ -19,13 +19,15 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `bm25_simple_arm_enabled`, `bm25_tiered_boost_enabled` — BM25 keyword-arm tuning
 - `hybrid_dynamic_alpha_*` — per-query α shift from BPE-token rarity
 - `recency_*` — exponential-decay freshness boost post-rerank (RSS/Confluence KBs; keyed on files.created_at)
-- `contextual_enrichment*`, `parent_child_*`, `docling_*`, `late_chunking_*`, `embedding_batch_size` — ingestion
+- `contextual_enrichment*`, `parent_child_*`, `docling_*`, `late_chunking_*`, `embedding_batch_size`, `ingest_enrich_concurrency` (default 10), `kg_extraction_concurrency` (default 4) — ingestion (the two `*_concurrency` keys cap per-file LLM fan-out; see also the `AI_MAX_CONCURRENT_REQUESTS` runtime note for the global ceiling)
 - `raptor_*` — per-file RAPTOR hierarchical summary trees (`raptor_clustering_algorithm` selects kmeans vs leiden)
 - `chat_tabular_*`, `tabular_semantic_*` — structured spreadsheet Q&A + fuzzy free-text-cell search + charts/pivots (Phase 1/2/3; `chat_tabular_charts_enabled` is the Phase-3 flag)
 - `ragas_*`, `factcheck_*`, `citation_validation_*`, `langfuse_*` — validation + observability
 - `model_tier_fast` — deployment-wide default for fast-tier tasks (CRAG grader, KG extractor, contextual enricher, factuality / Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer, longmem conflict classifier, evidentiality classifier, HyPE question generator, golden-set question generator, sufficient-context gate**); per-task `*_model` keys override. All fast-tier JSON calls send strict `json_schema` Structured Outputs (vLLM guided_json) with auto-downgrade to `json_object` on backend rejection; tolerant parsing stays as last resort (`ai.GenerateCompletionStructured` / `structuredCompletionFn`). Sole exception: the tool-aware DAG planner (free-form per-tool `args` is incompatible with strict mode).
 
 **Runtime-only knob (no site_config):** `hnsw.iterative_scan = relaxed_order` is set by `BuildPoolConfig`'s `AfterConnect` hook on every new pool connection (T0-1). Required for filtered ANN queries (kb_id, node_kind, GraphChunkIDs, file_id) to expand the HNSW candidate list until the WHERE clause is satisfied. Tolerates pgvector < 0.8 with a one-shot warning; no operator action needed when pgvector ≥ 0.8 is installed.
+
+**Runtime-only knob (env, no site_config):** `AI_MAX_CONCURRENT_REQUESTS` (default unset = unbounded) caps simultaneous in-flight **unary** model-provider requests per endpoint (chat completion / embedding / rerank / models — the `ai.doJSON` path; streaming answers are deliberately exempt to avoid starving the unary calls answer-time tools depend on). Per-op fan-out caps (`ingest_enrich_concurrency`, `kg_extraction_concurrency`, multi-query, rerank, RAPTOR) bound each site locally but not their *product*; under an ingest burst that product can saturate the vLLM/embedding backend into timeouts. Set this to the backend's safe concurrent-request ceiling to turn saturation into backpressure. Deadlock-free by construction (each call holds ≤1 slot, released before any other acquire). `internal/ai/concurrency.go`.
 
 **Migrations** (in `go-backend/migrations/main/`, sequential, idempotent):
 

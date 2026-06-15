@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -60,7 +61,16 @@ func (hs *HealthServer) SetReady(ready bool) {
 	hs.ready.Store(ready)
 }
 
-// Shutdown gracefully stops the health server.
+// Shutdown gracefully stops the health server, draining in-flight probe
+// requests within a 30s window (matching the Asynq server's shutdown grace)
+// before forcing connections closed. srv.Shutdown is the idiomatic match for
+// the graceful drain the rest of the worker already performs; the prior
+// srv.Close() abruptly dropped any in-flight /readyz connection.
 func (hs *HealthServer) Shutdown() {
-	hs.srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := hs.srv.Shutdown(ctx); err != nil {
+		// Drain window exceeded (or another error) — force-close the rest.
+		_ = hs.srv.Close()
+	}
 }

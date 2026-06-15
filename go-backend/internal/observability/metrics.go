@@ -796,6 +796,14 @@ var queryCacheWriteDroppedTotal = promauto.NewCounter(
 	},
 )
 
+var researchEventsDroppedTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name:        "rag_research_events_dropped_total",
+		Help:        "Total research-agent progress events dropped because the bounded SSE buffer was full. A non-zero rate means a slow client (or SSE relay) is falling behind the agent and the client's event stream has gaps.",
+		ConstLabels: commonLabels,
+	},
+)
+
 var queryCacheDimSkippedTotal = promauto.NewCounter(
 	prometheus.CounterOpts{
 		Name: "rag_query_cache_dim_skipped_total",
@@ -839,6 +847,12 @@ func RecordQueryCacheInvalidation() {
 
 func RecordQueryCacheWriteDropped() {
 	queryCacheWriteDroppedTotal.Inc()
+}
+
+// RecordResearchEventDropped counts a research-agent progress event dropped
+// because its bounded SSE buffer was full.
+func RecordResearchEventDropped() {
+	researchEventsDroppedTotal.Inc()
 }
 
 func RecordQueryCacheDimSkipped() {
