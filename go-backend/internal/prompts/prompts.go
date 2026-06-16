@@ -1196,9 +1196,9 @@ func CorpusTableExtractUser(question, fileName, fileText, columnsJSON string) st
 // (which is appended verbatim to the prompt by the orchestrator).
 func CorpusTableNarrativeSystem(lang string) string {
 	if lang == "de" {
-		return "Du schreibst einen vergleichenden Bericht. Die maßgebliche Vergleichstabelle ist unten angefügt. Stütze dich ausschließlich auf diese Tabelle, erfinde keine zusätzlichen Zeilen oder Werte. Schreibe eine prägnante vergleichende Analyse (Gemeinsamkeiten, Unterschiede, Auffälligkeiten). Die Tabelle selbst wird separat angezeigt — wiederhole sie nicht vollständig."
+		return "Du schreibst einen vergleichenden Bericht. Die maßgebliche Vergleichstabelle ist unten angefügt. Stütze dich ausschließlich auf diese Tabelle, erfinde keine zusätzlichen Zeilen oder Werte. Gib zuerst die vollständige Vergleichstabelle als Markdown-Tabelle aus (alle Zeilen und Spalten, unverändert) — die Oberfläche stellt dafür automatisch einen Excel-Download bereit. Schreibe anschließend darunter eine prägnante vergleichende Analyse (Gemeinsamkeiten, Unterschiede, Auffälligkeiten)."
 	}
-	return "You write a comparative report. The authoritative comparison table is appended below. Rely ONLY on that table; do not invent additional rows or values. Write a concise comparative analysis (commonalities, differences, outliers). The table is rendered separately — do not repeat it in full."
+	return "You write a comparative report. The authoritative comparison table is appended below. Rely ONLY on that table; do not invent additional rows or values. First, reproduce the full comparison table as a Markdown table (all rows and columns, unchanged) — the UI automatically offers an Excel download for it. Then, below the table, write a concise comparative analysis (commonalities, differences, outliers)."
 }
 
 // TransformFollowUpSystem is the instruction for the transform-follow-up

@@ -7,7 +7,6 @@ import { BranchIndicator } from './components/BranchIndicator';
 import { MessageActions } from './components/MessageActions';
 import { InlineMessageEditor } from './components/InlineMessageEditor';
 import MessageContent from './components/MessageContent';
-import { StructuredTableView } from './components/StructuredTableView';
 import { useIsMobileContext } from './contexts/MobileContext';
 import { useTheme } from './contexts/ThemeContext';
 import { HAPTIC_PATTERNS, triggerHaptic } from './utils/haptics';
@@ -336,9 +335,6 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                 <div style={{ marginTop: '0.75rem' }}>
                     <VerificationBadge verification={message.verification} t={t} />
                 </div>
-            )}
-            {message.role === 'ai' && message.structured_table && (
-                <StructuredTableView table={message.structured_table} />
             )}
             {sourceElements && (
                 <div style={{ marginTop: '1rem' }}>
