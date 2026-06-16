@@ -435,6 +435,7 @@ func ChatSystemPrompt(lang string) string {
     9. Behalte einen professionellen, aber hilfreichen Ton bei.
     10. Verwende Markdown-Formatierung für Struktur (Überschriften, Listen, Fettdruck) wo es die Lesbarkeit verbessert.
     11. Passe die Länge der Antwort an die Komplexität der Frage an: kurze Fragen → kurze Antworten, komplexe Fragen → detaillierte Antworten.
+    11a. Wird um eine Tabelle, ein Spreadsheet, eine Excel-/CSV-Datei o. Ä. gebeten, gib die Daten als Markdown-Tabelle aus — die Oberfläche stellt dafür automatisch einen Excel-Download bereit. Lehne solche Bitten NIEMALS mit „ich kann keine Excel-/Dateien erzeugen“ ab; rendere stattdessen eine Markdown-Tabelle aus dem belegten Kontext.
 
     Vollständigkeit:
     12. Wenn der Kontext die Frage nur teilweise beantwortet, sage ausdrücklich, was abgedeckt ist und was nicht.
@@ -468,6 +469,7 @@ func ChatSystemPrompt(lang string) string {
     9. Maintain a professional but helpful tone.
     10. Use Markdown formatting for structure (headings, lists, bold) where it improves readability.
     11. Adapt response length to the complexity of the question: simple questions → brief answers, complex questions → detailed answers.
+    11a. When asked for a table, spreadsheet, Excel/CSV file, or similar, render the data as a Markdown table — the UI automatically offers an Excel download for it. NEVER refuse such requests with "I can't generate Excel/files"; instead render a Markdown table from the cited context.
 
     Completeness:
     12. If the context only partially answers the question, explicitly state what IS covered and what IS NOT.
@@ -1205,7 +1207,7 @@ func CorpusTableNarrativeSystem(lang string) string {
 // never introduce new information.
 func TransformFollowUpSystem(lang string) string {
 	if lang == "de" {
-		return "Der Nutzer bittet darum, deine vorherige Antwort umzuformen (z. B. als Tabelle, Zusammenfassung, Übersetzung oder Stichpunkte). Die vorherige Antwort ist unten angefügt und ist die EINZIGE Grundlage: Übernimm ausschließlich Inhalte aus ihr, füge keine neuen Informationen hinzu und lasse nichts Wesentliches weg. Behalte vorhandene Quellenverweise wie [1] bei den jeweiligen Inhalten bei. Falls sich die Bitte nicht aus der vorherigen Antwort erfüllen lässt, sage das kurz, statt zu raten."
+		return "Der Nutzer bittet darum, deine vorherige Antwort umzuformen (z. B. als Tabelle, Zusammenfassung, Übersetzung oder Stichpunkte). Die vorherige Antwort ist unten angefügt und ist die EINZIGE Grundlage: Übernimm ausschließlich Inhalte aus ihr, füge keine neuen Informationen hinzu und lasse nichts Wesentliches weg. Behalte vorhandene Quellenverweise wie [1] bei den jeweiligen Inhalten bei. Wird um eine Excel-/CSV-/Spreadsheet-/Tabellen-Ausgabe gebeten, gib die Daten als Markdown-Tabelle aus — die Oberfläche stellt dafür automatisch einen Excel-Download bereit; lehne solche Bitten NICHT mit „ich kann keine Dateien erzeugen“ ab. Falls sich die Bitte nicht aus der vorherigen Antwort erfüllen lässt, sage das kurz, statt zu raten."
 	}
-	return "The user asks you to transform your previous answer (e.g. as a table, summary, translation, or bullet points). The previous answer is appended below and is the ONLY source: use exclusively its content, add no new information, and omit nothing essential. Keep existing citation markers like [1] attached to their content. If the request cannot be fulfilled from the previous answer, say so briefly instead of guessing."
+	return "The user asks you to transform your previous answer (e.g. as a table, summary, translation, or bullet points). The previous answer is appended below and is the ONLY source: use exclusively its content, add no new information, and omit nothing essential. Keep existing citation markers like [1] attached to their content. If asked for an Excel/CSV/spreadsheet/table output, render the data as a Markdown table — the UI automatically offers an Excel download for it; do NOT refuse such requests with \"I can't generate files\". If the request cannot be fulfilled from the previous answer, say so briefly instead of guessing."
 }

@@ -31,7 +31,7 @@ import (
 // ("übersetz…") are listed without a leading \b — a space-to-ü transition is
 // not a word boundary.
 
-var transformCueRe = regexp.MustCompile(`(?i)\b(tabell\w*|table|spreadsheet|zusammenfass\w*|fasse\b.*\bzusammen|summar(?:y|ize|ise)\w*|tl;?dr|kürzer|kürze\b|shorter|shorten|stichpunkte?|stichworte?|aufzählung|bullet points?|als liste|as a list|translate|ins (?:englische|deutsche)|auf (?:englisch|deutsch)|in (?:english|german)|umformulier\w*|rephrase|reword|vereinfach\w*|simplif\w*|formatier\w*|reformat)\b|übersetz\w*`)
+var transformCueRe = regexp.MustCompile(`(?i)\b(tabell\w*|table|spreadsheet|excel|xlsx?|csv|zusammenfass\w*|fasse\b.*\bzusammen|summar(?:y|ize|ise)\w*|tl;?dr|kürzer|kürze\b|shorter|shorten|stichpunkte?|stichworte?|aufzählung|bullet points?|als liste|as a list|translate|ins (?:englische|deutsche)|auf (?:englisch|deutsch)|in (?:english|german)|umformulier\w*|rephrase|reword|vereinfach\w*|simplif\w*|formatier\w*|reformat)\b|übersetz\w*`)
 
 var transformAnaphorRe = regexp.MustCompile(`(?i)\b(das|dies|diese[srnm]?|davon|daraus|es|it|this|that|deine antwort|die antwort|letzte antwort|your (?:answer|response|reply)|previous answer|the above|obige[srnm]?)\b`)
 

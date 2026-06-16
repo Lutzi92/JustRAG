@@ -416,6 +416,36 @@ button.source-card {
   background: rgba(255, 255, 255, 0.02);
 }
 
+/* Per-table Excel export (generic Markdown tables in AI answers) */
+.md-table {
+  margin: 1rem 0;
+}
+
+.md-table > table {
+  margin: 0;
+}
+
+.md-table__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.35rem;
+}
+
+.md-table__toolbar button {
+  font-size: 0.78rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.md-table__toolbar button:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-primary);
+}
+
 /* Dark mode polish — accent glow on interactive elements */
 [data-theme='dark'] .send-button:not(:disabled) {
   box-shadow: 0 0 12px rgba(var(--accent-primary-rgb), 0.15);

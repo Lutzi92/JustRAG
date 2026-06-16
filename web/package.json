@@ -23,6 +23,7 @@
     "@aws-sdk/client-s3": "^3.1011.0",
     "axios": "^1.16.1",
     "dompurify": "^3.4.6",
+    "exceljs": "^4.4.0",
     "express-rate-limit": "8.3.1",
     "form-data": "^4.0.5",
     "framer-motion": "12.34.2",
@@ -37,8 +38,7 @@
     "recharts": "3.7.0",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
-    "remark-gfm": "4.0.1",
-    "xlsx": "^0.18.5"
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@eslint/js": "9.39.2",

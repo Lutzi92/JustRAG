@@ -31,6 +31,15 @@ func TestIsTransformFollowUpQuery(t *testing.T) {
 		"kürzer bitte",
 		"zusammenfassen bitte",
 		"summarize that",
+		// Export-format follow-ups: reformat the previous answer as a
+		// spreadsheet/table the UI can export to .xlsx (retrieval-free).
+		"gib mir das als Excel-Datei",
+		"das bitte als Excel",
+		"exportiere das als Excel",
+		"kannst du das als Excel-Tabelle ausgeben?",
+		"as an excel file",
+		"can you give me that as an xlsx?",
+		"das als csv bitte",
 	}
 	for _, q := range positives {
 		if !IsTransformFollowUpQuery(q) {

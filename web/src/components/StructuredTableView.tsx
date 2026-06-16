@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { utils, writeFile } from 'xlsx';
+import { exportRowsToXlsx } from '../utils/exportXlsx';
 import type { StructuredTable } from '../types';
 
 interface Props {
@@ -26,15 +26,12 @@ export function StructuredTableView({ table }: Props) {
                 const raw = row[c.key];
                 if (c.type === 'number' && raw != null) {
                     const n = Number(String(raw).replace(/[, ]/g, ''));
-                    return Number.isNaN(n) ? raw : n;
+                    return Number.isNaN(n) ? (raw as string) : n;
                 }
-                return raw ?? '';
+                return (raw ?? '') as string;
             }),
         );
-        const ws = utils.aoa_to_sheet([header, ...body]);
-        const wb = utils.book_new();
-        utils.book_append_sheet(wb, ws, 'Comparison');
-        writeFile(wb, 'comparison.xlsx');
+        void exportRowsToXlsx([header, ...body], { filename: 'comparison.xlsx', sheetName: 'Comparison' });
     }, [table]);
 
     const columns = table.columns.filter((c) => !RESERVED.has(c.key));

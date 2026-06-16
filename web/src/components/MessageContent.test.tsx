@@ -9,6 +9,12 @@ vi.mock('../contexts/ThemeContext', () => ({
     useTheme: vi.fn(),
 }));
 
+// Stub the export helper — it lazy-loads ExcelJS and touches the DOM/Blob APIs,
+// neither of which we want to exercise in a unit test of the wiring.
+vi.mock('../utils/exportXlsx', () => ({
+    exportRowsToXlsx: vi.fn(),
+}));
+
 describe('MessageContent', () => {
     beforeEach(() => {
         // Reset mock before each test
@@ -150,5 +156,51 @@ describe('MessageContent', () => {
         expect(screen.getByText(/what is their email/i)).toBeInTheDocument();
         expect(screen.getByText(/crag_proceed/i)).toBeInTheDocument();
         expect(screen.getByText(/early_stop_sufficient/i)).toBeInTheDocument();
+    });
+
+    it('renders a Download .xlsx button on a Markdown table', () => {
+        const md = '| Name | Score |\n| --- | --- |\n| Alice | 9 |\n| Bob | 7 |';
+        render(<MessageContent content={md} />);
+        expect(screen.getByRole('button', { name: /Download \.xlsx/i })).toBeInTheDocument();
+    });
+
+    it('does not render a Download button when there is no table', () => {
+        render(<MessageContent content="Just prose, no table." />);
+        expect(screen.queryByRole('button', { name: /Download \.xlsx/i })).toBeNull();
+    });
+
+    it('exports the table cells (incl. header) on click', async () => {
+        const { exportRowsToXlsx } = await import('../utils/exportXlsx');
+
+        const md = '| Name | Score |\n| --- | --- |\n| Alice | 9 |\n| Bob | 7 |';
+        render(<MessageContent content={md} />);
+        fireEvent.click(screen.getByRole('button', { name: /Download \.xlsx/i }));
+
+        expect(exportRowsToXlsx).toHaveBeenCalledWith(
+            [
+                ['Name', 'Score'],
+                ['Alice', '9'],
+                ['Bob', '7'],
+            ],
+            { filename: 'table.xlsx' },
+        );
+    });
+
+    it('strips citation markers from exported table cells', async () => {
+        const { exportRowsToXlsx } = await import('../utils/exportXlsx');
+        const sources = [{ index: 1, fileName: 'doc.pdf', fileId: 'f1', content: '', score: 0.9, pages: [4] }];
+
+        // The cell carries an inline citation that renders as a sup.source-ref.
+        const md = '| Topic | Detail |\n| --- | --- |\n| Budget | 5000 EUR [1] |';
+        render(<MessageContent content={md} sources={sources} />);
+        fireEvent.click(screen.getByRole('button', { name: /Download \.xlsx/i }));
+
+        expect(exportRowsToXlsx).toHaveBeenCalledWith(
+            [
+                ['Topic', 'Detail'],
+                ['Budget', '5000 EUR'],
+            ],
+            { filename: 'table.xlsx' },
+        );
     });
 });
