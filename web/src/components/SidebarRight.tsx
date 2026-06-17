@@ -3,6 +3,7 @@ import {
     PanelRightClose, Sparkles, FileText, MessageSquare, Loader2, Trash2, Plus, Search, GraduationCap, ArrowLeft,
 } from 'lucide-react';
 import type { ChatEntry, GeneratedContent } from '../types';
+import { artifactTypeLabel } from '../utils/artifactTypes';
 import { useTheme } from '../contexts/ThemeContext';
 import { useIsMobileContext } from '../contexts/MobileContext';
 import { useKbCore } from '../contexts/KbCoreContext';
@@ -32,8 +33,8 @@ const SidebarRightComp: React.FC = () => {
     const isGlobal = currentKb?.isGlobal;
     const studioConfig = currentKb?.isGlobal ? (currentKb.studioConfig || undefined) : undefined;
 
-    const sc = { cards: true, presentation: true, podcast: true, abstract: true, ...studioConfig };
-    const hasAnyStudio = sc.cards || sc.presentation || sc.podcast || sc.abstract;
+    const sc = { cards: true, presentation: true, podcast: true, abstract: true, briefingDoc: true, faq: true, studyGuide: true, timeline: true, quiz: true, ...studioConfig };
+    const hasAnyStudio = sc.cards || sc.presentation || sc.podcast || sc.abstract || sc.briefingDoc || sc.faq || sc.studyGuide || sc.timeline || sc.quiz;
 
     const researchChats = useMemo(() => chats.filter(c => c.type === 'research'), [chats]);
     const academicChats = useMemo(() => chats.filter(c => c.type === 'academic_research'), [chats]);
@@ -151,6 +152,11 @@ const SidebarRightComp: React.FC = () => {
                             {sc.podcast && <button onClick={() => handleGenerate('podcast')} disabled={generating || !hasFiles} className="studio-gen-btn" title={t('podcastEnglishOnly')}>{t('podcastEnglishOnly')}</button>}
 
                             {sc.abstract && <button onClick={() => handleGenerate('abstract')} disabled={generating || !hasFiles} className="studio-gen-btn">{t('abstract')}</button>}
+                            {sc.briefingDoc && <button onClick={() => handleGenerate('briefing_doc')} disabled={generating || !hasFiles} className="studio-gen-btn">{t('briefingDoc')}</button>}
+                            {sc.faq && <button onClick={() => handleGenerate('faq')} disabled={generating || !hasFiles} className="studio-gen-btn">{t('faq')}</button>}
+                            {sc.studyGuide && <button onClick={() => handleGenerate('study_guide')} disabled={generating || !hasFiles} className="studio-gen-btn">{t('studyGuide')}</button>}
+                            {sc.timeline && <button onClick={() => handleGenerate('timeline')} disabled={generating || !hasFiles} className="studio-gen-btn">{t('timeline')}</button>}
+                            {sc.quiz && <button onClick={() => handleGenerate('quiz')} disabled={generating || !hasFiles} className="studio-gen-btn">{t('quiz')}</button>}
                         </div>
                     )}
 
@@ -192,7 +198,7 @@ const SidebarRightComp: React.FC = () => {
                                                 >
                                                     {item.title}
                                                 </button>
-                                                <div className="source-meta sidebar-right__item-meta sidebar-ui__item-meta">{(item as GeneratedContent).type} • {new Date(item.createdAt).toLocaleDateString()}</div>
+                                                <div className="source-meta sidebar-right__item-meta sidebar-ui__item-meta">{artifactTypeLabel((item as GeneratedContent).type, t)} • {new Date(item.createdAt).toLocaleDateString()}</div>
                                             </div>
                                             <button onClick={(e) => handleDeleteGeneratedContent(item.id, e)} className="settings-toggle sidebar-right__item-delete sidebar-ui__item-delete" aria-label={`${t('deleteItem')} ${item.title}`}>
                                                 <Trash2 size={14} />

@@ -7,7 +7,7 @@ export interface KbCoreContextValue {
   isPro: boolean;
   availableConfigs: SafeAIConfig[];
   kbView: string;
-  setKbView: (view: 'chat' | 'dashboard' | 'research' | 'academic_research' | 'studio') => void;
+  setKbView: (view: 'chat' | 'dashboard' | 'research' | 'academic_research' | 'studio' | 'mindmap') => void;
   kbMgmt: ReturnType<typeof useKnowledgeBases>;
   handleGoHome: () => void;
   handleViewHome: () => void;

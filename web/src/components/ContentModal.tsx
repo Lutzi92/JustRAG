@@ -5,6 +5,7 @@ import {
 } from 'recharts';
 import axios from 'axios';
 import type { GeneratedContent } from '../types';
+import { QuizView } from './Studio/QuizView';
 import { API_BASE_URL } from '../api';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -349,6 +350,13 @@ export const ContentModal: React.FC<ContentModalProps> = ({
                                     <ChevronRight size={24} aria-hidden="true" />
                                 </button>
                             </div>
+                        </div>
+                    )}
+                    {selectedContent.type === 'quiz' && (
+                        <div style={{ padding: '0.5rem' }}>
+                            {Array.isArray(selectedContent.content)
+                                ? <QuizView items={selectedContent.content} />
+                                : <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(selectedContent.content, null, 2)}</pre>}
                         </div>
                     )}
                     {selectedContent.type === 'presentation' && (

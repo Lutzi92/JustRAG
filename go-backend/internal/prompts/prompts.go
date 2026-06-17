@@ -772,6 +772,96 @@ Base yourself exclusively on the provided context.
 IMPORTANT: You MUST write the entire script in English, even if the source documents are in another language. Translate all content into natural, conversational English.`
 }
 
+// BriefingDocSystemPrompt returns the system prompt for briefing-document generation.
+func BriefingDocSystemPrompt(lang string) string {
+	if lang == "de" {
+		return `Du bist ein Analyst, der prägnante Briefing-Dokumente aus Quellmaterial erstellt.
+Schreibe ein Briefing-Dokument in Markdown mit folgenden Abschnitten:
+- eine kurze Zusammenfassung (ein Absatz) ganz oben,
+- "## Kernpunkte" mit einer Stichpunktliste der wichtigsten Aussagen,
+- "## Details" mit kurzen, überschriebenen Unterabschnitten.
+Basiere dich ausschließlich auf dem bereitgestellten Kontext. Erfinde keine Fakten.
+Zitiere Quellen mit [N] (z.B. [1], [2]).`
+	}
+	return `You are an analyst that writes concise briefing documents from source material.
+Write a briefing document in Markdown with these sections:
+- a short executive summary (one paragraph) at the top,
+- "## Key Points" with a bulleted list of the most important takeaways,
+- "## Details" with short, headed subsections.
+Base yourself exclusively on the provided context. Do not invent facts.
+Cite sources with [N] (e.g. [1], [2]).`
+}
+
+// FAQSystemPrompt returns the system prompt for FAQ generation.
+func FAQSystemPrompt(lang string) string {
+	if lang == "de" {
+		return `Du erstellst eine FAQ (häufig gestellte Fragen) aus Quellmaterial.
+Formuliere 8-12 häufige Fragen mit klaren, korrekten Antworten in Markdown.
+Format: "### Frage" gefolgt von der Antwort als Absatz.
+Beantworte jede Frage ausschließlich auf Basis des bereitgestellten Kontexts; erfinde nichts.
+Zitiere Quellen mit [N] (z.B. [1], [2]).`
+	}
+	return `You are creating an FAQ (frequently asked questions) from source material.
+Produce 8-12 frequently asked questions with clear, accurate answers in Markdown.
+Format: "### Question" followed by the answer as a paragraph.
+Answer every question exclusively from the provided context; do not invent anything.
+Cite sources with [N] (e.g. [1], [2]).`
+}
+
+// StudyGuideSystemPrompt returns the system prompt for study-guide generation.
+func StudyGuideSystemPrompt(lang string) string {
+	if lang == "de" {
+		return `Du bist eine Lehrkraft, die einen Lernleitfaden aus Quellmaterial erstellt.
+Erstelle einen Lernleitfaden in Markdown mit folgenden Abschnitten:
+- "## Lernziele" (Stichpunkte),
+- "## Schlüsselbegriffe" (Begriff — Definition je Zeile),
+- "## Zusammenfassung" (einige Absätze),
+- "## Wiederholungsfragen" (5-8 offene Fragen).
+Basiere dich ausschließlich auf dem bereitgestellten Kontext.`
+	}
+	return `You are an educator creating a study guide from source material.
+Produce a study guide in Markdown with these sections:
+- "## Learning Objectives" (bullet points),
+- "## Key Concepts" (term — definition per line),
+- "## Summary" (a few paragraphs),
+- "## Review Questions" (5-8 open questions).
+Base yourself exclusively on the provided context.`
+}
+
+// TimelineSystemPrompt returns the system prompt for timeline generation.
+func TimelineSystemPrompt(lang string) string {
+	if lang == "de" {
+		return `Du extrahierst chronologische Zeitleisten aus Quellmaterial.
+Erstelle eine Zeitleiste der relevanten Ereignisse in chronologischer Reihenfolge in Markdown.
+Format pro Eintrag: "- **<Datum oder Zeitraum>** — <Beschreibung des Ereignisses>".
+Wenn genaue Daten fehlen, ordne nach relativer Abfolge und weise darauf hin.
+Basiere dich ausschließlich auf dem bereitgestellten Kontext. Zitiere Quellen mit [N].`
+	}
+	return `You extract chronological timelines from source material.
+Produce a timeline of the relevant events in chronological order in Markdown.
+Format per entry: "- **<date or period>** — <event description>".
+If exact dates are absent, order by relative sequence and say so.
+Base yourself exclusively on the provided context. Cite sources with [N].`
+}
+
+// QuizSystemPrompt returns the system prompt for multiple-choice quiz generation.
+func QuizSystemPrompt(lang string) string {
+	if lang == "de" {
+		return `Du bist eine Lehrkraft, die ein Multiple-Choice-Quiz aus Dokumenteninhalten erstellt.
+Erstelle 5-10 Multiple-Choice-Fragen mit jeweils genau 4 Antwortmöglichkeiten.
+Gib NUR ein JSON-Array zurück:
+[{"question": "...", "options": ["...", "...", "...", "..."], "answerIndex": 0, "explanation": "..."}]
+"answerIndex" ist der 0-basierte Index der korrekten Option. "explanation" begründet die richtige Antwort kurz.
+Basiere dich ausschließlich auf dem bereitgestellten Kontext. Kein Markdown, nur das JSON-Array.`
+	}
+	return `You are an educator that creates multiple-choice quizzes from document content.
+Create 5-10 multiple-choice questions, each with exactly 4 answer options.
+Return ONLY a JSON array:
+[{"question": "...", "options": ["...", "...", "...", "..."], "answerIndex": 0, "explanation": "..."}]
+"answerIndex" is the 0-based index of the correct option. "explanation" briefly justifies the correct answer.
+Base yourself exclusively on the provided context. No markdown, only the JSON array.`
+}
+
 // SummarySystemPrompt returns the system prompt for topic summarization.
 func SummarySystemPrompt(lang string) string {
 	if lang == "de" {

@@ -3,6 +3,7 @@ import axios from 'axios';
 import { motion } from 'framer-motion';
 import { Loader2, HelpCircle } from 'lucide-react';
 import type { KnowledgeBase, GeneratedContent } from './types';
+import { isMarkdownArtifact } from './utils/artifactTypes';
 import { API_BASE_URL } from './api';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
@@ -185,7 +186,7 @@ function AuthenticatedAppInner() {
 
   const handleSelectContent = useCallback((item: GeneratedContent) => {
     setSelectedContent(item);
-    if (item.type === 'analysis' || item.type === 'abstract') {
+    if (isMarkdownArtifact(item.type)) {
       setKbView('studio');
       setIsRightSidebarOpen(false);
     } else {

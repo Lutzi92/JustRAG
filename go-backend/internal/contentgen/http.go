@@ -206,6 +206,76 @@ func (h *Handler) GenerateCards(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// GenerateQuiz — POST /api/kb/{id}/generate/quiz
+// ---------------------------------------------------------------------------
+
+// quizQuestion is a single multiple-choice question.
+type quizQuestion struct {
+	Question    string   `json:"question"`
+	Options     []string `json:"options"`
+	AnswerIndex int      `json:"answerIndex"`
+	Explanation string   `json:"explanation,omitempty"`
+}
+
+// GenerateQuiz creates a multiple-choice quiz from KB content on the given topic.
+// Runs inline (single LLM call). Stored as a JSON array of quizQuestion, mirroring
+// the flashcards shape so the frontend renders it with a dedicated interactive view.
+func (h *Handler) GenerateQuiz(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	kbID := kbIDFromContext(r)
+
+	caller := auth.UserFromContext(ctx)
+	if caller == nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	var req GenerateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(req.Topic) == "" {
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "topic is required")
+		return
+	}
+	lang := defaultLang(req.Language)
+
+	contextStr, err := getContext(ctx, h.searchSvc, kbID, req.Topic, 25)
+	if err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to retrieve context")
+		return
+	}
+
+	prompt := fmt.Sprintf("Topic: %s\n\nContext:\n%s\n\nCreate a multiple-choice quiz for the topic based on the context above.", req.Topic, contextStr)
+	raw, err := generateWithLLM(ctx, h.aiResolver, prompt, prompts.QuizSystemPrompt(lang), kbID)
+	if err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "LLM generation failed")
+		return
+	}
+
+	raw = stripCodeFence(strings.TrimSpace(raw))
+
+	var questions []quizQuestion
+	var contentVal any
+	if err := json.Unmarshal([]byte(raw), &questions); err == nil && len(questions) > 0 {
+		contentVal = questions
+	} else {
+		// Return raw on parse error so the client still gets something.
+		contentVal = map[string]any{"raw": raw}
+	}
+
+	title := fmt.Sprintf("Quiz: %s", req.Topic)
+	record, err := h.store.CreateGeneratedContent(ctx, kbID, caller.ID, "quiz", title, contentVal)
+	if err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to save generated content")
+		return
+	}
+
+	httputil.WriteJSONCtx(ctx, w, http.StatusOK, record)
+}
+
+// ---------------------------------------------------------------------------
 // GeneratePresentation — POST /api/kb/{id}/generate/presentation
 // ---------------------------------------------------------------------------
 

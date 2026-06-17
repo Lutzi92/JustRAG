@@ -184,6 +184,13 @@ export interface StudioConfig {
     podcast: boolean;
     chart: boolean;
     abstract: boolean;
+    // Phase-2 study artifacts. Optional so legacy stored configs (which omit
+    // them) keep working; absent ⇒ enabled by default in the sc spreads.
+    briefingDoc?: boolean;
+    faq?: boolean;
+    studyGuide?: boolean;
+    timeline?: boolean;
+    quiz?: boolean;
 }
 
 export interface KnowledgeBase {
@@ -290,6 +297,13 @@ export interface AbstractContentData {
     abstractType: 'academic' | 'executive';
 }
 
+export interface QuizItem {
+    question: string;
+    options: string[];
+    answerIndex: number;
+    explanation?: string;
+}
+
 interface GeneratedContentBase {
     id: string;
     kbId: string;
@@ -306,6 +320,11 @@ export type GeneratedContent = GeneratedContentBase & (
     | { type: 'analysis'; content: AnalysisContentData; }
     | { type: 'abstract'; content: AbstractContentData; }
     | { type: 'research'; content: AnalysisContentData; }
+    | { type: 'briefing_doc'; content: AnalysisContentData; }
+    | { type: 'faq'; content: AnalysisContentData; }
+    | { type: 'study_guide'; content: AnalysisContentData; }
+    | { type: 'timeline'; content: AnalysisContentData; }
+    | { type: 'quiz'; content: QuizItem[]; }
 );
 
 export interface RssFeed {

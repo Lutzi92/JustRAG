@@ -6,9 +6,11 @@ import axios from 'axios';
 import {
     Trash2, Minimize2,
     Type, Layout, Mic, X, Check,
-    FileText, Loader2
+    FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks
 } from 'lucide-react';
 import type { GeneratedContent, StudioConfig } from '../../types';
+import { isMarkdownArtifact, artifactTypeLabel } from '../../utils/artifactTypes';
+import { QuizView } from './QuizView';
 import { API_BASE_URL } from '../../api';
 import { MarkdownEditor } from './MarkdownEditor';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -18,7 +20,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 interface StudioWorkspaceProps {
     kbId: string;
     generatedContent: GeneratedContent[];
-    onGenerate: (type: 'cards' | 'presentation' | 'podcast' | 'chart' | 'abstract') => void;
+    onGenerate: (type: 'cards' | 'presentation' | 'podcast' | 'chart' | 'abstract' | 'briefing_doc' | 'faq' | 'study_guide' | 'timeline' | 'quiz') => void;
     onDeleteContent: (id: string, e: React.MouseEvent) => void;
     onClose: () => void;
     studioConfig?: StudioConfig;
@@ -57,8 +59,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
     // When selection changes, update editor content if it's an analysis or abstract
     useEffect(() => {
-        if (selectedItem?.type === 'analysis' || selectedItem?.type === 'abstract' || selectedItem?.type === 'research') {
-            setEditorContent(selectedItem.content.text || '');
+        if (selectedItem && isMarkdownArtifact(selectedItem.type)) {
+            setEditorContent((selectedItem.content as { text?: string }).text || '');
         }
     }, [selectedItem]);
 
@@ -70,7 +72,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
 
     // Chart generation is force-disabled until DuckDB support is ported to the Go backend.
     // chart: false is set after the spread so studioConfig cannot re-enable it.
-    const sc = { cards: true, presentation: true, podcast: true, abstract: true, ...studioConfig, chart: false };
+    const sc = { cards: true, presentation: true, podcast: true, abstract: true, briefingDoc: true, faq: true, studyGuide: true, timeline: true, quiz: true, ...studioConfig, chart: false };
 
     const handleAnalyzeRequest = () => {
         setShowAnalysisModal(true);
@@ -109,7 +111,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     };
 
     const handleSave = async () => {
-        if (!selectedItem || (selectedItem.type !== 'analysis' && selectedItem.type !== 'abstract' && selectedItem.type !== 'research')) return;
+        if (!selectedItem || !isMarkdownArtifact(selectedItem.type)) return;
 
         setSaveStatus('saving');
         try {
@@ -152,7 +154,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     }, [isCopied]);
 
     const handleCopyToClipboard = async () => {
-        if ((selectedItem?.type === 'analysis' || selectedItem?.type === 'abstract' || selectedItem?.type === 'research') && editorContent) {
+        if (selectedItem && isMarkdownArtifact(selectedItem.type) && editorContent) {
             const copied = await copyToClipboard(editorContent);
             if (copied) {
                 setIsCopied(true);
@@ -168,7 +170,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const exportDocx = async () => {
         if (!selectedItem) return;
         try {
-            const contentToExport = (selectedItem.type === 'analysis' || selectedItem.type === 'abstract') ? editorContent : JSON.stringify(selectedItem.content, null, 2);
+            const contentToExport = isMarkdownArtifact(selectedItem.type) ? editorContent : JSON.stringify(selectedItem.content, null, 2);
 
             // Matches ResearchMode.tsx: body: JSON.stringify({ report, goal })
             // Axios automatically stringifies the body, so we pass the object directly.
@@ -216,7 +218,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         const title = selectedItem.title;
         let contentHtml = '';
 
-        if (selectedItem.type === 'analysis' || selectedItem.type === 'abstract') {
+        if (isMarkdownArtifact(selectedItem.type)) {
             // Render markdown to HTML with proper structure
             contentHtml = renderToStaticMarkup(
                 <div className="markdown-content">
@@ -363,6 +365,32 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             <FileText size={16} /> {t('abstract')}
                         </button>
                     )}
+
+                    {sc.briefingDoc && (
+                        <button onClick={() => onGenerateParent('briefing_doc')} disabled={!hasFiles} className="studio-gen-btn">
+                            <Newspaper size={16} /> {t('briefingDoc')}
+                        </button>
+                    )}
+                    {sc.faq && (
+                        <button onClick={() => onGenerateParent('faq')} disabled={!hasFiles} className="studio-gen-btn">
+                            <HelpCircle size={16} /> {t('faq')}
+                        </button>
+                    )}
+                    {sc.studyGuide && (
+                        <button onClick={() => onGenerateParent('study_guide')} disabled={!hasFiles} className="studio-gen-btn">
+                            <GraduationCap size={16} /> {t('studyGuide')}
+                        </button>
+                    )}
+                    {sc.timeline && (
+                        <button onClick={() => onGenerateParent('timeline')} disabled={!hasFiles} className="studio-gen-btn">
+                            <Clock size={16} /> {t('timeline')}
+                        </button>
+                    )}
+                    {sc.quiz && (
+                        <button onClick={() => onGenerateParent('quiz')} disabled={!hasFiles} className="studio-gen-btn">
+                            <ListChecks size={16} /> {t('quiz')}
+                        </button>
+                    )}
                 </div>
 
                 <div style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
@@ -397,7 +425,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                             {item.title}
                                         </div>
                                         <div className="source-meta">
-                                            {item.type === 'analysis' ? t('analysis') : item.type === 'research' ? t('research') : item.type} • {new Date(item.createdAt).toLocaleDateString()}
+                                            {artifactTypeLabel(item.type, t)} • {new Date(item.createdAt).toLocaleDateString()}
                                         </div>
                                     </div>
                                     <button
@@ -429,7 +457,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     </h3>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {selectedItem && selectedItem.type !== 'analysis' && selectedItem.type !== 'abstract' && selectedItem.type !== 'research' && (
+                        {selectedItem && !isMarkdownArtifact(selectedItem.type) && (
                             <>
                                 <button
                                     onClick={handleCopyToClipboard}
@@ -484,7 +512,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 </header>
 
                 <div style={{ flex: 1, display: 'flex', overflow: 'hidden', padding: '2rem' }}>
-                    {(selectedItem?.type === 'analysis' || selectedItem?.type === 'abstract' || selectedItem?.type === 'research') ? (
+                    {(selectedItem && isMarkdownArtifact(selectedItem.type)) ? (
                         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
                             <MarkdownEditor
                                 value={editorContent}
@@ -530,7 +558,10 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                                     ))}
                                 </div>
                             )}
-                            {selectedItem.type !== 'flashcards' && (
+                            {selectedItem.type === 'quiz' && Array.isArray(selectedItem.content) && (
+                                <QuizView items={selectedItem.content} />
+                            )}
+                            {selectedItem.type !== 'flashcards' && !(selectedItem.type === 'quiz' && Array.isArray(selectedItem.content)) && (
                                 <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.9rem', fontFamily: 'inherit' }}>
                                     {JSON.stringify(selectedItem.content, null, 2)}
                                 </pre>

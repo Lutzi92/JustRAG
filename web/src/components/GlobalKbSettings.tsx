@@ -34,7 +34,7 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
     const [examplePrompts, setExamplePrompts] = useState(kb.examplePrompts || '');
     const [systemPrompt, setSystemPrompt] = useState(kb.systemPrompt || '');
     const [studioConfig, setStudioConfig] = useState<StudioConfig>(
-        { cards: true, presentation: true, podcast: true, chart: true, abstract: true, ...kb.studioConfig }
+        { cards: true, presentation: true, podcast: true, chart: true, abstract: true, briefingDoc: true, faq: true, studyGuide: true, timeline: true, quiz: true, ...kb.studioConfig }
     );
     const [files, setFiles] = useState<FileEntry[]>([]);
     const [editors, setEditors] = useState<GlobalKbEditor[]>([]);
@@ -579,7 +579,7 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
                     </h2>
                     <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '0 0 0.75rem' }}>{t('studioConfigDescription')}</p>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
-                        {(['cards', 'presentation', 'podcast', 'chart', 'abstract'] as const).map(key => (
+                        {(['cards', 'presentation', 'podcast', 'chart', 'abstract', 'briefingDoc', 'faq', 'studyGuide', 'timeline', 'quiz'] as const).map(key => (
                             <button
                                 key={key}
                                 type="button"

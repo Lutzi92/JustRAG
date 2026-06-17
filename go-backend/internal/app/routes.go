@@ -48,6 +48,7 @@ import (
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/kbconfig"
 	"github.com/justrag/go-backend/internal/kg"
+	"github.com/justrag/go-backend/internal/kggraph"
 	"github.com/justrag/go-backend/internal/longmem"
 	"github.com/justrag/go-backend/internal/mcp"
 	"github.com/justrag/go-backend/internal/mcp/builtin"
@@ -607,6 +608,11 @@ func registerKBRoutes(rc *routeCtx) {
 	webSearchHandler := websearch.NewHandler(rc.chatStore)
 	rc.mux.Handle("POST /api/kb/{id}/websearch", rc.kbViewChain(webSearchHandler.WebSearch))
 
+	// Knowledge-graph overview (frontend mind map) — KB view permission.
+	// Returns empty nodes/edges on KBs without KG extraction.
+	kgGraphHandler := kggraph.NewHandler(kg.NewPgStore(rc.infra.db.Main))
+	rc.mux.Handle("GET /api/kb/{id}/graph", rc.kbViewChain(kgGraphHandler.GetGraph))
+
 	// Add sources (KB edit permission)
 	rc.mux.Handle("POST /api/kb/{id}/add-sources", rc.kbEditChain(rc.filesHandler.AddSources))
 	// Fetch a URL and either preview its extracted content (previewOnly=true)
@@ -796,12 +802,19 @@ func registerContentGenRoutes(rc *routeCtx, generateRL *middleware.RedisRateLimi
 	contentGenHandler := contentgen.NewHandler(rc.genContentStore, rc.aiResolver, rc.searchService, rc.infra.asynqClient, rc.asynqInspector, rc.infra.rdb.Client)
 
 	rc.mux.Handle("POST /api/kb/{id}/generate/cards", generateRL.Middleware(rc.kbViewChain(contentGenHandler.GenerateCards)))
+	rc.mux.Handle("POST /api/kb/{id}/generate/quiz", generateRL.Middleware(rc.kbViewChain(contentGenHandler.GenerateQuiz)))
 	rc.mux.Handle("POST /api/kb/{id}/generate/presentation", generateRL.Middleware(rc.kbViewChain(contentGenHandler.GeneratePresentation)))
 	rc.mux.Handle("POST /api/kb/{id}/generate/podcast", generateRL.Middleware(rc.kbViewChain(contentGenHandler.GeneratePodcast)))
 	rc.mux.Handle("GET /api/kb/{id}/generate/podcast/status/{jobId}", rc.kbViewChain(contentGenHandler.GetPodcastStatus))
 	rc.mux.Handle("POST /api/kb/{id}/generate/chart", generateRL.Middleware(rc.kbViewChain(contentGenHandler.GenerateChart)))
 	rc.mux.Handle("POST /api/kb/{id}/generate/analysis", generateRL.Middleware(rc.kbViewChain(contentGenHandler.GenerateAnalysis)))
 	rc.mux.Handle("POST /api/kb/{id}/generate/abstract", generateRL.Middleware(rc.kbViewChain(contentGenHandler.GenerateAbstract)))
+
+	// Markdown-text study artifacts (briefing doc, FAQ, study guide, timeline)
+	// share one generic handler; each is one ArtifactSpec in the registry.
+	for _, spec := range contentgen.TextArtifacts {
+		rc.mux.Handle("POST /api/kb/{id}/generate/"+spec.Type, generateRL.Middleware(rc.kbViewChain(contentGenHandler.GenerateArtifact(spec))))
+	}
 }
 
 // dispatchResearchAction resolves the request-time conflict between the

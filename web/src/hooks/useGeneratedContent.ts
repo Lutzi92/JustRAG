@@ -108,7 +108,7 @@ export function useGeneratedContent({
     }, 3000);
   }, [t, fetchGeneratedContent, toast]);
 
-  const handleGenerate = useCallback(async (type: 'cards' | 'presentation' | 'podcast' | 'chart' | 'abstract') => {
+  const handleGenerate = useCallback(async (type: 'cards' | 'presentation' | 'podcast' | 'chart' | 'abstract' | 'briefing_doc' | 'faq' | 'study_guide' | 'timeline' | 'quiz') => {
     if (type === 'chart') {
       const dataFileExtensions = ['.xlsx', '.xls', '.csv', '.ods', '.json', '.parquet'];
       const dataFile = files.find(f => dataFileExtensions.some(ext => f.name.toLowerCase().endsWith(ext)));

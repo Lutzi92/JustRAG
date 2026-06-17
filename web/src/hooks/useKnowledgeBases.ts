@@ -11,7 +11,7 @@ interface UseKnowledgeBasesParams {
   handleGoHome: () => void;
   setCurrentKb: (kb: KnowledgeBase | null) => void;
   setIsPro: (isPro: boolean) => void;
-  setKbView: (view: 'chat' | 'dashboard' | 'research' | 'studio') => void;
+  setKbView: (view: 'chat' | 'dashboard' | 'research' | 'studio' | 'mindmap') => void;
   setView: (view: 'home' | 'kb' | 'admin' | 'profile' | 'global-kb-settings' | 'privacy' | 'accessibility') => void;
   setSelectedContent: (content: GeneratedContent | null) => void;
   setGeneratedContent: (content: GeneratedContent[]) => void;
