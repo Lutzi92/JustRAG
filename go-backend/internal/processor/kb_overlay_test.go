@@ -39,7 +39,7 @@ func read(p *Processor, key string) string {
 
 func TestWithKBConfig_OverlaysPerKBValue(t *testing.T) {
 	p := &Processor{siteConfigReader: fakeReader{vals: map[string]string{
-		"raptor_enabled":      "false",
+		"raptor_enabled":       "false",
 		"parent_child_enabled": "global-only",
 	}}}
 	p.SetKBOverrideLister(fakeLister{overrides: map[string]map[string]*string{
