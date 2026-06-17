@@ -311,23 +311,64 @@ func TestGenerateAbstract_MissingFileID_Returns400(t *testing.T) {
 // Tests: GenerateChart
 // ---------------------------------------------------------------------------
 
-func TestGenerateChart_Returns501(t *testing.T) {
-	h := contentgen.NewHandler(&mockStore{}, nil, defaultSearcher(), nil, nil, nil)
+// With no chart deps wired, GenerateChart uses the LLM-from-context path and
+// returns a parsed chart spec.
+func TestGenerateChart_LLMPath_Returns200(t *testing.T) {
+	llmContent := `{"description":"Sales by region","type":"bar","config":{"xAxis":"region","keys":["sales"]},"series":[{"region":"North","sales":120},{"region":"South","sales":90}]}`
+	srv := buildLLMServer(t, llmContent)
 
-	req := postJSON(t, "/api/kb/"+testKBID+"/generate/chart", map[string]string{"topic": "test"})
+	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/chart", map[string]string{"topic": "sales by region"})
 	rec := httptest.NewRecorder()
 	h.GenerateChart(rec, req)
 
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
 	}
-
-	var resp map[string]string
+	var resp gencontent.GenContentRow
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp["error"] == "" {
-		t.Error("expected non-empty error message")
+	if resp.Type != "chart" {
+		t.Errorf("expected type chart, got %s", resp.Type)
+	}
+	content, ok := resp.Content.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map content, got %T", resp.Content)
+	}
+	if content["type"] != "bar" {
+		t.Errorf("expected chart type bar, got %v", content["type"])
+	}
+	series, ok := content["series"].([]any)
+	if !ok || len(series) != 2 {
+		t.Errorf("expected 2 series points, got %v", content["series"])
+	}
+}
+
+// An LLM response missing required fields is rejected (no partial chart saved).
+func TestGenerateChart_IncompleteSpec_Returns500(t *testing.T) {
+	srv := buildLLMServer(t, `{"type":"bar"}`)
+	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/chart", map[string]string{"topic": "x"})
+	rec := httptest.NewRecorder()
+	h.GenerateChart(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGenerateChart_MissingTopic_Returns400(t *testing.T) {
+	h := contentgen.NewHandler(&mockStore{}, nil, defaultSearcher(), nil, nil, nil)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/chart", map[string]string{"topic": ""})
+	rec := httptest.NewRecorder()
+	h.GenerateChart(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
 

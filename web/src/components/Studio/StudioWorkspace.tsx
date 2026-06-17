@@ -6,7 +6,7 @@ import axios from 'axios';
 import {
     Trash2, Minimize2,
     Type, Layout, Mic, X, Check,
-    FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks
+    FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks, BarChart3
 } from 'lucide-react';
 import type { GeneratedContent, StudioConfig } from '../../types';
 import { isMarkdownArtifact, artifactTypeLabel } from '../../utils/artifactTypes';
@@ -70,9 +70,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const [analysisInstruction, setAnalysisInstruction] = useState('');
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
-    // Chart generation is force-disabled until DuckDB support is ported to the Go backend.
-    // chart: false is set after the spread so studioConfig cannot re-enable it.
-    const sc = { cards: true, presentation: true, podcast: true, abstract: true, briefingDoc: true, faq: true, studyGuide: true, timeline: true, quiz: true, ...studioConfig, chart: false };
+    const sc = { cards: true, presentation: true, podcast: true, chart: true, abstract: true, briefingDoc: true, faq: true, studyGuide: true, timeline: true, quiz: true, ...studioConfig };
 
     const handleAnalyzeRequest = () => {
         setShowAnalysisModal(true);
@@ -363,6 +361,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     {sc.abstract && (
                         <button onClick={() => onGenerateParent('abstract')} disabled={!hasFiles} className="studio-gen-btn">
                             <FileText size={16} /> {t('abstract')}
+                        </button>
+                    )}
+                    {sc.chart && (
+                        <button onClick={() => onGenerateParent('chart')} disabled={!hasFiles} className="studio-gen-btn">
+                            <BarChart3 size={16} /> {t('chart')}
                         </button>
                     )}
 

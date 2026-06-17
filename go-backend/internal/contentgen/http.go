@@ -94,6 +94,12 @@ type Handler struct {
 	asynq      AsynqEnqueuer
 	inspector  AsynqInspector
 	redis      RedisGetter
+
+	// Optional chart-generation dependencies (set via SetChartDeps). When both
+	// are present GenerateChart can use the accurate SQL-over-tabular path;
+	// otherwise it falls back to LLM-from-context. See chart.go.
+	chartCatalog ChartCatalog
+	chartRO      ChartQuerier
 }
 
 // NewHandler creates a new Handler.
@@ -576,15 +582,7 @@ func (h *Handler) GetPodcastStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// GenerateChart — POST /api/kb/{id}/generate/chart
-// ---------------------------------------------------------------------------
-
-// GenerateChart returns 501 Not Implemented.
-// Chart generation requires DuckDB which is not yet ported to the Go server.
-func (h *Handler) GenerateChart(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteErrorCtx(r.Context(), w, http.StatusNotImplemented, "chart generation not available in Go server yet")
-}
+// GenerateChart is implemented in chart.go (hybrid SQL-over-tabular + LLM path).
 
 // ---------------------------------------------------------------------------
 // GenerateAnalysis — POST /api/kb/{id}/generate/analysis

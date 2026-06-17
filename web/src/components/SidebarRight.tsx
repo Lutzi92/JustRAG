@@ -33,8 +33,8 @@ const SidebarRightComp: React.FC = () => {
     const isGlobal = currentKb?.isGlobal;
     const studioConfig = currentKb?.isGlobal ? (currentKb.studioConfig || undefined) : undefined;
 
-    const sc = { cards: true, presentation: true, podcast: true, abstract: true, briefingDoc: true, faq: true, studyGuide: true, timeline: true, quiz: true, ...studioConfig };
-    const hasAnyStudio = sc.cards || sc.presentation || sc.podcast || sc.abstract || sc.briefingDoc || sc.faq || sc.studyGuide || sc.timeline || sc.quiz;
+    const sc = { cards: true, presentation: true, podcast: true, chart: true, abstract: true, briefingDoc: true, faq: true, studyGuide: true, timeline: true, quiz: true, ...studioConfig };
+    const hasAnyStudio = sc.cards || sc.presentation || sc.podcast || sc.chart || sc.abstract || sc.briefingDoc || sc.faq || sc.studyGuide || sc.timeline || sc.quiz;
 
     const researchChats = useMemo(() => chats.filter(c => c.type === 'research'), [chats]);
     const academicChats = useMemo(() => chats.filter(c => c.type === 'academic_research'), [chats]);
@@ -152,6 +152,7 @@ const SidebarRightComp: React.FC = () => {
                             {sc.podcast && <button onClick={() => handleGenerate('podcast')} disabled={generating || !hasFiles} className="studio-gen-btn" title={t('podcastEnglishOnly')}>{t('podcastEnglishOnly')}</button>}
 
                             {sc.abstract && <button onClick={() => handleGenerate('abstract')} disabled={generating || !hasFiles} className="studio-gen-btn">{t('abstract')}</button>}
+                            {sc.chart && <button onClick={() => handleGenerate('chart')} disabled={generating || !hasFiles} className="studio-gen-btn">{t('chart')}</button>}
                             {sc.briefingDoc && <button onClick={() => handleGenerate('briefing_doc')} disabled={generating || !hasFiles} className="studio-gen-btn">{t('briefingDoc')}</button>}
                             {sc.faq && <button onClick={() => handleGenerate('faq')} disabled={generating || !hasFiles} className="studio-gen-btn">{t('faq')}</button>}
                             {sc.studyGuide && <button onClick={() => handleGenerate('study_guide')} disabled={generating || !hasFiles} className="studio-gen-btn">{t('studyGuide')}</button>}

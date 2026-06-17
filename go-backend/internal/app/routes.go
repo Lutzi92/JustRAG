@@ -800,6 +800,12 @@ func registerFileRoutes(rc *routeCtx) {
 
 func registerContentGenRoutes(rc *routeCtx, generateRL *middleware.RedisRateLimiter) {
 	contentGenHandler := contentgen.NewHandler(rc.genContentStore, rc.aiResolver, rc.searchService, rc.infra.asynqClient, rc.asynqInspector, rc.infra.rdb.Client)
+	// Chart generation hybrid SQL path needs the tabular catalog + the
+	// SELECT-only pool. When the read-only pool is unconfigured the handler
+	// falls back to the LLM-from-context chart path.
+	if rc.infra.sqlToolDB != nil {
+		contentGenHandler.SetChartDeps(tabular.NewCatalog(rc.infra.db.Main), rc.infra.sqlToolDB)
+	}
 
 	rc.mux.Handle("POST /api/kb/{id}/generate/cards", generateRL.Middleware(rc.kbViewChain(contentGenHandler.GenerateCards)))
 	rc.mux.Handle("POST /api/kb/{id}/generate/quiz", generateRL.Middleware(rc.kbViewChain(contentGenHandler.GenerateQuiz)))

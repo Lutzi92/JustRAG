@@ -844,6 +844,46 @@ If exact dates are absent, order by relative sequence and say so.
 Base yourself exclusively on the provided context. Cite sources with [N].`
 }
 
+// ChartParamsSystemPrompt returns the system prompt for the SQL-path chart
+// generator: the model picks chart columns + an aggregation over a known table
+// schema (it never writes SQL).
+func ChartParamsSystemPrompt(lang string) string {
+	if lang == "de" {
+		return `Du wählst Diagramm-Parameter zur Visualisierung einer Datenbanktabelle.
+Gegeben sind die Nutzeranfrage und die Tabellenspalten (Name + Typ).
+Antworte mit NUR einem JSON-Objekt:
+{"chartType":"bar|line|area|pie","xColumn":"<Spalte>","yColumns":["<numerische Spalte>"],"aggregation":"sum|avg|min|max|count|none","description":"..."}
+xColumn ist die Kategorie-/Label-/Datumsachse. yColumns müssen numerische Spalten sein.
+"count" zählt Zeilen pro xColumn (yColumns wird ignoriert). "none" nur für bereits aggregierte, kleine Tabellen.
+Wähle Spalten AUSSCHLIESSLICH aus der bereitgestellten Liste. Kein Markdown, nur das JSON-Objekt.`
+	}
+	return `You select chart parameters for visualizing a database table.
+You are given the user's request and the table columns (name + type).
+Respond with ONLY a JSON object:
+{"chartType":"bar|line|area|pie","xColumn":"<column>","yColumns":["<numeric column>"],"aggregation":"sum|avg|min|max|count|none","description":"..."}
+xColumn is the category/label/date axis. yColumns must be numeric columns.
+"count" counts rows per xColumn (yColumns ignored). Use "none" only for already-aggregated small tables.
+Choose columns ONLY from the provided list. No markdown, only the JSON object.`
+}
+
+// ChartContextSystemPrompt returns the system prompt for the fallback chart
+// generator: the model emits the full chart spec (including data points) from
+// retrieved document context.
+func ChartContextSystemPrompt(lang string) string {
+	if lang == "de" {
+		return `Du erstellst ein Diagramm aus Dokumentkontext.
+Antworte mit NUR einem JSON-Objekt:
+{"description":"...","type":"bar|line|area|pie","config":{"xAxis":"<key>","keys":["<numerischer key>"]},"series":[{"<xAxis>":"Label","<key>":Zahl}, ...]}
+Jedes series-Objekt muss den xAxis-Key und jeden Key aus config.keys mit einem numerischen Wert enthalten.
+Stütze alle Zahlen ausschließlich auf den Kontext; erfinde keine Daten. 3-12 Datenpunkte. Kein Markdown.`
+	}
+	return `You create a chart from document context.
+Respond with ONLY a JSON object:
+{"description":"...","type":"bar|line|area|pie","config":{"xAxis":"<key>","keys":["<numeric key>"]},"series":[{"<xAxis>":"label","<key>":number}, ...]}
+Every series object must contain the xAxis key and each key in config.keys with a numeric value.
+Base all numbers strictly on the context; do not invent data. 3-12 data points. No markdown.`
+}
+
 // QuizSystemPrompt returns the system prompt for multiple-choice quiz generation.
 func QuizSystemPrompt(lang string) string {
 	if lang == "de" {
