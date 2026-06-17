@@ -214,3 +214,29 @@ hype_search_enabled       = true     # query-time arm: match query against quest
 ```
 
 No migration (dim-keyed `chunk_hype_questions_<dim>`, created at startup by `EnsureHyPETable`; same halfvec/HNSW rules). Re-ingest is the only backfill. Build the index first (`hype_enabled` + re-ingest), then enable `hype_search_enabled` and validate with `cmd/eval`. Vector-only (does NOT feed BM25); orthogonal to `contextual_enrichment`. Fail-open. `hype_search_enabled` fires on the standard `PrepareChatContext` path AND every orchestrator's **initial** search (Supervisor / Plan-Execute / Agentic / DeepChat) — wired exactly where `GraphChunkIDs` is threaded (initial retrieval only; not sub-query / hop-2+ / DAG-node searches).
+
+## In-chat document comparison
+
+```
+chat_compare_enabled             = true        # master gate; default off
+chat_compare_model               = <small>     # per-task fast-tier override → model_tier_fast → KB chat model
+chat_compare_max_sections        = 60          # [1,500] cap on sections analyzed per uploaded file
+chat_compare_concurrency         = 6           # [1,32] fan-out cap for per-section LLM checks
+chat_compare_peers_per_section   = 5           # [1,20] KB retrieval limit per section
+chat_compare_attachment_ttl_hours = 24         # [1,720] Redis attachment store TTL
+chat_compare_max_file_bytes      = 10485760    # 10 MB upload cap
+```
+
+No migration, no operator SQL grants — the feature reuses the chat KB read-access ACL (`chat_compare` requests are gated by the same auth + KB-view check + `chat` rate limiter as the chat send route). The user uploads a single file in the chat (`POST /api/kb/{id}/chat/attachment`, multipart `file`); it is **parsed in memory and held session-scoped in a Redis-backed `chatattach` store with a 24h TTL — it is NEVER ingested into the KB**. The upload endpoint returns `{attachmentId, filename, sectionCount, charCount}`; 503 when disabled, 413 over the 10 MB cap, 415 on an unsupported type, 422 on unparsable content. The chat send body then carries `attachmentId` + `comparisonModes[]`; when both are present (and the feature is enabled) the turn dispatches to `RunComparisonChat` (highest orchestrator priority).
+
+Three selectable comparison modes:
+
+- **contradiction** — claims in the uploaded file that conflict with the KB's documents
+- **formal** — formal-correctness issues, *inferred from the retrieved KB peers* (there is no template; the reference style is learned from the KB itself)
+- **completeness** — sections present in the KB peers but missing from (or under-specified in) the uploaded file
+
+The reference set is **auto-retrieved from the whole KB** per section (no manual document selection). The engine fans out per section → per-section KB retrieval → a strict-`json_schema` structured-output LLM check per mode (fast tier; resolves via `ResolveFastTierModel(ctx, reader, "chat_compare_model")`) → aggregated findings sorted by severity, streamed to the client via a `comparisonFindings` SSE event, followed by a streamed prose summary. The per-section checks run on the fast tier; the prose **summary uses the KB chat model**.
+
+Security: uploads are user-scoped — an attachment is readable only by the user who uploaded it — and the upload endpoint is rate-limited via the shared `chat` limiter. New package `internal/chatattach`; engine in `internal/chat/comparison_chat.go`; endpoint handler in `internal/chat/http_attachment.go`.
+
+> Follow-up: the `chat_compare_*` keys are **not** yet surfaced in the admin Agent panel (`web/src/components/admin/AdminAgentTab.tsx` is a hand-written component, not driven by `siteconfig/registry.go`). Until that JSX is added, set these keys directly in `site_config` (e.g. via the generic site-config editor / SQL). Verify admin-UI exposure as a separate frontend task.

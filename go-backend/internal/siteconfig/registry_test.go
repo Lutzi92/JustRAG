@@ -50,3 +50,28 @@ func TestValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestKGExtractionIsPerKBReingest(t *testing.T) {
+	if !IsPerKB("kg_extraction_enabled") {
+		t.Fatal("kg_extraction_enabled should be a per-KB key")
+	}
+	fld, ok := Field("kg_extraction_enabled")
+	if !ok {
+		t.Fatal("Field(kg_extraction_enabled) not found")
+	}
+	if fld.Type != FieldBool {
+		t.Fatalf("type = %q, want bool", fld.Type)
+	}
+	if !fld.RequiresReingest {
+		t.Fatal("kg_extraction_enabled must be flagged RequiresReingest")
+	}
+	if fld.Group != "Ingestion" {
+		t.Fatalf("group = %q, want Ingestion", fld.Group)
+	}
+	if err := Validate("kg_extraction_enabled", "true"); err != nil {
+		t.Fatalf("Validate true: %v", err)
+	}
+	if err := Validate("kg_extraction_enabled", "notabool"); err == nil {
+		t.Fatal("Validate should reject non-bool")
+	}
+}

@@ -9,6 +9,8 @@ import { useToast } from '../contexts/ToastContext';
 import { buildMessageMap, findDefaultLeaf } from '../utils/messageTree';
 import { useMessageTree } from './useMessageTree';
 import { useChatStream } from './useChatStream';
+import { useChatAttachment } from './useChatAttachment';
+import type { ComparisonMode } from '../components/ChatComparisonControls';
 
 interface RawChatMessage {
   id: string;
@@ -61,6 +63,13 @@ export function useChat({
 
   // Input state
   const [userMessageInput, setUserMessageInput] = useState('');
+
+  // In-chat document comparison: attachment lifecycle + selected modes.
+  // The attachment persists across the chat session (so follow-up turns keep
+  // sending its id), while selectedModes are cleared after a comparison send
+  // so a follow-up is a normal question rather than a re-comparison.
+  const attachmentState = useChatAttachment(currentKb?.id ?? '', t);
+  const [selectedModes, setSelectedModes] = useState<ComparisonMode[]>([]);
 
   // Chat history state
   const [chats, setChats] = useState<ChatEntry[]>([]);
@@ -247,6 +256,13 @@ export function useChat({
     }
   }, [onResearchLoaded, onAcademicResearchLoaded, setActiveChatId, setMessageTree, setActiveLeafId, setComparisonMode, setComparisonLeafId, toast, t]);
 
+  // Clears the comparison attachment + selected modes (e.g. on new chat or the
+  // user pressing the chip's remove button).
+  const clearComparison = useCallback(() => {
+    attachmentState.clear();
+    setSelectedModes([]);
+  }, [attachmentState]);
+
   const handleNewChat = useCallback(() => {
     setActiveChatId(null);
     setMessageTree(new Map());
@@ -257,7 +273,8 @@ export function useChat({
     setForkPointId(null);
     setLoadedResearchSession(null);
     setLoadedAcademicSession(null);
-  }, [setActiveChatId, setMessageTree, setActiveLeafId, setComparisonMode, setComparisonLeafId]);
+    clearComparison();
+  }, [setActiveChatId, setMessageTree, setActiveLeafId, setComparisonMode, setComparisonLeafId, clearComparison]);
 
   const handleDeleteChat = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -279,23 +296,40 @@ export function useChat({
   const handleSendMessage = useCallback(async (e: React.FormEvent | React.KeyboardEvent, editParentId?: string) => {
     e.preventDefault();
     setIsAtBottom(true);
-    if (!userMessageInput.trim() || !currentKb || loading || chatSwitchingRef.current) return;
+    if (!currentKb || loading || chatSwitchingRef.current) return;
+
+    // A comparison send (attachment + ≥1 mode) is allowed with an empty input —
+    // we substitute a localized default message because the backend rejects an
+    // empty message with 400 before running the comparison. Don't start a
+    // comparison while the attachment is still uploading.
+    const isComparison = !!attachmentState.attachment && selectedModes.length > 0;
+    if (isComparison && attachmentState.uploading) return;
+    if (!userMessageInput.trim() && !isComparison) return;
 
     // Guard: require at least one selected file before clearing input
     const selectedFiles = files.filter(f => f.selected !== false);
     if (selectedFiles.length === 0) return;
 
-    const userMessage = userMessageInput.trim();
+    const userMessage = userMessageInput.trim() || (isComparison ? t('comparisonDefaultMessage') : '');
+    if (!userMessage) return;
+
+    const sendOpts = attachmentState.attachment
+      ? { attachmentId: attachmentState.attachment.attachmentId, comparisonModes: selectedModes }
+      : undefined;
+
     setUserMessageInput('');
     setEditingMessageId(null);
     setForkPointId(null);
+    // Clear modes after a comparison send so a follow-up turn is a normal
+    // question; keep the attachment until the user removes it.
+    if (selectedModes.length > 0) setSelectedModes([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
 
     // Delegate actual streaming to useChatStream
-    await stream.handleSendMessage(e, userMessage, activeLeafId, editParentId);
-  }, [userMessageInput, currentKb, loading, files, activeLeafId, stream]);
+    await stream.handleSendMessage(e, userMessage, activeLeafId, editParentId, sendOpts);
+  }, [userMessageInput, currentKb, loading, files, activeLeafId, stream, attachmentState.attachment, attachmentState.uploading, selectedModes, t]);
 
   const handleStartEdit = useCallback((messageId: string) => {
     setEditingMessageId(messageId);
@@ -393,6 +427,14 @@ export function useChat({
     userMessageInput,
     setUserMessageInput,
     loading,
+    // Document comparison
+    attachment: attachmentState.attachment,
+    attachmentUploading: attachmentState.uploading,
+    attachmentError: attachmentState.error,
+    uploadAttachment: attachmentState.upload,
+    selectedComparisonModes: selectedModes,
+    setSelectedComparisonModes: setSelectedModes,
+    clearComparison,
     // Chat history
     chats,
     setChats,
@@ -439,6 +481,9 @@ export function useChat({
     forkPointId,
     userMessageInput,
     loading,
+    attachmentState,
+    selectedModes,
+    clearComparison,
     chats,
     activeChatId,
     loadedResearchSession,

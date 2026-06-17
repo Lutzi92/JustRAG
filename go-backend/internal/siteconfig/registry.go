@@ -81,6 +81,7 @@ var kbConfigRegistry = []KBConfigField{
 	{Key: "raptor_enabled", Type: FieldBool, Group: "Ingestion", Label: "RAPTOR indexing", Help: "Hierarchical summary trees. Mutually exclusive with parent-child.", RequiresReingest: true},
 	{Key: "parent_child_enabled", Type: FieldBool, Group: "Ingestion", Label: "Parent-child chunking", Help: "Small-to-big retrieval. Mutually exclusive with RAPTOR.", RequiresReingest: true},
 	{Key: "contextual_enrichment", Type: FieldBool, Group: "Ingestion", Label: "Contextual enrichment", Help: "Anthropic-style 1-sentence chunk prefix at ingest.", RequiresReingest: true},
+	{Key: "kg_extraction_enabled", Type: FieldBool, Group: "Ingestion", Label: "Knowledge-graph extraction (graphrag)", Help: "Extract entities + relations at ingest to build the per-KB knowledge graph. Required before graph routing can use this KB.", RequiresReingest: true},
 }
 
 // byKey indexes the registry for O(1) lookup.

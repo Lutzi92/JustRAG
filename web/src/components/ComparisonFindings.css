@@ -1,0 +1,87 @@
+.comparison-findings {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 8px 0;
+}
+
+.comparison-findings section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.comparison-findings h4 {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.comparison-finding {
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    border-left-width: 3px;
+    background: var(--bg-secondary);
+}
+
+.comparison-finding.sev-high {
+    border-left-color: #e5484d;
+}
+
+.comparison-finding.sev-medium {
+    border-left-color: #f5a623;
+}
+
+.comparison-finding.sev-low {
+    border-left-color: #30a46c;
+}
+
+.comparison-finding .sev-badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: #fff;
+}
+
+.comparison-finding.sev-high .sev-badge {
+    background: #e5484d;
+}
+
+.comparison-finding.sev-medium .sev-badge {
+    background: #f5a623;
+}
+
+.comparison-finding.sev-low .sev-badge {
+    background: #30a46c;
+}
+
+.comparison-finding .issue {
+    margin: 6px 0 0;
+    color: var(--text-primary);
+    font-size: 0.88rem;
+}
+
+.comparison-finding blockquote {
+    margin: 6px 0 0;
+    padding: 4px 10px;
+    border-left: 2px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-style: italic;
+}
+
+.comparison-finding blockquote.cited {
+    border-left-color: var(--accent-primary);
+}
+
+.comparison-finding .cited-files {
+    margin: 6px 0 0;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}

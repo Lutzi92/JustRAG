@@ -162,6 +162,7 @@ var snapshotConfigKeys = []string{
 	"chat_graph_routing_inject_chunks",
 	"raptor_enabled",
 	"parent_child_enabled",
+	"kg_extraction_enabled",
 	// Corpus-table structured extraction (registry keys; cross-checked by
 	// snapshot_registry_test.go like the Plan-1 block above).
 	"chat_corpus_table_enabled",

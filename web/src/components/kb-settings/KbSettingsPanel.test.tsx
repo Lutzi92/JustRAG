@@ -3,29 +3,36 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { KbSettingsPanel } from './KbSettingsPanel';
 import { API_BASE_URL } from '../../api';
 
+const showConfirm = vi.fn(async () => true);
+const showAlert = vi.fn(async () => {});
+vi.mock('../../contexts/ModalContext', () => ({
+  useModalContext: () => ({ showConfirm, showAlert }),
+}));
+
 const sample = {
   registry: [
     { key: 'rerank_blend_alpha', type: 'float', group: 'Retrieval', label: 'Reranker blend α', help: 'h', min: 0, max: 1 },
     { key: 'crag_enabled', type: 'bool', group: 'Corrective', label: 'Corrective RAG', help: 'h' },
     { key: 'chat_graph_routing_path_mode', type: 'enum', group: 'Knowledge graph', label: 'Graph mode', help: 'h', enum: ['neighbors', 'ppr', 'paths'] },
+    { key: 'raptor_enabled', type: 'bool', group: 'Ingestion', label: 'RAPTOR indexing', help: 'h', requiresReingest: true },
   ],
   values: {
     rerank_blend_alpha: { override: '0.3', global: '0.8', effective: '0.3' },
     crag_enabled: { override: null, global: 'true', effective: 'true' },
     chat_graph_routing_path_mode: { override: null, global: 'neighbors', effective: 'neighbors' },
+    raptor_enabled: { override: null, global: 'false', effective: 'false' },
   },
 };
 
 beforeEach(() => {
-  // authFetch (used by the api client) reads localStorage for the bearer token;
-  // jsdom's localStorage isn't reliably present in this env, so stub it.
+  showConfirm.mockClear();
+  showAlert.mockClear();
   vi.stubGlobal('localStorage', {
     getItem: () => null,
     setItem: () => {},
     removeItem: () => {},
     clear: () => {},
   });
-  // useReducedMotion calls window.matchMedia, which jsdom doesn't implement.
   vi.stubGlobal('matchMedia', (query: string) => ({
     matches: false,
     media: query,
@@ -36,7 +43,10 @@ beforeEach(() => {
     removeListener: () => {},
     dispatchEvent: () => false,
   }));
-  global.fetch = vi.fn(async (_url: string, opts?: RequestInit) => {
+  global.fetch = vi.fn(async (url: string, opts?: RequestInit) => {
+    if (opts?.method === 'POST' && String(url).endsWith('/reembed')) {
+      return { ok: true, json: async () => ({ queued: 3 }) } as Response;
+    }
     if (opts?.method === 'PUT') return { ok: true, json: async () => ({ success: true }) } as Response;
     return { ok: true, json: async () => sample } as Response;
   }) as unknown as typeof fetch;
@@ -50,17 +60,14 @@ describe('KbSettingsPanel', () => {
   it('renders effective values and marks overridden fields', async () => {
     render(<KbSettingsPanel kbId="kb1" />);
     await waitFor(() => screen.getByText('Reranker blend α'));
-    // Overridden field shows the override indicator.
     expect(screen.getByTestId('override-badge-rerank_blend_alpha')).toBeTruthy();
-    // Inherited field does not.
     expect(screen.queryByTestId('override-badge-crag_enabled')).toBeNull();
   });
 
-  it('saves changed values via PUT', async () => {
+  it('saves changed values via PUT without prompting re-ingest for non-ingest keys', async () => {
     render(<KbSettingsPanel kbId="kb1" />);
     await waitFor(() => screen.getByText('Corrective RAG'));
-    const toggle = screen.getByTestId('field-crag_enabled') as HTMLInputElement;
-    fireEvent.click(toggle);
+    fireEvent.click(screen.getByTestId('field-crag_enabled') as HTMLInputElement);
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
@@ -68,5 +75,42 @@ describe('KbSettingsPanel', () => {
         expect.objectContaining({ method: 'PUT' }),
       );
     });
+    expect(showConfirm).not.toHaveBeenCalled();
+  });
+
+  it('does not call /reembed or showAlert when user cancels the re-ingest prompt', async () => {
+    showConfirm.mockResolvedValueOnce(false);
+    render(<KbSettingsPanel kbId="kb1" />);
+    await waitFor(() => screen.getByText('RAPTOR indexing'));
+    fireEvent.click(screen.getByTestId('field-raptor_enabled') as HTMLInputElement);
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(showConfirm).toHaveBeenCalled());
+    // Settings PUT must have been called.
+    expect(global.fetch).toHaveBeenCalledWith(
+      `${API_BASE_URL}/api/kb/kb1/settings`,
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    // No /reembed POST when the user declines.
+    const fetchMock = global.fetch as ReturnType<typeof vi.fn>;
+    const reembedCall = fetchMock.mock.calls.find(
+      (call) => String(call[0]).endsWith('/reembed'),
+    );
+    expect(reembedCall).toBeUndefined();
+    expect(showAlert).not.toHaveBeenCalled();
+  });
+
+  it('prompts and schedules re-ingest when an ingest key changes', async () => {
+    render(<KbSettingsPanel kbId="kb1" />);
+    await waitFor(() => screen.getByText('RAPTOR indexing'));
+    fireEvent.click(screen.getByTestId('field-raptor_enabled') as HTMLInputElement);
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(showConfirm).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${API_BASE_URL}/api/kb/kb1/reembed`,
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    await waitFor(() => expect(showAlert).toHaveBeenCalled());
   });
 });

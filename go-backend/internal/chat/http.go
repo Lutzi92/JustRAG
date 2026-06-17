@@ -12,11 +12,13 @@ import (
 
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/auth"
+	"github.com/justrag/go-backend/internal/chatattach"
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/kg"
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/longmem"
 	"github.com/justrag/go-backend/internal/observability"
+	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/sessionmem"
 	"github.com/justrag/go-backend/internal/store"
 	"github.com/justrag/go-backend/internal/vector"
@@ -57,6 +59,19 @@ type Handler struct {
 	// table queries. Optional — when nil, RunCorpusTableChat falls back
 	// to an error path (guarded by the caller before dispatch).
 	corpusChunks CorpusChunkReader
+	// attachmentStore persists parsed in-chat comparison attachments
+	// (uploaded documents compared against a KB, never ingested).
+	// Optional — when nil, UploadAttachment guards the call with an
+	// explicit 500 ("feature not fully initialized") rather than
+	// panicking on a nil-interface .Put; the CompareEnabled gate
+	// short-circuits before that on deployments where the feature is
+	// off. Wired in a later task.
+	attachmentStore chatattach.Store
+	// parserFactory parses uploaded comparison attachments in memory
+	// (via a temp file, since the parser API reads from disk). Built
+	// from parser.DefaultFactoryWith(nil) when unset so UploadAttachment
+	// always has a working factory without extra wiring.
+	parserFactory *parser.Factory
 }
 
 // RaptorDescendantsResolver is the narrow interface
@@ -237,6 +252,17 @@ func WithKBConfigStore(s KBConfigOverrideLister) HandlerOption {
 func WithCorpusChunks(r CorpusChunkReader) HandlerOption {
 	return func(h *Handler) {
 		h.corpusChunks = r
+	}
+}
+
+// WithAttachmentStore attaches the in-chat comparison-attachment store used by
+// UploadAttachment to persist parsed uploaded documents (compared against a KB,
+// never ingested). Production wiring passes chatattach.NewRedisStore. Optional —
+// when absent, UploadAttachment guards the call with an explicit 500 rather than
+// dereferencing a nil store.
+func WithAttachmentStore(s chatattach.Store) HandlerOption {
+	return func(h *Handler) {
+		h.attachmentStore = s
 	}
 }
 

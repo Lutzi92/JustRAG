@@ -1285,3 +1285,56 @@ func ChatCorpusTableModel(ctx context.Context, r SiteConfigReader) string {
 func ChatCorpusTableRouterLLMEnabled(ctx context.Context, r SiteConfigReader) bool {
 	return readBool(ctx, r, "chat_corpus_table_router_llm_enabled", true)
 }
+
+// ---------------------------------------------------------------------------
+// In-chat document comparison (chat_compare_*)
+// ---------------------------------------------------------------------------
+
+// CompareEnabled gates the in-chat document comparison feature. Default off.
+// Tunable via "chat_compare_enabled".
+func CompareEnabled(ctx context.Context, r SiteConfigReader) bool {
+	return readBool(ctx, r, "chat_compare_enabled", false)
+}
+
+// CompareModel returns the LLM model for the comparison section-synthesis
+// calls. Falls back through the fast-tier chain (per-task → model_tier_fast →
+// empty); when still empty the caller uses the KB default chat model. Tunable
+// via "chat_compare_model".
+func CompareModel(ctx context.Context, r SiteConfigReader) string {
+	return ResolveFastTierModel(ctx, r, "chat_compare_model")
+}
+
+// CompareMaxSections caps how many sections the comparison decomposes a
+// document into. Default 60; clamped to [1, 500]. Tunable via
+// "chat_compare_max_sections".
+func CompareMaxSections(ctx context.Context, r SiteConfigReader) int {
+	return readInt(ctx, r, "chat_compare_max_sections", 60, 1, 500)
+}
+
+// CompareConcurrency caps the number of concurrent per-section LLM calls
+// during comparison. Default 6; clamped to [1, 32]. Tunable via
+// "chat_compare_concurrency".
+func CompareConcurrency(ctx context.Context, r SiteConfigReader) int {
+	return readInt(ctx, r, "chat_compare_concurrency", 6, 1, 32)
+}
+
+// ComparePeersPerSection caps how many peer chunks each section is compared
+// against. Default 5; clamped to [1, 20]. Tunable via
+// "chat_compare_peers_per_section".
+func ComparePeersPerSection(ctx context.Context, r SiteConfigReader) int {
+	return readInt(ctx, r, "chat_compare_peers_per_section", 5, 1, 20)
+}
+
+// CompareAttachmentTTLHours is the lifetime of a compare attachment before
+// it is eligible for cleanup. Default 24 hours; clamped to [1, 720]. Tunable
+// via "chat_compare_attachment_ttl_hours".
+func CompareAttachmentTTLHours(ctx context.Context, r SiteConfigReader) int {
+	return readInt(ctx, r, "chat_compare_attachment_ttl_hours", 24, 1, 720)
+}
+
+// CompareMaxFileBytes caps the size of a comparison attachment file. Default
+// 10485760 (10 MiB); clamped to [1024, 104857600]. Tunable via
+// "chat_compare_max_file_bytes".
+func CompareMaxFileBytes(ctx context.Context, r SiteConfigReader) int {
+	return readInt(ctx, r, "chat_compare_max_file_bytes", 10485760, 1024, 104857600)
+}

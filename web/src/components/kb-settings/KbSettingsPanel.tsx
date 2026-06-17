@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { motion } from 'framer-motion';
 import { SlidersHorizontal, FlaskConical, ChevronDown, ChevronRight, Search, Save, RotateCcw } from 'lucide-react';
 import type { KbConfigField, KbSettingsResponse } from '../../types';
-import { fetchKbSettings, saveKbSettings, resetKbSetting } from './api';
+import { fetchKbSettings, saveKbSettings, resetKbSetting, reembedKb } from './api';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
+import { useModalContext } from '../../contexts/ModalContext';
 import AdminEvalTab from '../admin/AdminEvalTab';
 
 interface Props {
@@ -21,6 +22,7 @@ const STORAGE_KEY = 'kb-settings-sections-open-v1';
 // from the effective value are sent on Save.
 export function KbSettingsPanel({ kbId }: Props) {
   const reducedMotion = useReducedMotion();
+  const { showConfirm, showAlert } = useModalContext();
   const [tab, setTab] = useState<'settings' | 'evals'>('settings');
   const [data, setData] = useState<KbSettingsResponse | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -65,9 +67,31 @@ export function KbSettingsPanel({ kbId }: Props) {
         if (v !== (data?.values[k]?.effective ?? '')) changed[k] = v;
       }
       if (Object.keys(changed).length > 0) await saveKbSettings(kbId, changed);
+
+      // Labels of changed settings that only take effect after a re-ingest.
+      const reingestLabels = (data?.registry ?? [])
+        .filter((f) => f.requiresReingest && changed[f.key] !== undefined)
+        .map((f) => f.label);
+
       const fresh = await fetchKbSettings(kbId);
       setData(fresh);
       setDraft({});
+
+      if (reingestLabels.length > 0) {
+        const ok = await showConfirm(
+          `These changes (${reingestLabels.join(', ')}) only take effect after re-ingesting all files in this knowledge base. Schedule the re-ingest now?`,
+          'Re-ingest required',
+        );
+        if (ok) {
+          const { queued } = await reembedKb(kbId);
+          await showAlert(
+            queued > 0
+              ? `Queued ${queued} file(s) for re-ingest.`
+              : 'No files to re-ingest in this knowledge base.',
+            'Re-ingest scheduled',
+          );
+        }
+      }
     } catch (e) {
       setError(String(e));
     } finally {

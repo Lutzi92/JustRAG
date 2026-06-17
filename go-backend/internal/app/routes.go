@@ -33,6 +33,7 @@ import (
 	"github.com/justrag/go-backend/internal/authhandler"
 	"github.com/justrag/go-backend/internal/cascade"
 	"github.com/justrag/go-backend/internal/chat"
+	"github.com/justrag/go-backend/internal/chatattach"
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/confluence"
 	"github.com/justrag/go-backend/internal/contentgen"
@@ -440,6 +441,7 @@ func registerAdminRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/admin/reembed-all", rc.superadminChain(maintenanceHandler.ReembedAll))
 	rc.mux.Handle("POST /api/admin/reembed-user-memory", rc.superadminChain(maintenanceHandler.ReembedUserMemory))
 	rc.mux.Handle("POST /api/admin/agent/template", rc.superadminChain(maintenanceHandler.UploadAgentTemplate))
+	rc.mux.Handle("POST /api/kb/{id}/reembed", rc.kbTuningChain(maintenanceHandler.ReembedKB))
 
 	// Phase 1 §1.4 admin agent-metrics panel — per-(window,kb) outcome
 	// distributions for the agentic / plan-execute / CRAG paths. Reads
@@ -738,6 +740,17 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 		// via GetChunksByFileID — used by RunCorpusTableChat to assemble
 		// full per-file text for comparison queries.
 		chat.WithCorpusChunks(rc.chunkService),
+		// In-chat document comparison: Redis-backed store for parsed
+		// uploaded attachments (compared against a KB, never ingested).
+		// Reuses the shared Redis client. TTL is read once at startup from
+		// chat_compare_attachment_ttl_hours (default 24h); changes need a
+		// restart. NewRedisStore guards ttl<=0 → chatattach.DefaultTTL.
+		// parserFactory is left unset — the handler's lazy attachmentFactory()
+		// falls back to parser.DefaultFactoryWith(nil).
+		chat.WithAttachmentStore(chatattach.NewRedisStore(
+			rc.infra.rdb.Client,
+			time.Duration(chat.CompareAttachmentTTLHours(context.Background(), rc.chatStore))*time.Hour,
+		)),
 	}
 	if rc.agentDecisionStore != nil {
 		chatOpts = append(chatOpts, chat.WithDecisionRecorder(&decisionRecorderAdapter{store: rc.agentDecisionStore}))
@@ -778,6 +791,10 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 	// auth chain from the outside so unauthenticated requests don't consume
 	// quota — matching the pattern used by registerContentGenRoutes.
 	rc.mux.Handle("POST /api/kb/{id}/chat", chatRL.Middleware(rc.kbViewChain(chatHandler.SendMessage)))
+	// In-chat document comparison: upload a document to compare against the KB.
+	// Same auth + KB-view ACL chain and "chat" rate limiter as the chat send route —
+	// the upload triggers synchronous parsing + a Redis write, so it must be metered.
+	rc.mux.Handle("POST /api/kb/{id}/chat/attachment", chatRL.Middleware(rc.kbViewChain(chatHandler.UploadAttachment)))
 
 	// Chat — feedback
 	rc.mux.Handle("POST /api/kb/{id}/chats/{chatId}/messages/{messageId}/feedback", rc.kbViewChain(chatHandler.SubmitFeedback))

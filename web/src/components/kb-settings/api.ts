@@ -30,3 +30,9 @@ export async function resetKbSetting(kbId: string, key: string): Promise<void> {
   const res = await authFetch(url(kbId, `/${encodeURIComponent(key)}`), { method: 'DELETE' });
   if (!res.ok) throw new Error(`reset setting: ${res.status}`);
 }
+
+export async function reembedKb(kbId: string): Promise<{ queued: number }> {
+  const res = await authFetch(`${API_BASE_URL}/api/kb/${kbId}/reembed`, { method: 'POST' });
+  if (!res.ok) throw new Error(`reembed: ${res.status}`);
+  return res.json();
+}

@@ -159,6 +159,19 @@ export interface Message {
     // the `agentTrajectory` SSE events. Undefined when no events arrived
     // (legacy path or non-streaming).
     trajectory?: TrajectoryEvent[];
+    // In-chat document comparison findings, populated by useChatStream from
+    // the `comparisonFindings` SSE event during a comparison turn.
+    comparisonFindings?: ComparisonFinding[];
+}
+
+export interface ComparisonFinding {
+    mode: 'contradiction' | 'formal' | 'completeness';
+    severity: 'high' | 'medium' | 'low';
+    sectionIdx: number;
+    uploadQuote: string;
+    issue: string;
+    citedFileIds: string[];
+    citedQuote: string;
 }
 
 export interface BranchInfo {

@@ -20,6 +20,7 @@ import (
 	"github.com/justrag/go-backend/internal/pgxutil"
 	"github.com/justrag/go-backend/internal/processor/raptor"
 	"github.com/justrag/go-backend/internal/safego"
+	"github.com/justrag/go-backend/internal/siteconfig"
 	"github.com/justrag/go-backend/internal/splitter"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/vector"
@@ -186,6 +187,11 @@ type Processor struct {
 	// the vector pool was not injected (e.g. server-side processor, tests).
 	// runHyPEGenerationStage guards on non-nil.
 	hype *vector.HyPEStore
+	// kbOverrides loads a KB's per-KB site_config overrides so ProcessFile can
+	// resolve ingestion flags (raptor/parent-child/enrichment/kg_extraction)
+	// against the file's KB instead of only the global site_config. nil →
+	// ingestion uses global config exactly as before (back-compat).
+	kbOverrides kbOverrideLister
 }
 
 // indexedChunk pairs a chunk's text with its source page number.
@@ -224,6 +230,41 @@ func NewProcessor(factory *parser.Factory, aiResolver *ai.ConfigResolver, chunkS
 // whether contextual chunk enrichment is enabled.
 func (p *Processor) SetSiteConfigReader(r SiteConfigReader) {
 	p.siteConfigReader = r
+}
+
+// kbOverrideLister loads a KB's per-KB config overrides. Satisfied by
+// *kbconfig.Store. Kept as a local interface so the processor package does not
+// import kbconfig (avoids an import cycle and keeps the dependency narrow).
+type kbOverrideLister interface {
+	ListKBOverrides(ctx context.Context, kbID string) (map[string]*string, error)
+}
+
+// SetKBOverrideLister attaches the per-KB override source. Without it, ingestion
+// resolves all config globally (unchanged behavior).
+func (p *Processor) SetKBOverrideLister(l kbOverrideLister) { p.kbOverrides = l }
+
+// withKBConfig returns a shallow clone of p whose siteConfigReader overlays the
+// KB's per-KB overrides on top of the global reader, so every config read in
+// ProcessFile (and the sub-methods it calls via the receiver) sees per-KB
+// values. Returns p unchanged when there is no lister, no global reader, an
+// empty kbID, a lookup error (fail-open), or the KB has no overrides. The
+// overlay only consults registry keys (siteconfig.IsPerKB), so global-only keys
+// — embedding model, dim tables, late chunking, docling — are unaffected.
+func (p *Processor) withKBConfig(ctx context.Context, kbID string) *Processor {
+	if p.kbOverrides == nil || p.siteConfigReader == nil || kbID == "" {
+		return p
+	}
+	overrides, err := p.kbOverrides.ListKBOverrides(ctx, kbID)
+	if err != nil {
+		logctx.From(ctx).Warn("processor.kb_overlay.list_failed", "error", err, "kb_id", kbID)
+		return p
+	}
+	if len(overrides) == 0 {
+		return p
+	}
+	clone := *p
+	clone.siteConfigReader = siteconfig.NewKBOverlay(p.siteConfigReader, overrides)
+	return &clone
 }
 
 // SetMainDB attaches the application Postgres pool used for KB-language
@@ -587,6 +628,11 @@ type ProcessFileInput struct {
 // parse → split → embed (batches of 20) → store chunks → update progress/status.
 // ChunkSize and ChunkOverlap of 0 use the splitter defaults (512 and 100).
 func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error {
+	// Resolve ingestion config through the file's KB so per-KB overrides
+	// (raptor/parent-child/enrichment/kg_extraction) take effect. Reassigning
+	// the receiver routes every downstream p.siteConfigReader read and every
+	// p.<method> call through the overlay-bearing clone.
+	p = p.withKBConfig(ctx, in.KBID)
 	fileID := in.FileID
 	filePath := in.FilePath
 	fileName := in.FileName

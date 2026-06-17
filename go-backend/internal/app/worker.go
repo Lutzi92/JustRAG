@@ -25,6 +25,7 @@ import (
 	"github.com/justrag/go-backend/internal/gencontent"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kb"
+	"github.com/justrag/go-backend/internal/kbconfig"
 	"github.com/justrag/go-backend/internal/longmem"
 	"github.com/justrag/go-backend/internal/migrate"
 	"github.com/justrag/go-backend/internal/observability"
@@ -218,6 +219,7 @@ func RunWorker(cfg *config.Config) error {
 		AsynqClient: rssClient,
 	})))
 	proc.SetSiteConfigReader(chatStore)
+	proc.SetKBOverrideLister(kbconfig.NewStore(db.Main))
 	proc.SetMainDB(db.Main)
 	proc.SetVectorPool(db.Vector)
 	proc.SetMaterializer(tabular.NewMaterializer(db.Main))

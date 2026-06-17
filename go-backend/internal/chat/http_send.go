@@ -19,6 +19,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/observability"
+	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -55,6 +56,8 @@ type sendMessageRequest struct {
 	Enhance          string   `json:"enhance"` // "rewrite", "expand", "spell", or ""
 	ReasoningEnabled bool     `json:"reasoningEnabled"`
 	ReasoningLevel   string   `json:"reasoningLevel"` // "low", "medium", "high"
+	AttachmentID     string   `json:"attachmentId"`
+	ComparisonModes  []string `json:"comparisonModes"`
 }
 
 // ---------------------------------------------------------------------------
@@ -227,9 +230,32 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// standard PrepareChatContext).
 	graphDec, graphChunkIDs := h.resolveGraphRouting(ctx, kbID, searchQuery, cls.QueryType)
 
+	// In-chat document comparison: an attachment + at least one mode + the
+	// feature gate routes this turn to the comparison orchestrator (handled
+	// inside tryDeepChat's dispatch switch as the highest-priority case).
+	// Computed here so the deep-chat gate fires even when the query itself is
+	// not classified complex_reasoning.
+	compareEnabled := CompareEnabled(ctx, h.siteConfigReader)
+	runCompare := willRunComparison(compareEnabled, body.AttachmentID, body.ComparisonModes)
+
+	// Follow-up over a prior upload: when an attachment rides along but this is
+	// NOT a fresh comparison run (no modes), inject a capped block of the
+	// uploaded document + prior findings into the KB system prompt so the user
+	// can ask about the upload without re-uploading. Best-effort: load failures
+	// and foreign-owned attachments are silently skipped. Threads through both
+	// the deep-chat path and the standard PrepareChatContext path because both
+	// receive kbSystemPrompt below.
+	if body.AttachmentID != "" && !runCompare && h.attachmentStore != nil {
+		if att, aerr := h.attachmentStore.Get(ctx, body.AttachmentID); aerr == nil && att.UserID == user.ID {
+			kbSystemPrompt = prependBlock(buildFollowUpContext(att), kbSystemPrompt)
+		}
+	}
+
 	// Deep chat: complex streaming queries get a 2-step research agent.
+	// Comparison turns also route through tryDeepChat (its switch dispatches
+	// the comparison orchestrator) regardless of complexity classification.
 	isComplex := cls.UseHyDE && cls.UseMultiQuery
-	if isComplex && streamMode {
+	if (isComplex || runCompare) && streamMode {
 		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, answerHistory); handled {
 			return
 		}
@@ -426,18 +452,28 @@ func (h *Handler) tryDeepChat(
 		(!ChatCorpusTableRouterLLMEnabled(ctx, h.siteConfigReader) ||
 			ai.ConfirmCorpusComparison(ctx, h.aiResolver, searchQuery, kbID, lang, ChatCorpusTableModel(ctx, h.siteConfigReader)))
 
+	// In-chat document comparison takes top priority over every orchestrator
+	// (including corpus-table) — an explicit attachment + modes is an
+	// unambiguous user intent, so it should never be hijacked by a query
+	// classifier. attachmentStore being non-nil is the infrastructure guard.
+	runCompare := h.attachmentStore != nil &&
+		willRunComparison(CompareEnabled(ctx, h.siteConfigReader), body.AttachmentID, body.ComparisonModes)
+	if runCompare {
+		willRunCorpusTable = false
+	}
+
 	// Phase 3 §3.2 supervisor takes priority over both plan-execute and
 	// agentic when the gate is on. Plan §3.2 ship gate: "non-regression
 	// on lookup/enumeration; ≥ 2 pp gain on complex_reasoning MRR or
 	// nDCG" — only the eval harness can decide whether the gate flips,
 	// so this gate stays per-deployment opt-in.
-	willRunSupervisor := !willRunCorpusTable && supervisorEnabled &&
+	willRunSupervisor := !runCompare && !willRunCorpusTable && supervisorEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
-	willRunPlanExecute := !willRunCorpusTable && !willRunSupervisor && planExecuteEnabled &&
+	willRunPlanExecute := !runCompare && !willRunCorpusTable && !willRunSupervisor && planExecuteEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
-	willRunAgentic := !willRunCorpusTable && !willRunSupervisor && !willRunPlanExecute &&
+	willRunAgentic := !runCompare && !willRunCorpusTable && !willRunSupervisor && !willRunPlanExecute &&
 		agenticEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
@@ -449,6 +485,7 @@ func (h *Handler) tryDeepChat(
 		"corpus_table_enabled", corpusTableEnabled,
 		"query_type", queryType,
 		"enhance", body.Enhance,
+		"will_run_comparison", runCompare,
 		"will_run_corpus_table", willRunCorpusTable,
 		"will_run_supervisor", willRunSupervisor,
 		"will_run_plan_execute", willRunPlanExecute,
@@ -467,6 +504,43 @@ func (h *Handler) tryDeepChat(
 	}
 
 	switch {
+	case runCompare:
+		userID := ""
+		if u := auth.UserFromContext(ctx); u != nil {
+			userID = u.ID
+		}
+		cmpParams := ComparisonChatParams{
+			KbID:            kbID,
+			ChatID:          chatID,
+			Language:        lang,
+			Model:           CompareModel(ctx, h.siteConfigReader),
+			Modes:           body.ComparisonModes,
+			MaxSections:     CompareMaxSections(ctx, h.siteConfigReader),
+			Concurrency:     CompareConcurrency(ctx, h.siteConfigReader),
+			PeersPerSection: ComparePeersPerSection(ctx, h.siteConfigReader),
+		}
+		structured := func(c context.Context, prompt, system, kb, model string, spec *ai.StructuredSpec) (string, error) {
+			res, gerr := ai.GenerateCompletionStructured(c, h.aiResolver, prompt, system, kb, model, spec)
+			if gerr != nil {
+				return "", gerr
+			}
+			return res.Content, nil
+		}
+		cmpDeps := ComparisonDeps{Store: h.attachmentStore, Search: h.searchService.Search, Structured: structured}
+		var cmpFindings []Finding
+		chatCtx, cmpFindings, err = RunComparisonChat(ctx, cmpDeps, body.AttachmentID, userID, cmpParams, collectEmit)
+		if err == nil && chatCtx != nil {
+			// Drive the post-dispatch streamer to emit a prose SUMMARY over the
+			// findings. The streamer (below) feeds chatCtx.SystemPrompt +
+			// body.Message to ai.StreamCompletionWithHistory and ignores
+			// chatCtx.Context, so the findings text is embedded into the system
+			// prompt here (ComparisonSummaryPrompt's wording refers to "the
+			// following findings"). The structured findings were already streamed
+			// as a comparisonFindings event; this prose is the gist.
+			chatCtx.SystemPrompt = prompts.ComparisonSummaryPrompt(lang) +
+				"\n\n" + renderFindingsForSummary(cmpFindings)
+		}
+
 	case willRunCorpusTable:
 		chatCtx, err = RunCorpusTableChat(ctx, h.aiResolver, h.searchService, h.corpusChunks, CorpusTableParams{
 			KbID:           kbID,
@@ -770,6 +844,8 @@ func (h *Handler) tryDeepChat(
 	// terminal `answer` stage to the closed-enum outcome label.
 	mode := "standard"
 	switch {
+	case runCompare:
+		mode = "comparison"
 	case willRunCorpusTable:
 		mode = "corpus_table"
 	case willRunSupervisor:

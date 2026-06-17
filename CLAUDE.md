@@ -12,6 +12,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `chat_longcontext_*` — System-2 long-context routing for global-synthesis queries
 - `chat_context_compression_*` — ECoRAG evidentiality-based post-rerank filtering
 - `chat_sufficient_context_*` — holistic "does the assembled set suffice?" abstention gate (standard + supervisor paths)
+- `chat_compare_*` — in-chat single-file comparison against the KB (upload a file in chat; contradiction / formal / completeness modes). `_enabled` master gate (default off), `_model` (fast-tier), `_max_sections`, `_concurrency`, `_peers_per_section`, `_attachment_ttl_hours`, `_max_file_bytes`. File parsed in memory, held in a Redis-backed `chatattach` store (24h TTL), never ingested. New package `internal/chatattach`; endpoint `POST /api/kb/{id}/chat/attachment`.
 - `crag_*`, `adaptive_routing_*` — corrective-RAG + skip rules
 - `kg_*`, `chat_graph_routing_*` — knowledge-graph extraction + routing (incl. `_path_mode` PPR/PathRAG trichotomy)
 - `query_cache_*`, `step_back_*`, `mmr_*`, `rerank_blend_alpha*`, `top_n_*` — retrieval pipeline (`query_cache_similarity_threshold_*` for per-query-type thresholds)
@@ -23,7 +24,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `raptor_*` — per-file RAPTOR hierarchical summary trees (`raptor_clustering_algorithm` selects kmeans vs leiden)
 - `chat_tabular_*`, `tabular_semantic_*` — structured spreadsheet Q&A + fuzzy free-text-cell search + charts/pivots (Phase 1/2/3; `chat_tabular_charts_enabled` is the Phase-3 flag)
 - `ragas_*`, `factcheck_*`, `citation_validation_*`, `langfuse_*` — validation + observability
-- `model_tier_fast` — deployment-wide default for fast-tier tasks (CRAG grader, KG extractor, contextual enricher, factuality / Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer, longmem conflict classifier, evidentiality classifier, HyPE question generator, golden-set question generator, sufficient-context gate**); per-task `*_model` keys override. All fast-tier JSON calls send strict `json_schema` Structured Outputs (vLLM guided_json) with auto-downgrade to `json_object` on backend rejection; tolerant parsing stays as last resort (`ai.GenerateCompletionStructured` / `structuredCompletionFn`). Sole exception: the tool-aware DAG planner (free-form per-tool `args` is incompatible with strict mode).
+- `model_tier_fast` — deployment-wide default for fast-tier tasks (CRAG grader, KG extractor, contextual enricher, factuality / Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer, longmem conflict classifier, evidentiality classifier, HyPE question generator, golden-set question generator, sufficient-context gate, comparison section checker** (`chat_compare_model`)); per-task `*_model` keys override. All fast-tier JSON calls send strict `json_schema` Structured Outputs (vLLM guided_json) with auto-downgrade to `json_object` on backend rejection; tolerant parsing stays as last resort (`ai.GenerateCompletionStructured` / `structuredCompletionFn`). Sole exception: the tool-aware DAG planner (free-form per-tool `args` is incompatible with strict mode).
 
 **Runtime-only knob (no site_config):** `hnsw.iterative_scan = relaxed_order` is set by `BuildPoolConfig`'s `AfterConnect` hook on every new pool connection (T0-1). Required for filtered ANN queries (kb_id, node_kind, GraphChunkIDs, file_id) to expand the HNSW candidate list until the WHERE clause is satisfied. Tolerates pgvector < 0.8 with a one-shot warning; no operator action needed when pgvector ≥ 0.8 is installed.
 
@@ -175,7 +176,7 @@ Grouped by responsibility — names match directory names exactly. Long-form beh
 | Cluster | Packages | Owns |
 |---|---|---|
 | Wire / HTTP | `app`, `httputil`, `middleware`, `auth`, `authhandler`, `apikeyauth`, `sserelay`, `requestid` | Routing, auth chains, SSE relay, request-id propagation |
-| Chat orchestration | `chat`, `agents`, `prompts`, `longmem` | The 4 orchestrators (agentic / plan-execute / supervisor / standard), trajectory events, refine/factuality gates, post-response tasks, per-user long-term memory store |
+| Chat orchestration | `chat`, `agents`, `prompts`, `longmem`, `chatattach` | The 4 orchestrators (agentic / plan-execute / supervisor / standard), trajectory events, refine/factuality gates, post-response tasks, per-user long-term memory store, session-scoped Redis attachment store for in-chat document comparison |
 | Retrieval pipeline | `vector`, `ai`, `splitter`, `processor`, `parser`, `pptx` | Search service (BM25 + vector + reranker + MMR), embedder/grader/refiner LLM calls, chunking, document parsing, KG **write** path (`processor/kg_store.go`) |
 | Tools (MCP) | `mcp`, `mcp/builtin`, `sessionmem`, `aibudget` | MCP registry + dispatcher, built-in tools (kb_search, keyword_search, chunk_read, document_outline, calculator, sql_query, code_exec, graph_search, web_search, memory_*), session memory, per-turn token budget |
 | Knowledge graph | `kg`, `processor` (extractor) | KG **read** path (`kg/`); extractor + writer in `processor/kg_extractor.go` + `processor/kg_store.go` |
@@ -208,6 +209,7 @@ Most chat-pipeline features default OFF. The **full toggle blocks** (combined fl
 | RAPTOR indexing | `raptor_enabled` (+ `_clustering_algorithm`, `_branching_factor`, …) | 0046 | RAPTOR hierarchical indexing |
 | Tabular Q&A (table_query) | `chat_tabular_query_enabled` (+ `_semantic_columns_enabled`, `_charts_enabled`) — **needs OPERATOR PREREQUISITE grants** | 0048 | Structured spreadsheet Q&A |
 | HyPE | `hype_enabled` (ingest) + `hype_search_enabled` (query) | — | HyPE — hypothetical prompt embeddings |
+| In-chat document comparison | `chat_compare_enabled` (+ `_model`, `_max_sections`, `_concurrency`, `_peers_per_section`, `_attachment_ttl_hours`, `_max_file_bytes`) | — | In-chat document comparison |
 
 Mutual exclusions and ordering gotchas (e.g. `chat_self_rag_enabled` REPLACES `chat_factuality_verifier_enabled`; `raptor_enabled` vs `parent_child_enabled`; the T1-2 dim re-embed sequence before `chat_longmem_recall_semantic`) are documented inline in each recipe.
 

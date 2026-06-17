@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import type { Message, MessageSource, MessageVerification, StructuredTable, KnowledgeBase, FileEntry, ChatEntry, TrajectoryEvent } from '../types';
+import type { Message, MessageSource, MessageVerification, StructuredTable, KnowledgeBase, FileEntry, ChatEntry, TrajectoryEvent, ComparisonFinding } from '../types';
 import { API_BASE_URL, authFetch } from '../api';
 import { HAPTIC_PATTERNS, triggerHaptic } from '../utils/haptics';
 import {
@@ -52,6 +52,7 @@ export function useChatStream({
     userMessage: string,
     activeLeafId: string | null,
     editParentId?: string,
+    opts?: { attachmentId?: string; comparisonModes?: string[] },
   ) => {
     const selectedFiles = files.filter(f => f.selected !== false);
     if (!userMessage.trim() || !currentKb || loading || selectedFiles.length === 0) return;
@@ -104,7 +105,14 @@ export function useChatStream({
           reasoningEnabled: reasoningEnabled,
           reasoningLevel: reasoningLevel,
           language,
-          selectedFileIds: selectedFiles.map(f => f.id)
+          selectedFileIds: selectedFiles.map(f => f.id),
+          // In-chat document comparison: when an attachment is present the
+          // backend injects it; non-empty `comparisonModes` makes the turn a
+          // comparison (otherwise it's a normal follow-up over the attachment).
+          ...(opts?.attachmentId ? { attachmentId: opts.attachmentId } : {}),
+          ...(opts?.comparisonModes && opts.comparisonModes.length > 0
+            ? { comparisonModes: opts.comparisonModes }
+            : {}),
         }),
         signal: abortController.signal,
       });
@@ -275,6 +283,11 @@ export function useChatStream({
           if (event.structuredTable) {
             setMessageTree(prev => updateMessageInTree(prev, currentAiTempIdRef.current, {
               structured_table: event.structuredTable as StructuredTable,
+            }));
+          }
+          if (event.comparisonFindings) {
+            setMessageTree(prev => updateMessageInTree(prev, currentAiTempIdRef.current, {
+              comparisonFindings: event.comparisonFindings as ComparisonFinding[],
             }));
           }
         },

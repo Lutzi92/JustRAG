@@ -7,6 +7,7 @@ import { BranchIndicator } from './components/BranchIndicator';
 import { MessageActions } from './components/MessageActions';
 import { InlineMessageEditor } from './components/InlineMessageEditor';
 import MessageContent from './components/MessageContent';
+import { ComparisonFindings } from './components/ComparisonFindings';
 import { useIsMobileContext } from './contexts/MobileContext';
 import { useTheme } from './contexts/ThemeContext';
 import { HAPTIC_PATTERNS, triggerHaptic } from './utils/haptics';
@@ -329,6 +330,10 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                 </div>
             ) : (
                 message.content
+            )}
+
+            {message.role === 'ai' && message.comparisonFindings && message.comparisonFindings.length > 0 && (
+                <ComparisonFindings findings={message.comparisonFindings} t={t} />
             )}
 
             {message.role === 'ai' && !isStreaming && message.verification != null && hasFactcheckOutput(message.verification) && (

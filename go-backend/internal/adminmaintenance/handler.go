@@ -19,6 +19,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kb"
+	"github.com/justrag/go-backend/internal/kbaccess"
 )
 
 // maxTemplateFilenameLen caps the stored filename. POSIX NAME_MAX is 255 but
@@ -148,6 +149,57 @@ func (h *Handler) ReembedAll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusOK, map[string]any{"success": true, "queued": queued})
+}
+
+// ReembedKB handles POST /api/kb/{id}/reembed. KB edit permission is enforced by
+// kbTuningChain. It lists the KB's re-embeddable files and enqueues a
+// re-embedding task per file onto the heavy queue (a KB-wide sweep, same
+// semantics as reembed-all). The re-embed worker deletes old chunks and
+// reprocesses with the KB's current — now per-KB-aware — config. Files without
+// a storage path are skipped. Response: {"queued": N}.
+func (h *Handler) ReembedKB(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	kbID := r.PathValue("id")
+	if access := kbaccess.AccessFromContext(ctx); access != nil && access.KB != nil {
+		kbID = access.KB.ID
+	}
+
+	fileRows, err := h.store.ListReembedableFilesByKBID(ctx, kbID)
+	if err != nil {
+		slog.Error("reembed-kb: list files failed", "kbId", kbID, "error", err)
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to list files")
+		return
+	}
+
+	queued := 0
+	for _, f := range fileRows {
+		if f.StoragePath == nil || *f.StoragePath == "" {
+			continue
+		}
+		payload, err := json.Marshal(jobs.FileProcessingPayload{
+			FileID:       f.ID,
+			KbID:         f.KbID,
+			FilePath:     *f.StoragePath,
+			OriginalName: f.Name,
+			MimeType:     f.Type,
+		})
+		if err != nil {
+			slog.Warn("reembed-kb: marshal payload failed", "fileId", f.ID, "error", err)
+			continue
+		}
+		if _, err := h.enqueuer.Enqueue(
+			asynq.NewTask(jobs.TypeReEmbedding, payload),
+			asynq.Queue(jobs.QueueHeavy),
+			asynq.MaxRetry(3),
+			asynq.Timeout(jobs.TimeoutFor(jobs.TypeReEmbedding)),
+		); err != nil {
+			slog.Warn("reembed-kb: enqueue failed", "fileId", f.ID, "error", err)
+			continue
+		}
+		queued++
+	}
+
+	httputil.WriteJSONCtx(ctx, w, http.StatusOK, map[string]any{"queued": queued})
 }
 
 // ReembedUserMemory enqueues one re-embed-user-memory job per user that
