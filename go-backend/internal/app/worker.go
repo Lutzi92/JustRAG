@@ -357,8 +357,9 @@ func RunWorker(cfg *config.Config) error {
 	var stopMaintenance func()
 	if cfg.WorkerMaintenance {
 		stopMaintenance = worker.StartMaintenance(ctx, worker.MaintenanceConfig{
-			MainDB:   db.Main,
-			VectorDB: db.Vector,
+			MainDB:           db.Main,
+			VectorDB:         db.Vector,
+			StuckFileTimeout: cfg.StuckFileTimeout,
 		})
 	}
 	defer func() {

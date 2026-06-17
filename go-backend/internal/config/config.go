@@ -112,6 +112,15 @@ type Config struct {
 	WorkerMaintenance bool     // WORKER_MAINTENANCE — run maintenance tasks (default true)
 	WorkerHealthPort  int      // WORKER_HEALTH_PORT — health endpoint port (default 8081)
 
+	// StuckFileTimeout is how long a file may sit in "processing" without its
+	// progress advancing before the maintenance sweep marks it error/timeout
+	// ("Processing timed out"). Keyed on files.progress_updated_at, so a single
+	// long no-progress stage (large-PDF parse/OCR, heavy enrichment, RAPTOR)
+	// can trip it even while the worker is still busy. Default 30 minutes;
+	// raise via STUCK_FILE_TIMEOUT_MINUTES for slow backends / very large files
+	// (keep it well under the 2h asynq task timeout).
+	StuckFileTimeout time.Duration
+
 	// WorkerDBStatementTimeout overrides DB.StatementTimeout for the worker's
 	// DB pool. Worker tasks (batch embedding inserts, full-text tsvector
 	// updates, vector index ops) routinely exceed the server's request-path
@@ -388,6 +397,12 @@ func Load() (*Config, error) {
 	}
 	cfg.WorkerHealthPort = mustInt("WORKER_HEALTH_PORT", 8081)
 	cfg.WorkerMaintenance = os.Getenv("WORKER_MAINTENANCE") != "false"
+	stuckFileTimeoutMin := mustInt("STUCK_FILE_TIMEOUT_MINUTES", 30)
+	if stuckFileTimeoutMin <= 0 {
+		errs = append(errs, fmt.Sprintf("STUCK_FILE_TIMEOUT_MINUTES=%d must be positive", stuckFileTimeoutMin))
+		stuckFileTimeoutMin = 30
+	}
+	cfg.StuckFileTimeout = time.Duration(stuckFileTimeoutMin) * time.Minute
 	workerDBStatementTimeoutMs := mustInt("WORKER_DB_STATEMENT_TIMEOUT_MS", 0)
 	if workerDBStatementTimeoutMs < 0 {
 		errs = append(errs, fmt.Sprintf("WORKER_DB_STATEMENT_TIMEOUT_MS=%d must be non-negative", workerDBStatementTimeoutMs))
