@@ -26,6 +26,7 @@ const SECTION_CONFIGS = [
     { id: 'multistep', titleKey: 'agentSectionMultiStep', i18nKeys: ['chatKBRouterEnabled', 'chatKBRouterMinConfidence', 'chatTurnBudgetSeconds', 'chatTurnBudgetTokens', 'chatTurnBudgetToolCalls', 'chatAgenticEnabled', 'chatAgenticMaxHops', 'chatPlanExecuteEnabled', 'chatPlanExecuteMaxSubQueries', 'chatPlanExecuteMaxIterations', 'chatPlanExecuteTokenBudget', 'chatPlanExecuteToolAware', 'chatPlanExecuteDAGIterative', 'chatAnswerToolsEnabled', 'chatAnswerToolsMaxRounds', 'chatSupervisorEnabled', 'chatSupervisorMultiSpecialist'], settingKeys: ['chat_kb_router_enabled', 'chat_kb_router_min_confidence', 'chat_turn_budget_seconds', 'chat_turn_budget_tokens', 'chat_turn_budget_tool_calls', 'chat_agentic_enabled', 'chat_agentic_max_hops', 'chat_plan_execute_enabled', 'chat_plan_execute_max_sub_queries', 'chat_plan_execute_max_iterations', 'chat_plan_execute_token_budget', 'chat_plan_execute_tool_aware', 'chat_plan_execute_dag_iterative', 'chat_answer_tools_enabled', 'chat_answer_tools_max_rounds', 'chat_supervisor_enabled', 'chat_supervisor_multi_specialist'] },
     { id: 'conversation', titleKey: 'agentSectionConversation', i18nKeys: ['chatAnswerHistoryEnabled', 'chatAnswerHistoryMessages', 'chatAnswerHistoryMaxChars', 'chatTransformFollowupEnabled'], settingKeys: ['chat_answer_history_enabled', 'chat_answer_history_messages', 'chat_answer_history_max_chars', 'chat_transform_followup_enabled'] },
     { id: 'corpusTable', titleKey: 'agentSectionCorpusTable', i18nKeys: ['chatCorpusTableEnabled', 'chatCorpusTableModel', 'chatCorpusTableMaxFiles', 'chatCorpusTableConcurrency', 'chatCorpusTableRouterLlmEnabled'], settingKeys: ['chat_corpus_table_enabled', 'chat_corpus_table_model', 'chat_corpus_table_max_files', 'chat_corpus_table_concurrency', 'chat_corpus_table_router_llm_enabled'] },
+    { id: 'compare', titleKey: 'agentSectionCompare', i18nKeys: ['chatCompareEnabled', 'chatCompareModel', 'chatCompareMaxSections', 'chatCompareConcurrency', 'chatComparePeersPerSection', 'chatCompareAttachmentTtlHours', 'chatCompareMaxFileBytes'], settingKeys: ['chat_compare_enabled', 'chat_compare_model', 'chat_compare_max_sections', 'chat_compare_concurrency', 'chat_compare_peers_per_section', 'chat_compare_attachment_ttl_hours', 'chat_compare_max_file_bytes'] },
     { id: 'longmem', titleKey: 'agentSectionLongmem', i18nKeys: ['chatLongmemEnabled', 'chatLongmemMinSalience', 'chatLongmemRecallTopK', 'chatLongmemDecayDays', 'chatLongmemRecallSemantic', 'chatLongmemConflictResolution', 'chatLongmemConflictModel', 'chatLongmemConflictCandidates'], settingKeys: ['chat_longmem_enabled', 'chat_longmem_min_salience', 'chat_longmem_recall_top_k', 'chat_longmem_decay_days', 'chat_longmem_recall_semantic', 'chat_longmem_conflict_resolution', 'chat_longmem_conflict_model', 'chat_longmem_conflict_candidates'] },
     { id: 'validation', titleKey: 'agentSectionValidation', i18nKeys: ['factcheckInChat', 'citationValidationEnabled', 'citationValidationSemanticThreshold', 'chatFactualityGateEnabled', 'chatFactualityGateMaxRefines', 'chatSelfRAGEnabled', 'ragasSamplingEnabled', 'ragasSamplingRate'], settingKeys: ['factcheck_in_chat', 'citation_validation_enabled', 'citation_validation_semantic_threshold', 'chat_factuality_gate_enabled', 'chat_factuality_gate_max_refines', 'chat_self_rag_enabled', 'ragas_sampling_enabled', 'ragas_sampling_rate'] },
     { id: 'ingestion', titleKey: 'agentSectionIngestion', i18nKeys: ['doclingEnabled', 'doclingBaseUrl', 'describeImageEnabled', 'describeImageEnabledHelp', 'describeImageModel', 'describeImageModelHelp', 'contextualEnrichment', 'embeddingBatchSize', 'lateChunkingEnabled', 'lateChunkingMaxInputTokens', 'parentChildEnabled', 'parentChunkSize', 'childChunkSize', 'raptorEnabled', 'raptorMinChunks', 'raptorMaxLevels', 'raptorBranchingFactor', 'raptorClusteringAlgorithm', 'raptorLeidenResolution', 'hyPEEnabled', 'hyPEQuestionsPerChunk', 'hyPEModel'], settingKeys: ['docling_enabled', 'docling_base_url', 'describe_image_enabled', 'describe_image_model', 'contextual_enrichment', 'embedding_batch_size', 'late_chunking_enabled', 'late_chunking_max_input_tokens', 'parent_child_enabled', 'parent_chunk_size', 'child_chunk_size', 'raptor_enabled', 'raptor_min_chunks', 'raptor_max_levels', 'raptor_branching_factor', 'raptor_clustering_algorithm', 'raptor_leiden_resolution', 'hype_enabled', 'hype_questions_per_chunk', 'hype_model'] },
@@ -1366,6 +1367,116 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             {t('chatCorpusTableRouterLlmEnabled')}
                         </label>
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatCorpusTableRouterLlmEnabledHelp')}</p>
+                    </div>
+                </Section>
+
+                <Section title={t('agentSectionCompare')} {...sectionState('compare')}>
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-compare-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="chat-compare-enabled"
+                                type="checkbox"
+                                checked={siteConfigs.chat_compare_enabled === 'true' || siteConfigs.chat_compare_enabled === '1'}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, chat_compare_enabled: e.target.checked ? 'true' : 'false' }))}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('chatCompareEnabled')}
+                        </label>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatCompareEnabledHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-compare-model">{t('chatCompareModel')}</label>
+                        <input
+                            id="chat-compare-model"
+                            type="text"
+                            placeholder="(fast-tier default)"
+                            value={siteConfigs.chat_compare_model ?? ''}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_compare_model: e.target.value }))}
+                            disabled={!(siteConfigs.chat_compare_enabled === 'true' || siteConfigs.chat_compare_enabled === '1')}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatCompareModelHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-compare-max-sections">{t('chatCompareMaxSections')}</label>
+                        <input
+                            id="chat-compare-max-sections"
+                            type="number"
+                            min={1}
+                            max={500}
+                            step={1}
+                            value={siteConfigs.chat_compare_max_sections || '60'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_compare_max_sections: e.target.value }))}
+                            disabled={!(siteConfigs.chat_compare_enabled === 'true' || siteConfigs.chat_compare_enabled === '1')}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatCompareMaxSectionsHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-compare-concurrency">{t('chatCompareConcurrency')}</label>
+                        <input
+                            id="chat-compare-concurrency"
+                            type="number"
+                            min={1}
+                            max={32}
+                            step={1}
+                            value={siteConfigs.chat_compare_concurrency || '6'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_compare_concurrency: e.target.value }))}
+                            disabled={!(siteConfigs.chat_compare_enabled === 'true' || siteConfigs.chat_compare_enabled === '1')}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatCompareConcurrencyHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-compare-peers-per-section">{t('chatComparePeersPerSection')}</label>
+                        <input
+                            id="chat-compare-peers-per-section"
+                            type="number"
+                            min={1}
+                            max={20}
+                            step={1}
+                            value={siteConfigs.chat_compare_peers_per_section || '5'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_compare_peers_per_section: e.target.value }))}
+                            disabled={!(siteConfigs.chat_compare_enabled === 'true' || siteConfigs.chat_compare_enabled === '1')}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatComparePeersPerSectionHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-compare-attachment-ttl-hours">{t('chatCompareAttachmentTtlHours')}</label>
+                        <input
+                            id="chat-compare-attachment-ttl-hours"
+                            type="number"
+                            min={1}
+                            max={720}
+                            step={1}
+                            value={siteConfigs.chat_compare_attachment_ttl_hours || '24'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_compare_attachment_ttl_hours: e.target.value }))}
+                            disabled={!(siteConfigs.chat_compare_enabled === 'true' || siteConfigs.chat_compare_enabled === '1')}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatCompareAttachmentTtlHoursHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-compare-max-file-bytes">{t('chatCompareMaxFileBytes')}</label>
+                        <input
+                            id="chat-compare-max-file-bytes"
+                            type="number"
+                            min={1024}
+                            max={104857600}
+                            step={1024}
+                            value={siteConfigs.chat_compare_max_file_bytes || '10485760'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_compare_max_file_bytes: e.target.value }))}
+                            disabled={!(siteConfigs.chat_compare_enabled === 'true' || siteConfigs.chat_compare_enabled === '1')}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatCompareMaxFileBytesHelp')}</p>
                     </div>
                 </Section>
 

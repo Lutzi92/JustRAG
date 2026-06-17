@@ -493,6 +493,23 @@ export const translations = {
     chartSuccess: { de: 'Diagramm erfolgreich generiert!', en: 'Chart successfully generated!' },
     fileLimitReached: { de: 'Datei-Limit pro Knowledge Base erreicht.', en: 'File limit per Knowledge Base reached.' },
     uploadFailed: { de: 'Upload fehlgeschlagen', en: 'Upload failed' },
+    // Document comparison (in-chat attachment)
+    comparisonUploadFailed: { de: 'Upload fehlgeschlagen', en: 'Upload failed' },
+    comparisonDisabled: { de: 'Dokumentenvergleich ist deaktiviert', en: 'Document comparison is disabled' },
+    comparisonFileTooLarge: { de: 'Datei zu groß', en: 'File too large' },
+    comparisonUnsupportedType: { de: 'Nicht unterstützter Dateityp', en: 'Unsupported file type' },
+    comparisonNoText: { de: 'Konnte keinen Text aus der Datei extrahieren', en: 'Could not extract text from file' },
+    comparisonRemoveAttachment: { de: 'Anhang entfernen', en: 'Remove attachment' },
+    comparisonModesLabel: { de: 'Vergleichsmodi', en: 'Comparison modes' },
+    comparisonSections: { de: 'Abschnitte', en: 'sections' },
+    comparisonModeContradiction: { de: 'Widerspruch', en: 'Contradiction' },
+    comparisonModeFormal: { de: 'Formal', en: 'Formal' },
+    comparisonModeCompleteness: { de: 'Vollständigkeit', en: 'Completeness' },
+    comparisonCitedKb: { de: 'WB', en: 'KB' },
+    comparisonCitedFiles: { de: 'Dateien', en: 'Files' },
+    comparisonDefaultMessage: { de: 'Vergleiche dieses Dokument mit der Wissensbasis', en: 'Compare this document against the knowledge base' },
+    comparisonAttach: { de: 'Dokument zum Vergleich anhängen', en: 'Attach a document to compare' },
+    comparisonUploading: { de: 'Wird hochgeladen…', en: 'Uploading…' },
     deleteFileError: { de: 'Fehler beim Löschen der Datei', en: 'Error deleting file' },
     downloadFileError: { de: 'Fehler beim Herunterladen der Datei. Bitte stelle sicher, dass du angemeldet bist.', en: 'Error downloading file. Please make sure you are logged in.' },
     downloadFailed: { de: 'Download fehlgeschlagen', en: 'Download failed' },
@@ -1600,6 +1617,46 @@ export const translations = {
     chatContextCompressionModelHelp: {
         de: 'LLM für den Evidentialitäts-Klassifikator. Leer = Fast-Tier-Resolver (per-task → model_tier_fast → KB-Chat-Modell). Aufgabe ist Structured-Output (ein JSON-Objekt mit N Floats), kein Reasoning — ein kleines schnelles Modell reicht.',
         en: 'LLM used for the evidentiality classifier. Empty = fast-tier resolver (per-task → model_tier_fast → KB chat model). The task is constrained output (one JSON object with N floats), not reasoning — a small fast model is sufficient.',
+    },
+
+    // ---------------------------------------------------------------
+    // In-chat document comparison
+    // ---------------------------------------------------------------
+    agentSectionCompare: { de: 'Dokumentenvergleich (im Chat)', en: 'In-chat document comparison' },
+    chatCompareEnabled: { de: 'Dokumentenvergleich aktivieren', en: 'Enable document comparison' },
+    chatCompareEnabledHelp: {
+        de: 'Master-Schalter. Wenn aktiviert, kann ein im Chat angehängtes Dokument abschnittsweise gegen den KB-Korpus verglichen werden. Standard: aus.',
+        en: 'Master gate. When on, a document attached in chat can be compared section-by-section against the KB corpus. Default: off.',
+    },
+    chatCompareModel: { de: 'Vergleich: Modell-Override', en: 'Comparison: model override' },
+    chatCompareModelHelp: {
+        de: 'Optionaler Fast-Tier-Modell-Override für den Vergleich. Leer lassen, um model_tier_fast zu verwenden.',
+        en: 'Optional fast-tier model override for the comparison. Leave blank to use model_tier_fast.',
+    },
+    chatCompareMaxSections: { de: 'Vergleich: max. Abschnitte', en: 'Comparison: max sections' },
+    chatCompareMaxSectionsHelp: {
+        de: 'Obergrenze für die Anzahl der aus dem angehängten Dokument verglichenen Abschnitte. Bereich [1, 500]; Default 60.',
+        en: 'Upper bound on the number of sections compared from the attached document. Range [1, 500]; default 60.',
+    },
+    chatCompareConcurrency: { de: 'Vergleich: Parallelität', en: 'Comparison: concurrency' },
+    chatCompareConcurrencyHelp: {
+        de: 'Anzahl der parallel verarbeiteten Abschnitts-Vergleiche. Bereich [1, 32]; Default 6.',
+        en: 'Number of section comparisons processed in parallel. Range [1, 32]; default 6.',
+    },
+    chatComparePeersPerSection: { de: 'Vergleich: Peers pro Abschnitt', en: 'Comparison: peers per section' },
+    chatComparePeersPerSectionHelp: {
+        de: 'Anzahl der pro Dokumentabschnitt abgerufenen Korpus-Gegenstücke (Peers). Bereich [1, 20]; Default 5.',
+        en: 'Number of corpus counterparts (peers) retrieved per document section. Range [1, 20]; default 5.',
+    },
+    chatCompareAttachmentTtlHours: { de: 'Vergleich: Anhang-TTL (Stunden)', en: 'Comparison: attachment TTL (hours)' },
+    chatCompareAttachmentTtlHoursHelp: {
+        de: 'Lebensdauer hochgeladener Vergleichs-Anhänge in Stunden. Bereich [1, 720]; Default 24. Hinweis: wird beim Start angewendet — Neustart erforderlich, damit Änderungen wirken.',
+        en: 'Lifetime of uploaded comparison attachments in hours. Range [1, 720]; default 24. Note: applied at startup — restart required for changes to take effect.',
+    },
+    chatCompareMaxFileBytes: { de: 'Vergleich: max. Dateigröße (Bytes)', en: 'Comparison: max file size (bytes)' },
+    chatCompareMaxFileBytesHelp: {
+        de: 'Upload-Größenbegrenzung für Vergleichs-Anhänge in Bytes. Bereich [1024, 104857600]; Default 10485760 (10 MB).',
+        en: 'Upload size cap for comparison attachments, in bytes. Range [1024, 104857600]; default 10485760 (10 MB).',
     },
 
     // ---------------------------------------------------------------
