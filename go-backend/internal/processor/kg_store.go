@@ -43,7 +43,7 @@ func newKGStore(pool *pgxpool.Pool) *kgStore {
 //
 // Returns the count of (created entities, dedup-merged entities,
 // inserted edges) for the per-stage log.
-func (s *kgStore) persistKGExtraction(ctx context.Context, kbID, chunkID string, ext ai.KGExtraction) (created, deduped, edges int, err error) {
+func (s *kgStore) persistKGExtraction(ctx context.Context, kbID, fileID, chunkID string, ext ai.KGExtraction) (created, deduped, edges int, err error) {
 	if s == nil || s.pool == nil {
 		return 0, 0, 0, errors.New("kg_store: no DB pool configured")
 	}
@@ -86,6 +86,19 @@ func (s *kgStore) persistKGExtraction(ctx context.Context, kbID, chunkID string,
 				deduped++
 				observability.RecordKGDisambiguation("dedupe")
 			}
+
+			// Record this file's contribution to the (deduped) entity so a
+			// later file-delete can GC it once its last contributing file is
+			// gone. fileID is always set on the ingestion path; guard anyway.
+			if fileID != "" {
+				if _, ferr := tx.Exec(ctx, `
+					INSERT INTO kg_entity_files (entity_id, kb_id, file_id)
+					VALUES ($1, $2::uuid, $3::uuid)
+					ON CONFLICT (entity_id, file_id) DO NOTHING
+				`, id, kbID, fileID); ferr != nil {
+					return fmt.Errorf("kg_store: link entity %q to file: %w", e.Name, ferr)
+				}
+			}
 		}
 
 		// Insert edges. Relations whose src/dst weren't in the entity
@@ -107,9 +120,9 @@ func (s *kgStore) persistKGExtraction(ctx context.Context, kbID, chunkID string,
 				continue
 			}
 			batch.Queue(`
-				INSERT INTO kg_edges (kb_id, src_entity_id, dst_entity_id, rel, evidence, chunk_id)
-				VALUES ($1::uuid, $2, $3, $4, $5, NULLIF($6, '')::uuid)
-			`, kbID, srcID, dstID, r.Rel, r.Evidence, chunkID)
+				INSERT INTO kg_edges (kb_id, src_entity_id, dst_entity_id, rel, evidence, chunk_id, file_id)
+				VALUES ($1::uuid, $2, $3, $4, $5, NULLIF($6, '')::uuid, NULLIF($7, '')::uuid)
+			`, kbID, srcID, dstID, r.Rel, r.Evidence, chunkID, fileID)
 			queued = append(queued, edgeRef{src: r.Src, dst: r.Dst})
 		}
 		if batch.Len() > 0 {

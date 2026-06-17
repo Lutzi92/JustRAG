@@ -9,6 +9,7 @@ import dagre from 'dagre';
 import { Loader2, Network, X } from 'lucide-react';
 import { API_BASE_URL } from '../../api';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useKBGraphStream } from '../../hooks/useKBGraphStream';
 
 interface MindMapViewProps {
     kbId: string;
@@ -20,7 +21,7 @@ interface MindMapViewProps {
 
 interface GraphNode { id: number; name: string; type: string; degree: number; }
 interface GraphEdge { source: number; target: number; rel: string; }
-interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; }
+interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; processing?: boolean; }
 
 const NODE_W = 170;
 const NODE_H = 44;
@@ -88,17 +89,16 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
     // node id -> entity name, for the click-to-ask handler.
     const [names, setNames] = useState<Record<string, string>>({});
 
-    useEffect(() => {
-        // Initial status is 'loading'; the component is keyed by kbId in the
-        // parent so it remounts (fresh 'loading') on KB switch — no synchronous
-        // setState needed here.
+    const loadGraph = useCallback(() => {
         let cancelled = false;
         axios.get(`${API_BASE_URL}/api/kb/${kbId}/graph`)
             .then(res => {
                 if (cancelled) return;
                 const data = res.data as GraphData;
                 if (!data?.nodes || data.nodes.length === 0) {
-                    setStatus('empty');
+                    // Keep showing the spinner while extraction is still in
+                    // flight; only declare "empty" once the KB is idle.
+                    setStatus(data?.processing ? 'loading' : 'empty');
                     return;
                 }
                 const laid = layoutGraph(data);
@@ -110,6 +110,14 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
             .catch(() => { if (!cancelled) setStatus('error'); });
         return () => { cancelled = true; };
     }, [kbId, setNodes, setEdges]);
+
+    useEffect(() => {
+        const cancel = loadGraph();
+        return cancel;
+    }, [loadGraph]);
+
+    // Live updates: re-fetch on graph_changed; `processing` drives the spinner.
+    const { processing } = useKBGraphStream(kbId, loadGraph);
 
     const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
         const name = names[node.id] ?? (node.data?.label as string | undefined);
@@ -139,6 +147,18 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
             </header>
 
             <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+                {processing && (
+                    <div style={{
+                        position: 'absolute', top: 12, right: 12, zIndex: 10,
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                        borderRadius: 8, padding: '6px 10px', fontSize: '0.8rem',
+                        color: 'var(--text-secondary)', boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+                    }}>
+                        <Loader2 className="animate-spin" size={16} style={{ color: 'var(--accent-primary)' }} />
+                        <span>{t('mindMapBuilding')}</span>
+                    </div>
+                )}
                 {status === 'ready' ? (
                     <ReactFlow
                         nodes={nodes}

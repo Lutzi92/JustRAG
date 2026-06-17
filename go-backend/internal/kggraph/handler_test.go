@@ -22,6 +22,10 @@ func (f *fakeStore) GraphOverview(_ context.Context, _ string, maxNodes int) (kg
 	return f.graph, f.err
 }
 
+func (f *fakeStore) KBHasActiveIngestion(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
 func TestGetGraph_Returns200(t *testing.T) {
 	fs := &fakeStore{graph: kg.GraphOverview{
 		Nodes: []kg.GraphNode{{ID: 1, Name: "Alice", Type: "Person", Degree: 2}},

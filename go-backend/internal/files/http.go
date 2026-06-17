@@ -117,6 +117,7 @@ type Handler struct {
 	asynqClient  taskEnqueuer
 	fetcher      *fetcher.Fetcher
 	queryCache   QueryCacheInvalidator
+	kgEvents     kgFileEventer
 }
 
 // SetFetcher injects the shared Fetcher used by FetchURL to retrieve web
@@ -129,6 +130,17 @@ func (h *Handler) SetFetcher(f *fetcher.Fetcher) { h.fetcher = f }
 // nuke cached SearchResults whose chunks reference the mutated KB.
 // Optional — when nil, the cache is left to its TTL fallback.
 func (h *Handler) SetQueryCacheInvalidator(qc QueryCacheInvalidator) { h.queryCache = qc }
+
+// kgFileEventer removes a deleted file's knowledge-graph contribution and
+// notifies mindmap subscribers. Satisfied by *kgevents.FileHook. Optional —
+// nil leaves the KG graph untouched on delete (pre-0055 behaviour).
+type kgFileEventer interface {
+	OnFileDeleted(ctx context.Context, kbID, fileID string)
+}
+
+// SetKGFileEventer injects the KG cleanup + mindmap-notify hook for file
+// deletes. Optional.
+func (h *Handler) SetKGFileEventer(e kgFileEventer) { h.kgEvents = e }
 
 // invalidateQueryCache fires the optional KB query-cache invalidation
 // hook. Fail-safe: nil invalidator is a no-op; errors are logged but
@@ -427,6 +439,12 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	// Fire-and-forget — the cache is best-effort and the TTL fallback
 	// corrects any missed invalidation within ~24h.
 	h.invalidateQueryCache(r.Context(), file.KbID, "file_deleted")
+
+	// Remove this file's KG contribution (precise per-file GC) and push a
+	// graph_changed event so any open mindmap re-fetches. Best-effort.
+	if h.kgEvents != nil {
+		h.kgEvents.OnFileDeleted(r.Context(), file.KbID, fileID)
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }

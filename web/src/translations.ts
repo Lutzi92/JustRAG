@@ -159,6 +159,7 @@ export const translations = {
     quiz: { de: 'Quiz', en: 'Quiz' },
     mindMap: { de: 'Mindmap', en: 'Mind Map' },
     mindMapLoading: { de: 'Wissensgraph wird geladen…', en: 'Loading knowledge graph…' },
+    mindMapBuilding: { de: 'Wissensgraph wird aktualisiert…', en: 'Updating knowledge graph…' },
     mindMapError: { de: 'Wissensgraph konnte nicht geladen werden.', en: 'Failed to load the knowledge graph.' },
     mindMapEmpty: { de: 'Für diese Wissensdatenbank ist noch kein Wissensgraph verfügbar. Aktivieren Sie die KG-Extraktion und ingestieren Sie Dokumente neu.', en: 'No knowledge graph available for this knowledge base yet. Enable KG extraction and re-ingest documents.' },
     mindMapAskAbout: { de: 'Im Chat fragen', en: 'Ask in chat' },

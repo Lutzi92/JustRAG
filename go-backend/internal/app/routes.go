@@ -49,6 +49,7 @@ import (
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/kbconfig"
 	"github.com/justrag/go-backend/internal/kg"
+	"github.com/justrag/go-backend/internal/kgevents"
 	"github.com/justrag/go-backend/internal/kggraph"
 	"github.com/justrag/go-backend/internal/longmem"
 	"github.com/justrag/go-backend/internal/mcp"
@@ -99,10 +100,17 @@ type routeCtx struct {
 	// before any register* call so registration order is not load-bearing.
 	agentDecisionStore *adminagentmetrics.PgStore
 
-	// kgStore is the AP-C3 / AP-C4 read-side kg.Store. Shared
-	// between the graph_search MCP tool and the chat handler's
-	// AP-C4 router heuristic.
-	kgStore kg.Store
+	// kgStore is the AP-C3 / AP-C4 read-side KG store. Shared
+	// between the graph_search MCP tool, the chat handler's AP-C4
+	// router heuristic, the graph overview handler (kggraph), and
+	// the KG file-eventer hook. *kg.PgStore satisfies both kg.Store
+	// and kggraph.Store so we store the concrete pointer.
+	kgStore *kg.PgStore
+
+	// kgGraphHandler is the KB mind-map HTTP handler. Stored here so
+	// registerResearchRoutes can inject the SSE relay after it is
+	// constructed in registerKBRoutes.
+	kgGraphHandler *kggraph.Handler
 
 	// feedbackReader aggregates per-chunk feedback signals from the main
 	// DB. Shared between the server-side SearchService (retrieval boost,
@@ -164,6 +172,11 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	)
 	kbStore := kb.NewStore(infra.db.Main)
 
+	// kgStore is created once here so it can be shared between the KG graph
+	// handler (registerKBRoutes), the graph_search MCP tool (registerChatRoutes),
+	// and the KG file-eventer hook on filesHandler (wired below).
+	kgStore := kg.NewPgStore(infra.db.Main)
+
 	// Shared Fetcher used by crawler, websearch, and academic handlers.
 	// JustFindUserDataDir holds the persistent rod profile so the Anubis
 	// challenge cookie survives across restarts. Mounted from the
@@ -186,6 +199,9 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	// Wire the QueryCache invalidator so file-mutation handlers (delete)
 	// nuke cached SearchResults whose chunks may reference outdated content.
 	filesHandler.SetQueryCacheInvalidator(searchService)
+	// Wire the KG file-eventer so file-delete handlers clean up KG data and
+	// notify mindmap subscribers via Redis pub/sub.
+	filesHandler.SetKGFileEventer(kgevents.NewFileHook(kgevents.NewPublisher(infra.rdb.Client), kgStore))
 	cascadeDeleter.SetQueryCacheInvalidator(searchService)
 
 	// Online feedback loop: per-chunk feedback aggregate reader (main DB).
@@ -224,6 +240,7 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 		chunkService:       chunkService,
 		cascadeDeleter:     cascadeDeleter,
 		kbStore:            kbStore,
+		kgStore:            kgStore,
 		sharedFetcher:      sharedFetcher,
 		asynqInspector:     asynqInspector,
 		agentDecisionStore: agentDecisionStore,
@@ -612,8 +629,12 @@ func registerKBRoutes(rc *routeCtx) {
 
 	// Knowledge-graph overview (frontend mind map) — KB view permission.
 	// Returns empty nodes/edges on KBs without KG extraction.
-	kgGraphHandler := kggraph.NewHandler(kg.NewPgStore(rc.infra.db.Main))
-	rc.mux.Handle("GET /api/kb/{id}/graph", rc.kbViewChain(kgGraphHandler.GetGraph))
+	// kgStore was created in setupRoutes and propagated via rc so it is
+	// shared with the graph_search MCP tool (registerChatRoutes) and the
+	// KG file-eventer hook.
+	rc.kgGraphHandler = kggraph.NewHandler(rc.kgStore)
+	rc.mux.Handle("GET /api/kb/{id}/graph", rc.kbViewChain(rc.kgGraphHandler.GetGraph))
+	rc.mux.Handle("GET /api/kb/{id}/graph/stream", rc.kbViewChain(rc.kgGraphHandler.StreamGraph))
 
 	// Add sources (KB edit permission)
 	rc.mux.Handle("POST /api/kb/{id}/add-sources", rc.kbEditChain(rc.filesHandler.AddSources))
@@ -685,11 +706,11 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 
 	// AP-C3 graph_search: traverses kg_entities + kg_edges populated
 	// by the AP-C1 ingestion stage. The KG read-side store is
-	// constructed once and shared between the MCP tool (planner-
-	// callable) and the AP-C4 router heuristic (chat pre-step).
-	kgStore := kg.NewPgStore(rc.infra.db.Main)
-	mcpRegistry.RegisterBuiltin(builtin.NewGraphSearch(kgStore))
-	rc.kgStore = kgStore
+	// created once in setupRoutes and propagated via rc.kgStore so it is
+	// shared between the MCP tool (planner-callable), the AP-C4 router
+	// heuristic (chat pre-step), the graph handler (registerKBRoutes), and
+	// the KG file-eventer hook (filesHandler).
+	mcpRegistry.RegisterBuiltin(builtin.NewGraphSearch(rc.kgStore))
 
 	// AP-D1 long-term memory: per-user durable facts. Wired only
 	// when chat_longmem_enabled flips it on; the chat handler's
@@ -727,7 +748,7 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 		chat.WithToolDispatcher(chat.NewMCPDispatcher(mcpRegistry)),
 		chat.WithSessionMemory(sessionMemoryStore),
 		chat.WithKBRouterCandidates(kbRouterLister),
-		chat.WithKGStore(kgStore),
+		chat.WithKGStore(rc.kgStore),
 		chat.WithLongmemStore(longmemStore),
 		chat.WithTabularCatalog(tabular.NewCatalog(rc.infra.db.Main)),
 		// Phase F RAPTOR: vector.ChunkService implements the
@@ -878,6 +899,11 @@ func dispatchResearchAction(h *research.Handler) http.HandlerFunc {
 
 func registerResearchRoutes(rc *routeCtx, researchRL *middleware.RedisRateLimiter) {
 	relay := sserelay.New(rc.infra.rdb.Client, rc.infra.asynqClient)
+	// Wire the shared SSE relay into the KG graph handler so the /graph/stream
+	// endpoint can push live mindmap updates to the browser.
+	if rc.kgGraphHandler != nil {
+		rc.kgGraphHandler.SetRelay(relay)
+	}
 	researchHandler := research.NewHandler(rc.chatStore, relay, rc.aiResolver, rc.searchService, rc.infra.rdb.Client)
 	academicHandler := academic.NewHandler(&academicDeps{PGStore: rc.chatStore, filesStore: rc.filesStore}, relay, rc.infra.rdb.Client, rc.infra.stor, rc.infra.asynqClient, rc.sharedFetcher)
 

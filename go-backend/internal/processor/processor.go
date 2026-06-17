@@ -192,6 +192,10 @@ type Processor struct {
 	// against the file's KB instead of only the global site_config. nil →
 	// ingestion uses global config exactly as before (back-compat).
 	kbOverrides kbOverrideLister
+	// kgPub publishes mindmap live-update events (status / graph_changed) to
+	// the per-KB Redis channel. nil → no events (mindmap falls back to its
+	// initial fetch). Only used on KG-extraction-enabled KBs.
+	kgPub kgEventPublisher
 }
 
 // indexedChunk pairs a chunk's text with its source page number.
@@ -282,6 +286,29 @@ func (p *Processor) SetMaterializer(m *tabular.Materializer) { p.materializer = 
 // flag is on. Call this on the worker side alongside SetMainDB.
 func (p *Processor) SetVectorPool(pool *pgxpool.Pool) {
 	p.hype = vector.NewHyPEStore(pool)
+}
+
+// kgEventPublisher is the narrow publish surface ProcessFile needs. Satisfied
+// by *kgevents.Publisher.
+type kgEventPublisher interface {
+	PublishStatus(ctx context.Context, kbID string, processing bool)
+	PublishGraphChanged(ctx context.Context, kbID string)
+}
+
+// SetKGEventPublisher injects the mindmap live-update publisher. Optional.
+func (p *Processor) SetKGEventPublisher(pub kgEventPublisher) { p.kgPub = pub }
+
+// kbHasActiveIngestion reports whether the KB still has a pending/processing
+// file — the mindmap "still building" signal. nil mainDB → false (no panic).
+func (p *Processor) kbHasActiveIngestion(ctx context.Context, kbID string) (bool, error) {
+	if p.mainDB == nil {
+		return false, nil
+	}
+	var exists bool
+	err := p.mainDB.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM files WHERE kb_id=$1::uuid AND status IN ('pending','processing'))
+	`, kbID).Scan(&exists)
+	return exists, err
 }
 
 // resolveKBLanguages does a single SELECT and returns both forms of the KB
@@ -654,6 +681,12 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		return fmt.Errorf("processor: update status processing: %w", err)
 	}
 	_ = p.store.UpdateFileProgress(ctx, fileID, 5)
+
+	// Mindmap live update: signal "still building" as soon as a KG-enabled
+	// KB begins ingesting a file, so an open mindmap tab shows the spinner.
+	if p.kgPub != nil && resolveKGExtractionEnabled(ctx, p.siteConfigReader) {
+		p.kgPub.PublishStatus(ctx, kbID, true)
+	}
 
 	// Idempotency guard: an Asynq retry re-runs this handler from the top.
 	// Delete any chunks a previous (failed/partial) attempt wrote, else the
@@ -1177,6 +1210,15 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		}
 	}
 
+	// Mindmap live update: the graph data for this KB just changed (KG
+	// extraction ran). Tell subscribers to re-fetch, and recompute whether
+	// any OTHER file is still ingesting so the spinner clears when idle.
+	if p.kgPub != nil && resolveKGExtractionEnabled(ctx, p.siteConfigReader) {
+		p.kgPub.PublishGraphChanged(ctx, kbID)
+		active, _ := p.kbHasActiveIngestion(ctx, kbID)
+		p.kgPub.PublishStatus(ctx, kbID, active)
+	}
+
 	return nil
 }
 
@@ -1308,7 +1350,7 @@ extract:
 		if exts[i] == nil {
 			continue
 		}
-		created, deduped, edges, err := store.persistKGExtraction(ctx, kbID, c.ID, *exts[i])
+		created, deduped, edges, err := store.persistKGExtraction(ctx, kbID, fileID, c.ID, *exts[i])
 		if err != nil {
 			logctx.From(ctx).Warn("kg extraction: persist failed; skipping chunk",
 				"fileId", fileID, "chunkId", c.ID, "error", err)
