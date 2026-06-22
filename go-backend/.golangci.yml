@@ -1,13 +1,12 @@
-run:
-  timeout: 5m
+version: "2"
 
 linters:
+  # v2 enables errcheck, govet, ineffassign, staticcheck, and unused by
+  # default (gosimple was folded into staticcheck in v2), so only the extras
+  # beyond that default set are listed here.
   enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
     - bodyclose
+    - copyloopvar
     - noctx
     # Test discipline. thelper flags helper funcs (that call t.Error/t.Fatal)
     # without t.Helper() — failures otherwise point at the helper line, not
@@ -19,87 +18,102 @@ linters:
     # offenders so the current codebase passes while new growth is flagged.
     - funlen
     - gocyclo
-    # Formatting gate: `gofmt -l` must be empty so struct-literal alignment
-    # and friends can't drift between contributors' editor setups.
+  settings:
+    staticcheck:
+      # v2 folds the stylecheck (ST*) and quickfix (QF*) analyzers into the
+      # single staticcheck linter and turns them on by default. v1 only ran
+      # the SA bug checks (plus gosimple's S checks) — keep that scope so this
+      # v2 migration stays behaviour-neutral instead of surfacing a wave of
+      # new style findings. Re-enable ST*/QF* deliberately if wanted later.
+      checks:
+        - all
+        - -ST*
+        - -QF*
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # too noisy for a migration project
+        - shadow # common pattern in error handling
+    funlen:
+      # Ratchet thresholds set just above today's worst offenders so the
+      # current codebase passes while any NEW function larger than these
+      # fails CI. Current worst: Search 566 lines / 315 statements.
+      # Headroom ~2-3%.
+      lines: 580
+      statements: 320
+    gocyclo:
+      # Ratchet threshold just above today's worst offender (Search = 105).
+      # Headroom ~5%. Any NEW function with complexity > 110 fails CI.
+      min-complexity: 110
+    errcheck:
+      exclude-functions:
+        # Fire-and-forget writes to HTTP response writers.
+        - (net/http.ResponseWriter).Write
+        # Deferred rollbacks — error is expected when commit already ran.
+        - (*github.com/jackc/pgx/v5.Tx).Rollback
+        # Crypto rand — panics on failure anyway.
+        - crypto/rand.Read
+        # ODS parser: fmt.Sscanf on a best-effort numeric field; parse failure leaves n at its zero value which is correct.
+        - fmt.Sscanf
+  exclusions:
+    generated: lax
+    # These four presets reproduce v1's built-in default exclusion set
+    # (the implicit issues.exclude-use-default: true in the v1 schema).
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Test files can be more relaxed.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - noctx
+          - funlen
+          - tparallel
+      # Fire-and-forget scheduler enqueue calls inside ticker goroutines; errors are logged by the callee.
+      # TODO(arch-remediation): propagate enqueue errors to a metrics counter.
+      - path: internal/rss/scheduler\.go
+        linters:
+          - errcheck
+        text: enqueuePoll
+      - path: internal/confluence/scheduler\.go
+        linters:
+          - errcheck
+        text: enqueueSync
+      # Empty branch in metrics test: pre-existing; the if block intentionally left empty as a no-op guard.
+      # TODO(arch-remediation): either add an assertion or remove the dead branch.
+      - path: internal/observability/metrics_test\.go
+        linters:
+          - staticcheck
+        text: SA9003
+      # SSE streaming goroutine: resp.Body is closed via defer inside the spawned goroutine;
+      # bodyclose cannot follow goroutine boundaries — this is a known false positive.
+      # TODO(arch-remediation): refactor DoStream to make close ownership explicit.
+      - path: internal/ai/client\.go
+        linters:
+          - bodyclose
+      # Analytics paramOffset increment at end of builder branches: the increment is dead
+      # but the pattern is consistent across all three query builders; harmless.
+      # TODO(arch-remediation): remove trailing paramOffset++ in analytics store builders.
+      - path: internal/analytics/store_pg\.go
+        linters:
+          - ineffassign
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+
+formatters:
+  # gofmt is a formatter in v2 (split out of the linters set). `gofmt -l` must
+  # stay empty so struct-literal alignment and friends can't drift between
+  # contributors' editor setups.
+  enable:
     - gofmt
-    # Re-enabled 2026-06-11 after the arch-remediation burn-down (findings
-    # fixed; chromium-build-tag false positives carry targeted //nolint
-    # comments in internal/fetcher).
-    - gosimple
-    - unused
-    - copyloopvar
-
-linters-settings:
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment  # too noisy for a migration project
-      - shadow          # common pattern in error handling
-
-  funlen:
-    # Ratchet thresholds set just above today's worst offenders so the
-    # current codebase passes while any NEW function larger than these
-    # fails CI. Current worst: Search 566 lines / 315 statements.
-    # Headroom ~2-3%.
-    lines: 580
-    statements: 320
-
-  gocyclo:
-    # Ratchet threshold just above today's worst offender (Search = 105).
-    # Headroom ~5%. Any NEW function with complexity > 110 fails CI.
-    min-complexity: 110
-
-  errcheck:
-    exclude-functions:
-      # Fire-and-forget writes to HTTP response writers.
-      - (net/http.ResponseWriter).Write
-      # Deferred rollbacks — error is expected when commit already ran.
-      - (*github.com/jackc/pgx/v5.Tx).Rollback
-      # Crypto rand — panics on failure anyway.
-      - crypto/rand.Read
-      # ODS parser: fmt.Sscanf on a best-effort numeric field; parse failure leaves n at its zero value which is correct.
-      - fmt.Sscanf
-
-issues:
-  exclude-rules:
-    # Test files can be more relaxed.
-    - path: _test\.go
-      linters:
-        - errcheck
-        - noctx
-        - funlen
-        - tparallel
-    # Fire-and-forget scheduler enqueue calls inside ticker goroutines; errors are logged by the callee.
-    # TODO(arch-remediation): propagate enqueue errors to a metrics counter.
-    - path: internal/rss/scheduler\.go
-      linters:
-        - errcheck
-      text: "enqueuePoll"
-    - path: internal/confluence/scheduler\.go
-      linters:
-        - errcheck
-      text: "enqueueSync"
-    # AWS SDK v2 deprecated endpoint resolver — pre-existing, requires upstream SDK upgrade.
-    # TODO(arch-remediation): upgrade aws-sdk-go-v2 endpoint resolution to service-specific resolver.
-    - path: internal/storage/storage\.go
-      linters:
-        - staticcheck
-      text: "SA1019"
-    # Empty branch in metrics test: pre-existing; the if block intentionally left empty as a no-op guard.
-    # TODO(arch-remediation): either add an assertion or remove the dead branch.
-    - path: internal/observability/metrics_test\.go
-      linters:
-        - staticcheck
-      text: "SA9003"
-    # SSE streaming goroutine: resp.Body is closed via defer inside the spawned goroutine;
-    # bodyclose cannot follow goroutine boundaries — this is a known false positive.
-    # TODO(arch-remediation): refactor DoStream to make close ownership explicit.
-    - path: internal/ai/client\.go
-      linters:
-        - bodyclose
-    # Analytics paramOffset increment at end of builder branches: the increment is dead
-    # but the pattern is consistent across all three query builders; harmless.
-    # TODO(arch-remediation): remove trailing paramOffset++ in analytics store builders.
-    - path: internal/analytics/store_pg\.go
-      linters:
-        - ineffassign
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

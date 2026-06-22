@@ -247,30 +247,27 @@ type s3Storage struct {
 }
 
 func newS3Storage(cfg Config) (*s3Storage, error) {
-	customResolver := aws.EndpointResolverWithOptionsFunc(
-		func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			return aws.Endpoint{
-				URL:               cfg.S3Endpoint,
-				SigningRegion:     cfg.S3Region,
-				HostnameImmutable: true,
-			}, nil
-		},
-	)
-
 	awsCfg, err := awsconfig.LoadDefaultConfig(
 		context.Background(),
 		awsconfig.WithRegion(cfg.S3Region),
 		awsconfig.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(cfg.S3AccessKey, cfg.S3SecretKey, ""),
 		),
-		awsconfig.WithEndpointResolverWithOptions(customResolver), //nolint:staticcheck
 	)
 	if err != nil {
 		return nil, fmt.Errorf("storage: load AWS config: %w", err)
 	}
 
+	// Per-client BaseEndpoint is the modern replacement for the deprecated
+	// EndpointResolverWithOptions resolver: it points the SDK at a custom
+	// S3-compatible endpoint (MinIO, etc.) and, together with UsePathStyle,
+	// preserves the old HostnameImmutable behaviour. Left unset for real AWS
+	// S3 so the SDK derives the regional endpoint itself.
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.UsePathStyle = true
+		if cfg.S3Endpoint != "" {
+			o.BaseEndpoint = aws.String(cfg.S3Endpoint)
+		}
 	})
 
 	s := &s3Storage{client: client, bucket: cfg.S3Bucket}

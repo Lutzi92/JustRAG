@@ -69,6 +69,12 @@ Defaults:
 - server on `http://localhost:3000`
 - worker health on `http://localhost:8081/healthz`
 
+`go.mod` pins a `toolchain` floor (currently `go1.26.4`) for stdlib security
+fixes, so a host with an older `go` will download that toolchain on first
+build. On air-gapped hosts that download fails — set `GOTOOLCHAIN=local` to
+build with the locally installed Go instead (it must already satisfy the
+`go 1.26` language baseline).
+
 ## Migrations
 
 The primary migration runtime is the Go `migrate` binary.
