@@ -2,6 +2,16 @@
 #
 # Usage:
 #   docker compose -f docker-compose.local.yml up --build
+#
+# Docling (layout-aware parsing + image captioning) is bundled in below so you
+# can test it locally. After the stack is up, enable it in the admin Agent panel:
+#   docling_enabled  = true
+#   docling_base_url = http://docling:5001        # in-compose service hostname
+#   docling_picture_description_enabled = true     # optional: gemma-4 image captioning
+#   docling_picture_area_threshold      = 0.05
+#   docling_table_mode                  = accurate
+# Captioning is performed by the docling sidecar calling gemma-4 — point
+# DOCLING_PICTURE_DESCRIPTION_API_URL (below) at your local gemma-4 endpoint.
 
 services:
   # One-shot: runs goose migrations, vector table setup, and admin seed.
@@ -195,6 +205,45 @@ services:
     volumes:
       - rag-minio-data:/data
 
+  docling:
+    # First cold start downloads ~3 GB of models — the container stays
+    # "starting" (health) until that finishes. The Go services don't block on
+    # it (they fall back to built-in parsers when Docling isn't reachable), so
+    # the rest of the stack comes up independently.
+    image: quay.io/docling-project/docling-serve:latest
+    restart: unless-stopped
+    # Published only so you can curl http://localhost:5001/health locally; the
+    # app reaches Docling over the compose network at http://docling:5001.
+    ports:
+      - "${WORKER_BIND_IP:-127.0.0.1}:5001:5001"
+    # host.docker.internal does not resolve on Linux Docker by default; this
+    # mapping lets the captioning calls reach a gemma-4 running on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DOCLING_SERVE_ENABLE_UI: "false"
+      # --- Image captioning via gemma-4 (only used when picture description is on) ---
+      # Point at your local gemma-4 OpenAI-compatible endpoint. If gemma-4 runs
+      # on the host, host.docker.internal works via the extra_hosts above; if it
+      # runs as another compose service, use that service name instead. NOTE:
+      # confirm the exact key names against the docling-serve tag you run.
+      DOCLING_PICTURE_DESCRIPTION_API_URL: "http://host.docker.internal:8000/v1/chat/completions"
+      DOCLING_PICTURE_DESCRIPTION_MODEL: "gemma-4-26b"
+    healthcheck:
+      # Probe with Python stdlib rather than curl — the docling-serve image is
+      # Python-based and may not ship curl, which would falsely report unhealthy.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5001/health').status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 300s
+    volumes:
+      - docling-cache:/.cache
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+
 
 volumes:
   rag-db-data-v18:
@@ -205,3 +254,4 @@ volumes:
   rag-uploads:
   rag-justfind-profile-server:
   rag-justfind-profile-worker:
+  docling-cache:

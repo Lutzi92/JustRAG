@@ -128,3 +128,76 @@ func TestClient_EmptyResponseIsError(t *testing.T) {
 		t.Fatal("expected error for empty document, got nil")
 	}
 }
+
+func TestClient_Convert_EmitsPictureDescriptionFields(t *testing.T) {
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseMultipartForm(1 << 20)
+		got = map[string]string{}
+		for k, v := range r.MultipartForm.Value {
+			if len(v) > 0 {
+				got[k] = v[0]
+			}
+		}
+		if !strings.HasSuffix(r.URL.Path, "/v1/convert/file") {
+			t.Errorf("expected /v1/convert/file, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"document": map[string]any{"md_content": "# T"},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, 10*time.Second)
+	c.Options = ConvertOptions{
+		PictureDescription:    true,
+		PictureAreaThreshold:  0.05,
+		PictureClassification: true,
+		TableMode:             "accurate",
+	}
+	if _, err := c.Convert(context.Background(), "x.pdf", strings.NewReader("x")); err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if got["do_picture_description"] != "true" {
+		t.Errorf("missing do_picture_description, got %+v", got)
+	}
+	if got["picture_description_area_threshold"] != "0.05" {
+		t.Errorf("bad area threshold: %q", got["picture_description_area_threshold"])
+	}
+	if got["do_picture_classification"] != "true" {
+		t.Errorf("missing do_picture_classification")
+	}
+	if got["table_mode"] != "accurate" {
+		t.Errorf("bad table_mode: %q", got["table_mode"])
+	}
+	if got["abort_on_error"] != "false" {
+		t.Errorf("expected abort_on_error=false")
+	}
+}
+
+func TestClient_Convert_ZeroOptionsOmitsNewFields(t *testing.T) {
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseMultipartForm(1 << 20)
+		got = map[string]string{}
+		for k, v := range r.MultipartForm.Value {
+			if len(v) > 0 {
+				got[k] = v[0]
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"document": map[string]any{"md_content": "# T"}})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, 10*time.Second) // zero Options
+	if _, err := c.Convert(context.Background(), "x.pdf", strings.NewReader("x")); err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	for _, k := range []string{"do_picture_description", "picture_description_area_threshold", "do_picture_classification", "table_mode"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("field %q should be omitted with zero options", k)
+		}
+	}
+}

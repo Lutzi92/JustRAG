@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,6 +121,16 @@ func RunWorker(cfg *config.Config) error {
 				Fallback: &parser.PptxParser{},
 			},
 		)
+		// Only intercept standalone image uploads when captioning is on: with
+		// it off, Docling would add nothing over the cheaper Tesseract-only
+		// ImageParser, so we leave that path unchanged.
+		if dc.Options.PictureDescription {
+			doclingFront = append(doclingFront, &docling.FallbackParser{
+				Primary:  &docling.DoclingImageParser{Client: dc},
+				Fallback: &parser.ImageParser{},
+			})
+			slog.Info("docling image captioning enabled for standalone image uploads")
+		}
 		slog.Info("docling parser enabled for pdf + docx + pptx", "base_url", dc.BaseURL())
 	}
 	sttHTTPClient := ai.NewSTTHTTPClient()
@@ -463,5 +474,32 @@ func buildDoclingClient(ctx context.Context, scr siteConfigReaderForDocling) *do
 			timeout = time.Duration(n) * time.Second
 		}
 	}
-	return docling.NewClient(*urlRaw, timeout)
+	client := docling.NewClient(*urlRaw, timeout)
+	client.Options = readDoclingOptions(ctx, scr)
+	return client
+}
+
+// readDoclingOptions derives caption/table flags from site-config. Read
+// failures degrade to safe defaults (captioning off, table_mode "fast").
+func readDoclingOptions(ctx context.Context, scr siteConfigReaderForDocling) docling.ConvertOptions {
+	opts := docling.ConvertOptions{TableMode: "fast"}
+
+	if v, err := scr.GetSiteConfigValue(ctx, "docling_picture_description_enabled"); err == nil && v != nil && (*v == "true" || *v == "1") {
+		opts.PictureDescription = true
+		opts.PictureClassification = true // classification is a cheap filter signal; on whenever captioning is on
+	}
+
+	opts.PictureAreaThreshold = 0.05
+	if v, err := scr.GetSiteConfigValue(ctx, "docling_picture_area_threshold"); err == nil && v != nil {
+		if f, perr := strconv.ParseFloat(strings.TrimSpace(*v), 64); perr == nil && f >= 0 && f <= 1 {
+			opts.PictureAreaThreshold = f
+		}
+	}
+
+	if v, err := scr.GetSiteConfigValue(ctx, "docling_table_mode"); err == nil && v != nil {
+		if m := strings.TrimSpace(*v); m == "accurate" || m == "fast" {
+			opts.TableMode = m
+		}
+	}
+	return opts
 }

@@ -168,7 +168,7 @@ func TestDoclingDocxParser_Parse_CallsSameEndpointAsPDF(t *testing.T) {
 	if !res.IsMarkdown {
 		t.Error("expected IsMarkdown=true")
 	}
-	if gotURL != "/v1alpha/convert/file" {
+	if gotURL != "/v1/convert/file" {
 		t.Errorf("expected same Docling endpoint, got %q", gotURL)
 	}
 }

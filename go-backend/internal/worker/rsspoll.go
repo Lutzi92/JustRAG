@@ -244,21 +244,39 @@ func writeRSSItemHeader(sb *strings.Builder, item *gofeed.Item) {
 	sb.WriteString("\n")
 }
 
+// feedItemBody returns the feed's own item body, preferring full Content over
+// the shorter Description summary.
+func feedItemBody(item *gofeed.Item) string {
+	if item.Content != "" {
+		return item.Content
+	}
+	return item.Description
+}
+
 // buildRSSItemContent converts an RSS item into markdown using the feed's own
 // content/description. This is the fallback when full-text fetch is off or fails.
 func buildRSSItemContent(item *gofeed.Item) string {
 	var sb strings.Builder
 	writeRSSItemHeader(&sb, item)
-
-	// Prefer full content over description.
-	if item.Content != "" {
-		sb.WriteString(item.Content)
-	} else if item.Description != "" {
-		sb.WriteString(item.Description)
-	}
-
+	sb.WriteString(feedItemBody(item))
 	sb.WriteString("\n")
 	return sb.String()
+}
+
+// minFullTextChars is the floor below which a fetched extraction is treated as
+// junk rather than real article text. A JS-rendered single-page app served over
+// plain HTTP yields only its shell (a title and some boilerplate), which is
+// non-empty but useless; without this floor it would be stored as "full text"
+// and silently replace the feed's own — often better — summary.
+const minFullTextChars = 200
+
+// isUsableFullText reports whether fetched markdown is substantial enough to
+// prefer over the feed's own content: it must clear the absolute floor (to
+// reject SPA-shell boilerplate) and be at least as long as what the feed already
+// provides (so we only drop the summary when the fetch genuinely adds text).
+func isUsableFullText(fetched, feedText string) bool {
+	f := strings.TrimSpace(fetched)
+	return len(f) >= minFullTextChars && len(f) >= len(strings.TrimSpace(feedText))
 }
 
 // buildRSSItemContentWithBody emits the metadata header followed by the
@@ -278,11 +296,15 @@ func resolveRSSItemContent(ctx context.Context, f urlFetcher, feed *rss.RSSFeedR
 		fctx, cancel := context.WithTimeout(ctx, rssFetchTimeout)
 		res, err := f.Fetch(fctx, item.Link, fetcher.Options{Mode: fetcher.ModeAuto, Timeout: rssFetchTimeout})
 		cancel()
-		if err == nil && res != nil && strings.TrimSpace(res.Markdown) != "" {
+		if err == nil && res != nil && isUsableFullText(res.Markdown, feedItemBody(item)) {
 			return buildRSSItemContentWithBody(item, res.Markdown)
 		}
-		slog.Warn("RSS full-text fetch failed, using feed content",
-			"feedId", feed.ID, "link", item.Link, "error", err)
+		fetchedChars := 0
+		if res != nil {
+			fetchedChars = len(strings.TrimSpace(res.Markdown))
+		}
+		slog.Warn("RSS full-text fetch unusable, using feed content",
+			"feedId", feed.ID, "link", item.Link, "error", err, "fetchedChars", fetchedChars)
 	}
 	return buildRSSItemContent(item)
 }

@@ -240,3 +240,19 @@ The reference set is **auto-retrieved from the whole KB** per section (no manual
 Security: uploads are user-scoped — an attachment is readable only by the user who uploaded it — and the upload endpoint is rate-limited via the shared `chat` limiter. New package `internal/chatattach`; engine in `internal/chat/comparison_chat.go`; endpoint handler in `internal/chat/http_attachment.go`.
 
 > Follow-up: the `chat_compare_*` keys are **not** yet surfaced in the admin Agent panel (`web/src/components/admin/AdminAgentTab.tsx` is a hand-written component, not driven by `siteconfig/registry.go`). Until that JSX is added, set these keys directly in `site_config` (e.g. via the generic site-config editor / SQL). Verify admin-UI exposure as a separate frontend task.
+
+## Image captioning + better tables (Docling)
+
+```
+docling_enabled                     = true        # prerequisite: sidecar reachable (see docs/observability/docling.md)
+docling_base_url                    = http://docling:5001   # or the k8s Service DNS
+docling_picture_description_enabled = true        # gate; default off
+docling_picture_area_threshold      = 0.05        # skip images < 5% of page area (filters logos/icons); [0,1]
+docling_table_mode                  = accurate    # cleaner structured tables; default "fast"
+```
+
+No migration. Captioning rides the Docling convert call, so `docling_enabled` must be on. **The vision model (gemma-4) is configured on the Docling sidecar**, not the app — set `DOCLING_PICTURE_DESCRIPTION_API_URL` / `_MODEL` in `docker-compose.docling.yml` or `k8s/docling.yml` (confirm the exact env key names against the docling-serve version you pin; fallback is to pass `picture_description_api` as a request field from `internal/parser/docling/client.go`). Captions land inline in Docling's markdown and flow through the existing chunk/embed pipeline — retrieval is caption→text, no multimodal embeddings.
+
+When on, standalone image uploads (`.png`/`.jpg`/…) also route through Docling (caption + OCR) with Tesseract as the fallback. Existing files are **not** retroactively captioned — re-ingest a KB to benefit.
+
+**Throttle / GPU contention:** Docling's calls to gemma-4 bypass `AI_MAX_CONCURRENT_REQUESTS`, so cap Docling replicas + per-pod concurrency (the `k8s/docling.yml` fixed replica count is the throttle) and raise `DOCLING_TIMEOUT_SECONDS` since captioning extends convert latency. Fast-follows available on the same request and not yet wired: `do_chart_extraction`, `do_formula_enrichment`.

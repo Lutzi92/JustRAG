@@ -44,15 +44,55 @@ func TestBuildRSSItemContentWithBody(t *testing.T) {
 	}
 }
 
+// longArticle is a realistic full-article body: well above minFullTextChars and
+// longer than the feed's own summary, so the quality gate accepts it.
+var longArticle = strings.Repeat("Detailed advisory body describing the vulnerability and affected products. ", 6)
+
 func TestResolveRSSItemContent_FetchSuccess(t *testing.T) {
-	f := &stubFetcher{res: &fetcher.Result{Markdown: "FULL ARTICLE BODY"}}
+	f := &stubFetcher{res: &fetcher.Result{Markdown: longArticle}}
 	feed := &rss.RSSFeedRow{ID: "f1", FetchFullText: true}
 	out := resolveRSSItemContent(context.Background(), f, feed, feedItem())
-	if !strings.Contains(out, "FULL ARTICLE BODY") {
+	if !strings.Contains(out, "Detailed advisory body") {
 		t.Errorf("expected fetched body, got: %q", out)
 	}
 	if strings.Contains(out, "short summary") {
 		t.Errorf("feed summary should be dropped when full text present: %q", out)
+	}
+}
+
+// TestResolveRSSItemContent_ShortJunkFallsBack is the cert-bund regression test:
+// a JS-SPA shell yields a tiny non-empty extraction ("Warn- und Informationsdienst").
+// The quality gate must reject it and keep the feed's own summary rather than
+// silently storing the boilerplate.
+func TestResolveRSSItemContent_ShortJunkFallsBack(t *testing.T) {
+	f := &stubFetcher{res: &fetcher.Result{Markdown: "Warn- und Informationsdienst"}}
+	feed := &rss.RSSFeedRow{ID: "f1", FetchFullText: true}
+	out := resolveRSSItemContent(context.Background(), f, feed, feedItem())
+	if !strings.Contains(out, "short summary") {
+		t.Errorf("expected fallback to feed summary on junk extraction, got: %q", out)
+	}
+	if strings.Contains(out, "Warn- und Informationsdienst") {
+		t.Errorf("junk extraction should not be stored as full text: %q", out)
+	}
+}
+
+func TestIsUsableFullText(t *testing.T) {
+	long := strings.Repeat("x", minFullTextChars)
+	cases := []struct {
+		name          string
+		fetched, feed string
+		want          bool
+	}{
+		{"below floor", "Warn- und Informationsdienst", "short summary", false},
+		{"above floor, empty feed", long, "", true},
+		{"above floor but shorter than feed", long, strings.Repeat("y", minFullTextChars+50), false},
+		{"above floor and longer than feed", long + "more", "short summary", true},
+		{"whitespace only", "        ", "", false},
+	}
+	for _, c := range cases {
+		if got := isUsableFullText(c.fetched, c.feed); got != c.want {
+			t.Errorf("%s: isUsableFullText(len %d, len %d) = %v, want %v", c.name, len(c.fetched), len(c.feed), got, c.want)
+		}
 	}
 }
 

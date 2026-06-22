@@ -7,10 +7,23 @@
 #   docling_enabled = true
 #   docling_base_url = http://docling:5001
 #
+# Optional image captioning (charts/figures inside docs + standalone image
+# uploads) — also set in the admin Agent panel:
+#   docling_picture_description_enabled = true
+#   docling_picture_area_threshold      = 0.05   # skip images < 5% of page area
+#   docling_table_mode                  = accurate
+# Captioning is performed by THIS sidecar calling gemma-4 (see the
+# DOCLING_PICTURE_DESCRIPTION_* env below), not the Go app.
+#
 # The first cold start downloads ~3 GB of models — be patient.
 
 services:
   docling:
+    # PIN THIS in production. `latest` is a moving target and image captioning
+    # depends on /v1/convert/file + do_picture_description being present.
+    # Confirm a known-good tag against the releases, then pin it (e.g.
+    # quay.io/docling-project/docling-serve:vX.Y.Z):
+    #   https://github.com/docling-project/docling-serve/releases
     image: quay.io/docling-project/docling-serve:latest
     container_name: justrag-docling
     restart: unless-stopped
@@ -18,6 +31,16 @@ services:
       - "5001:5001"
     environment:
       DOCLING_SERVE_ENABLE_UI: "false"
+      # --- Image captioning via gemma-4 (vision-capable) ---
+      # Only used when docling_picture_description_enabled=true. Point the URL
+      # at your gemma-4 OpenAI-compatible endpoint reachable from this
+      # container. NOTE: confirm the exact key names against the docling-serve
+      # version you pin — picture-description is configured server-side
+      # (preset / api / custom_config). If your version has no server-side
+      # default config, pass picture_description_api as a request field from the
+      # Go client (internal/parser/docling/client.go) instead.
+      DOCLING_PICTURE_DESCRIPTION_API_URL: "http://host.docker.internal:8000/v1/chat/completions"
+      DOCLING_PICTURE_DESCRIPTION_MODEL: "gemma-4-26b"
     volumes:
       - docling-cache:/.cache
     deploy:

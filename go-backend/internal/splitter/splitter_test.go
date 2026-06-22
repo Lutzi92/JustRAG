@@ -242,3 +242,38 @@ func TestNoWhitespaceOnlyChunks(t *testing.T) {
 		}
 	}
 }
+
+// A clean (accurate-mode) markdown table should survive chunking intact: the
+// chunk that holds the header row must hold every data row too, never tearing
+// a table across a chunk boundary. Filler before the table forces a real split
+// (the table alone is far under ChunkSize and would otherwise never split).
+func TestMarkdownSplit_KeepsSmallTableIntact(t *testing.T) {
+	filler := strings.Repeat("lorem ipsum dolor sit amet consectetur ", 200)
+	md := "# Report\n\n" + filler + "\n\n" +
+		"| Quarter | Revenue |\n" +
+		"| --- | --- |\n" +
+		"| Q1 | 100 |\n" +
+		"| Q2 | 120 |\n" +
+		"| Q3 | 140 |\n\n" +
+		"End of section.\n"
+
+	chunks := Split(md, MarkdownConfig())
+
+	var tableChunks int
+	for _, ch := range chunks {
+		if strings.Contains(ch, "| Quarter | Revenue |") {
+			tableChunks++
+			for _, row := range []string{"| Q1 | 100 |", "| Q2 | 120 |", "| Q3 | 140 |"} {
+				if !strings.Contains(ch, row) {
+					t.Errorf("table split mid-table: chunk with header missing row %q", row)
+				}
+			}
+		}
+	}
+	if tableChunks != 1 {
+		t.Errorf("expected the table header in exactly 1 chunk, got %d", tableChunks)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("expected the filler to force >1 chunk, got %d (test not exercising a split)", len(chunks))
+	}
+}

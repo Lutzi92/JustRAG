@@ -20,7 +20,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `bm25_simple_arm_enabled`, `bm25_tiered_boost_enabled` — BM25 keyword-arm tuning
 - `hybrid_dynamic_alpha_*` — per-query α shift from BPE-token rarity
 - `recency_*` — exponential-decay freshness boost post-rerank (RSS/Confluence KBs; keyed on files.created_at)
-- `contextual_enrichment*`, `parent_child_*`, `docling_*`, `late_chunking_*`, `embedding_batch_size`, `ingest_enrich_concurrency` (default 10), `kg_extraction_concurrency` (default 4) — ingestion (the two `*_concurrency` keys cap per-file LLM fan-out; see also the `AI_MAX_CONCURRENT_REQUESTS` runtime note for the global ceiling)
+- `contextual_enrichment*`, `parent_child_*`, `docling_*` (incl. `_picture_description_enabled` + `_picture_area_threshold` for gemma-4 image captioning, `_table_mode` fast/accurate), `late_chunking_*`, `embedding_batch_size`, `ingest_enrich_concurrency` (default 10), `kg_extraction_concurrency` (default 4) — ingestion (the two `*_concurrency` keys cap per-file LLM fan-out; see also the `AI_MAX_CONCURRENT_REQUESTS` runtime note for the global ceiling)
 - `raptor_*` — per-file RAPTOR hierarchical summary trees (`raptor_clustering_algorithm` selects kmeans vs leiden)
 - `chat_tabular_*`, `tabular_semantic_*` — structured spreadsheet Q&A + fuzzy free-text-cell search + charts/pivots (Phase 1/2/3; `chat_tabular_charts_enabled` is the Phase-3 flag)
 - `ragas_*`, `factcheck_*`, `citation_validation_*`, `langfuse_*` — validation + observability
@@ -210,6 +210,7 @@ Most chat-pipeline features default OFF. The **full toggle blocks** (combined fl
 | Tabular Q&A (table_query) | `chat_tabular_query_enabled` (+ `_semantic_columns_enabled`, `_charts_enabled`) — **needs OPERATOR PREREQUISITE grants** | 0048 | Structured spreadsheet Q&A |
 | HyPE | `hype_enabled` (ingest) + `hype_search_enabled` (query) | — | HyPE — hypothetical prompt embeddings |
 | In-chat document comparison | `chat_compare_enabled` (+ `_model`, `_max_sections`, `_concurrency`, `_peers_per_section`, `_attachment_ttl_hours`, `_max_file_bytes`) | — | In-chat document comparison |
+| Image captioning + better tables (Docling) | `docling_enabled` + `docling_picture_description_enabled` (+ `docling_picture_area_threshold`, `docling_table_mode`) — gemma-4 vision wired **on the sidecar** | — | Image captioning + better tables (Docling) |
 
 Mutual exclusions and ordering gotchas (e.g. `chat_self_rag_enabled` REPLACES `chat_factuality_verifier_enabled`; `raptor_enabled` vs `parent_child_enabled`; the T1-2 dim re-embed sequence before `chat_longmem_recall_semantic`) are documented inline in each recipe.
 
@@ -230,7 +231,7 @@ Helper: `chat.ResolveFastTierModel(ctx, reader, perTaskKey)` — the single reso
 
 ## Document parsing
 
-Default: `pdftotext` (PDFs) + built-in DOCX/PPTX parsers (flattened tables, dropped footnotes). Opt-in layout-aware parsing via Docling sidecar — see `docs/observability/docling.md`. When enabled (admin Agent panel → `docling_enabled` + `docling_base_url`) and reachable, all newly ingested PDF, DOCX, and PPTX files route through Docling; failures fall back to the built-in parsers (logged with `request_id`).
+Default: `pdftotext` (PDFs) + built-in DOCX/PPTX parsers (flattened tables, dropped footnotes). Opt-in layout-aware parsing via Docling sidecar — see `docs/observability/docling.md`. When enabled (admin Agent panel → `docling_enabled` + `docling_base_url`) and reachable, all newly ingested PDF, DOCX, and PPTX files route through Docling; failures fall back to the built-in parsers (logged with `request_id`). Optional image captioning (`docling_picture_description_enabled` + `docling_picture_area_threshold` + `docling_table_mode`): Docling describes figures/charts with gemma-4 (configured **on the sidecar**, not the app — `DOCLING_PICTURE_DESCRIPTION_*` in `docker-compose.docling.yml` / `k8s/docling.yml`), captions land inline in markdown → existing chunk/embed pipeline (caption→text, no migration); standalone image uploads also route through Docling (caption + OCR, Tesseract fallback). GPU-contention caveat: Docling's gemma-4 calls bypass `AI_MAX_CONCURRENT_REQUESTS` — throttle by capping Docling replicas (`k8s/docling.yml` fixed replica count). `internal/parser/docling/`.
 
 **Image description (`POST /api/describe-image`)**
 
@@ -239,7 +240,7 @@ describe_image_enabled = true                   # gate; default off (admin Agent
 describe_image_model   = <vision-capable model> # required; falls through model_tier_fast
 ```
 
-Multipart `image` field (PNG/JPEG/WEBP/GIF, ≤10 MB) + optional `prompt` form field; returns `{description}`. Sends an OpenAI-style multimodal `content` array (text + `image_url` data-URI) via `ai.DescribeImage` to the resolved provider. Disabled or unconfigured → 503; the default `gemma-4-26b` deployment is **NOT** assumed vision-capable — point `describe_image_model` at a vision model. Toggleable from the admin Agent panel (`describe_image_enabled` + `describe_image_model`). No migration. `internal/misc/describe_image.go`, `internal/ai/vision.go`.
+Multipart `image` field (PNG/JPEG/WEBP/GIF, ≤10 MB) + optional `prompt` form field; returns `{description}`. Sends an OpenAI-style multimodal `content` array (text + `image_url` data-URI) via `ai.DescribeImage` to the resolved provider. Disabled or unconfigured → 503. `gemma-4-26b` **is** vision-capable, so `describe_image_model` can point at the main model (still required — `model_tier_fast` is the fallback, and the resolved model must actually support vision). Toggleable from the admin Agent panel (`describe_image_enabled` + `describe_image_model`). No migration. `internal/misc/describe_image.go`, `internal/ai/vision.go`.
 
 ## Retrieval
 

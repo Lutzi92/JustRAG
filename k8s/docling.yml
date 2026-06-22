@@ -1,0 +1,135 @@
+# Docling Serve — shared, layout-aware document parser + image captioner.
+#
+# Runs as its own Deployment (NOT bundled into the worker pods): it's a Python
+# service carrying ~3GB of models, so co-locating it in every HPA'd worker pod
+# would be wasteful. The Go workers reach it over the cluster Service below.
+#
+# Enable it from the JustRAG admin Agent panel:
+#   docling_enabled  = true
+#   docling_base_url = http://docling.justrag.svc.cluster.local:5001
+#   (in-namespace, http://docling:5001 also resolves)
+#
+# Image captioning (do_picture_description) is configured server-side here, via
+# the picture-description env below pointing at the internal gemma-4 endpoint —
+# the Go client only sends the enabling flags. See
+# docs/superpowers/specs/2026-06-22-docling-image-table-parsing-design.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docling
+  namespace: justrag
+  labels:
+    app: justrag
+    component: docling
+spec:
+  # Fixed low replica count is INTENTIONAL and acts as the throttle: Docling's
+  # captioning calls to gemma-4 bypass the app's AI_MAX_CONCURRENT_REQUESTS
+  # ceiling, so a fleet of Docling pods could starve live chat on the shared
+  # gemma-4. Cap replicas (and Docling's own per-pod concurrency) instead of
+  # adding an HPA. Raise deliberately if you give ingestion its own gemma-4.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: justrag
+      component: docling
+  strategy:
+    # Models are large; avoid two full model loads racing during a rollout.
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: justrag
+        component: docling
+    spec:
+      # Captioning + layout models make pod start slow; give it room to drain.
+      terminationGracePeriodSeconds: 120
+      # Uncomment if your repo / registry is private:
+      # imagePullSecrets:
+      # - name: ghcr-secret
+      containers:
+        - name: docling
+          # PIN THIS. `latest` is a moving target and this integration depends
+          # on /v1/convert/file + do_picture_description being present. Confirm a
+          # known-good tag against the docling-serve releases, then pin it here
+          # (e.g. quay.io/docling-project/docling-serve:vX.Y.Z) — see
+          # https://github.com/docling-project/docling-serve/releases
+          image: quay.io/docling-project/docling-serve:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5001
+          env:
+            - name: DOCLING_SERVE_ENABLE_UI
+              value: "false"
+            # --- Image captioning via the internal gemma-4 (vision-capable) ---
+            # NOTE: confirm these exact key names against the docling-serve
+            # version you pin — picture-description is configured server-side
+            # (preset / api / custom_config). If your version has no server-side
+            # default config, pass picture_description_api as a request field
+            # from the Go client (internal/parser/docling/client.go) instead.
+            # Point the URL at your in-cluster gemma-4 OpenAI-compatible API.
+            - name: DOCLING_PICTURE_DESCRIPTION_API_URL
+              value: "http://gemma4.justrag.svc.cluster.local:8000/v1/chat/completions"
+            - name: DOCLING_PICTURE_DESCRIPTION_MODEL
+              value: "gemma-4-26b"
+          resources:
+            # CPU-only sizing. Docling's own layout/OCR/table models run here;
+            # the heavy vision work happens on gemma-4, not in this pod. Add
+            #   nvidia.com/gpu: 1
+            # under requests AND limits (plus a GPU node selector/toleration) if
+            # you have a GPU pool and want faster layout parsing.
+            requests:
+              cpu: "1"
+              memory: 6Gi
+            limits:
+              cpu: "4"
+              memory: 10Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5001
+            # First boot downloads ~3GB of weights; don't mark ready too early.
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5001
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 3
+          volumeMounts:
+            - name: model-cache
+              mountPath: /.cache
+      volumes:
+        # emptyDir re-downloads the ~3GB models on every pod restart. For faster
+        # restarts, replace with a PersistentVolumeClaim (ReadWriteOnce per pod,
+        # or ReadWriteMany shared across replicas if your storage supports it):
+        #   - name: model-cache
+        #     persistentVolumeClaim:
+        #       claimName: docling-model-cache
+        - name: model-cache
+          emptyDir:
+            sizeLimit: 6Gi
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docling
+  namespace: justrag
+  labels:
+    app: justrag
+    component: docling
+spec:
+  selector:
+    app: justrag
+    component: docling
+  ports:
+    - name: http
+      port: 5001
+      targetPort: 5001

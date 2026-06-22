@@ -16,13 +16,54 @@ Cold start downloads model weights (~3 GB). Subsequent restarts reuse the
 
 In the admin Agent panel:
 - `docling_enabled` = `true`
-- `docling_base_url` = `http://docling:5001` (in-compose hostname)
+- `docling_base_url` = `http://docling:5001` (in-compose hostname; in k8s use the
+  Service DNS, e.g. `http://docling.justrag.svc.cluster.local:5001`)
 
 ## Health check
 
 ```
 curl http://localhost:5001/health
 ```
+
+## Image captioning (figures inside docs + standalone image uploads)
+
+Opt-in on top of `docling_enabled`. When on, Docling describes substantive
+images with a vision model and the caption lands inline in the markdown, so it
+flows through the normal text chunking + embedding pipeline and becomes
+retrievable (citations point back to the source page). No multimodal
+embeddings, no DB migration.
+
+In the admin Agent panel:
+- `docling_picture_description_enabled` = `true` (default off)
+- `docling_picture_area_threshold` = `0.05` (skip images below 5% of page
+  area — filters logos/icons/decorative bullets; range [0,1])
+- `docling_table_mode` = `accurate` (better structured tables → cleaner
+  markdown; default `fast`)
+
+**The vision model is gemma-4, configured on the sidecar, not the app.** Docling
+itself calls gemma-4's OpenAI-compatible endpoint (`DOCLING_PICTURE_DESCRIPTION_*`
+in `docker-compose.docling.yml` / the k8s manifest). The Go client only sends the
+enabling flags. Confirm the exact env key names against the docling-serve version
+you pin; if your version has no server-side picture-description config, pass
+`picture_description_api` as a request field from the Go client
+(`internal/parser/docling/client.go`) instead.
+
+When captioning is on, **standalone image uploads** (`.png`/`.jpg`/…) also route
+through Docling (vision caption **and** OCR) instead of the Tesseract-OCR-only
+path; Tesseract remains the fallback when Docling is down or disabled.
+
+### GPU-contention caveat (important)
+
+Docling's vision calls to gemma-4 do **not** pass through the app's
+`AI_MAX_CONCURRENT_REQUESTS` ceiling (that governs only the app's own calls). A
+burst of image-heavy ingestion can have Docling hammering the same gemma-4 that
+serves live chat and starve interactive answers. The throttle is therefore at the
+Docling layer: **cap Docling replicas + its own request concurrency** (see the
+fixed `replicas` and the rationale comment in `k8s/docling.yml`). Only raise the
+replica count once you give ingestion its own gemma-4 instance.
+
+Captioning also extends per-document convert latency, so raise
+`DOCLING_TIMEOUT_SECONDS` on go-server / go-worker when it's enabled.
 
 ## Behaviour & fallback
 
@@ -31,7 +72,8 @@ curl http://localhost:5001/health
   footnotes extracted (previously silently dropped by the DOCX parser),
   heading hierarchy surfaced as `sections` chunk metadata (same shape as
   `.md` files); for PPTX, slide titles are surfaced as headings and speaker
-  notes are retained.
+  notes are retained. With image captioning on (above), figures/charts inside
+  the document are described inline too.
 - When disabled OR unreachable OR returning errors, JustRAG silently falls
   back to the built-in parsers (`pdftotext` for PDF, the custom DOCX parser
   for DOCX, the built-in PPTX parser for PPTX). Failures are logged at warn
@@ -51,3 +93,12 @@ curl http://localhost:5001/health
 Docling defaults to GPU when available. CPU-only is fine for low ingest
 volumes (≤10 PDFs/hour). Set `docker compose ... up --scale docling=2` for
 parallelism if a single instance is the bottleneck.
+
+## Kubernetes
+
+`k8s/docling.yml` runs Docling as its own Deployment + Service (it is a Python
+service carrying ~3 GB of models — do **not** bundle it into the worker pods).
+The manifest uses a **fixed low replica count and no HPA on purpose**: that cap
+is the throttle for the shared-gemma-4 captioning path (see the caveat above).
+Point `docling_base_url` at the Service DNS. Replace the model-cache `emptyDir`
+with a PVC if you want to avoid the ~3 GB re-download on every pod restart.

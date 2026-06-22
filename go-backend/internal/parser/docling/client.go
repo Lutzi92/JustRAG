@@ -15,14 +15,26 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// ConvertOptions carries the optional enrichment flags sent on each convert
+// request. The zero value sends no extra fields, preserving the legacy request.
+type ConvertOptions struct {
+	PictureDescription    bool    // do_picture_description: caption images via the sidecar's configured VLM
+	PictureAreaThreshold  float64 // picture_description_area_threshold: skip images below this fraction of page area
+	PictureClassification bool    // do_picture_classification: classify pictures (logo/chart/photo)
+	TableMode             string  // table_mode: "fast" | "accurate" (empty → server default)
+}
 
 // Client talks to a Docling Serve instance.
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	// Options is applied to every Convert call. Zero value = legacy request.
+	Options ConvertOptions
 }
 
 // NewClient returns a Client targeting baseURL with the given request timeout.
@@ -62,10 +74,24 @@ func (c *Client) Convert(ctx context.Context, fileName string, r io.Reader) (*Co
 	if _, err := io.Copy(fw, r); err != nil {
 		return nil, fmt.Errorf("docling: copy file body: %w", err)
 	}
-	for k, v := range map[string]string{
+	fields := map[string]string{
 		"to_formats":           "md",
 		"return_response_type": "json",
-	} {
+	}
+	if c.Options.PictureDescription {
+		fields["do_picture_description"] = "true"
+		fields["abort_on_error"] = "false"
+		if c.Options.PictureAreaThreshold > 0 {
+			fields["picture_description_area_threshold"] = strconv.FormatFloat(c.Options.PictureAreaThreshold, 'g', -1, 64)
+		}
+		if c.Options.PictureClassification {
+			fields["do_picture_classification"] = "true"
+		}
+	}
+	if c.Options.TableMode != "" {
+		fields["table_mode"] = c.Options.TableMode
+	}
+	for k, v := range fields {
 		if err := mw.WriteField(k, v); err != nil {
 			return nil, fmt.Errorf("docling: write form field %s: %w", k, err)
 		}
@@ -74,7 +100,7 @@ func (c *Client) Convert(ctx context.Context, fileName string, r io.Reader) (*Co
 		return nil, fmt.Errorf("docling: close multipart: %w", err)
 	}
 
-	url := c.baseURL + "/v1alpha/convert/file"
+	url := c.baseURL + "/v1/convert/file"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
 	if err != nil {
 		return nil, fmt.Errorf("docling: build request: %w", err)
