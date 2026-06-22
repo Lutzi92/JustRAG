@@ -1120,7 +1120,10 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		// The producer's RecoverError defer runs before Wait()+close, so by
 		// the time we exit the for-range, producerErr is fully written. If
 		// the spawn loop didn't panic but a per-chunk sub-goroutine did,
-		// pull the first such panic out of producerErrCh.
+		// pull the first such panic out of producerErrCh. The channel is
+		// buffered size 1 and the per-chunk sends are non-blocking, so this
+		// receives the first sub-goroutine panic and any later ones were
+		// already dropped at the send (one panic is enough to fail the file).
 		if producerErr == nil {
 			select {
 			case producerErr = <-producerErrCh:

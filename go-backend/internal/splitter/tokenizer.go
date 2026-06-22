@@ -12,6 +12,11 @@ import (
 // Returns nil when initialization failed — callers fall back to char-based
 // estimation (CountTokens) or "no signal" (EncodeBPE).
 var getTokenizer = sync.OnceValue(func() *tiktoken.Tiktoken {
+	// Serve the cl100k_base vocab from the embedded copy so initialization
+	// never reaches the network (see offline_tokenizer.go). Registered here,
+	// inside the Once, so it is in place before EncodingForModel resolves and
+	// the SetBpeLoader global write is synchronized with the encoder read.
+	tiktoken.SetBpeLoader(&offlineBpeLoader{fallback: tiktoken.NewDefaultBpeLoader()})
 	enc, err := tiktoken.EncodingForModel("gpt-4")
 	if err != nil {
 		slog.Warn("failed to initialize tiktoken tokenizer, falling back to char estimation", "error", err)
