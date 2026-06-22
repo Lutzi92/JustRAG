@@ -43,7 +43,7 @@
   --header-icon-bg: #eaf7ff;
   --error-text: #c0392b;
   --error-bg: #fdecea;
-  --success-text: #2d8f4e;
+  --success-text: #207d3e; /* darkened -> WCAG AA on white (was 4.08:1) */
   --success-bg: #e5f0cf;
   --warning-bg: #ffce7b;
   --placeholder-text: #767676;
@@ -678,6 +678,7 @@ button.source-card {
 
 .send-button:disabled {
   background: var(--border-color);
+  color: var(--text-secondary); /* glyph was white on #ccc = 1.6:1 */
   cursor: not-allowed;
 }
 

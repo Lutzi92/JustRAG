@@ -64,17 +64,11 @@ spec:
           env:
             - name: DOCLING_SERVE_ENABLE_UI
               value: "false"
-            # --- Image captioning via the internal gemma-4 (vision-capable) ---
-            # NOTE: confirm these exact key names against the docling-serve
-            # version you pin — picture-description is configured server-side
-            # (preset / api / custom_config). If your version has no server-side
-            # default config, pass picture_description_api as a request field
-            # from the Go client (internal/parser/docling/client.go) instead.
-            # Point the URL at your in-cluster gemma-4 OpenAI-compatible API.
-            - name: DOCLING_PICTURE_DESCRIPTION_API_URL
-              value: "http://gemma4.justrag.svc.cluster.local:8000/v1/chat/completions"
-            - name: DOCLING_PICTURE_DESCRIPTION_MODEL
-              value: "gemma-4-26b"
+            # Image captioning config (endpoint + API key + model id) is injected
+            # per-request by the Go backend from the admin AI provider config — it
+            # is NOT set on this sidecar, so the model-API credential never lives
+            # here. Docling must still be able to reach that model Service from
+            # this pod (same cluster/namespace network).
           resources:
             # CPU-only sizing. Docling's own layout/OCR/table models run here;
             # the heavy vision work happens on gemma-4, not in this pod. Add

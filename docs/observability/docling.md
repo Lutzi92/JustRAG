@@ -40,13 +40,16 @@ In the admin Agent panel:
 - `docling_table_mode` = `accurate` (better structured tables → cleaner
   markdown; default `fast`)
 
-**The vision model is gemma-4, configured on the sidecar, not the app.** Docling
-itself calls gemma-4's OpenAI-compatible endpoint (`DOCLING_PICTURE_DESCRIPTION_*`
-in `docker-compose.docling.yml` / the k8s manifest). The Go client only sends the
-enabling flags. Confirm the exact env key names against the docling-serve version
-you pin; if your version has no server-side picture-description config, pass
-`picture_description_api` as a request field from the Go client
-(`internal/parser/docling/client.go`) instead.
+**The vision endpoint + API key are injected by the Go backend, not stored on the
+sidecar.** On each convert request the Go client sends a `picture_description_api`
+config (`url` + `params.model` + an `Authorization: Bearer` header) sourced from
+the **admin AI provider config** — the same endpoint + key the rest of the app
+uses — so the model-API credential never lives on the Docling sidecar. This is
+required when the model API needs authentication. The vision **model** follows
+`describe_image_model` (→ `model_tier_fast`), the same setting as
+`/api/describe-image`. Set that to your vision-capable model (e.g.
+`jlu/gemma-4-26b-it`). Docling still has to be able to **reach** that model URL
+from its container/pod (network reachability only — no secret).
 
 When captioning is on, **standalone image uploads** (`.png`/`.jpg`/…) also route
 through Docling (vision caption **and** OCR) instead of the Tesseract-OCR-only

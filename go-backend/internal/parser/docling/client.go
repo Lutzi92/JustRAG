@@ -23,10 +23,18 @@ import (
 // ConvertOptions carries the optional enrichment flags sent on each convert
 // request. The zero value sends no extra fields, preserving the legacy request.
 type ConvertOptions struct {
-	PictureDescription    bool    // do_picture_description: caption images via the sidecar's configured VLM
+	PictureDescription    bool    // do_picture_description: caption images via the configured VLM
 	PictureAreaThreshold  float64 // picture_description_area_threshold: skip images below this fraction of page area
 	PictureClassification bool    // do_picture_classification: classify pictures (logo/chart/photo)
 	TableMode             string  // table_mode: "fast" | "accurate" (empty → server default)
+
+	// Picture-description vision endpoint, injected per-request as
+	// picture_description_api so Docling calls our (authenticated) model API.
+	// Sourced from the app's AI provider config — the API key is NOT stored on
+	// the Docling sidecar.
+	PictureAPIURL   string // full OpenAI-compatible chat/completions URL
+	PictureAPIModel string // model id sent as params.model (verbatim, e.g. "jlu/gemma-4-26b-it")
+	PictureAPIKey   string // bearer token; sent as an Authorization header (omitted when empty)
 }
 
 // Client talks to a Docling Serve instance.
@@ -86,6 +94,20 @@ func (c *Client) Convert(ctx context.Context, fileName string, r io.Reader) (*Co
 		}
 		if c.Options.PictureClassification {
 			fields["do_picture_classification"] = "true"
+		}
+		// Point Docling's captioning at our authenticated model API. The key
+		// travels in the request headers map, not on the sidecar.
+		if c.Options.PictureAPIURL != "" {
+			api := map[string]any{"url": c.Options.PictureAPIURL}
+			if c.Options.PictureAPIModel != "" {
+				api["params"] = map[string]any{"model": c.Options.PictureAPIModel}
+			}
+			if c.Options.PictureAPIKey != "" {
+				api["headers"] = map[string]any{"Authorization": "Bearer " + c.Options.PictureAPIKey}
+			}
+			if b, err := json.Marshal(api); err == nil {
+				fields["picture_description_api"] = string(b)
+			}
 		}
 	}
 	if c.Options.TableMode != "" {

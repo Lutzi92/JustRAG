@@ -106,7 +106,7 @@ func RunWorker(cfg *config.Config) error {
 	chatStore := chat.NewStore(db.Main)
 	chunkService := vector.NewChunkService(db.Vector)
 	var doclingFront []parser.Parser
-	if dc := buildDoclingClient(ctx, chatStore); dc != nil {
+	if dc := buildDoclingClient(ctx, chatStore, aiResolver); dc != nil {
 		doclingFront = append(doclingFront,
 			&docling.FallbackParser{
 				Primary:  &docling.DoclingPDFParser{Client: dc},
@@ -450,7 +450,7 @@ type siteConfigReaderForDocling interface {
 //
 // The DOCLING_TIMEOUT_SECONDS env var (default 300) controls the per-request
 // timeout. Generous because Docling can take ~60s on a complex 20-page PDF.
-func buildDoclingClient(ctx context.Context, scr siteConfigReaderForDocling) *docling.Client {
+func buildDoclingClient(ctx context.Context, scr siteConfigReaderForDocling, resolver *ai.ConfigResolver) *docling.Client {
 	enabledRaw, err := scr.GetSiteConfigValue(ctx, "docling_enabled")
 	if err != nil {
 		slog.Warn("docling: failed to read docling_enabled site-config; falling back to built-in parsers", "error", err)
@@ -475,18 +475,40 @@ func buildDoclingClient(ctx context.Context, scr siteConfigReaderForDocling) *do
 		}
 	}
 	client := docling.NewClient(*urlRaw, timeout)
-	client.Options = readDoclingOptions(ctx, scr)
+	client.Options = readDoclingOptions(ctx, scr, resolver)
 	return client
 }
 
 // readDoclingOptions derives caption/table flags from site-config. Read
 // failures degrade to safe defaults (captioning off, table_mode "fast").
-func readDoclingOptions(ctx context.Context, scr siteConfigReaderForDocling) docling.ConvertOptions {
+//
+// When picture description is on, the vision endpoint + API key are sourced
+// from the app's AI provider config (the same one /api/describe-image uses) and
+// passed to Docling per-request, so the model-API credential never lives on the
+// Docling sidecar.
+func readDoclingOptions(ctx context.Context, scr siteConfigReaderForDocling, resolver *ai.ConfigResolver) docling.ConvertOptions {
 	opts := docling.ConvertOptions{TableMode: "fast"}
 
 	if v, err := scr.GetSiteConfigValue(ctx, "docling_picture_description_enabled"); err == nil && v != nil && (*v == "true" || *v == "1") {
 		opts.PictureDescription = true
 		opts.PictureClassification = true // classification is a cheap filter signal; on whenever captioning is on
+
+		// Vision model: same resolution as /api/describe-image
+		// (describe_image_model → model_tier_fast).
+		opts.PictureAPIModel = chat.DescribeImageModel(ctx, scr)
+		// Endpoint + bearer key from the AI provider config. BaseURL carries a
+		// trailing slash; the chat-completions path mirrors ai.Client.
+		if resolver != nil {
+			if cfg, rerr := resolver.Resolve(ctx, ""); rerr == nil && cfg != nil {
+				opts.PictureAPIURL = cfg.BaseURL + "chat/completions"
+				opts.PictureAPIKey = cfg.APIKey
+			} else if rerr != nil {
+				slog.Warn("docling: could not resolve model API config for image captioning; captions may be skipped", "error", rerr)
+			}
+		}
+		if opts.PictureAPIModel == "" {
+			slog.Warn("docling: picture description enabled but no vision model resolved (set describe_image_model or model_tier_fast)")
+		}
 	}
 
 	opts.PictureAreaThreshold = 0.05

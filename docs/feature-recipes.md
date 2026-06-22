@@ -251,7 +251,7 @@ docling_picture_area_threshold      = 0.05        # skip images < 5% of page are
 docling_table_mode                  = accurate    # cleaner structured tables; default "fast"
 ```
 
-No migration. Captioning rides the Docling convert call, so `docling_enabled` must be on. **The vision model (gemma-4) is configured on the Docling sidecar**, not the app — set `DOCLING_PICTURE_DESCRIPTION_API_URL` / `_MODEL` in `docker-compose.docling.yml` or `k8s/docling.yml` (confirm the exact env key names against the docling-serve version you pin; fallback is to pass `picture_description_api` as a request field from `internal/parser/docling/client.go`). Captions land inline in Docling's markdown and flow through the existing chunk/embed pipeline — retrieval is caption→text, no multimodal embeddings.
+No migration. Captioning rides the Docling convert call, so `docling_enabled` must be on. **The vision endpoint + API key are injected per-request by the Go backend** from the admin AI provider config (same endpoint + key the app already uses); the vision model follows `describe_image_model` (→ `model_tier_fast`) — set it to a vision-capable model (e.g. `jlu/gemma-4-26b-it`). The key is **never** stored on the Docling sidecar (required when the model API needs auth); Docling only needs network reachability to that model URL. Captions land inline in Docling's markdown and flow through the existing chunk/embed pipeline — retrieval is caption→text, no multimodal embeddings.
 
 When on, standalone image uploads (`.png`/`.jpg`/…) also route through Docling (caption + OCR) with Tesseract as the fallback. Existing files are **not** retroactively captioned — re-ingest a KB to benefit.
 

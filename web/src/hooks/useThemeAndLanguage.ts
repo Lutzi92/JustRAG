@@ -14,6 +14,7 @@ export function useThemeAndLanguage() {
   });
 
   useEffect(() => {
+    document.documentElement.lang = language; // screen-reader pronunciation tracks DE/EN toggle
     localStorage.setItem('language', language);
   }, [language]);
 

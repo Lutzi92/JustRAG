@@ -12,8 +12,10 @@
 #   docling_picture_description_enabled = true
 #   docling_picture_area_threshold      = 0.05   # skip images < 5% of page area
 #   docling_table_mode                  = accurate
-# Captioning is performed by THIS sidecar calling gemma-4 (see the
-# DOCLING_PICTURE_DESCRIPTION_* env below), not the Go app.
+# Captioning is performed by this sidecar calling your model API, but the
+# endpoint + API key + vision model (describe_image_model) are injected by the Go
+# backend from the admin AI provider config — nothing to set on the sidecar. The
+# model URL just has to be reachable from this container.
 #
 # The first cold start downloads ~3 GB of models — be patient.
 
@@ -31,16 +33,10 @@ services:
       - "5001:5001"
     environment:
       DOCLING_SERVE_ENABLE_UI: "false"
-      # --- Image captioning via gemma-4 (vision-capable) ---
-      # Only used when docling_picture_description_enabled=true. Point the URL
-      # at your gemma-4 OpenAI-compatible endpoint reachable from this
-      # container. NOTE: confirm the exact key names against the docling-serve
-      # version you pin — picture-description is configured server-side
-      # (preset / api / custom_config). If your version has no server-side
-      # default config, pass picture_description_api as a request field from the
-      # Go client (internal/parser/docling/client.go) instead.
-      DOCLING_PICTURE_DESCRIPTION_API_URL: "http://host.docker.internal:8000/v1/chat/completions"
-      DOCLING_PICTURE_DESCRIPTION_MODEL: "gemma-4-26b"
+      # Image captioning config (endpoint + API key + model) is injected
+      # per-request by the Go backend from the admin AI provider config — it is
+      # NOT set on this sidecar, so the model-API credential never lives here.
+      # Docling must still be able to reach that model URL from this container.
     volumes:
       - docling-cache:/.cache
     deploy:

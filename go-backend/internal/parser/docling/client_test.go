@@ -155,6 +155,9 @@ func TestClient_Convert_EmitsPictureDescriptionFields(t *testing.T) {
 		PictureAreaThreshold:  0.05,
 		PictureClassification: true,
 		TableMode:             "accurate",
+		PictureAPIURL:         "http://model.local/v1/chat/completions",
+		PictureAPIModel:       "jlu/gemma-4-26b-it",
+		PictureAPIKey:         "secret-key",
 	}
 	if _, err := c.Convert(context.Background(), "x.pdf", strings.NewReader("x")); err != nil {
 		t.Fatalf("convert: %v", err)
@@ -173,6 +176,56 @@ func TestClient_Convert_EmitsPictureDescriptionFields(t *testing.T) {
 	}
 	if got["abort_on_error"] != "false" {
 		t.Errorf("expected abort_on_error=false")
+	}
+	// picture_description_api must carry the endpoint, model, and bearer header
+	// so Docling can call our authenticated model API.
+	var api struct {
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers"`
+		Params  map[string]any    `json:"params"`
+	}
+	if err := json.Unmarshal([]byte(got["picture_description_api"]), &api); err != nil {
+		t.Fatalf("picture_description_api not valid JSON: %q (%v)", got["picture_description_api"], err)
+	}
+	if api.URL != "http://model.local/v1/chat/completions" {
+		t.Errorf("bad api url: %q", api.URL)
+	}
+	if api.Headers["Authorization"] != "Bearer secret-key" {
+		t.Errorf("missing/!= bearer header: %q", api.Headers["Authorization"])
+	}
+	if api.Params["model"] != "jlu/gemma-4-26b-it" {
+		t.Errorf("bad api model: %v", api.Params["model"])
+	}
+}
+
+func TestClient_Convert_PictureAPIOmittedWhenNoKey(t *testing.T) {
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseMultipartForm(1 << 20)
+		got = map[string]string{}
+		for k, v := range r.MultipartForm.Value {
+			if len(v) > 0 {
+				got[k] = v[0]
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"document": map[string]any{"md_content": "# T"}})
+	}))
+	defer srv.Close()
+
+	// PictureDescription on but no endpoint resolved → enrichment flag is sent,
+	// but no picture_description_api field (Docling would fall back to its own
+	// default model config, or skip — never our request without a URL).
+	c := NewClient(srv.URL, 10*time.Second)
+	c.Options = ConvertOptions{PictureDescription: true}
+	if _, err := c.Convert(context.Background(), "x.pdf", strings.NewReader("x")); err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if got["do_picture_description"] != "true" {
+		t.Errorf("expected do_picture_description=true")
+	}
+	if _, ok := got["picture_description_api"]; ok {
+		t.Errorf("picture_description_api should be omitted with no URL")
 	}
 }
 

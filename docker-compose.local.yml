@@ -10,8 +10,11 @@
 #   docling_picture_description_enabled = true     # optional: gemma-4 image captioning
 #   docling_picture_area_threshold      = 0.05
 #   docling_table_mode                  = accurate
-# Captioning is performed by the docling sidecar calling gemma-4 — point
-# DOCLING_PICTURE_DESCRIPTION_API_URL (below) at your local gemma-4 endpoint.
+# Captioning is performed by the docling sidecar calling your model API, but the
+# endpoint + API key + vision model (describe_image_model) are injected by the Go
+# backend from the admin AI provider config — nothing to set on the sidecar. Make
+# sure that model URL is reachable from the docling container (extra_hosts below
+# covers a gemma-4 running on the host).
 
 services:
   # One-shot: runs goose migrations, vector table setup, and admin seed.
@@ -216,19 +219,15 @@ services:
     # app reaches Docling over the compose network at http://docling:5001.
     ports:
       - "${WORKER_BIND_IP:-127.0.0.1}:5001:5001"
-    # host.docker.internal does not resolve on Linux Docker by default; this
-    # mapping lets the captioning calls reach a gemma-4 running on the host.
+    # Image captioning config (model endpoint + API key + model id) is injected
+    # per-request by the Go backend from the admin AI provider config — it is
+    # NOT set on this sidecar. Docling must still be able to REACH that model
+    # URL: host.docker.internal does not resolve on Linux Docker by default, so
+    # this mapping lets Docling reach a gemma-4 running on the host.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       DOCLING_SERVE_ENABLE_UI: "false"
-      # --- Image captioning via gemma-4 (only used when picture description is on) ---
-      # Point at your local gemma-4 OpenAI-compatible endpoint. If gemma-4 runs
-      # on the host, host.docker.internal works via the extra_hosts above; if it
-      # runs as another compose service, use that service name instead. NOTE:
-      # confirm the exact key names against the docling-serve tag you run.
-      DOCLING_PICTURE_DESCRIPTION_API_URL: "http://host.docker.internal:8000/v1/chat/completions"
-      DOCLING_PICTURE_DESCRIPTION_MODEL: "gemma-4-26b"
     healthcheck:
       # Probe with Python stdlib rather than curl — the docling-serve image is
       # Python-based and may not ship curl, which would falsely report unhealthy.

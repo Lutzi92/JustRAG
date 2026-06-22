@@ -41,3 +41,12 @@ data:
   # -- Worker settings --
   NODE_ENV: "production"
   WORKER_HEALTH_PORT: "8081"
+
+  # -- Docling --
+  # Image captioning endpoint/key/model are injected per-request by the Go
+  # backend from the admin AI provider config — they are NOT set here (the
+  # credential never leaves the app). The vision model id follows
+  # describe_image_model (site_config).
+  # Docling convert timeout (read by the worker/server, default 300s). Raise
+  # when captioning is on, since vision calls add per-document latency.
+  DOCLING_TIMEOUT_SECONDS: "600"
