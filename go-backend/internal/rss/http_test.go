@@ -23,16 +23,19 @@ var (
 )
 
 type mockStore struct {
-	feed    *rss.RSSFeedRow
-	feeds   []rss.RSSFeedRow
-	updated *rss.RSSFeedRow
-	err     error
+	feed                 *rss.RSSFeedRow
+	feeds                []rss.RSSFeedRow
+	updated              *rss.RSSFeedRow
+	createdFetchFullText bool
+	updatedFetchFullText *bool
+	err                  error
 }
 
-func (m *mockStore) CreateRSSFeed(_ context.Context, kbID, url string, title *string, pollInterval int) (*rss.RSSFeedRow, error) {
+func (m *mockStore) CreateRSSFeed(_ context.Context, kbID, url string, title *string, pollInterval int, fetchFullText bool) (*rss.RSSFeedRow, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
+	m.createdFetchFullText = fetchFullText
 	return m.feed, nil
 }
 
@@ -54,6 +57,7 @@ func (m *mockStore) UpdateRSSFeed(_ context.Context, feedID string, updates rss.
 	if m.err != nil {
 		return nil, m.err
 	}
+	m.updatedFetchFullText = updates.FetchFullText
 	return m.updated, nil
 }
 
@@ -285,5 +289,55 @@ func TestDeleteRSSFeed_OK(t *testing.T) {
 
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: fetchFullText wiring (regression tests)
+// ---------------------------------------------------------------------------
+
+// TestCreateRSSFeed_PassesFetchFullText verifies that fetchFullText=true in the
+// POST body is forwarded to the store. The create wiring was added in Task 1, so
+// this test is expected to pass immediately; it serves as a regression guard.
+func TestCreateRSSFeed_PassesFetchFullText(t *testing.T) {
+	feed := makeFeed()
+	store := &mockStore{feed: feed}
+	validator := &mockValidator{title: "Feed"}
+	h := newHandlerForTest(store, validator)
+
+	body := map[string]any{"url": "https://example.com/feed.xml", "fetchFullText": true}
+	req := withKBAccess(newRequest(http.MethodPost, "/api/kb/"+testKBID+"/rss", body), testKBID)
+	rr := httptest.NewRecorder()
+	h.CreateRSSFeed(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rr.Code, rr.Body.String())
+	}
+	if !store.createdFetchFullText {
+		t.Fatal("expected fetchFullText=true to be passed to the store")
+	}
+}
+
+// TestUpdateRSSFeed_PassesFetchFullText verifies that fetchFullText=true in the
+// PATCH body is forwarded to the store via RSSFeedUpdate.FetchFullText.
+// This test was RED before the updateRSSFeedRequest / UpdateRSSFeed wiring was added.
+func TestUpdateRSSFeed_PassesFetchFullText(t *testing.T) {
+	feed := makeFeed()
+	updated := makeFeed()
+	updated.FetchFullText = true
+
+	store := &mockStore{feed: feed, updated: updated}
+	validator := &mockValidator{}
+	h := newHandlerForTest(store, validator)
+
+	body := map[string]any{"fetchFullText": true}
+	req := withKBAccess(newRequest(http.MethodPatch, "/api/kb/"+testKBID+"/rss/"+testFeedID, body), testKBID)
+	rr := serveFeedID(testFeedID, h.UpdateRSSFeed, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	if store.updatedFetchFullText == nil || !*store.updatedFetchFullText {
+		t.Fatal("expected fetchFullText=true to be passed to the store via RSSFeedUpdate")
 	}
 }

@@ -354,6 +354,7 @@ export interface RssFeed {
     consecutiveFailures: number;
     lastPolledAt: string | null;
     itemCount: number;
+    fetchFullText: boolean;
     createdAt: string;
 }
 

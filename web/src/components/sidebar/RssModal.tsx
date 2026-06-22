@@ -7,18 +7,20 @@ interface RssModalProps {
     show: boolean;
     onClose: () => void;
     rssLoading: boolean;
-    onAddRssFeed: (url: string, pollInterval: number) => void;
+    onAddRssFeed: (url: string, pollInterval: number, fetchFullText: boolean) => void;
 }
 
 const RssModalComp: React.FC<RssModalProps> = ({ show, onClose, rssLoading, onAddRssFeed }) => {
     const { t } = useTheme();
     const [rssUrl, setRssUrl] = useState('');
     const [rssPollInterval, setRssPollInterval] = useState(60);
+    const [rssFetchFullText, setRssFetchFullText] = useState(false);
 
     const handleSubmit = () => {
         if (rssUrl.trim()) {
-            onAddRssFeed(rssUrl.trim(), rssPollInterval);
+            onAddRssFeed(rssUrl.trim(), rssPollInterval, rssFetchFullText);
             setRssUrl('');
+            setRssFetchFullText(false);
             onClose();
         }
     };
@@ -52,6 +54,17 @@ const RssModalComp: React.FC<RssModalProps> = ({ show, onClose, rssLoading, onAd
                     <option value="1440">24 {t('hours')}</option>
                 </select>
             </div>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontSize: '0.85rem' }}>
+                <input
+                    type="checkbox"
+                    checked={rssFetchFullText}
+                    onChange={(e) => setRssFetchFullText(e.target.checked)}
+                />
+                <span>
+                    {t('rssFetchFullText')}
+                    <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{t('rssFetchFullTextHint')}</span>
+                </span>
+            </label>
             <button
                 onClick={handleSubmit}
                 disabled={rssLoading || !rssUrl.trim()}

@@ -53,6 +53,8 @@ export const translations = {
     websearchDeepDesc: { de: 'Mehrstufige Recherche — der Agent durchsucht das Web, liest Seiten und fasst die Ergebnisse zusammen.', en: 'Multi-step research — the agent searches the web, reads pages, and summarizes findings.' },
     crawlDesc: { de: 'Crawle eine Website und extrahiere Inhalte von mehreren Seiten.', en: 'Crawl a website and extract content from multiple pages.' },
     rssDesc: { de: 'Abonniere einen RSS-Feed, um automatisch neue Inhalte als Quellen hinzuzufügen.', en: 'Subscribe to an RSS feed to automatically add new content as sources.' },
+    rssFetchFullText: { de: 'Vollständigen Artikeltext von der verlinkten Seite abrufen', en: 'Fetch full article text from the linked page' },
+    rssFetchFullTextHint: { de: 'Lädt die verlinkte Seite und indexiert deren vollständigen Inhalt statt nur der Feed-Zusammenfassung.', en: 'Fetches the linked page and indexes its full content instead of just the feed summary.' },
     websearch: { de: 'Websearch', en: 'Websearch' },
     crawl: { de: 'Crawl', en: 'Crawl' },
     research: { de: 'Bericht erstellen', en: 'Create Report' },

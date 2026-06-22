@@ -218,6 +218,7 @@ func RunWorker(cfg *config.Config) error {
 		FileStore:   filesStore,
 		Storage:     stor,
 		AsynqClient: rssClient,
+		Fetcher:     sharedFetcher,
 	})))
 	proc.SetSiteConfigReader(chatStore)
 	proc.SetKBOverrideLister(kbconfig.NewStore(db.Main))

@@ -57,6 +57,7 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
     // RSS state
     const [rssUrl, setRssUrl] = useState('');
     const [rssPollInterval, setRssPollInterval] = useState(60);
+    const [rssFetchFullText, setRssFetchFullText] = useState(false);
     const [rssLoading, setRssLoading] = useState(false);
     const [rssFeeds, setRssFeeds] = useState<RssFeed[]>([]);
 
@@ -261,8 +262,9 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
         if (!rssUrl.trim()) return;
         setRssLoading(true);
         try {
-            await axios.post(`${API_BASE_URL}/api/kb/${kb.id}/rss`, { url: rssUrl.trim(), pollInterval: rssPollInterval });
+            await axios.post(`${API_BASE_URL}/api/kb/${kb.id}/rss`, { url: rssUrl.trim(), pollInterval: rssPollInterval, fetchFullText: rssFetchFullText });
             setRssUrl('');
+            setRssFetchFullText(false);
             toast.success(t('rssFeedAdded'));
             fetchRssFeeds();
         } catch (err: unknown) {
@@ -753,6 +755,17 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
                                 <option value="1440">24 {t('hours')}</option>
                             </select>
                         </div>
+                        <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                            <input
+                                type="checkbox"
+                                checked={rssFetchFullText}
+                                onChange={(e) => setRssFetchFullText(e.target.checked)}
+                            />
+                            <span>
+                                {t('rssFetchFullText')}
+                                <span style={{ display: 'block', fontSize: '0.7rem' }}>{t('rssFetchFullTextHint')}</span>
+                            </span>
+                        </label>
                         {rssFeeds.length > 0 && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                                 {rssFeeds.map(feed => (

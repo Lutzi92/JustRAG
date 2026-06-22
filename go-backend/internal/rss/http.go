@@ -33,6 +33,7 @@ type RSSFeedRow struct {
 	ConsecutiveFailures int        `json:"consecutiveFailures" db:"consecutive_failures"`
 	LastPolledAt        *time.Time `json:"lastPolledAt"        db:"last_polled_at"`
 	ItemCount           int        `json:"itemCount"           db:"item_count"`
+	FetchFullText       bool       `json:"fetchFullText"       db:"fetch_full_text"`
 	CreatedAt           time.Time  `json:"createdAt"           db:"created_at"`
 }
 
@@ -42,6 +43,7 @@ type RSSFeedUpdate struct {
 	Status              *string
 	ErrorMessage        *string
 	ConsecutiveFailures *int
+	FetchFullText       *bool
 }
 
 // ---------------------------------------------------------------------------
@@ -50,7 +52,7 @@ type RSSFeedUpdate struct {
 
 // RSSStore is the persistence interface required by Handler.
 type RSSStore interface {
-	CreateRSSFeed(ctx context.Context, kbID, url string, title *string, pollInterval int) (*RSSFeedRow, error)
+	CreateRSSFeed(ctx context.Context, kbID, url string, title *string, pollInterval int, fetchFullText bool) (*RSSFeedRow, error)
 	ListRSSFeeds(ctx context.Context, kbID string) ([]RSSFeedRow, error)
 	GetRSSFeedByID(ctx context.Context, feedID string) (*RSSFeedRow, error)
 	UpdateRSSFeed(ctx context.Context, feedID string, updates RSSFeedUpdate) (*RSSFeedRow, error)
@@ -138,8 +140,9 @@ func kbIDFromContext(r *http.Request) string {
 
 // createRSSFeedRequest is the expected JSON body for creating a feed.
 type createRSSFeedRequest struct {
-	URL          string `json:"url"`
-	PollInterval *int   `json:"pollInterval"`
+	URL           string `json:"url"`
+	PollInterval  *int   `json:"pollInterval"`
+	FetchFullText *bool  `json:"fetchFullText"`
 }
 
 // CreateRSSFeed handles POST /api/kb/{id}/rss.
@@ -191,7 +194,13 @@ func (h *Handler) CreateRSSFeed(w http.ResponseWriter, r *http.Request) {
 		titlePtr = &feedTitle
 	}
 
-	feed, err := h.store.CreateRSSFeed(ctx, kbID, body.URL, titlePtr, pollInterval)
+	// Determine fetchFullText (default false if not provided).
+	fetchFullText := false
+	if body.FetchFullText != nil {
+		fetchFullText = *body.FetchFullText
+	}
+
+	feed, err := h.store.CreateRSSFeed(ctx, kbID, body.URL, titlePtr, pollInterval, fetchFullText)
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to create RSS feed")
 		return
@@ -239,8 +248,9 @@ func (h *Handler) ListRSSFeeds(w http.ResponseWriter, r *http.Request) {
 
 // updateRSSFeedRequest is the expected JSON body for updating a feed.
 type updateRSSFeedRequest struct {
-	PollInterval *int    `json:"pollInterval"`
-	Status       *string `json:"status"`
+	PollInterval  *int    `json:"pollInterval"`
+	Status        *string `json:"status"`
+	FetchFullText *bool   `json:"fetchFullText"`
 }
 
 // UpdateRSSFeed handles PATCH /api/kb/{id}/rss/{feedId}.
@@ -285,8 +295,9 @@ func (h *Handler) UpdateRSSFeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updates := RSSFeedUpdate{
-		PollInterval: body.PollInterval,
-		Status:       body.Status,
+		PollInterval:  body.PollInterval,
+		Status:        body.Status,
+		FetchFullText: body.FetchFullText,
 	}
 
 	// Clear error fields when re-activating.

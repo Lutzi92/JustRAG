@@ -36,6 +36,7 @@ type rssFeedRow struct {
 	ConsecutiveFailures int        `db:"consecutive_failures"`
 	LastPolledAt        *time.Time `db:"last_polled_at"`
 	ItemCount           int        `db:"item_count"`
+	FetchFullText       bool       `db:"fetch_full_text"`
 	CreatedAt           time.Time  `db:"created_at"`
 }
 
@@ -45,14 +46,14 @@ func toRSSFeedRow(r rssFeedRow) RSSFeedRow {
 }
 
 // CreateRSSFeed inserts a new RSS feed for the given KB and returns the stored row.
-func (s *PGStore) CreateRSSFeed(ctx context.Context, kbID, url string, title *string, pollInterval int) (*RSSFeedRow, error) {
+func (s *PGStore) CreateRSSFeed(ctx context.Context, kbID, url string, title *string, pollInterval int, fetchFullText bool) (*RSSFeedRow, error) {
 	const sql = `
-		INSERT INTO rss_feeds (kb_id, url, title, poll_interval, status)
-		VALUES ($1, $2, $3, $4, 'active')
+		INSERT INTO rss_feeds (kb_id, url, title, poll_interval, fetch_full_text, status)
+		VALUES ($1, $2, $3, $4, $5, 'active')
 		RETURNING id, kb_id, url, title, poll_interval, status, error_message,
-		          consecutive_failures, last_polled_at, item_count, created_at`
+		          consecutive_failures, last_polled_at, item_count, fetch_full_text, created_at`
 
-	rows, err := pgxutil.QueryRows[rssFeedRow](ctx, s.pool, sql, kbID, url, title, pollInterval)
+	rows, err := pgxutil.QueryRows[rssFeedRow](ctx, s.pool, sql, kbID, url, title, pollInterval, fetchFullText)
 	if err != nil {
 		return nil, fmt.Errorf("CreateRSSFeed: %w", err)
 	}
@@ -67,7 +68,7 @@ func (s *PGStore) CreateRSSFeed(ctx context.Context, kbID, url string, title *st
 func (s *PGStore) ListRSSFeeds(ctx context.Context, kbID string) ([]RSSFeedRow, error) {
 	const sql = `
 		SELECT id, kb_id, url, title, poll_interval, status, error_message,
-		       consecutive_failures, last_polled_at, item_count, created_at
+		       consecutive_failures, last_polled_at, item_count, fetch_full_text, created_at
 		FROM rss_feeds
 		WHERE kb_id = $1
 		ORDER BY created_at DESC`
@@ -88,7 +89,7 @@ func (s *PGStore) ListRSSFeeds(ctx context.Context, kbID string) ([]RSSFeedRow, 
 func (s *PGStore) GetRSSFeedByID(ctx context.Context, feedID string) (*RSSFeedRow, error) {
 	const sql = `
 		SELECT id, kb_id, url, title, poll_interval, status, error_message,
-		       consecutive_failures, last_polled_at, item_count, created_at
+		       consecutive_failures, last_polled_at, item_count, fetch_full_text, created_at
 		FROM rss_feeds
 		WHERE id = $1`
 
@@ -134,6 +135,11 @@ func (s *PGStore) UpdateRSSFeed(ctx context.Context, feedID string, updates RSSF
 		args = append(args, *updates.ConsecutiveFailures)
 		param++
 	}
+	if updates.FetchFullText != nil {
+		setClauses = append(setClauses, fmt.Sprintf("fetch_full_text = $%d", param))
+		args = append(args, *updates.FetchFullText)
+		param++
+	}
 
 	if len(setClauses) == 0 {
 		// Nothing to update — return current row.
@@ -146,7 +152,7 @@ func (s *PGStore) UpdateRSSFeed(ctx context.Context, feedID string, updates RSSF
 		SET %s
 		WHERE id = $%d
 		RETURNING id, kb_id, url, title, poll_interval, status, error_message,
-		          consecutive_failures, last_polled_at, item_count, created_at`,
+		          consecutive_failures, last_polled_at, item_count, fetch_full_text, created_at`,
 		strings.Join(setClauses, ", "), param)
 
 	rows, err := pgxutil.QueryRows[rssFeedRow](ctx, s.pool, sql, args...)
@@ -175,7 +181,7 @@ func (s *PGStore) DeleteRSSFeed(ctx context.Context, feedID string) error {
 func (s *PGStore) ListActiveRSSFeeds(ctx context.Context) ([]RSSFeedRow, error) {
 	const sql = `
 		SELECT id, kb_id, url, title, poll_interval, status, error_message,
-		       consecutive_failures, last_polled_at, item_count, created_at
+		       consecutive_failures, last_polled_at, item_count, fetch_full_text, created_at
 		FROM rss_feeds
 		WHERE status = 'active'
 		ORDER BY created_at ASC`

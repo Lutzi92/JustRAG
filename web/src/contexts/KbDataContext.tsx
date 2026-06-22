@@ -14,8 +14,8 @@ export interface KbDataContextValue {
   rssFeeds: RssFeed[];
   rssLoading: boolean;
   fetchRssFeeds: (kbId?: string) => void;
-  addRssFeed: (url: string, pollInterval: number) => void;
-  updateRssFeed: (feedId: string, updates: { pollInterval?: number; status?: 'active' | 'paused' }) => void;
+  addRssFeed: (url: string, pollInterval: number, fetchFullText: boolean) => void;
+  updateRssFeed: (feedId: string, updates: { pollInterval?: number; status?: 'active' | 'paused'; fetchFullText?: boolean }) => void;
   deleteRssFeed: (feedId: string) => void;
   pollFeedNow: (feedId: string) => void;
   // Confluence

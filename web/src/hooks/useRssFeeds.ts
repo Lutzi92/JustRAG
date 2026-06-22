@@ -32,11 +32,11 @@ export function useRssFeeds({ currentKb, fetchFiles }: UseRssFeedsParams) {
         }
     }, [currentKb?.id, t, toast]);
 
-    const addRssFeed = useCallback(async (url: string, pollInterval: number) => {
+    const addRssFeed = useCallback(async (url: string, pollInterval: number, fetchFullText: boolean) => {
         if (!currentKb) return;
         setRssLoading(true);
         try {
-            const res = await axios.post(`${API_BASE_URL}/api/kb/${currentKb.id}/rss`, { url, pollInterval });
+            const res = await axios.post(`${API_BASE_URL}/api/kb/${currentKb.id}/rss`, { url, pollInterval, fetchFullText });
             setRssFeeds(prev => [res.data, ...prev]);
             toast.success(t('rssFeedAdded'));
             // Poll for updates: the worker processes the initial feed asynchronously.
@@ -54,7 +54,7 @@ export function useRssFeeds({ currentKb, fetchFiles }: UseRssFeedsParams) {
         }
     }, [currentKb, fetchFiles, fetchRssFeeds, t, toast]);
 
-    const updateRssFeed = useCallback(async (feedId: string, updates: { pollInterval?: number; status?: 'active' | 'paused' }) => {
+    const updateRssFeed = useCallback(async (feedId: string, updates: { pollInterval?: number; status?: 'active' | 'paused'; fetchFullText?: boolean }) => {
         if (!currentKb) return;
         setRssFeeds(prev => prev.map(f => f.id === feedId ? { ...f, ...updates } : f));
         try {

@@ -8,15 +8,30 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/mmcdole/gofeed"
 
+	"github.com/justrag/go-backend/internal/fetcher"
 	"github.com/justrag/go-backend/internal/files"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/rss"
 	"github.com/justrag/go-backend/internal/storage"
 )
+
+// rssFetchTimeout is the per-item hard cap for a full-text article fetch.
+// It covers the entire ModeAuto tier-escalation sequence (tier-1 then tier-2
+// each receive a fresh Options.Timeout internally), so passing it as both the
+// context deadline and the per-tier Options.Timeout guarantees no single item
+// can spend more than rssFetchTimeout in total.
+const rssFetchTimeout = 25 * time.Second
+
+// urlFetcher is the minimal slice of *fetcher.Fetcher the RSS poller needs.
+// Declaring it here keeps the dependency stubbable in tests.
+type urlFetcher interface {
+	Fetch(ctx context.Context, rawURL string, opts fetcher.Options) (*fetcher.Result, error)
+}
 
 // RSSPollDeps holds the dependencies for the RSS poll handler.
 type RSSPollDeps struct {
@@ -24,6 +39,7 @@ type RSSPollDeps struct {
 	FileStore   files.Store
 	Storage     storage.Storage
 	AsynqClient *asynq.Client
+	Fetcher     urlFetcher
 }
 
 // NewRSSPollHandler returns an asynq.HandlerFunc that polls an RSS feed,
@@ -87,8 +103,8 @@ func NewRSSPollHandler(deps RSSPollDeps) asynq.HandlerFunc {
 
 			fileName := rssItemFileName(item)
 
-			// Build markdown content from the feed item.
-			content := buildRSSItemContent(item)
+			// Build markdown content, fetching the linked page's full text when enabled.
+			content := resolveRSSItemContent(ctx, deps.Fetcher, feed, item)
 
 			// Store to storage.
 			storagePath := storage.GetStoragePath("rss", feed.KbID, fileName)
@@ -197,11 +213,8 @@ func extractHashFromFileName(name string) string {
 	return ""
 }
 
-// buildRSSItemContent converts an RSS item into markdown text suitable for
-// chunking and embedding.
-func buildRSSItemContent(item *gofeed.Item) string {
-	var sb strings.Builder
-
+// writeRSSItemHeader writes the title/source/date/author metadata block.
+func writeRSSItemHeader(sb *strings.Builder, item *gofeed.Item) {
 	sb.WriteString("# ")
 	sb.WriteString(item.Title)
 	sb.WriteString("\n\n")
@@ -229,6 +242,13 @@ func buildRSSItemContent(item *gofeed.Item) string {
 	}
 
 	sb.WriteString("\n")
+}
+
+// buildRSSItemContent converts an RSS item into markdown using the feed's own
+// content/description. This is the fallback when full-text fetch is off or fails.
+func buildRSSItemContent(item *gofeed.Item) string {
+	var sb strings.Builder
+	writeRSSItemHeader(&sb, item)
 
 	// Prefer full content over description.
 	if item.Content != "" {
@@ -239,4 +259,30 @@ func buildRSSItemContent(item *gofeed.Item) string {
 
 	sb.WriteString("\n")
 	return sb.String()
+}
+
+// buildRSSItemContentWithBody emits the metadata header followed by the
+// fetched full article body, dropping the feed's own summary.
+func buildRSSItemContentWithBody(item *gofeed.Item, body string) string {
+	var sb strings.Builder
+	writeRSSItemHeader(&sb, item)
+	sb.WriteString(body)
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// resolveRSSItemContent returns the document body for an item, fetching the
+// linked page's full text when the feed opts in and the fetch succeeds.
+func resolveRSSItemContent(ctx context.Context, f urlFetcher, feed *rss.RSSFeedRow, item *gofeed.Item) string {
+	if feed.FetchFullText && item.Link != "" && f != nil {
+		fctx, cancel := context.WithTimeout(ctx, rssFetchTimeout)
+		res, err := f.Fetch(fctx, item.Link, fetcher.Options{Mode: fetcher.ModeAuto, Timeout: rssFetchTimeout})
+		cancel()
+		if err == nil && res != nil && strings.TrimSpace(res.Markdown) != "" {
+			return buildRSSItemContentWithBody(item, res.Markdown)
+		}
+		slog.Warn("RSS full-text fetch failed, using feed content",
+			"feedId", feed.ID, "link", item.Link, "error", err)
+	}
+	return buildRSSItemContent(item)
 }
