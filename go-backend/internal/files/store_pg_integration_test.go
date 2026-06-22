@@ -157,6 +157,39 @@ func TestResetFileForRetry(t *testing.T) {
 	}
 }
 
+func readStage(t *testing.T, pool *pgxpool.Pool, fileID string) (stage *string, idx, total *int) {
+	t.Helper()
+	if err := pool.QueryRow(context.Background(),
+		`SELECT current_stage, stage_index, stage_total FROM files WHERE id = $1::uuid`, fileID,
+	).Scan(&stage, &idx, &total); err != nil {
+		t.Fatalf("readStage: %v", err)
+	}
+	return
+}
+
+func TestUpdateAndClearFileStage(t *testing.T) {
+	pool := openMainPool(t)
+	store := files.NewStore(pool)
+	ctx := context.Background()
+	_, fileID := seedErrorFile(t, pool, "processing")
+
+	if err := store.UpdateFileStage(ctx, fileID, "embed", 3, 5); err != nil {
+		t.Fatalf("UpdateFileStage: %v", err)
+	}
+	stage, idx, total := readStage(t, pool, fileID)
+	if stage == nil || *stage != "embed" || idx == nil || *idx != 3 || total == nil || *total != 5 {
+		t.Fatalf("got stage=%v idx=%v total=%v, want embed/3/5", stage, idx, total)
+	}
+
+	if err := store.ClearFileStage(ctx, fileID); err != nil {
+		t.Fatalf("ClearFileStage: %v", err)
+	}
+	stage, idx, total = readStage(t, pool, fileID)
+	if stage != nil || idx != nil || total != nil {
+		t.Fatalf("after clear got stage=%v idx=%v total=%v, want all nil", stage, idx, total)
+	}
+}
+
 func TestListErrorFiles(t *testing.T) {
 	pool := openMainPool(t)
 	store := files.NewStore(pool)

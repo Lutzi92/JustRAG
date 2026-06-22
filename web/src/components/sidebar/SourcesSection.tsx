@@ -3,10 +3,9 @@ import {
     Link, Globe, Bot, FileText, Download, Trash2,
     Rss, RefreshCw, Pause, Play, Eye, BookOpen
 } from 'lucide-react';
-import { motion } from 'framer-motion';
 import type { FileEntry, RssFeed, ConfluenceSource } from '../../types';
 import { useTheme } from '../../contexts/ThemeContext';
-import { useReducedMotion, getMotionProps } from '../../hooks/useReducedMotion';
+import { IngestStageIndicator } from './IngestStageIndicator';
 
 interface SourcesSectionProps {
     files: FileEntry[];
@@ -49,7 +48,6 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
     onRetryFile, onRetryAllFailed
 }) => {
     const { t } = useTheme();
-    const reducedMotion = useReducedMotion();
 
     const nonRssFiles = files.filter(f => f.origin !== 'rss' && f.origin !== 'confluence');
     const rssFeedFiles = (feedId: string) => files.filter(f => f.rssFeedId === feedId);
@@ -132,11 +130,6 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                     >
                                         {file.status} • {file.origin}
                                     </div>
-                                    {file.status === 'processing' && (
-                                        <div className="sidebar-left__file-progress-text">
-                                            {file.progress}%
-                                        </div>
-                                    )}
                                 </div>
                                 {file.status === 'error' && (
                                     <div
@@ -146,22 +139,13 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                         {errorLabel(file)}
                                     </div>
                                 )}
-                                {file.status === 'processing' && (
-                                    <div
-                                        role="progressbar"
-                                        aria-valuenow={file.progress}
-                                        aria-valuemin={0}
-                                        aria-valuemax={100}
-                                        aria-label={`${file.status} ${file.name}`}
-                                        className="sidebar-left__file-progress-track"
-                                    >
-                                        <motion.div
-                                            {...getMotionProps(reducedMotion)}
-                                            initial={{ width: 0 }}
-                                            animate={{ width: `${file.progress}%` }}
-                                            className="sidebar-left__file-progress-fill"
-                                        />
-                                    </div>
+                                {file.currentStage && (
+                                    <IngestStageIndicator
+                                        stage={file.currentStage}
+                                        index={file.stageIndex}
+                                        total={file.stageTotal}
+                                        fileName={file.name}
+                                    />
                                 )}
                             </div>
                         </div>

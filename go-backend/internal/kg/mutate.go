@@ -57,8 +57,11 @@ func (s *PgStore) DeleteKGForFile(ctx context.Context, kbID, fileID string) erro
 	})
 }
 
-// KBHasActiveIngestion reports whether the KB has any file still pending or
-// processing — the "still building" signal the mindmap spinner uses.
+// KBHasActiveIngestion reports whether the KB has any file still queued,
+// processing, OR in a post-status ingestion stage (current_stage set, e.g. KG
+// extraction running after status flips to 'completed') — the "still building"
+// signal the mindmap spinner uses. Stage-awareness keeps the spinner visible
+// through graph-building on a page refresh.
 func (s *PgStore) KBHasActiveIngestion(ctx context.Context, kbID string) (bool, error) {
 	if s == nil || s.pool == nil {
 		return false, fmt.Errorf("kg: KBHasActiveIngestion: no pool")
@@ -67,7 +70,8 @@ func (s *PgStore) KBHasActiveIngestion(ctx context.Context, kbID string) (bool, 
 	err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS(
 		    SELECT 1 FROM files
-		     WHERE kb_id = $1::uuid AND status IN ('pending', 'processing')
+		     WHERE kb_id = $1::uuid
+		       AND (status IN ('pending', 'processing') OR current_stage IS NOT NULL)
 		)`, kbID).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("kg: KBHasActiveIngestion: %w", err)

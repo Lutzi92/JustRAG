@@ -221,6 +221,26 @@
   background: var(--accent-primary);
 }
 
+.sidebar-left__file-stage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.sidebar-left__file-stage-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sidebar-left__file-stage-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-left__tools-input {
   width: 100%;
   padding: 0.5rem;

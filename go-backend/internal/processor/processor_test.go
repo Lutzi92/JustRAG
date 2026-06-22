@@ -39,6 +39,14 @@ func (m *mockStore) MarkFileError(_ context.Context, _ string, stage, message st
 	return nil
 }
 
+func (m *mockStore) UpdateFileStage(context.Context, string, string, int, int) error {
+	return nil
+}
+
+func (m *mockStore) ClearFileStage(context.Context, string) error {
+	return nil
+}
+
 type contextCapturingStore struct {
 	statusCtxErrs []error
 }
@@ -54,6 +62,14 @@ func (s *contextCapturingStore) UpdateFileProgress(context.Context, string, int)
 
 func (s *contextCapturingStore) MarkFileError(ctx context.Context, _, _, _ string) error {
 	s.statusCtxErrs = append(s.statusCtxErrs, ctx.Err())
+	return nil
+}
+
+func (s *contextCapturingStore) UpdateFileStage(context.Context, string, string, int, int) error {
+	return nil
+}
+
+func (s *contextCapturingStore) ClearFileStage(context.Context, string) error {
 	return nil
 }
 

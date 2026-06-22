@@ -1,9 +1,8 @@
 import React, { useEffect } from 'react';
 import { X, Trash2, Rss } from 'lucide-react';
-import { motion } from 'framer-motion';
 import type { RssFeed, FileEntry } from '../types';
 import { useTheme } from '../contexts/ThemeContext';
-import { useReducedMotion, getMotionProps } from '../hooks/useReducedMotion';
+import { IngestStageIndicator } from './sidebar/IngestStageIndicator';
 import './RssFeedEntriesModal.css';
 
 interface RssFeedEntriesModalProps {
@@ -15,7 +14,6 @@ interface RssFeedEntriesModalProps {
 
 export const RssFeedEntriesModal: React.FC<RssFeedEntriesModalProps> = ({ feed, files, onDeleteFile, onClose }) => {
     const { t } = useTheme();
-    const reducedMotion = useReducedMotion();
 
     useEffect(() => {
         const handleEsc = (e: KeyboardEvent) => {
@@ -50,15 +48,13 @@ export const RssFeedEntriesModal: React.FC<RssFeedEntriesModalProps> = ({ feed, 
                                     </span>
                                     <span>{new Date(file.createdAt).toLocaleDateString()}</span>
                                 </div>
-                                {file.status === 'processing' && (
-                                    <div className="rss-entries-modal__progress-track">
-                                        <motion.div
-                                            {...getMotionProps(reducedMotion)}
-                                            initial={{ width: 0 }}
-                                            animate={{ width: `${file.progress}%` }}
-                                            className="rss-entries-modal__progress-fill"
-                                        />
-                                    </div>
+                                {file.currentStage && (
+                                    <IngestStageIndicator
+                                        stage={file.currentStage}
+                                        index={file.stageIndex}
+                                        total={file.stageTotal}
+                                        fileName={file.name}
+                                    />
                                 )}
                             </div>
                             <button

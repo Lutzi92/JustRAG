@@ -263,6 +263,9 @@ export interface FileEntry {
     rssFeedId?: string;
     errorStage?: string;
     errorMessage?: string;
+    currentStage?: string;
+    stageIndex?: number;
+    stageTotal?: number;
 }
 
 export interface ChatEntry {

@@ -82,6 +82,9 @@ type FileRow struct {
 	Origin             string    `json:"origin"             db:"origin"`
 	ErrorStage         *string   `json:"errorStage,omitempty"   db:"error_stage"`
 	ErrorMessage       *string   `json:"errorMessage,omitempty" db:"error_message"`
+	CurrentStage       *string   `json:"currentStage,omitempty" db:"current_stage"`
+	StageIndex         *int      `json:"stageIndex,omitempty"   db:"stage_index"`
+	StageTotal         *int      `json:"stageTotal,omitempty"   db:"stage_total"`
 	RSSFeedID          *string   `json:"rssFeedId"          db:"rss_feed_id"`
 	ConfluenceSourceID *string   `json:"confluenceSourceId" db:"confluence_source_id"`
 	CreatedAt          time.Time `json:"createdAt"           db:"created_at"`

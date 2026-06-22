@@ -226,6 +226,28 @@ func (s *PGStore) UpdateFileProgress(ctx context.Context, fileID string, progres
 	return nil
 }
 
+// UpdateFileStage records the file's current ingestion stage for the upload
+// spinner + n/x indicator. stage is a stable key (parse/tabular/enrich/embed/
+// kg/hype/raptor); index is 1-based; total is the enabled-stage count. Set at
+// every stage boundary; cleared via ClearFileStage at true completion.
+func (s *PGStore) UpdateFileStage(ctx context.Context, fileID, stage string, index, total int) error {
+	const sql = `UPDATE files SET current_stage = $1, stage_index = $2, stage_total = $3 WHERE id = $4`
+	if _, err := s.pool.Exec(ctx, sql, stage, index, total, fileID); err != nil {
+		return fmt.Errorf("UpdateFileStage: %w", err)
+	}
+	return nil
+}
+
+// ClearFileStage nulls the stage columns — the file is no longer actively
+// ingesting (done, errored, or abandoned). Idempotent.
+func (s *PGStore) ClearFileStage(ctx context.Context, fileID string) error {
+	const sql = `UPDATE files SET current_stage = NULL, stage_index = NULL, stage_total = NULL WHERE id = $1`
+	if _, err := s.pool.Exec(ctx, sql, fileID); err != nil {
+		return fmt.Errorf("ClearFileStage: %w", err)
+	}
+	return nil
+}
+
 // MarkFileError sets status='error' and records the failing stage plus a
 // short, sanitized, user-facing message. Overwrites previous detail — call
 // sites record the most recent attempt's failure. The raw Go error must

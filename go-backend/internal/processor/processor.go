@@ -148,6 +148,11 @@ type ProcessorStore interface {
 	// MarkFileError sets status='error' with a sanitized user-facing
 	// stage + message (see files.PGStore.MarkFileError for the vocabulary).
 	MarkFileError(ctx context.Context, fileID, stage, message string) error
+	// UpdateFileStage records the current ingestion stage (key/index/total)
+	// for the upload spinner + n/x indicator.
+	UpdateFileStage(ctx context.Context, fileID, stage string, index, total int) error
+	// ClearFileStage nulls the stage columns at true completion.
+	ClearFileStage(ctx context.Context, fileID string) error
 }
 
 // SiteConfigReader reads individual site config values.
@@ -651,6 +656,20 @@ type ProcessFileInput struct {
 	ChunkOverlap int // 0 → splitter default (100)
 }
 
+// setStage records the current ingestion stage for the upload spinner. The
+// stage must be present in plan; if not (indexOf returns 0) the call is skipped
+// so a flag/plan mismatch can never write a misleading 0/x. Best-effort: a
+// failed UI-progress write must never fail ingestion.
+func (p *Processor) setStage(ctx context.Context, fileID string, plan stagePlan, stage string) {
+	idx := plan.indexOf(stage)
+	if idx == 0 {
+		return
+	}
+	if err := p.store.UpdateFileStage(ctx, fileID, stage, idx, plan.total()); err != nil {
+		logctx.From(ctx).Warn("processor: update file stage failed", "fileId", fileID, "stage", stage, "error", err)
+	}
+}
+
 // ProcessFile runs the full pipeline for a single file:
 // parse → split → embed (batches of 20) → store chunks → update progress/status.
 // ChunkSize and ChunkOverlap of 0 use the splitter defaults (512 and 100).
@@ -681,6 +700,41 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		return fmt.Errorf("processor: update status processing: %w", err)
 	}
 	_ = p.store.UpdateFileProgress(ctx, fileID, 5)
+
+	// Compute the stage plan up front so the upload spinner can show a stable
+	// n/x. Tabular only counts for spreadsheets; enrich follows its site_config
+	// gate. The post-embed tail (kg/hype/raptor) only runs on the default flat
+	// path — the parent-child and late-chunking paths `return nil` before it —
+	// so those stages must be excluded from the count when either alternate
+	// path is active, else n/x never reaches x/x. Cleared on every exit path
+	// via the defer below so a file is never pinned to a stage (and the mindmap
+	// spinner clears).
+	parentChild := chat.ParentChildEnabled(ctx, p.siteConfigReader)
+	lateChunking := resolveLateChunkingEnabled(ctx, p.siteConfigReader)
+	flatTail := !parentChild && !lateChunking
+	plan := buildStagePlan(stageFlags{
+		Tabular: p.materializer != nil && tabular.IsSpreadsheet(mimeType, fileName) && resolveTabularEnabled(ctx, p.siteConfigReader),
+		Enrich:  resolveEnrichmentEnabled(ctx, p.siteConfigReader),
+		KG:      flatTail && resolveKGExtractionEnabled(ctx, p.siteConfigReader),
+		HyPE:    flatTail && resolveHyPEEnabled(ctx, p.siteConfigReader),
+		Raptor:  flatTail && chat.RaptorEnabled(ctx, p.siteConfigReader),
+	})
+	defer func() {
+		// WithoutCancel: clear the stage even if the request ctx was canceled,
+		// otherwise a canceled/abandoned file stays "active" forever and pins
+		// the mindmap spinner and the frontend's 2s poll. A failed clear has
+		// outsized consequences (current_stage IS NOT NULL keeps the KB
+		// "actively ingesting" indefinitely), so retry once on a transient
+		// error before giving up.
+		clearCtx := context.WithoutCancel(ctx)
+		if err := p.store.ClearFileStage(clearCtx, fileID); err != nil {
+			logctx.From(ctx).Warn("processor: clear file stage failed; retrying", "fileId", fileID, "error", err)
+			if err := p.store.ClearFileStage(clearCtx, fileID); err != nil {
+				logctx.From(ctx).Error("processor: clear file stage failed after retry; file may stay 'ingesting' until re-touched", "fileId", fileID, "error", err)
+			}
+		}
+	}()
+	p.setStage(ctx, fileID, plan, stageParse)
 
 	// Mindmap live update: signal "still building" as soon as a KG-enabled
 	// KB begins ingesting a file, so an open mindmap tab shows the spinner.
@@ -742,6 +796,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	if p.materializer != nil &&
 		tabular.IsSpreadsheet(mimeType, fileName) &&
 		resolveTabularEnabled(ctx, p.siteConfigReader) {
+		p.setStage(ctx, fileID, plan, stageTabular)
 		if card, err := p.runTabularMaterializer(ctx, filePath, fileName, fileID, kbID, pgConfig); err != nil {
 			logctx.From(ctx).Warn("processor: tabular materializer failed; falling back to text ingestion",
 				"fileId", fileID, "error", err)
@@ -829,6 +884,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			logctx.From(ctx).Info("processor: contextual enrichment enabled",
 				"fileId", fileID,
 				"modelOverride", enrichmentModel)
+			p.setStage(ctx, fileID, plan, stageEnrich)
 		}
 	}
 
@@ -870,6 +926,10 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			logctx.From(ctx).Info("processor: parent-child split produced 0 groups", "fileId", fileID)
 			return nil
 		}
+		// parent-child runs enrich (on parents) then embeds children as distinct
+		// sub-phases; surface both to the spinner.
+		p.setStage(ctx, fileID, plan, stageEnrich) // no-op if enrich not in plan
+		p.setStage(ctx, fileID, plan, stageEmbed)
 		if err := p.runParentChildIngest(ctx, fileID, kbID, fileName, groups,
 			enrichmentEnabled, enrichmentModel, pgConfig); err != nil {
 			p.markTerminalError(ctx, fileID, "processing", "Processing failed unexpectedly")
@@ -895,6 +955,9 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			"maxInputTokens", maxInputTokens,
 			"enrichment", enrichmentEnabled,
 		)
+		// late-chunking enriches all chunks, then late-chunk-embeds them.
+		p.setStage(ctx, fileID, plan, stageEnrich) // no-op if enrich not in plan
+		p.setStage(ctx, fileID, plan, stageEmbed)
 		if err := p.runLateChunkedIngest(ctx, fileID, kbID, fileName, chunks,
 			ichunks, result.Text, sectionIndex, &sectionSearchOffset,
 			enrichmentEnabled, enrichmentModel, maxInputTokens, pgConfig); err != nil {
@@ -913,6 +976,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// stages overlap: embedding can start as soon as a batch-worth of
 	// enriched chunks is ready, while remaining chunks are still being
 	// enriched.
+	p.setStage(ctx, fileID, plan, stageEmbed)
 	embeddingBatchSize := resolveEmbeddingBatchSize(ctx, p.siteConfigReader)
 	maxEnrichConcurrency := resolveEnrichConcurrency(ctx, p.siteConfigReader)
 	totalChunks := len(chunks)
@@ -1182,6 +1246,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// log and drop — KG is a side-channel, never reverts the file's
 	// completed/partial status.
 	if resolveKGExtractionEnabled(ctx, p.siteConfigReader) {
+		p.setStage(ctx, fileID, plan, stageKG)
 		kgErr := p.runKGExtractionStage(ctx, fileID, kbID, fileName, result.Text, rawLang)
 		if kgErr != nil {
 			logctx.From(ctx).Warn("processor: kg extraction stage failed",
@@ -1192,6 +1257,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// HyPE: generate + embed hypothetical questions per chunk. Best-effort,
 	// post-ingest, gated independently from KG. Re-ingest is the only backfill.
 	if resolveHyPEEnabled(ctx, p.siteConfigReader) {
+		p.setStage(ctx, fileID, plan, stageHyPE)
 		if hErr := p.runHyPEGenerationStage(ctx, fileID, kbID, fileName, result.Text, rawLang); hErr != nil {
 			logctx.From(ctx).Warn("processor: hype generation stage failed",
 				"fileId", fileID, "error", hErr)
@@ -1209,6 +1275,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			logctx.From(ctx).Info("raptor.build.skipped",
 				"fileId", fileID, "reason", "parent_child_enabled")
 		} else if lastDimensions > 0 {
+			p.setStage(ctx, fileID, plan, stageRaptor)
 			p.runRaptorBuildStage(ctx, fileID, kbID, fileName, lastDimensions, pgConfig)
 		}
 	}

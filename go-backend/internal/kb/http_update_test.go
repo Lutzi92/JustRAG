@@ -278,3 +278,44 @@ func TestListFiles_ErrorFieldsSerialized(t *testing.T) {
 		t.Errorf("errorStage must be omitted for non-error files: %s", body)
 	}
 }
+
+// TestListFiles_StageFieldsSerialized checks that currentStage/stageIndex/stageTotal
+// are emitted for in-progress files and omitted entirely for idle ones.
+func TestListFiles_StageFieldsSerialized(t *testing.T) {
+	stage := "embed"
+	idx, total := 3, 5
+	active := makeFileRow("f-active", "doc.pdf")
+	active.Status = "processing"
+	active.CurrentStage = &stage
+	active.StageIndex = &idx
+	active.StageTotal = &total
+	idle := makeFileRow("f-idle", "done.pdf")
+
+	store := &mockUpdateStore{files: []kb.FileRow{active, idle}, total: 2}
+	h := kb.NewUpdateHandler(store, nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/kb/kb-1/files", nil)
+	r = injectKBAccess(r, "kb-1")
+	w := httptest.NewRecorder()
+	h.ListFiles(w, r)
+
+	body := w.Body.String()
+	if !strings.Contains(body, `"currentStage":"embed"`) {
+		t.Errorf("currentStage missing: %s", body)
+	}
+	if !strings.Contains(body, `"stageIndex":3`) {
+		t.Errorf("stageIndex missing: %s", body)
+	}
+	if !strings.Contains(body, `"stageTotal":5`) {
+		t.Errorf("stageTotal missing: %s", body)
+	}
+	if strings.Count(body, "currentStage") != 1 {
+		t.Errorf("currentStage must be omitted for idle files: %s", body)
+	}
+	if strings.Count(body, "stageIndex") != 1 {
+		t.Errorf("stageIndex must be omitted for idle files: %s", body)
+	}
+	if strings.Count(body, "stageTotal") != 1 {
+		t.Errorf("stageTotal must be omitted for idle files: %s", body)
+	}
+}

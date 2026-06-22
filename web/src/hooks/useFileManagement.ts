@@ -46,7 +46,9 @@ export function useFileManagement({ currentKb }: UseFileManagementParams) {
   }, [t, toast]);
 
   // Polling for processing files
-  const hasProcessingFiles = files.some(f => f.status === 'processing' || f.status === 'pending');
+  const hasProcessingFiles = files.some(
+    f => f.status === 'processing' || f.status === 'pending' || f.currentStage != null,
+  );
   const currentKbId = currentKb?.id;
   useEffect(() => {
     if (hasProcessingFiles && currentKbId) {

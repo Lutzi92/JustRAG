@@ -173,8 +173,9 @@ func TestKBHasActiveIngestion(t *testing.T) {
 		t.Fatal("expected no active ingestion for empty KB")
 	}
 
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO files (kb_id, name, type, status) VALUES ($1::uuid, 'f.pdf', 'pdf', 'processing')`, kb); err != nil {
+	var fileID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO files (kb_id, name, type, status) VALUES ($1::uuid, 'f.pdf', 'pdf', 'processing') RETURNING id::text`, kb).Scan(&fileID); err != nil {
 		t.Fatalf("insert file: %v", err)
 	}
 	active, err = store.KBHasActiveIngestion(ctx, kb)
@@ -183,5 +184,30 @@ func TestKBHasActiveIngestion(t *testing.T) {
 	}
 	if !active {
 		t.Fatal("expected active ingestion with a processing file")
+	}
+
+	// A file whose status is already 'completed' but is still in a post-status
+	// stage (KG extraction) must count as active — this is the refresh bug.
+	if _, err := pool.Exec(ctx, `UPDATE files SET status='completed', current_stage='kg' WHERE id=$1::uuid`, fileID); err != nil {
+		t.Fatalf("update completed+kg: %v", err)
+	}
+	active, err = store.KBHasActiveIngestion(ctx, kb)
+	if err != nil {
+		t.Fatalf("KBHasActiveIngestion: %v", err)
+	}
+	if !active {
+		t.Fatal("want active=true for status=completed with current_stage='kg'")
+	}
+
+	// Once the stage is cleared, the KB is idle.
+	if _, err := pool.Exec(ctx, `UPDATE files SET current_stage=NULL WHERE id=$1::uuid`, fileID); err != nil {
+		t.Fatalf("clear stage: %v", err)
+	}
+	active, err = store.KBHasActiveIngestion(ctx, kb)
+	if err != nil {
+		t.Fatalf("KBHasActiveIngestion: %v", err)
+	}
+	if active {
+		t.Fatal("want active=false after current_stage cleared")
 	}
 }
