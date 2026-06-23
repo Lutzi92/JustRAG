@@ -54,6 +54,7 @@ import (
 	"github.com/justrag/go-backend/internal/longmem"
 	"github.com/justrag/go-backend/internal/mcp"
 	"github.com/justrag/go-backend/internal/mcp/builtin"
+	"github.com/justrag/go-backend/internal/mcpserver"
 	memorypkg "github.com/justrag/go-backend/internal/memory"
 	"github.com/justrag/go-backend/internal/middleware"
 	"github.com/justrag/go-backend/internal/misc"
@@ -586,6 +587,8 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/kb/{id}/shares", rc.kbViewChain(kbSharingHandler.ListShares))
 	rc.mux.Handle("POST /api/kb/{id}/share", rc.kbViewChain(kbSharingHandler.AddShare))
 	rc.mux.Handle("DELETE /api/kb/{id}/share/{userId}", rc.kbViewChain(kbSharingHandler.RemoveShare))
+	rc.mux.Handle("POST /api/kb/{id}/share/bulk", rc.kbViewChain(kbSharingHandler.BulkInvite))
+	rc.mux.Handle("DELETE /api/kb/{id}/share/pending/{username}", rc.kbViewChain(kbSharingHandler.RemovePendingShare))
 
 	// Analytics
 	analyticsHandler := analytics.NewHandler(analytics.NewStore(rc.infra.db.Main))
@@ -965,6 +968,15 @@ func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 		rc.kbMw.RequireKBPermission("view")(http.HandlerFunc(publicHandler.SendMessage)))))
 	rc.mux.Handle("POST /api/v1/kb/{id}/research", apiRL.Middleware(apiKeyAuth.Authenticate(
 		rc.kbMw.RequireKBPermission("view")(http.HandlerFunc(publicHandler.Research)))))
+
+	// KB-as-MCP-server: expose each KB as an MCP server (one tool, ask_kb).
+	// Gated by the mcp_server_enabled site_config flag (default off); per-KB
+	// access is enforced by the same apiKeyAuth + RequireKBPermission("view")
+	// chain as the public chat endpoint.
+	mcpAnswerer := mcpserver.NewPipelineAnswerer(rc.aiResolver, rc.searchService, rc.chatStore, rc.chatStore)
+	mcpKBHandler := mcpserver.NewHandler(mcpAnswerer, rc.chatStore)
+	rc.mux.Handle("POST /api/v1/kb/{id}/mcp", apiRL.Middleware(apiKeyAuth.Authenticate(
+		rc.kbMw.RequireKBPermission("view")(http.HandlerFunc(mcpKBHandler.ServeHTTP)))))
 }
 
 func registerMiscRoutes(rc *routeCtx) {

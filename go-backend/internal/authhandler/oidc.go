@@ -146,6 +146,7 @@ type OIDCStore interface {
 	GetUserByExternalID(ctx context.Context, externalID string) (*users.UserRow, error)
 	GetUsersByUsername(ctx context.Context, username string) ([]*users.UserRow, error)
 	LinkUserExternalID(ctx context.Context, userID, externalID string) (*users.UserRow, error)
+	ApplyPendingInvites(ctx context.Context, userID, username string) error
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +354,13 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			"err", err, "sub", claims.Sub, "email", claims.Email)
 		oidcErrRedirect(w, r, "user_resolution_failed")
 		return
+	}
+
+	// Promote any bulk invites parked for this username into real shares.
+	// Best-effort: a failure here must not block login.
+	if err := oStore.ApplyPendingInvites(ctx, user.ID, user.Username); err != nil {
+		slog.Warn("oidc callback: applying pending invites failed",
+			"err", err, "user_id", user.ID, "username", user.Username)
 	}
 
 	tokenStr, err := h.signToken(user.ID, user.Username, user.Role)

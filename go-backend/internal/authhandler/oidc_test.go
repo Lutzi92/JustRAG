@@ -26,6 +26,8 @@ type fakeOIDCStore struct {
 	getUsernameErr error
 	linkErr        error
 	createErr      error
+
+	appliedInvitesFor string
 }
 
 func (f *fakeOIDCStore) GetUserByUsername(ctx context.Context, username string) (*users.UserRow, error) {
@@ -87,6 +89,11 @@ func (f *fakeOIDCStore) LinkUserExternalID(ctx context.Context, userID, external
 		}
 	}
 	return nil, errors.New("user not found in fake store")
+}
+
+func (f *fakeOIDCStore) ApplyPendingInvites(_ context.Context, _ string, username string) error {
+	f.appliedInvitesFor = username
+	return nil
 }
 
 func idStr(i int) string {

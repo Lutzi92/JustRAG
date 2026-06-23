@@ -473,6 +473,85 @@ func (s *PGStore) RemoveKBShare(ctx context.Context, kbID, userID string) error 
 	return nil
 }
 
+// GetUserIDByUsername resolves a username to a user id, case-insensitively.
+// found is false (with nil error) when no such user exists yet.
+func (s *PGStore) GetUserIDByUsername(ctx context.Context, username string) (string, bool, error) {
+	var id string
+	err := s.pool.QueryRow(ctx,
+		`SELECT id FROM users WHERE LOWER(username) = LOWER($1) LIMIT 1`, username).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return id, true, nil
+}
+
+// ShareExists reports whether a share row already exists for kbID+userID.
+func (s *PGStore) ShareExists(ctx context.Context, kbID, userID string) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM knowledge_base_shares WHERE kb_id = $1 AND user_id = $2)`,
+		kbID, userID).Scan(&exists)
+	return exists, err
+}
+
+// UpsertPendingInvite stores (or updates the permission of) a pending invite for
+// a username that does not yet exist as a user. invitedBy may be "" (stored NULL).
+func (s *PGStore) UpsertPendingInvite(ctx context.Context, kbID, username, permission, invitedBy string) error {
+	var by *string
+	if invitedBy != "" {
+		by = &invitedBy
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO pending_kb_invites (kb_id, username, permission, invited_by)
+		VALUES ($1, LOWER($2), $3, $4)
+		ON CONFLICT (kb_id, LOWER(username)) DO UPDATE SET permission = EXCLUDED.permission`,
+		kbID, username, permission, by)
+	return err
+}
+
+// pendingInviteDBRow scans a pending_kb_invites row.
+type pendingInviteDBRow struct {
+	Username   string    `db:"username"`
+	Permission string    `db:"permission"`
+	CreatedAt  time.Time `db:"created_at"`
+}
+
+// ListPendingInvites returns all unapplied invites for a KB, newest first.
+func (s *PGStore) ListPendingInvites(ctx context.Context, kbID string) ([]PendingInviteRow, error) {
+	const sql = `
+		SELECT username, permission, created_at
+		FROM pending_kb_invites
+		WHERE kb_id = $1
+		ORDER BY created_at DESC`
+	rows, err := pgxutil.QueryRows[pendingInviteDBRow](ctx, s.pool, sql, kbID)
+	if err != nil {
+		return []PendingInviteRow{}, err
+	}
+	result := make([]PendingInviteRow, len(rows))
+	for i, r := range rows {
+		result[i] = PendingInviteRow(r)
+	}
+	return result, nil
+}
+
+// RemovePendingInvite deletes a pending invite by KB + username (case-insensitive).
+// Wraps store.ErrNotFound when no row was deleted.
+func (s *PGStore) RemovePendingInvite(ctx context.Context, kbID, username string) error {
+	ct, err := s.pool.Exec(ctx,
+		`DELETE FROM pending_kb_invites WHERE kb_id = $1 AND LOWER(username) = LOWER($2)`,
+		kbID, username)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("pending_invite kb=%s user=%s: %w", kbID, username, store.ErrNotFound)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // GetKBChunkConfig — used by worker.KBChunkConfigStore
 // ---------------------------------------------------------------------------

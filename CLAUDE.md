@@ -23,6 +23,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `contextual_enrichment*`, `parent_child_*`, `docling_*` (incl. `_picture_description_enabled` + `_picture_area_threshold` for gemma-4 image captioning, `_table_mode` fast/accurate), `late_chunking_*`, `embedding_batch_size`, `ingest_enrich_concurrency` (default 10), `kg_extraction_concurrency` (default 4) — ingestion (the two `*_concurrency` keys cap per-file LLM fan-out; see also the `AI_MAX_CONCURRENT_REQUESTS` runtime note for the global ceiling)
 - `raptor_*` — per-file RAPTOR hierarchical summary trees (`raptor_clustering_algorithm` selects kmeans vs leiden)
 - `chat_tabular_*`, `tabular_semantic_*` — structured spreadsheet Q&A + fuzzy free-text-cell search + charts/pivots (Phase 1/2/3; `chat_tabular_charts_enabled` is the Phase-3 flag)
+- `mcp_server_enabled` — expose each KB as an MCP server at `POST /api/v1/kb/{id}/mcp` (single tool `ask_kb`, runs the real RAG pipeline; per-KB access via existing API-key + KB-permission chain). Default off. `internal/mcpserver`.
 - `ragas_*`, `factcheck_*`, `citation_validation_*`, `langfuse_*` — validation + observability
 - `model_tier_fast` — deployment-wide default for fast-tier tasks (CRAG grader, KG extractor, contextual enricher, factuality / Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer, longmem conflict classifier, evidentiality classifier, HyPE question generator, golden-set question generator, sufficient-context gate, comparison section checker** (`chat_compare_model`)); per-task `*_model` keys override. All fast-tier JSON calls send strict `json_schema` Structured Outputs (vLLM guided_json) with auto-downgrade to `json_object` on backend rejection; tolerant parsing stays as last resort (`ai.GenerateCompletionStructured` / `structuredCompletionFn`). Sole exception: the tool-aware DAG planner (free-form per-tool `args` is incompatible with strict mode).
 
@@ -211,6 +212,7 @@ Most chat-pipeline features default OFF. The **full toggle blocks** (combined fl
 | HyPE | `hype_enabled` (ingest) + `hype_search_enabled` (query) | — | HyPE — hypothetical prompt embeddings |
 | In-chat document comparison | `chat_compare_enabled` (+ `_model`, `_max_sections`, `_concurrency`, `_peers_per_section`, `_attachment_ttl_hours`, `_max_file_bytes`) | — | In-chat document comparison |
 | Image captioning + better tables (Docling) | `docling_enabled` + `docling_picture_description_enabled` (+ `docling_picture_area_threshold`, `docling_table_mode`) — gemma-4 vision wired **on the sidecar** | — | Image captioning + better tables (Docling) |
+| KB-as-MCP-server (ask_kb) | `mcp_server_enabled` (global, default off) | — | KB-as-MCP-server |
 
 Mutual exclusions and ordering gotchas (e.g. `chat_self_rag_enabled` REPLACES `chat_factuality_verifier_enabled`; `raptor_enabled` vs `parent_child_enabled`; the T1-2 dim re-embed sequence before `chat_longmem_recall_semantic`) are documented inline in each recipe.
 

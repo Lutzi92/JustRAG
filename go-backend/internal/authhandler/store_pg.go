@@ -23,8 +23,14 @@ func NewStore(pool *pgxpool.Pool) *PGStore {
 	return &PGStore{pool: pool}
 }
 
-// Compile-time interface assertion.
-var _ Store = (*PGStore)(nil)
+// Compile-time interface assertions. Asserting OIDCStore too means a future
+// signature drift on any OIDC method fails the build here, rather than silently
+// flipping the runtime h.store.(OIDCStore) assertion to ok=false and disabling
+// all OIDC login.
+var (
+	_ Store     = (*PGStore)(nil)
+	_ OIDCStore = (*PGStore)(nil)
+)
 
 // ---------------------------------------------------------------------------
 // User operations
@@ -191,6 +197,25 @@ func toAuthProviderRow(r authProviderDBRow) adminproviders.AuthProviderRow {
 }
 
 const authProviderSelectCols = `id, type, name, config, is_active, created_at`
+
+// ApplyPendingInvites promotes any pending_kb_invites matching this username into
+// real knowledge_base_shares for userID, then deletes the promoted invites — all
+// in one statement so it fires exactly once per invite. Idempotent: a re-run
+// finds nothing to move. Called on every successful OIDC login (the username
+// lookup is indexed and empty in the common case).
+func (s *PGStore) ApplyPendingInvites(ctx context.Context, userID, username string) error {
+	_, err := s.pool.Exec(ctx, `
+		WITH moved AS (
+			DELETE FROM pending_kb_invites
+			WHERE LOWER(username) = LOWER($2)
+			RETURNING kb_id, permission
+		)
+		INSERT INTO knowledge_base_shares (kb_id, user_id, permission)
+		SELECT kb_id, $1, permission FROM moved
+		ON CONFLICT (kb_id, user_id) DO UPDATE SET permission = EXCLUDED.permission`,
+		userID, username)
+	return err
+}
 
 // GetActiveAuthProviders returns all active auth provider rows ordered by created_at DESC.
 func (s *PGStore) GetActiveAuthProviders(ctx context.Context) ([]adminproviders.AuthProviderRow, error) {
