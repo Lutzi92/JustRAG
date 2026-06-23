@@ -21,6 +21,7 @@ import { CrawlModal } from './sidebar/CrawlModal';
 import { RssModal } from './sidebar/RssModal';
 import { FileUploadModal } from './sidebar/FileUploadModal';
 import { ConfluenceModal } from './sidebar/ConfluenceModal';
+import { ACCEPTED_FILE_TYPES } from '../constants';
 import './SidebarLeft.css';
 
 const SidebarLeftComp: React.FC = () => {
@@ -222,7 +223,7 @@ const SidebarLeftComp: React.FC = () => {
                 ref={fileInputRef}
                 className="sidebar-left__hidden-file-input"
                 onChange={handleFileUpload}
-                accept=".pdf,.txt,.xlsx,.xls,.csv,.ods,.docx,.odt,.epub,.mp3,.wav,.m4a,.jpg,.jpeg,.png,.webp"
+                accept={ACCEPTED_FILE_TYPES}
                 multiple
             />
 

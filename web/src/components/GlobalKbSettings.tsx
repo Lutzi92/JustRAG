@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import type { KnowledgeBase, StudioConfig, FileEntry, GlobalKbEditor, SafeAIConfig, RssFeed, ConfluenceSource, ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath } from '../types';
 import { API_BASE_URL } from '../api';
-import { MAX_FILES_PER_GLOBAL_KB } from '../constants';
+import { MAX_FILES_PER_GLOBAL_KB, ACCEPTED_FILE_TYPES } from '../constants';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useFormValidation } from '../hooks/useFormValidation';
@@ -633,6 +633,7 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
                             <input
                                 type="file"
                                 multiple
+                                accept={ACCEPTED_FILE_TYPES}
                                 onChange={handleFileUpload}
                                 style={{ display: 'none' }}
                                 disabled={uploading}

@@ -20,6 +20,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/storage"
 )
 
@@ -487,6 +488,17 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if dangerousExtensions[ext] {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "File type not allowed")
+		return
+	}
+
+	// 3b-ii. Reject unsupported file types up front. Without this, an
+	// unsupported binary (e.g. a legacy .doc) passes the blocklist and is
+	// queued for ingestion, where it either fails to parse — leaving a file
+	// stuck in the KB with an error — or falls through to the text catch-all
+	// parser and is indexed as garbage. Rejecting here keeps the KB clean.
+	if !parser.IsSupportedExtension(header.Filename) {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest,
+			fmt.Sprintf("File type not supported (%s)", ext))
 		return
 	}
 

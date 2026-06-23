@@ -511,6 +511,53 @@ func TestUpload_DangerousExtension(t *testing.T) {
 	}
 }
 
+func TestUpload_UnsupportedExtension(t *testing.T) {
+	ownerID := "user-1"
+	kb := &kbaccess.KnowledgeBase{ID: "kb-1", UserID: &ownerID, IsGlobal: false}
+
+	store := &mockStore{}
+	stor := &mockStorage{}
+	h := files.NewHandler(store, stor, noopChunks())
+
+	// Legacy .doc has no parser and is not in the dangerous blocklist; it must
+	// be rejected up front rather than ingested as garbage / left as an error.
+	req := buildMultipartRequest(t, "report.doc", []byte("legacy word doc"))
+	req = withUser(req, ownerUser())
+	req = withKBAccess(req, kb)
+
+	rr := httptest.NewRecorder()
+	h.Upload(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "not supported") {
+		t.Errorf("expected 'not supported' in body, got %q", body)
+	}
+}
+
+func TestUpload_SupportedNonPDF(t *testing.T) {
+	ownerID := "user-1"
+	kb := &kbaccess.KnowledgeBase{ID: "kb-1", UserID: &ownerID, IsGlobal: false}
+
+	store := &mockStore{}
+	stor := &mockStorage{}
+	h := files.NewHandler(store, stor, noopChunks())
+
+	// A supported, non-PDF type must still pass the new allowlist check.
+	req := buildMultipartRequest(t, "notes.md", []byte("# notes"))
+	req = withUser(req, ownerUser())
+	req = withKBAccess(req, kb)
+
+	rr := httptest.NewRecorder()
+	h.Upload(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestUpload_EmptyFile(t *testing.T) {
 	ownerID := "user-1"
 	kb := &kbaccess.KnowledgeBase{ID: "kb-1", UserID: &ownerID, IsGlobal: false}
