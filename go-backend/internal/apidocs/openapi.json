@@ -5,16 +5,6 @@
     "description": "API for interacting with JustRAG knowledge bases. Authenticate using API keys generated from your user profile.\n\n## Authentication\nAll endpoints require a Bearer token (API key with `jrag_` prefix) in the `Authorization` header.\n\n## Streaming\nChat endpoints support Server-Sent Events (SSE) streaming by default. Set `?stream=false` to receive a synchronous JSON response instead.\n\n### SSE Format\n```\ndata: {\"type\": \"...\", ...}\n\ndata: [DONE]\n```",
     "version": "1.0.0"
   },
-  "servers": [
-    {
-      "url": "/api/v1",
-      "description": "Public API"
-    },
-    {
-      "url": "/openai/v1",
-      "description": "OpenAI Compatible"
-    }
-  ],
   "tags": [
     {
       "name": "Knowledge Bases",
@@ -35,7 +25,7 @@
     }
   ],
   "paths": {
-    "/kb": {
+    "/api/v1/kb": {
       "get": {
         "tags": [
           "Knowledge Bases"
@@ -43,11 +33,6 @@
         "summary": "List knowledge bases",
         "description": "Returns all knowledge bases accessible to the authenticated user.",
         "operationId": "listKnowledgeBases",
-        "servers": [
-          {
-            "url": "/api/v1"
-          }
-        ],
         "parameters": [
           {
             "name": "limit",
@@ -91,7 +76,7 @@
         }
       }
     },
-    "/kb/{id}/chats": {
+    "/api/v1/kb/{id}/chats": {
       "get": {
         "tags": [
           "Chat"
@@ -99,11 +84,6 @@
         "summary": "List chats",
         "description": "Returns all chats for a knowledge base.",
         "operationId": "listChats",
-        "servers": [
-          {
-            "url": "/api/v1"
-          }
-        ],
         "parameters": [
           {
             "name": "id",
@@ -153,7 +133,7 @@
         }
       }
     },
-    "/kb/{id}/chats/{chatId}/messages": {
+    "/api/v1/kb/{id}/chats/{chatId}/messages": {
       "get": {
         "tags": [
           "Chat"
@@ -161,11 +141,6 @@
         "summary": "Get messages",
         "description": "Returns all messages for a chat, ordered by creation time. Messages form a tree structure via parentMessageId.",
         "operationId": "getChatMessages",
-        "servers": [
-          {
-            "url": "/api/v1"
-          }
-        ],
         "parameters": [
           {
             "name": "id",
@@ -225,7 +200,7 @@
         }
       }
     },
-    "/kb/{id}/chat": {
+    "/api/v1/kb/{id}/chat": {
       "post": {
         "tags": [
           "Chat"
@@ -233,11 +208,6 @@
         "summary": "Send a message",
         "description": "Send a message to a knowledge base and receive an AI-generated response with source citations. Supports both streaming (SSE) and synchronous responses.",
         "operationId": "sendMessage",
-        "servers": [
-          {
-            "url": "/api/v1"
-          }
-        ],
         "parameters": [
           {
             "name": "id",
@@ -304,7 +274,7 @@
         }
       }
     },
-    "/models": {
+    "/openai/v1/models": {
       "get": {
         "tags": [
           "OpenAI Compatible"
@@ -312,11 +282,6 @@
         "summary": "List models",
         "description": "Lists all accessible knowledge bases as OpenAI-compatible models. Each knowledge base is exposed as a model with ID in the format `kb-<uuid>`.",
         "operationId": "listModels",
-        "servers": [
-          {
-            "url": "/openai/v1"
-          }
-        ],
         "responses": {
           "200": {
             "description": "List of models",
@@ -365,7 +330,7 @@
         }
       }
     },
-    "/chat/completions": {
+    "/openai/v1/chat/completions": {
       "post": {
         "tags": [
           "OpenAI Compatible"
@@ -373,11 +338,6 @@
         "summary": "Chat completions",
         "description": "Create a chat completion using a knowledge base as the backing model. Compatible with the OpenAI chat completions API. Only the last user message is used as the query; conversation history is not used for retrieval.",
         "operationId": "chatCompletions",
-        "servers": [
-          {
-            "url": "/openai/v1"
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {

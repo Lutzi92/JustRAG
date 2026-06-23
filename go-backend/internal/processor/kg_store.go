@@ -65,7 +65,7 @@ func (s *kgStore) persistKGExtraction(ctx context.Context, kbID, fileID, chunkID
 			// "create" vs "dedupe" outcomes for the metric.
 			if err := tx.QueryRow(ctx, `
 				INSERT INTO kg_entities (kb_id, canonical_name, type, aliases)
-				VALUES ($1::uuid, $2, $3, $4::text[])
+				VALUES ($1::uuid, $2, $3, COALESCE($4::text[], '{}'))
 				ON CONFLICT (kb_id, canonical_name, type)
 				DO UPDATE SET
 					aliases = (
