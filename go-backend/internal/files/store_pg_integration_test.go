@@ -173,12 +173,27 @@ func TestUpdateAndClearFileStage(t *testing.T) {
 	ctx := context.Background()
 	_, fileID := seedErrorFile(t, pool, "processing")
 
+	// Backdate progress_updated_at so the stuck-file sweep would consider this
+	// file timed out; a stage transition must refresh it (liveness heartbeat).
+	if _, err := pool.Exec(ctx, `UPDATE files SET progress_updated_at = NOW() - interval '2 hours' WHERE id = $1::uuid`, fileID); err != nil {
+		t.Fatalf("backdate progress_updated_at: %v", err)
+	}
+
 	if err := store.UpdateFileStage(ctx, fileID, "embed", 3, 5); err != nil {
 		t.Fatalf("UpdateFileStage: %v", err)
 	}
 	stage, idx, total := readStage(t, pool, fileID)
 	if stage == nil || *stage != "embed" || idx == nil || *idx != 3 || total == nil || *total != 5 {
 		t.Fatalf("got stage=%v idx=%v total=%v, want embed/3/5", stage, idx, total)
+	}
+
+	// progress_updated_at must have been refreshed to ~now, not left stale.
+	var stale bool
+	if err := pool.QueryRow(ctx, `SELECT progress_updated_at < NOW() - interval '1 minute' FROM files WHERE id = $1::uuid`, fileID).Scan(&stale); err != nil {
+		t.Fatalf("read progress_updated_at: %v", err)
+	}
+	if stale {
+		t.Fatalf("UpdateFileStage did not refresh progress_updated_at; stuck-file sweep would falsely time out an active file")
 	}
 
 	if err := store.ClearFileStage(ctx, fileID); err != nil {

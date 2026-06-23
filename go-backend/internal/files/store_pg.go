@@ -230,8 +230,15 @@ func (s *PGStore) UpdateFileProgress(ctx context.Context, fileID string, progres
 // spinner + n/x indicator. stage is a stable key (parse/tabular/enrich/embed/
 // kg/hype/raptor); index is 1-based; total is the enabled-stage count. Set at
 // every stage boundary; cleared via ClearFileStage at true completion.
+//
+// Also bumps progress_updated_at: a stage transition is a liveness heartbeat
+// from the worker, and the stuck-file maintenance sweep keys on
+// progress_updated_at. Without this, a long stage that doesn't emit a percent
+// update (enrich/KG/RAPTOR/large-file parse) lets progress_updated_at go stale
+// past StuckFileTimeout, so the sweep transiently flags an actively-ingesting
+// file as error/timeout until completion clears it (see worker.checkStuckFiles).
 func (s *PGStore) UpdateFileStage(ctx context.Context, fileID, stage string, index, total int) error {
-	const sql = `UPDATE files SET current_stage = $1, stage_index = $2, stage_total = $3 WHERE id = $4`
+	const sql = `UPDATE files SET current_stage = $1, stage_index = $2, stage_total = $3, progress_updated_at = NOW() WHERE id = $4`
 	if _, err := s.pool.Exec(ctx, sql, stage, index, total, fileID); err != nil {
 		return fmt.Errorf("UpdateFileStage: %w", err)
 	}
