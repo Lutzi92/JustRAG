@@ -130,6 +130,14 @@ func (f *fakeFileStore) MarkFileError(ctx context.Context, fileID, _, _ string) 
 	return f.UpdateFileStatus(ctx, fileID, "error")
 }
 
+func (f *fakeFileStore) UpdateFileStage(context.Context, string, string, int, int) error {
+	return nil
+}
+
+func (f *fakeFileStore) ClearFileStage(context.Context, string) error {
+	return nil
+}
+
 func (f *fakeFileStore) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
