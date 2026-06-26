@@ -48,6 +48,14 @@ func (f *fakeKGStore) PPRChunks(_ context.Context, _ string, _ []int64, _ int, _
 	return nil, nil
 }
 
+func (f *fakeKGStore) PPRPassages(_ context.Context, _ string, _ []int64, _ int, _ kg.PPRConfig) ([]string, error) {
+	return nil, nil
+}
+
+func (f *fakeKGStore) IncidentTriples(_ context.Context, _ string, _ []int64, _ int) ([]kg.IncidentTriple, error) {
+	return nil, nil
+}
+
 func (f *fakeKGStore) PathChunks(_ context.Context, _ string, _, _ int64, _ int, _ kg.PathConfig) ([]string, error) {
 	return nil, nil
 }
