@@ -436,6 +436,86 @@ func (s *PgStore) loadEdges(ctx context.Context, kbID string) ([]EdgeRow, error)
 	return out, nil
 }
 
+// buildDualNodeEdges turns the entity-only edge set into a HippoRAG-2
+// "dual-node" graph: every entity↔entity edge is preserved (topology),
+// and for each edge carrying a chunk_id we add two entity↔passage edges
+// so the passage participates directly in the random walk. Passage nodes
+// use synthetic NEGATIVE ids (entities are positive BIGSERIAL) and are
+// assigned once per distinct chunk_id. Returns the dual edge list and the
+// negativeID→chunkID map for reading passage scores back out.
+func buildDualNodeEdges(edges []EdgeRow) ([]EdgeRow, map[int64]string) {
+	dual := make([]EdgeRow, 0, len(edges)*3)
+	passageID := make(map[string]int64, len(edges))
+	idToChunk := make(map[int64]string, len(edges))
+	next := int64(-1)
+	for _, e := range edges {
+		dual = append(dual, EdgeRow{Src: e.Src, Dst: e.Dst, Weight: e.Weight})
+		if e.ChunkID == "" {
+			continue
+		}
+		pid, ok := passageID[e.ChunkID]
+		if !ok {
+			pid = next
+			next--
+			passageID[e.ChunkID] = pid
+			idToChunk[pid] = e.ChunkID
+		}
+		dual = append(dual, EdgeRow{Src: e.Src, Dst: pid, Weight: 1.0})
+		dual = append(dual, EdgeRow{Src: e.Dst, Dst: pid, Weight: 1.0})
+	}
+	return dual, idToChunk
+}
+
+// PPRPassages is the HippoRAG-2 dual-node chunk retriever. It runs PPR over
+// the passage+phrase graph seeded from the entity seedIDs and returns the
+// top-maxChunks chunk_ids by the passage nodes' OWN PPR score (not the
+// post-hoc endpoint-sum PPRChunks uses). Same degrade-gracefully contract
+// as PPRChunks: nil pool, empty seeds, maxChunks<1, or no edges → (nil,nil).
+func (s *PgStore) PPRPassages(ctx context.Context, kbID string, seedIDs []int64, maxChunks int, cfg PPRConfig) ([]string, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("kg: no DB pool configured")
+	}
+	if maxChunks < 1 || len(seedIDs) == 0 {
+		return nil, nil
+	}
+	edges, err := s.loadEdges(ctx, kbID)
+	if err != nil {
+		return nil, err
+	}
+	if len(edges) == 0 {
+		return nil, nil
+	}
+	dual, idToChunk := buildDualNodeEdges(edges)
+	scores := PersonalizedPageRank(seedIDs, dual, cfg)
+	if len(scores) == 0 {
+		return nil, nil
+	}
+	type chunkScored struct {
+		id    string
+		score float64
+	}
+	ranked := make([]chunkScored, 0, len(idToChunk))
+	for pid, chunk := range idToChunk {
+		if sc, ok := scores[pid]; ok && sc > 0 {
+			ranked = append(ranked, chunkScored{chunk, sc})
+		}
+	}
+	if len(ranked) == 0 {
+		return nil, nil
+	}
+	slices.SortFunc(ranked, func(a, b chunkScored) int {
+		return cmp.Or(cmp.Compare(b.score, a.score), cmp.Compare(a.id, b.id))
+	})
+	if len(ranked) > maxChunks {
+		ranked = ranked[:maxChunks]
+	}
+	out := make([]string, len(ranked))
+	for i, r := range ranked {
+		out[i] = r.id
+	}
+	return out, nil
+}
+
 // isSeed reports whether id appears in seedIDs. Linear scan — fine
 // because seedIDs is typically 1-3 entities from the alias router.
 func isSeed(id int64, seedIDs []int64) bool {

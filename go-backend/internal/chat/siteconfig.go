@@ -626,6 +626,42 @@ func ChatLongContextMaxTokens(ctx context.Context, reader SiteConfigReader) int 
 	return readInt(ctx, reader, "chat_longcontext_max_tokens", 100_000, 10_000, 500_000)
 }
 
+// ChatCommunitySearchEnabled gates community-primed global search: inject KG
+// community summaries into the answer pool for global-synthesis queries. Default off.
+func ChatCommunitySearchEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_community_search_enabled", false)
+}
+
+// ChatCommunitySearchTopK is how many community summaries to inject. Default 8, clamp [1,30].
+func ChatCommunitySearchTopK(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_community_search_top_k", 8, 1, 30)
+}
+
+// ChatDriftEnabled gates the full iterative DRIFT orchestrator: for
+// global-synthesis queries, read KG community summaries (the primer),
+// generate follow-up sub-questions, search each locally, and synthesise.
+// Default off.
+func ChatDriftEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_drift_enabled", false)
+}
+
+// ChatDriftMaxFollowups caps how many follow-up sub-questions DRIFT
+// generates and searches per turn. Default 4, clamp [1,8].
+func ChatDriftMaxFollowups(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_drift_max_followups", 4, 1, 8)
+}
+
+// ChatDriftPrimerTopK is how many community summaries seed the primer.
+// Default 6, clamp [1,20].
+func ChatDriftPrimerTopK(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_drift_primer_top_k", 6, 1, 20)
+}
+
+// ChatDriftSearchTopK is the per-follow-up search limit. Default 8, clamp [1,30].
+func ChatDriftSearchTopK(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_drift_search_top_k", 8, 1, 30)
+}
+
 // ChatContextCompressionEnabled gates the T2-3 ECoRAG
 // evidentiality compression. When true and the post-sandwich
 // chunk pool exceeds ChatContextCompressionMinChunks, one
@@ -765,6 +801,31 @@ func ChatGraphRoutingPPRTopEntities(ctx context.Context, reader SiteConfigReader
 	return readInt(ctx, reader, "chat_graph_routing_ppr_top_entities", 10, 1, 50)
 }
 
+// ChatGraphRoutingPPRDualNodeEnabled switches PPR chunk resolution to the
+// HippoRAG-2 dual-node path (PPRPassages) instead of the endpoint-sum
+// projection (PPRChunks). Default off.
+func ChatGraphRoutingPPRDualNodeEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_graph_routing_ppr_dual_node_enabled", false)
+}
+
+// ChatGraphRoutingPPRTripleFilterEnabled gates the HippoRAG-2 LLM
+// triple-filter (recognition memory) that prunes/expands PPR seeds. Default off.
+func ChatGraphRoutingPPRTripleFilterEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_graph_routing_ppr_triple_filter_enabled", false)
+}
+
+// ChatGraphRoutingPPRTripleFilterModel resolves the fast-tier model for the
+// triple-filter via the per-task key → model_tier_fast → KB default chain.
+func ChatGraphRoutingPPRTripleFilterModel(ctx context.Context, reader SiteConfigReader) string {
+	return ResolveFastTierModel(ctx, reader, "chat_graph_routing_ppr_triple_filter_model")
+}
+
+// ChatGraphRoutingPPRTripleFilterMaxTriples caps the candidate triples sent to
+// the LLM (prompt-size bound). Default 40, clamped to [5,200].
+func ChatGraphRoutingPPRTripleFilterMaxTriples(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_graph_routing_ppr_triple_filter_max_triples", 40, 5, 200)
+}
+
 // ChatGraphRoutingPathsMaxLen caps the path length the PathRAG
 // enumerator walks. 3 is PathRAG's sweet spot — multi-hop
 // reasoning rarely benefits past 3 hops on KG-scale graphs and
@@ -780,6 +841,14 @@ func ChatGraphRoutingPathsMaxLen(ctx context.Context, reader SiteConfigReader) i
 // "chat_graph_routing_paths_max_paths"; clamped to [1, 50].
 func ChatGraphRoutingPathsMaxPaths(ctx context.Context, reader SiteConfigReader) int {
 	return readInt(ctx, reader, "chat_graph_routing_paths_max_paths", 5, 1, 50)
+}
+
+// ChatGraphRoutingBridgeRerankEnabled gates bridge-evidence reranking: a
+// post-rerank score boost for chunks on a KG path between the query's matched
+// entities. Default off. Requires chat_graph_routing_enabled (reuses matched
+// entities).
+func ChatGraphRoutingBridgeRerankEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_graph_routing_bridge_rerank_enabled", false)
 }
 
 // ChatGraphRoutingEnabled reports whether the AP-C4 graph-routing

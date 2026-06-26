@@ -1842,6 +1842,47 @@ func GraphRoutingChunksInjectedForTest() *prometheus.CounterVec {
 	return graphRoutingChunksInjected
 }
 
+// --- Community-primed global search ---------------------------------------
+
+var communityPrimerTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_community_primer_total",
+		Help: "Community summaries injected into the answer pool for " +
+			"global-synthesis queries. Outcome values: injected (≥1 " +
+			"community summary was folded into the pool — value is the " +
+			"number of summaries added), empty (the primer fired but no " +
+			"community summaries were available to inject).",
+		ConstLabels: commonLabels,
+	},
+	[]string{"outcome"},
+)
+
+// RecordCommunityPrimer records a community-primer injection outcome
+// ("injected"/"empty"), adding n to the per-outcome counter.
+func RecordCommunityPrimer(outcome string, n int) {
+	communityPrimerTotal.WithLabelValues(outcome).Add(float64(n))
+}
+
+// --- Full iterative DRIFT --------------------------------------------------
+
+var driftRunTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_drift_run_total",
+		Help: "Full iterative DRIFT orchestrator runs by outcome. Outcome " +
+			"values: primed (a community primer was present), primerless (no " +
+			"community summaries were available), fallback (follow-up " +
+			"generation failed or was empty — searched the original query).",
+		ConstLabels: commonLabels,
+	},
+	[]string{"outcome"},
+)
+
+// RecordDriftRun records a DRIFT orchestrator run outcome
+// ("primed"/"primerless"/"fallback").
+func RecordDriftRun(outcome string) {
+	driftRunTotal.WithLabelValues(outcome).Inc()
+}
+
 // --- Long-term memory (AP-D1) --------------------------------------------
 
 var (

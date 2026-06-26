@@ -12,6 +12,19 @@ import (
 	"github.com/justrag/go-backend/internal/observability"
 )
 
+// excludeCommunitySummaryClause keeps KG community summaries out of the normal
+// retrieval pool. Community summaries (node_kind='community_summary') are only
+// surfaced by the community-primed global-search path (which injects them by id
+// via GraphChunkIDs, bypassing this WHERE clause). When an explicit
+// nodeKindFilter is set (eval ablation, or the community retrieval itself), the
+// caller's node_kind = $N clause already scopes the query, so no extra exclusion.
+func excludeCommunitySummaryClause(nodeKindFilter string) string {
+	if nodeKindFilter == "" {
+		return " AND node_kind <> 'community_summary'"
+	}
+	return ""
+}
+
 // parenJoin returns "(" + strings.Join(parts, sep) + ")" with a single
 // allocation. Pure-string concatenation of that pattern emits two: one for
 // strings.Join's result and one for the wrapping concat. On the keyword-search
@@ -167,6 +180,7 @@ func (s *SearchService) runVectorSearch(
 			filterClause += fmt.Sprintf(" AND node_kind = $%d::text", nextParam)
 			args = append(args, nodeKindFilter)
 		}
+		filterClause += excludeCommunitySummaryClause(nodeKindFilter)
 		vectorSQL = buildTwoPassVectorSQL(tableName, filterClause, dimensions, useHalfvec)
 	} else {
 		// Single-pass (existing behavior).
@@ -182,6 +196,7 @@ func (s *SearchService) runVectorSearch(
 			filterClause += fmt.Sprintf(" AND node_kind = $%d::text", nextParam)
 			args = append(args, nodeKindFilter)
 		}
+		filterClause += excludeCommunitySummaryClause(nodeKindFilter)
 
 		var vectorCast, embeddingExpr string
 		if useHalfvec {
@@ -323,6 +338,7 @@ func (s *SearchService) runKeywordSearch(
 		args = append(args, nodeKindFilter)
 		nextParam++
 	}
+	filterClause += excludeCommunitySummaryClause(nodeKindFilter)
 
 	// websearchClause is hoisted to function scope so the tiered-boost CASE
 	// (applied to the SELECT's score expression below when tieredBoost is on)

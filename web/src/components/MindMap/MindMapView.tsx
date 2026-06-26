@@ -10,6 +10,7 @@ import { Loader2, Network, X } from 'lucide-react';
 import { API_BASE_URL } from '../../api';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useKBGraphStream } from '../../hooks/useKBGraphStream';
+import { NodeSourcesPanel } from './NodeSourcesPanel';
 
 interface MindMapViewProps {
     kbId: string;
@@ -17,11 +18,19 @@ interface MindMapViewProps {
     // entity and switches back to the chat view.
     onAskAbout: (entityName: string) => void;
     onClose: () => void;
+    // Query-scoped mindmap (wired in a later task). When set, the view should
+    // load the per-answer subgraph for this message id instead of the whole-KB
+    // graph; null = whole-KB graph. Declared now so callers type-check.
+    messageId?: string | null;
+    // Clears the scoped message id but stays in the mindmap view (reloads the
+    // whole-KB graph). Behavior implemented in a later task.
+    onShowWholeKb?: () => void;
 }
 
-interface GraphNode { id: number; name: string; type: string; degree: number; }
+interface NodeSource { fileId: string; fileName: string; chunkId: string; }
+interface GraphNode { id: number; name: string; type: string; degree: number; sources?: NodeSource[]; }
 interface GraphEdge { source: number; target: number; rel: string; }
-interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; processing?: boolean; }
+interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; processing?: boolean; scoped?: boolean; }
 
 const NODE_W = 170;
 const NODE_H = 44;
@@ -81,17 +90,24 @@ function layoutGraph(data: GraphData): { nodes: Node[]; edges: Edge[] } {
 
 type Status = 'loading' | 'ready' | 'error' | 'empty';
 
-export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onClose }) => {
+export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onClose, messageId, onShowWholeKb }) => {
     const { t } = useTheme();
     const [status, setStatus] = useState<Status>('loading');
     const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
     // node id -> entity name, for the click-to-ask handler.
     const [names, setNames] = useState<Record<string, string>>({});
+    // node id -> source chunks, for the (scoped) provenance UI.
+    const [sources, setSources] = useState<Record<string, NodeSource[]>>({});
+    // currently selected node id (scoped mode opens a sources side panel).
+    const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
     const loadGraph = useCallback(() => {
         let cancelled = false;
-        axios.get(`${API_BASE_URL}/api/kb/${kbId}/graph`)
+        const url = messageId
+            ? `${API_BASE_URL}/api/kb/${kbId}/graph?messageId=${encodeURIComponent(messageId)}`
+            : `${API_BASE_URL}/api/kb/${kbId}/graph`;
+        axios.get(url)
             .then(res => {
                 if (cancelled) return;
                 const data = res.data as GraphData;
@@ -105,11 +121,12 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
                 setNodes(laid.nodes);
                 setEdges(laid.edges);
                 setNames(Object.fromEntries(data.nodes.map(n => [String(n.id), n.name])));
+                setSources(Object.fromEntries(data.nodes.map(n => [String(n.id), n.sources ?? []])));
                 setStatus('ready');
             })
             .catch(() => { if (!cancelled) setStatus('error'); });
         return () => { cancelled = true; };
-    }, [kbId, setNodes, setEdges]);
+    }, [kbId, messageId, setNodes, setEdges]);
 
     useEffect(() => {
         const cancel = loadGraph();
@@ -120,9 +137,10 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
     const { processing } = useKBGraphStream(kbId, loadGraph);
 
     const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+        if (messageId) { setSelectedNode(node.id); return; }
         const name = names[node.id] ?? (node.data?.label as string | undefined);
         if (name) onAskAbout(name);
-    }, [names, onAskAbout]);
+    }, [messageId, names, onAskAbout]);
 
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
@@ -136,6 +154,14 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
                         <h3 style={{ margin: 0 }}>{t('mindMap')}</h3>
                         <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{t('mindMapNodeHint')}</p>
                     </div>
+                    {messageId && (
+                        <>
+                            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{t('scopedToThisAnswer')}</span>
+                            <button type="button" className="message-action-btn" onClick={() => onShowWholeKb?.()}>
+                                {t('showWholeKb')}
+                            </button>
+                        </>
+                    )}
                 </div>
                 <button onClick={onClose} style={{
                     background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)',
@@ -182,8 +208,20 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
                         {status === 'loading' && <Loader2 className="animate-spin" size={32} style={{ color: 'var(--accent-primary)' }} />}
                         {status === 'loading' && <p>{t('mindMapLoading')}</p>}
                         {status === 'error' && <p>{t('mindMapError')}</p>}
-                        {status === 'empty' && (<><Network size={48} style={{ opacity: 0.2 }} /><p style={{ maxWidth: 460 }}>{t('mindMapEmpty')}</p></>)}
+                        {status === 'empty' && (<><Network size={48} style={{ opacity: 0.2 }} /><p style={{ maxWidth: 460 }}>{t('mindMapEmpty')}</p>{messageId && (
+                            <button type="button" className="message-action-btn" onClick={() => onShowWholeKb?.()}>
+                                {t('showWholeKb')}
+                            </button>
+                        )}</>)}
                     </div>
+                )}
+                {selectedNode && (
+                    <NodeSourcesPanel
+                        entityName={names[selectedNode] ?? ''}
+                        sources={sources[selectedNode] ?? []}
+                        onAsk={() => { const n = names[selectedNode]; if (n) onAskAbout(n); setSelectedNode(null); }}
+                        onClose={() => setSelectedNode(null)}
+                    />
                 )}
             </div>
         </div>

@@ -2,8 +2,6 @@ package chat
 
 import (
 	"context"
-	"strings"
-	"unicode"
 
 	"github.com/justrag/go-backend/internal/kg"
 	"github.com/justrag/go-backend/internal/logctx"
@@ -153,8 +151,14 @@ func resolveGraphChunksPPR(ctx context.Context, store kg.Store, siteCfg SiteConf
 		Damping: ChatGraphRoutingPPRDamping(ctx, siteCfg),
 		MaxIter: ChatGraphRoutingPPRMaxIter(ctx, siteCfg),
 	}
-	topEntities := ChatGraphRoutingPPRTopEntities(ctx, siteCfg)
-	out, err := store.PPRChunks(ctx, kbID, seeds, topEntities, maxChunks, cfg)
+	var out []string
+	var err error
+	if ChatGraphRoutingPPRDualNodeEnabled(ctx, siteCfg) {
+		out, err = store.PPRPassages(ctx, kbID, seeds, maxChunks, cfg)
+	} else {
+		topEntities := ChatGraphRoutingPPRTopEntities(ctx, siteCfg)
+		out, err = store.PPRChunks(ctx, kbID, seeds, topEntities, maxChunks, cfg)
+	}
 	if err != nil {
 		logctx.From(ctx).Warn("graph_routing: ppr chunk lookup failed; falling back to neighbours",
 			"error", err, "kb_id", kbID, "seeds", len(seeds))
@@ -163,33 +167,20 @@ func resolveGraphChunksPPR(ctx context.Context, store kg.Store, siteCfg SiteConf
 	return out
 }
 
-// resolveGraphChunksPaths is the T1-5 PathRAG injection strategy.
-// Enumerates relational paths between every distinct pair of
-// matched entities and unions their chunks (deduped, capped at
-// maxChunks). Single-entity queries can't form a pair; that case
-// returns nil so the caller falls back to neighbours.
-//
-// The pair enumeration is O(N²) over the matched-entity list,
-// which the alias router caps at 10 — worst case 45 pairs, but in
-// practice 1-3 entities match per query and the inner store call
-// is short-circuited for disconnected pairs.
-func resolveGraphChunksPaths(ctx context.Context, store kg.Store, siteCfg SiteConfigReader, kbID string, dec GraphTraversalDecision, maxChunks int) []string {
-	if store == nil || len(dec.MatchedEntities) < 2 {
+// bridgeChunkTally enumerates unordered pairs of the matched entities and
+// tallies, per chunk id, how many inter-entity KG paths it lies on. Shared by
+// the `paths` injection mode (resolveGraphChunksPaths) and bridge-evidence
+// reranking. Returns nil for <2 entities or an empty tally; per-pair PathChunks
+// errors are logged and skipped (fail-open).
+func bridgeChunkTally(ctx context.Context, store kg.Store, siteCfg SiteConfigReader, kbID string, ents []kg.Entity, maxChunks int) map[string]int {
+	if store == nil || len(ents) < 2 {
 		return nil
 	}
 	cfg := kg.PathConfig{
 		MaxLen:   ChatGraphRoutingPathsMaxLen(ctx, siteCfg),
 		MaxPaths: ChatGraphRoutingPathsMaxPaths(ctx, siteCfg),
 	}
-	// Use ordered pairs but skip self and symmetric duplicates:
-	// (i, j) with i < j is enough because FindRelationalPaths walks
-	// undirected (paths from A→B are the same as B→A).
-	type chunkScore struct {
-		id    string
-		score int // simple frequency tally — same dedup logic as neighbours mode
-	}
 	tally := make(map[string]int)
-	ents := dec.MatchedEntities
 	for i := 0; i < len(ents); i++ {
 		for j := i + 1; j < len(ents); j++ {
 			chunks, err := store.PathChunks(ctx, kbID, ents[i].ID, ents[j].ID, maxChunks, cfg)
@@ -206,6 +197,28 @@ func resolveGraphChunksPaths(ctx context.Context, store kg.Store, siteCfg SiteCo
 	}
 	if len(tally) == 0 {
 		return nil
+	}
+	return tally
+}
+
+// resolveGraphChunksPaths is the T1-5 PathRAG injection strategy.
+// Enumerates relational paths between every distinct pair of
+// matched entities and unions their chunks (deduped, capped at
+// maxChunks). Single-entity queries can't form a pair; that case
+// returns nil so the caller falls back to neighbours.
+//
+// The pair enumeration is O(N²) over the matched-entity list,
+// which the alias router caps at 10 — worst case 45 pairs, but in
+// practice 1-3 entities match per query and the inner store call
+// is short-circuited for disconnected pairs.
+func resolveGraphChunksPaths(ctx context.Context, store kg.Store, siteCfg SiteConfigReader, kbID string, dec GraphTraversalDecision, maxChunks int) []string {
+	tally := bridgeChunkTally(ctx, store, siteCfg, kbID, dec.MatchedEntities, maxChunks)
+	if len(tally) == 0 {
+		return nil
+	}
+	type chunkScore struct {
+		id    string
+		score int // simple frequency tally — same dedup logic as neighbours mode
 	}
 
 	// Order by frequency desc (chunks that appear on more
@@ -311,31 +324,5 @@ func ResolveGraphChunks(ctx context.Context, store kg.Store, kbID string, dec Gr
 // extractor's normalisation also carry hyphenated variants, so the
 // tokeniser doesn't need to reproduce them.
 func tokeniseForGraph(query string) []string {
-	if strings.TrimSpace(query) == "" {
-		return nil
-	}
-	out := make([]string, 0, 8)
-	seen := make(map[string]bool, 8)
-	current := strings.Builder{}
-	flush := func() {
-		t := current.String()
-		current.Reset()
-		if len(t) < 3 {
-			return
-		}
-		if seen[t] {
-			return
-		}
-		seen[t] = true
-		out = append(out, t)
-	}
-	for _, r := range query {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			current.WriteRune(r)
-		} else {
-			flush()
-		}
-	}
-	flush()
-	return out
+	return kg.TokenizeForGraph(query)
 }

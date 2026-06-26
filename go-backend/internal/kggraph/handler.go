@@ -6,10 +6,12 @@ package kggraph
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/kg"
@@ -22,6 +24,7 @@ import (
 type Store interface {
 	GraphOverview(ctx context.Context, kbID string, maxNodes int) (kg.GraphOverview, error)
 	KBHasActiveIngestion(ctx context.Context, kbID string) (bool, error)
+	ScopedGraphForMessage(ctx context.Context, kbID, messageID string) (kg.ScopedGraph, error)
 }
 
 // Handler serves the KG overview + live update endpoints.
@@ -45,6 +48,13 @@ type graphResponse struct {
 	Processing bool `json:"processing"`
 }
 
+// scopedResponse is the GET /graph?messageId= payload: the per-answer subgraph
+// with a scoped flag the frontend uses to switch into scoped-view behaviour.
+type scopedResponse struct {
+	kg.ScopedGraph
+	Scoped bool `json:"scoped"`
+}
+
 func kbIDFrom(ctx context.Context, r *http.Request) string {
 	if access := kbaccess.AccessFromContext(ctx); access != nil && access.KB != nil {
 		return access.KB.ID
@@ -56,6 +66,24 @@ func kbIDFrom(ctx context.Context, r *http.Request) string {
 func (h *Handler) GetGraph(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	kbID := kbIDFrom(ctx, r)
+
+	if messageID := r.URL.Query().Get("messageId"); messageID != "" {
+		if _, perr := uuid.Parse(messageID); perr != nil {
+			httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid messageId")
+			return
+		}
+		scoped, err := h.store.ScopedGraphForMessage(ctx, kbID, messageID)
+		if err != nil {
+			if errors.Is(err, kg.ErrMessageNotInKB) {
+				httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "message not found")
+				return
+			}
+			httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to load scoped graph")
+			return
+		}
+		httputil.WriteJSONCtx(ctx, w, http.StatusOK, scopedResponse{ScopedGraph: scoped, Scoped: true})
+		return
+	}
 
 	maxNodes := 0
 	if v := r.URL.Query().Get("maxNodes"); v != "" {

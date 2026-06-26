@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -501,5 +502,52 @@ func TestProcessFile_DeletesChunksBeforeIngest(t *testing.T) {
 	}
 	if len(spy.deletedParents) != 1 || spy.deletedParents[0] != "file-1" {
 		t.Errorf("DeleteParentChunksByFileID: want [file-1], got %v", spy.deletedParents)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// kgDeleter seam test
+// ---------------------------------------------------------------------------
+
+// spyKGDeleter records DeleteKGForFile calls and can simulate a failure so
+// TestClearStaleKG_* can verify best-effort behaviour.
+type spyKGDeleter struct {
+	calls   [][2]string // {kbID, fileID}
+	failErr error
+}
+
+func (s *spyKGDeleter) DeleteKGForFile(_ context.Context, kbID, fileID string) error {
+	s.calls = append(s.calls, [2]string{kbID, fileID})
+	return s.failErr
+}
+
+func TestClearStaleKG_CallsDeleterWithKBAndFile(t *testing.T) {
+	spy := &spyKGDeleter{}
+	p := NewProcessor(parser.NewFactory(), nil, nil, &mockStore{})
+	p.kgCleaner = spy
+
+	p.clearStaleKG(context.Background(), "kb-1", "file-1")
+
+	if len(spy.calls) != 1 || spy.calls[0] != [2]string{"kb-1", "file-1"} {
+		t.Errorf("DeleteKGForFile: want one call with {kb-1,file-1}, got %v", spy.calls)
+	}
+}
+
+func TestClearStaleKG_NilDeleterIsNoOp(t *testing.T) {
+	p := NewProcessor(parser.NewFactory(), nil, nil, &mockStore{})
+	// p.kgCleaner left nil — must not panic.
+	p.clearStaleKG(context.Background(), "kb-1", "file-1")
+}
+
+func TestClearStaleKG_ToleratesDeleterError(t *testing.T) {
+	spy := &spyKGDeleter{failErr: fmt.Errorf("boom")}
+	p := NewProcessor(parser.NewFactory(), nil, nil, &mockStore{})
+	p.kgCleaner = spy
+
+	// Must not panic or propagate; best-effort like chunk cleanup.
+	p.clearStaleKG(context.Background(), "kb-1", "file-1")
+
+	if len(spy.calls) != 1 {
+		t.Errorf("want deleter invoked once even on error, got %d calls", len(spy.calls))
 	}
 }

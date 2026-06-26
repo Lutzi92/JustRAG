@@ -42,6 +42,10 @@ type DeepChatParams struct {
 	// behaviour. Same field on every orchestrator's params struct so
 	// the http_send.go dispatcher can compute it once and forward.
 	GraphChunkIDs []string
+	// BridgeChunks forwards the bridge-evidence tally (chunk_id -> bridge
+	// count) into SearchOptions for post-rerank multi-hop boosting. Nil
+	// (default) leaves the boost inert.
+	BridgeChunks map[string]int
 	// HyPESearch enables the HyPE query-time arm on this orchestrator's
 	// initial search (resolved from hype_search_enabled at dispatch).
 	HyPESearch bool
@@ -86,6 +90,7 @@ func RunDeepChat(
 		ModelOverride: params.PlanningModel,
 		QueryType:     params.QueryType,
 		GraphChunkIDs: params.GraphChunkIDs,
+		BridgeChunks:  params.BridgeChunks,
 		HyPESearch:    params.HyPESearch,
 	}
 	result1, err := searchSvc.Search(ctx, params.KbID, params.Query, 0, opts1)
@@ -124,6 +129,7 @@ func RunDeepChat(
 		ModelOverride: params.PlanningModel,
 		QueryType:     params.QueryType,
 		GraphChunkIDs: params.GraphChunkIDs,
+		BridgeChunks:  params.BridgeChunks,
 		HyPESearch:    params.HyPESearch,
 	}
 	result2, err := searchSvc.Search(ctx, params.KbID, rewrittenQuery, 0, opts2)

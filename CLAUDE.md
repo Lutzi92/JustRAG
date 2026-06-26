@@ -14,7 +14,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `chat_sufficient_context_*` — holistic "does the assembled set suffice?" abstention gate (standard + supervisor paths)
 - `chat_compare_*` — in-chat single-file comparison against the KB (upload a file in chat; contradiction / formal / completeness modes). `_enabled` master gate (default off), `_model` (fast-tier), `_max_sections`, `_concurrency`, `_peers_per_section`, `_attachment_ttl_hours`, `_max_file_bytes`. File parsed in memory, held in a Redis-backed `chatattach` store (24h TTL), never ingested. New package `internal/chatattach`; endpoint `POST /api/kb/{id}/chat/attachment`.
 - `crag_*`, `adaptive_routing_*` — corrective-RAG + skip rules
-- `kg_*`, `chat_graph_routing_*` — knowledge-graph extraction + routing (incl. `_path_mode` PPR/PathRAG trichotomy)
+- `kg_*`, `chat_graph_routing_*` — knowledge-graph extraction + routing (incl. `_path_mode` PPR/PathRAG trichotomy; `chat_graph_routing_ppr_dual_node_enabled` (HippoRAG 2 dual-node passage PPR), `chat_graph_routing_ppr_triple_filter_enabled` (+ `_model`, `_max_triples`) — recognition-memory seed prune/expand; both default off; `chat_graph_routing_bridge_rerank_enabled` (+ `bridge_boost_weight`, default 0.1) — post-rerank boost for multi-hop bridge chunks on a KG path between matched entities; default off). `kg_canonicalization_enabled` (+ `_threshold` 0.85, `_max_pairs` 200, `_model`) — admin-triggered batch entity dedup (`POST /api/kb/{id}/canonicalize`): embedding-cosine candidates, LLM-confirmed, merged via edge re-pointing; default off. `internal/canonicalize`. `kg_communities_enabled` (+ `_resolution` 1.0, `_min_size` 3, `_summary_model`, `_summary_input_cap`) — admin-triggered batch (`POST /api/kb/{id}/communities/build`): topology-Louvain communities over kg_edges → per-community LLM summaries stored as `node_kind='community_summary'` chunks; default off. `internal/community`. (Index for a future DRIFT global-search.) `chat_community_search_enabled` (+ `_top_k` 8) — community-primed global search: for global-synthesis queries, inject KG community summaries (from `kg_communities_enabled`) into the answer pool; community summaries are excluded from normal retrieval by default. Default off. `internal/chat/community_search.go`. `chat_drift_enabled` (+ `_max_followups` 4, `_primer_top_k` 6, `_search_top_k` 8, `_model` fast-tier) — full iterative DRIFT: a global-synthesis orchestrator that reads KG community summaries (the primer), generates follow-up sub-questions, runs one light local search per follow-up, and assembles a single answer pass. Gated on `complex_reasoning` + `IsGlobalSynthesisQuery`; takes priority over the other orchestrators for those queries. Default off. `internal/chat/drift_chat.go`.
 - `query_cache_*`, `step_back_*`, `mmr_*`, `rerank_blend_alpha*`, `top_n_*` — retrieval pipeline (`query_cache_similarity_threshold_*` for per-query-type thresholds)
 - `query_decompose_*` — sub-question decomposition (DecomposeRAG)
 - `bm25_simple_arm_enabled`, `bm25_tiered_boost_enabled` — BM25 keyword-arm tuning
@@ -25,7 +25,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `chat_tabular_*`, `tabular_semantic_*` — structured spreadsheet Q&A + fuzzy free-text-cell search + charts/pivots (Phase 1/2/3; `chat_tabular_charts_enabled` is the Phase-3 flag)
 - `mcp_server_enabled` — expose each KB as an MCP server at `POST /api/v1/kb/{id}/mcp` (single tool `ask_kb`, runs the real RAG pipeline; per-KB access via existing API-key + KB-permission chain). Default off. `internal/mcpserver`.
 - `ragas_*`, `factcheck_*`, `citation_validation_*`, `langfuse_*` — validation + observability
-- `model_tier_fast` — deployment-wide default for fast-tier tasks (CRAG grader, KG extractor, contextual enricher, factuality / Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer, longmem conflict classifier, evidentiality classifier, HyPE question generator, golden-set question generator, sufficient-context gate, comparison section checker** (`chat_compare_model`)); per-task `*_model` keys override. All fast-tier JSON calls send strict `json_schema` Structured Outputs (vLLM guided_json) with auto-downgrade to `json_object` on backend rejection; tolerant parsing stays as last resort (`ai.GenerateCompletionStructured` / `structuredCompletionFn`). Sole exception: the tool-aware DAG planner (free-form per-tool `args` is incompatible with strict mode).
+- `model_tier_fast` — deployment-wide default for fast-tier tasks (CRAG grader, KG extractor, contextual enricher, factuality / Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer, longmem conflict classifier, evidentiality classifier, HyPE question generator, golden-set question generator, sufficient-context gate, comparison section checker** (`chat_compare_model`), **DRIFT follow-up generator** (`chat_drift_model`)); per-task `*_model` keys override. All fast-tier JSON calls send strict `json_schema` Structured Outputs (vLLM guided_json) with auto-downgrade to `json_object` on backend rejection; tolerant parsing stays as last resort (`ai.GenerateCompletionStructured` / `structuredCompletionFn`). Sole exception: the tool-aware DAG planner (free-form per-tool `args` is incompatible with strict mode).
 
 **Runtime-only knob (no site_config):** `hnsw.iterative_scan = relaxed_order` is set by `BuildPoolConfig`'s `AfterConnect` hook on every new pool connection (T0-1). Required for filtered ANN queries (kb_id, node_kind, GraphChunkIDs, file_id) to expand the HNSW candidate list until the WHERE clause is satisfied. Tolerates pgvector < 0.8 with a one-shot warning; no operator action needed when pgvector ≥ 0.8 is installed.
 
@@ -47,6 +47,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 | 0049 | `eval_golden_set_jobs` (async corpus → golden-set generation status) |
 | 0052 | `message_chunks` (answer→chunk links for the online feedback loop) |
 | 0054 | `files.error_stage` + `error_message` (ingestion error visibility + per-file/per-KB retry) |
+| 0059 | `kg_communities` (GraphRAG community detection) |
 
 **Vector tables** are dim-keyed (`document_chunks_2560`, `document_chunks_4096`, …); switching the embedder requires a re-ingest.
 
@@ -212,15 +213,16 @@ Most chat-pipeline features default OFF. The **full toggle blocks** (combined fl
 | HyPE | `hype_enabled` (ingest) + `hype_search_enabled` (query) | — | HyPE — hypothetical prompt embeddings |
 | In-chat document comparison | `chat_compare_enabled` (+ `_model`, `_max_sections`, `_concurrency`, `_peers_per_section`, `_attachment_ttl_hours`, `_max_file_bytes`) | — | In-chat document comparison |
 | Image captioning + better tables (Docling) | `docling_enabled` + `docling_picture_description_enabled` (+ `docling_picture_area_threshold`, `docling_table_mode`) — gemma-4 vision wired **on the sidecar** | — | Image captioning + better tables (Docling) |
+| Full iterative DRIFT | `chat_drift_enabled` (+ `_max_followups`, `_primer_top_k`, `_search_top_k`, `_model`) | 0059 | Full iterative DRIFT |
 | KB-as-MCP-server (ask_kb) | `mcp_server_enabled` (global, default off) | — | KB-as-MCP-server |
 
 Mutual exclusions and ordering gotchas (e.g. `chat_self_rag_enabled` REPLACES `chat_factuality_verifier_enabled`; `raptor_enabled` vs `parent_child_enabled`; the T1-2 dim re-embed sequence before `chat_longmem_recall_semantic`) are documented inline in each recipe.
 
 ## Model tier resolution
 
-Cost-optimization knob orthogonal to the feature recipes above. Each fast-tier task (CRAG grader, KG extractor, contextual enricher, factuality verifier, Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer (T1-1), longmem conflict classifier (T1-3), evidentiality classifier (T2-3), HyPE question generator, golden-set question generator**) resolves its model in this chain (first non-empty wins):
+Cost-optimization knob orthogonal to the feature recipes above. Each fast-tier task (CRAG grader, KG extractor, contextual enricher, factuality verifier, Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer (T1-1), longmem conflict classifier (T1-3), evidentiality classifier (T2-3), HyPE question generator, golden-set question generator, DRIFT follow-up generator**) resolves its model in this chain (first non-empty wins):
 
-1. The task's per-task site_config key (e.g. `crag_grader_model`, `kg_extraction_model`, `query_decompose_model`, `chat_longmem_conflict_model`, `chat_context_compression_model`, `hype_model`)
+1. The task's per-task site_config key (e.g. `crag_grader_model`, `kg_extraction_model`, `query_decompose_model`, `chat_longmem_conflict_model`, `chat_context_compression_model`, `hype_model`, `chat_drift_model`)
 2. `model_tier_fast` — deployment-wide fast-tier default
 3. The KB's default chat model (legacy fallback)
 
@@ -256,6 +258,7 @@ Full mechanism for every orchestrator and chat-pipeline feature lives in **`docs
 
 | # | Orchestrator | Flag(s) | Shape |
 |---|---|---|---|
+| 0 | DRIFT (global-synthesis) | `chat_drift_enabled` | Primer (community summaries) → LLM follow-ups → light search per follow-up → synthesise |
 | 1 | Supervisor | `chat_supervisor_enabled` | One classification call → specialist (RetrieverAgent / EnumeratorAgent) → search → answer |
 | 2 | Plan-and-Execute | `chat_plan_execute_enabled` (+ `_dag`, `_dag_iterative`, `_tool_aware`) | Plan → Iterate → Generate; flat or DAG, optional inter-level critic, optional tool-aware planner |
 | 3 | Agentic | `chat_agentic_enabled` (+ `_plateau_stop`, `_max_hops`) | Hop-1 → critique LLM → optional follow-up hops |

@@ -212,3 +212,45 @@ func TestPersonalizedPageRank_OrderingStableAcrossIterCaps(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildDualNodeEdges(t *testing.T) {
+	edges := []EdgeRow{
+		{Src: 1, Dst: 2, Weight: 2.0, ChunkID: "cA"},
+		{Src: 2, Dst: 3, Weight: 1.0, ChunkID: ""},
+	}
+	dual, idToChunk := buildDualNodeEdges(edges)
+	if len(dual) != 4 {
+		t.Fatalf("want 4 dual edges, got %d: %+v", len(dual), dual)
+	}
+	if len(idToChunk) != 1 {
+		t.Fatalf("want 1 passage node, got %d", len(idToChunk))
+	}
+	var pid int64
+	for id := range idToChunk {
+		pid = id
+	}
+	if pid >= 0 || idToChunk[pid] != "cA" {
+		t.Errorf("passage id must be negative and map to cA, got %d -> %q", pid, idToChunk[pid])
+	}
+	foundEE := false
+	for _, e := range dual {
+		if e.Src == 1 && e.Dst == 2 && e.Weight == 2.0 {
+			foundEE = true
+		}
+	}
+	if !foundEE {
+		t.Errorf("entity-entity edge (1,2,w=2.0) missing from dual graph")
+	}
+}
+
+func TestPersonalizedPageRank_PassageNodeAccruesScore(t *testing.T) {
+	dual := []EdgeRow{
+		{Src: 1, Dst: 2, Weight: 1.0},
+		{Src: 1, Dst: -1, Weight: 1.0},
+		{Src: 2, Dst: -1, Weight: 1.0},
+	}
+	scores := PersonalizedPageRank([]int64{1}, dual, PPRConfig{})
+	if scores[-1] <= 0 {
+		t.Errorf("passage node -1 should accrue positive PPR score, got %v", scores[-1])
+	}
+}

@@ -76,6 +76,22 @@ Migration **0044**. No-op until `kg_extraction_enabled` has run on the KB's file
 
 **Cross-feature ordering:** refine gates are independent of tool tier and graph routing; enable KG ingestion + tool-aware planner together for the multi-hop eval gain (planner sees `graph_search` in the catalog).
 
+## Full iterative DRIFT
+
+For global-synthesis queries, a dedicated orchestrator reads KG community summaries (the primer), asks the fast-tier LLM for follow-up sub-questions, runs one light local search per follow-up, and synthesises a single answer — the full iterative DRIFT path.
+
+**Prerequisite:** run the community-build job so community summaries exist (`kg_communities_enabled = true` + `POST /api/kb/{id}/communities/build`). If no summaries exist, DRIFT degrades gracefully to a primerless run (follow-ups generated from the query alone).
+
+```
+chat_drift_enabled        = true        # master gate; default off
+chat_drift_max_followups  = 4           # [1,8]
+chat_drift_primer_top_k   = 6           # [1,20]
+chat_drift_search_top_k   = 8           # [1,30]
+chat_drift_model          = <fast-tier> # optional; falls through model_tier_fast
+```
+
+Migration **0059** (kg_communities). Gated on `complex_reasoning` + `IsGlobalSynthesisQuery`; for matching queries it takes priority over supervisor/plan-execute/agentic/standard. Independent of, and composes with, the P2-B community-primed MVP (`chat_community_search_enabled`) — DRIFT is the multi-step path, the MVP is single-pass injection. Adds 1 fast-tier LLM call + N follow-up searches per matching turn; validate on the golden set before enabling. Metric: `rag_drift_run_total{outcome}`.
+
 ## Sub-question decomposition (DecomposeRAG, T1-1)
 
 ```

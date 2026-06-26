@@ -5,6 +5,7 @@ export interface MessageSource {
     content: string;
     score: number;
     pages?: number[];
+    nodeKind?: string;
 }
 
 // CitationStatus is one entry in MessageVerification.citations — produced

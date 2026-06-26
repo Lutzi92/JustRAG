@@ -97,6 +97,10 @@ type PlanExecuteParams struct {
 	// the same graph chunks into every sub-search would dilute the
 	// per-query relevance signal.
 	GraphChunkIDs []string
+	// BridgeChunks forwards the bridge-evidence tally (chunk_id -> bridge
+	// count) into the initial plan-search SearchOptions for post-rerank
+	// multi-hop boosting. Nil (default) leaves the boost inert.
+	BridgeChunks map[string]int
 	// HyPESearch enables the HyPE query-time arm on this orchestrator's
 	// initial search (resolved from hype_search_enabled at dispatch).
 	HyPESearch bool
@@ -296,6 +300,7 @@ func runPlanExecuteChatTestable(
 		ModelOverride: params.PlanningModel,
 		QueryType:     vector.QueryTypeComplexReasoning,
 		GraphChunkIDs: params.GraphChunkIDs,
+		BridgeChunks:  params.BridgeChunks,
 		HyPESearch:    params.HyPESearch,
 	}
 	if !dagUsed && (planErr != nil || len(subQueries) == 0) {

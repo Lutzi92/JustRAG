@@ -78,3 +78,13 @@ type ReEmbedUserMemoryPayload struct {
 type GenerateGoldenSetPayload struct {
 	JobID string `json:"jobId"`
 }
+
+// EntityCanonicalizePayload is the TypeEntityCanonicalizeKB task body.
+type EntityCanonicalizePayload struct {
+	KbID string `json:"kbId"`
+}
+
+// KGCommunitiesBuildPayload is the TypeKGCommunitiesBuild task body.
+type KGCommunitiesBuildPayload struct {
+	KbID string `json:"kbId"`
+}

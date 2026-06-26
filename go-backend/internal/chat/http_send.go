@@ -228,7 +228,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// the resolved subgraph chunks thread through whichever orchestrator
 	// handles the turn (Supervisor / Plan-Execute / Agentic / DeepChat /
 	// standard PrepareChatContext).
-	graphDec, graphChunkIDs := h.resolveGraphRouting(ctx, kbID, searchQuery, cls.QueryType)
+	graphDec, graphChunkIDs, bridgeChunks := h.resolveGraphRouting(ctx, kbID, searchQuery, cls.QueryType)
 
 	// In-chat document comparison: an attachment + at least one mode + the
 	// feature gate routes this turn to the comparison orchestrator (handled
@@ -256,7 +256,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// the comparison orchestrator) regardless of complexity classification.
 	isComplex := cls.UseHyDE && cls.UseMultiQuery
 	if (isComplex || runCompare) && streamMode {
-		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, answerHistory); handled {
+		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, bridgeChunks, answerHistory); handled {
 			return
 		}
 		// Deep chat failed — fall through to standard path.
@@ -286,6 +286,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		QueryType:             cls.QueryType,
 		Emit:                  collectEmit,
 		GraphSubgraphChunkIDs: graphChunkIDs,
+		BridgeChunks:          bridgeChunks,
 	}
 
 	// AP-C4 trajectory event (standard path): the decision was computed
@@ -371,6 +372,7 @@ func (h *Handler) tryDeepChat(
 	parentMsgID *string,
 	graphDec GraphTraversalDecision,
 	graphChunkIDs []string,
+	bridgeChunks map[string]int,
 	answerHistory []ai.ChatHistoryEntry,
 ) bool {
 	ctx, span := observability.Tracer().Start(ctx, "chat.deep_chat")
@@ -392,6 +394,7 @@ func (h *Handler) tryDeepChat(
 		PlanningModel:  EnrichmentModel(ctx, h.siteConfigReader),
 		QueryType:      queryType,
 		GraphChunkIDs:  graphChunkIDs,
+		BridgeChunks:   bridgeChunks,
 		HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
 	}
 
@@ -439,6 +442,7 @@ func (h *Handler) tryDeepChat(
 	planExecuteEnabled := ChatPlanExecuteEnabled(ctx, h.siteConfigReader)
 
 	supervisorEnabled := ChatSupervisorEnabled(ctx, h.siteConfigReader)
+	driftEnabled := ChatDriftEnabled(ctx, h.siteConfigReader)
 
 	// Corpus-table comparison: checked first so it can take top priority over
 	// all orchestrators. The two-stage gate (keyword classifier + optional LLM
@@ -462,18 +466,27 @@ func (h *Handler) tryDeepChat(
 		willRunCorpusTable = false
 	}
 
+	// Full iterative DRIFT takes priority over the other orchestrators, but
+	// only for global-synthesis queries (its primer is wasted on narrow
+	// lookups). Narrow gate → it rarely intercepts; everything else falls
+	// through to supervisor/plan-execute/agentic/standard unchanged.
+	willRunDrift := !runCompare && !willRunCorpusTable && driftEnabled &&
+		queryType == vector.QueryTypeComplexReasoning &&
+		body.Enhance == "" &&
+		IsGlobalSynthesisQuery(searchQuery)
+
 	// Phase 3 §3.2 supervisor takes priority over both plan-execute and
 	// agentic when the gate is on. Plan §3.2 ship gate: "non-regression
 	// on lookup/enumeration; ≥ 2 pp gain on complex_reasoning MRR or
 	// nDCG" — only the eval harness can decide whether the gate flips,
 	// so this gate stays per-deployment opt-in.
-	willRunSupervisor := !runCompare && !willRunCorpusTable && supervisorEnabled &&
+	willRunSupervisor := !runCompare && !willRunCorpusTable && !willRunDrift && supervisorEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
-	willRunPlanExecute := !runCompare && !willRunCorpusTable && !willRunSupervisor && planExecuteEnabled &&
+	willRunPlanExecute := !runCompare && !willRunCorpusTable && !willRunDrift && !willRunSupervisor && planExecuteEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
-	willRunAgentic := !runCompare && !willRunCorpusTable && !willRunSupervisor && !willRunPlanExecute &&
+	willRunAgentic := !runCompare && !willRunCorpusTable && !willRunDrift && !willRunSupervisor && !willRunPlanExecute &&
 		agenticEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
@@ -482,11 +495,13 @@ func (h *Handler) tryDeepChat(
 		"supervisor_enabled", supervisorEnabled,
 		"plan_execute_enabled", planExecuteEnabled,
 		"agentic_enabled", agenticEnabled,
+		"drift_enabled", driftEnabled,
 		"corpus_table_enabled", corpusTableEnabled,
 		"query_type", queryType,
 		"enhance", body.Enhance,
 		"will_run_comparison", runCompare,
 		"will_run_corpus_table", willRunCorpusTable,
+		"will_run_drift", willRunDrift,
 		"will_run_supervisor", willRunSupervisor,
 		"will_run_plan_execute", willRunPlanExecute,
 		"will_run_agentic", willRunAgentic,
@@ -553,6 +568,23 @@ func (h *Handler) tryDeepChat(
 			Concurrency:    ChatCorpusTableConcurrency(ctx, h.siteConfigReader),
 		}, collectEmit)
 
+	case willRunDrift:
+		driftParams := DriftChatParams{
+			KbID:           kbID,
+			Query:          searchQuery,
+			Language:       lang,
+			FileIDs:        body.SelectedFileIDs,
+			KbSystemPrompt: kbSystemPrompt,
+			PlanningModel:  ResolveFastTierModel(ctx, h.siteConfigReader, "chat_drift_model"),
+			MaxFollowups:   ChatDriftMaxFollowups(ctx, h.siteConfigReader),
+			PrimerTopK:     ChatDriftPrimerTopK(ctx, h.siteConfigReader),
+			SearchTopK:     ChatDriftSearchTopK(ctx, h.siteConfigReader),
+			GraphChunkIDs:  graphChunkIDs,
+			BridgeChunks:   bridgeChunks,
+			HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
+		}
+		chatCtx, err = RunDriftChat(ctx, h.aiResolver, h.searchService, driftParams, collectEmit)
+
 	case willRunSupervisor:
 		supervisorParams := SupervisorChatParams{
 			KbID:            kbID,
@@ -562,6 +594,7 @@ func (h *Handler) tryDeepChat(
 			KbSystemPrompt:  kbSystemPrompt,
 			PlanningModel:   EnrichmentModel(ctx, h.siteConfigReader),
 			GraphChunkIDs:   graphChunkIDs,
+			BridgeChunks:    bridgeChunks,
 			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
 			MultiSpecialist: ChatSupervisorMultiSpecialist(ctx, h.siteConfigReader),
 
@@ -591,6 +624,7 @@ func (h *Handler) tryDeepChat(
 			MaxDAGDepth:    ChatPlanExecuteMaxDAGDepth(ctx, h.siteConfigReader),
 			MaxDAGNodes:    ChatPlanExecuteMaxDAGNodes(ctx, h.siteConfigReader),
 			GraphChunkIDs:  graphChunkIDs,
+			BridgeChunks:   bridgeChunks,
 			HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
 		}
 		// AP-B3: tool-aware planner. Only meaningful when DAG is on
@@ -632,6 +666,7 @@ func (h *Handler) tryDeepChat(
 			MaxHops:        ChatAgenticMaxHops(ctx, h.siteConfigReader),
 			Plateau:        plateau,
 			GraphChunkIDs:  graphChunkIDs,
+			BridgeChunks:   bridgeChunks,
 			HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
 		}
 		chatCtx, err = RunAgenticChat(ctx, h.aiResolver, h.searchService, agenticParams, collectEmit)
@@ -848,6 +883,8 @@ func (h *Handler) tryDeepChat(
 		mode = "comparison"
 	case willRunCorpusTable:
 		mode = "corpus_table"
+	case willRunDrift:
+		mode = "drift"
 	case willRunSupervisor:
 		mode = "supervisor"
 	case willRunPlanExecute:

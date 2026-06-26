@@ -12,10 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/justrag/go-backend/internal/admineval"
 	"github.com/justrag/go-backend/internal/ai"
+	"github.com/justrag/go-backend/internal/canonicalize"
 	"github.com/justrag/go-backend/internal/chat"
+	"github.com/justrag/go-backend/internal/community"
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/confluence"
 	"github.com/justrag/go-backend/internal/database"
@@ -27,6 +30,7 @@ import (
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/kbconfig"
+	"github.com/justrag/go-backend/internal/kg"
 	"github.com/justrag/go-backend/internal/kgevents"
 	"github.com/justrag/go-backend/internal/longmem"
 	"github.com/justrag/go-backend/internal/migrate"
@@ -237,6 +241,7 @@ func RunWorker(cfg *config.Config) error {
 	proc.SetVectorPool(db.Vector)
 	proc.SetMaterializer(tabular.NewMaterializer(db.Main))
 	proc.SetKGEventPublisher(kgevents.NewPublisher(rdb.Client))
+	proc.SetKGDeleter(kg.NewPgStore(db.Main))
 	mux.HandleFunc(jobs.TypeResearchExecution, worker.Instrument(worker.NewResearchExecutionHandler(aiResolver, searchService, rdb.Client, chatStore, sharedFetcher)))
 	mux.HandleFunc(jobs.TypeAcademicResearchExecution, worker.Instrument(worker.NewAcademicResearchHandler(aiResolver, rdb.Client, chatStore, sharedFetcher)))
 	mux.HandleFunc(jobs.TypeRAGASSample, worker.Instrument(worker.NewRAGASSampleHandlerForResolver(aiResolver)))
@@ -357,6 +362,70 @@ func RunWorker(cfg *config.Config) error {
 		return ai.GenerateEmbeddings(ctx, aiResolver, texts, "", embeddingCache)
 	}
 	mux.HandleFunc(jobs.TypeReEmbedUserMemory, worker.Instrument(worker.NewReEmbedUserMemoryHandler(longmemStore, memEmbed)))
+
+	// EDC entity canonicalization: admin-triggered batch entity dedup per KB.
+	canonStore := kg.NewPgStore(db.Main)
+	embedFor := func(kbID string) canonicalize.EmbedFunc {
+		return func(ctx context.Context, texts []string) ([][]float64, error) {
+			return ai.GenerateEmbeddings(ctx, aiResolver, texts, kbID, embeddingCache)
+		}
+	}
+	confirmFor := func(kbID string) canonicalize.ConfirmFunc {
+		return func(ctx context.Context, ents []canonicalize.CanonEntity, pairs []canonicalize.Pair) ([]canonicalize.Pair, error) {
+			model := chat.ResolveFastTierModel(ctx, chatStore, "kg_canonicalization_model")
+			res, gerr := ai.GenerateCompletionStructured(ctx,
+				aiResolver, canonicalize.BuildConfirmPrompt(ents, pairs), canonicalize.ConfirmSystemPrompt,
+				kbID, model, &ai.StructuredSpec{Name: "kg_canon_confirm", Schema: json.RawMessage(canonicalize.ConfirmSchema)})
+			if gerr != nil {
+				return nil, gerr
+			}
+			return canonicalize.ParseConfirm(res.Content, pairs)
+		}
+	}
+	canonPub := kgevents.NewPublisher(rdb.Client)
+	mux.HandleFunc(jobs.TypeEntityCanonicalizeKB, worker.Instrument(worker.NewEntityCanonicalizeHandler(worker.CanonicalizeDeps{
+		Store:      canonStore,
+		Reader:     chatStore,
+		EmbedFor:   embedFor,
+		ConfirmFor: confirmFor,
+		Publish:    func(ctx context.Context, kbID string) { canonPub.PublishGraphChanged(ctx, kbID) },
+	})))
+
+	// KG community detection: admin-triggered topology-Louvain + per-community summaries per KB.
+	commStore := kg.NewPgStore(db.Main)
+	commChunkSvc := chunkService
+	commPub := kgevents.NewPublisher(rdb.Client)
+	commFileID := func(kbID string) string {
+		// deterministic per-KB synthetic file id (soft ref, no FK).
+		return uuid.NewSHA1(uuid.MustParse("6f9619ff-8b86-d011-b42d-00c04fc964ff"), []byte("kg-community:"+kbID)).String()
+	}
+	commPgConfig := "simple" // v1: BM25 over community summaries is secondary to vector retrieval; "simple" is an acceptable regconfig
+	mux.HandleFunc(jobs.TypeKGCommunitiesBuild, worker.Instrument(worker.NewKGCommunitiesBuildHandler(worker.CommunitiesDeps{
+		Store:           commStore,
+		Reader:          chatStore,
+		DeleteSummaries: func(ctx context.Context, kbID string) error { return commChunkSvc.DeleteCommunitySummaries(ctx, kbID) },
+		SummariseFor: func(kbID string) community.SummariseFunc {
+			return func(ctx context.Context, input string) (string, error) {
+				model := chat.ResolveFastTierModel(ctx, chatStore, "kg_community_summary_model")
+				res, err := ai.GenerateCompletionWithModelDeterministic(ctx, aiResolver, input,
+					"Summarise this group of related entities and their relationships into a concise paragraph capturing the community's overall theme.",
+					kbID, false, model)
+				if err != nil {
+					return "", err
+				}
+				return res.Content, nil
+			}
+		},
+		EmbedFor: func(kbID string) community.EmbedFunc {
+			return func(ctx context.Context, text string) ([]float64, error) {
+				return ai.GenerateEmbedding(ctx, aiResolver, text, kbID, embeddingCache)
+			}
+		},
+		SinkFor: func(kbID string) community.Sink {
+			return &communitySink{svc: commChunkSvc, store: commStore, kbID: kbID, fileID: commFileID(kbID), pgConfig: commPgConfig}
+		},
+		Publish: func(ctx context.Context, kbID string) { commPub.PublishGraphChanged(ctx, kbID) },
+	})))
 
 	// RSS and Confluence schedulers no longer run in the worker — they are
 	// started by go-server under a Redis leader lock (see internal/app/scheduler.go).

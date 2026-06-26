@@ -31,9 +31,11 @@ import (
 	"github.com/justrag/go-backend/internal/auditlogs"
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/authhandler"
+	"github.com/justrag/go-backend/internal/canonicalize"
 	"github.com/justrag/go-backend/internal/cascade"
 	"github.com/justrag/go-backend/internal/chat"
 	"github.com/justrag/go-backend/internal/chatattach"
+	"github.com/justrag/go-backend/internal/community"
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/confluence"
 	"github.com/justrag/go-backend/internal/contentgen"
@@ -460,6 +462,20 @@ func registerAdminRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/admin/reembed-user-memory", rc.superadminChain(maintenanceHandler.ReembedUserMemory))
 	rc.mux.Handle("POST /api/admin/agent/template", rc.superadminChain(maintenanceHandler.UploadAgentTemplate))
 	rc.mux.Handle("POST /api/kb/{id}/reembed", rc.kbTuningChain(maintenanceHandler.ReembedKB))
+
+	// Admin-triggered batch entity canonicalization (EDC dedup) for a KB.
+	canonicalizeHandler := kggraph.NewCanonicalizeHandler(
+		rc.infra.asynqClient,
+		rc.chatStore,
+		func(ctx context.Context, r kggraph.CanonReader) bool { return canonicalize.Enabled(ctx, r) },
+	)
+	rc.mux.Handle("POST /api/kb/{id}/canonicalize", rc.kbTuningChain(canonicalizeHandler.PostCanonicalize))
+
+	communitiesHandler := kggraph.NewCommunitiesHandler(
+		rc.infra.asynqClient, rc.chatStore,
+		func(ctx context.Context, r kggraph.CanonReader) bool { return community.Enabled(ctx, r) },
+	)
+	rc.mux.Handle("POST /api/kb/{id}/communities/build", rc.kbTuningChain(communitiesHandler.PostBuildCommunities))
 
 	// Phase 1 §1.4 admin agent-metrics panel — per-(window,kb) outcome
 	// distributions for the agentic / plan-execute / CRAG paths. Reads

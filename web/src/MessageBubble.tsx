@@ -29,6 +29,7 @@ interface MessageBubbleProps {
     isEditing?: boolean;
     onEditCancel?: () => void;
     onPreviewSource?: (fileId: string, fileName: string) => void;
+    onViewGraph?: (messageId: string) => void;
     animationDelay?: number;
 }
 
@@ -130,7 +131,7 @@ function VerificationBadge({ verification, t }: VerificationBadgeProps) {
     );
 }
 
-function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showFollowUps, branchInfo, onSwitchBranch, onEdit, onFork, onCompare, onRegenerate, onFeedback, isEditing, onEditCancel, onPreviewSource, animationDelay }: MessageBubbleProps) {
+function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showFollowUps, branchInfo, onSwitchBranch, onEdit, onFork, onCompare, onRegenerate, onFeedback, isEditing, onEditCancel, onPreviewSource, onViewGraph, animationDelay }: MessageBubbleProps) {
     const { t } = useTheme();
     const isThinking = Boolean(isStreaming && message.reasoning && !message.content);
     const isMobile = useIsMobileContext();
@@ -326,6 +327,8 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                         semanticCitations={semanticCitationSet(message.verification)}
                         trajectory={message.trajectory}
                         flaggedClaims={flaggedClaimsFor(message.verification)}
+                        messageId={message.id}
+                        onViewGraph={onViewGraph}
                     />
                 </div>
             ) : (

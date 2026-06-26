@@ -32,6 +32,11 @@ type Input struct {
 	// from chat.SupervisorChatParams.GraphChunkIDs when the
 	// chat_graph_routing_inject_chunks gate is on.
 	GraphChunkIDs []string
+	// BridgeChunks forwards the bridge-evidence tally (chunk_id -> bridge
+	// count) into the agent's SearchOptions for post-rerank multi-hop
+	// boosting. Nil (default) leaves the boost inert. The Supervisor sets
+	// this from chat.SupervisorChatParams.BridgeChunks.
+	BridgeChunks map[string]int
 	// HyPESearch enables the HyPE query-time arm on this agent's
 	// initial search (resolved from hype_search_enabled at dispatch).
 	HyPESearch bool
