@@ -118,6 +118,12 @@ type SearchOptions struct {
 	// chat_graph_routing_max_chunks, default 15).
 	GraphChunkIDs []string
 
+	// BridgeChunks maps chunk id → number of KG bridge paths (between the
+	// query's matched entities) the chunk lies on. Supplied by the chat
+	// layer when chat_graph_routing_bridge_rerank_enabled is on; drives the
+	// post-rerank bridge boost (applyBridgePrior). Nil → no boost.
+	BridgeChunks map[string]int
+
 	// HyPESearch enables the HyPE arm: the query embedding is matched
 	// against ingest-time hypothetical-question embeddings in
 	// chunk_hype_questions_<dim>; matched questions resolve to their
@@ -1024,6 +1030,15 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	// ------------------------------------------------------------------
 	if n := s.applyRecencyPrior(ctx, kbID, fused, siteCfg); n > 0 {
 		stageLog = append(stageLog, "recency_boost_applied", n)
+	}
+
+	// ------------------------------------------------------------------
+	// 10d. Bridge-evidence boost: surface multi-hop "bridge" chunks (on a
+	// KG path between the query's matched entities) that the reranker
+	// buried. Gated in the chat layer (opts.BridgeChunks nil when off).
+	// ------------------------------------------------------------------
+	if n := s.applyBridgePrior(fused, opts, siteCfg); n > 0 {
+		stageLog = append(stageLog, "bridge_boost_applied", n)
 	}
 
 	// ------------------------------------------------------------------

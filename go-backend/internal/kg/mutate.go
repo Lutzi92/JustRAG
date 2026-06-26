@@ -78,3 +78,57 @@ func (s *PgStore) KBHasActiveIngestion(ctx context.Context, kbID string) (bool, 
 	}
 	return exists, nil
 }
+
+// MergeEntities folds mergedIDs into survivorID within one KB: re-points all
+// kg_edges and kg_entity_files from the merged entities to the survivor, drops
+// any self-loop the re-point created, sets the survivor's aliases to
+// aliasUnion, and deletes the merged rows. One transaction; idempotent (a
+// re-run with already-deleted ids touches zero rows). Edges are re-pointed
+// BEFORE the entity delete so the ON DELETE CASCADE never drops a real edge.
+func (s *PgStore) MergeEntities(ctx context.Context, kbID string, survivorID int64, mergedIDs []int64, aliasUnion []string) error {
+	if s == nil || s.pool == nil {
+		return fmt.Errorf("kg: MergeEntities: no pool")
+	}
+	if kbID == "" || survivorID == 0 {
+		return fmt.Errorf("kg: MergeEntities: empty kbID/survivor")
+	}
+	ids := make([]int64, 0, len(mergedIDs))
+	for _, id := range mergedIDs {
+		if id != survivorID && id != 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if aliasUnion == nil {
+		aliasUnion = []string{}
+	}
+	return pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE kg_edges SET src_entity_id = $2 WHERE kb_id = $1::uuid AND src_entity_id = ANY($3)`, kbID, survivorID, ids); err != nil {
+			return fmt.Errorf("repoint src: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE kg_edges SET dst_entity_id = $2 WHERE kb_id = $1::uuid AND dst_entity_id = ANY($3)`, kbID, survivorID, ids); err != nil {
+			return fmt.Errorf("repoint dst: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM kg_edges WHERE kb_id = $1::uuid AND src_entity_id = $2 AND dst_entity_id = $2`, kbID, survivorID); err != nil {
+			return fmt.Errorf("drop self-loops: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO kg_entity_files (entity_id, kb_id, file_id)
+			SELECT $2, kb_id, file_id FROM kg_entity_files WHERE entity_id = ANY($3) AND kb_id = $1::uuid
+			ON CONFLICT (entity_id, file_id) DO NOTHING`, kbID, survivorID, ids); err != nil {
+			return fmt.Errorf("repoint entity_files: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM kg_entity_files WHERE entity_id = ANY($1)`, ids); err != nil {
+			return fmt.Errorf("delete merged entity_files: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE kg_entities SET aliases = $2::text[], updated_at = NOW() WHERE id = $1`, survivorID, aliasUnion); err != nil {
+			return fmt.Errorf("set survivor aliases: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM kg_entities WHERE id = ANY($1)`, ids); err != nil {
+			return fmt.Errorf("delete merged entities: %w", err)
+		}
+		return nil
+	})
+}

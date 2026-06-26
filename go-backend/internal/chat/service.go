@@ -67,6 +67,10 @@ type ChatContextParams struct {
 	// default) preserves the legacy behaviour: graph routing remains
 	// diagnostic-only and only the trajectory event is emitted.
 	GraphSubgraphChunkIDs []string
+	// BridgeChunks forwards the bridge-evidence tally (chunk_id -> bridge
+	// count) into vector.SearchOptions.BridgeChunks for post-rerank
+	// multi-hop boosting. Nil (default) leaves the boost inert.
+	BridgeChunks map[string]int
 }
 
 // ChatSource represents a single source document surfaced in a chat response.
@@ -863,6 +867,7 @@ func PrepareChatContext(
 		GraderModel:   cragCfg.graderModel,
 		QueryType:     params.QueryType,
 		GraphChunkIDs: params.GraphSubgraphChunkIDs,
+		BridgeChunks:  params.BridgeChunks,
 		HyPESearch:    HyPESearchEnabled(ctx, siteConfig),
 	}
 

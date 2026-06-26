@@ -15,6 +15,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/justrag/go-backend/internal/admineval"
 	"github.com/justrag/go-backend/internal/ai"
+	"github.com/justrag/go-backend/internal/canonicalize"
 	"github.com/justrag/go-backend/internal/chat"
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/confluence"
@@ -359,6 +360,34 @@ func RunWorker(cfg *config.Config) error {
 		return ai.GenerateEmbeddings(ctx, aiResolver, texts, "", embeddingCache)
 	}
 	mux.HandleFunc(jobs.TypeReEmbedUserMemory, worker.Instrument(worker.NewReEmbedUserMemoryHandler(longmemStore, memEmbed)))
+
+	// EDC entity canonicalization: admin-triggered batch entity dedup per KB.
+	canonStore := kg.NewPgStore(db.Main)
+	embedFor := func(kbID string) canonicalize.EmbedFunc {
+		return func(ctx context.Context, texts []string) ([][]float64, error) {
+			return ai.GenerateEmbeddings(ctx, aiResolver, texts, kbID, embeddingCache)
+		}
+	}
+	confirmFor := func(kbID string) canonicalize.ConfirmFunc {
+		return func(ctx context.Context, ents []canonicalize.CanonEntity, pairs []canonicalize.Pair) ([]canonicalize.Pair, error) {
+			model := chat.ResolveFastTierModel(ctx, chatStore, "kg_canonicalization_model")
+			res, gerr := ai.GenerateCompletionStructured(ctx,
+				aiResolver, canonicalize.BuildConfirmPrompt(ents, pairs), canonicalize.ConfirmSystemPrompt,
+				kbID, model, &ai.StructuredSpec{Name: "kg_canon_confirm", Schema: json.RawMessage(canonicalize.ConfirmSchema)})
+			if gerr != nil {
+				return nil, gerr
+			}
+			return canonicalize.ParseConfirm(res.Content, pairs)
+		}
+	}
+	canonPub := kgevents.NewPublisher(rdb.Client)
+	mux.HandleFunc(jobs.TypeEntityCanonicalizeKB, worker.Instrument(worker.NewEntityCanonicalizeHandler(worker.CanonicalizeDeps{
+		Store:      canonStore,
+		Reader:     chatStore,
+		EmbedFor:   embedFor,
+		ConfirmFor: confirmFor,
+		Publish:    func(ctx context.Context, kbID string) { canonPub.PublishGraphChanged(ctx, kbID) },
+	})))
 
 	// RSS and Confluence schedulers no longer run in the worker — they are
 	// started by go-server under a Redis leader lock (see internal/app/scheduler.go).

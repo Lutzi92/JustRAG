@@ -36,6 +36,10 @@ type AgenticChatParams struct {
 	// against a smaller scope, so they intentionally don't carry the
 	// graph injection — the contribution belongs to the initial pool.
 	GraphChunkIDs []string
+	// BridgeChunks forwards the bridge-evidence tally (chunk_id -> bridge
+	// count) into the hop-1 SearchOptions for post-rerank multi-hop
+	// boosting. Nil (default) leaves the boost inert.
+	BridgeChunks map[string]int
 	// HyPESearch enables the HyPE query-time arm on this orchestrator's
 	// initial search (resolved from hype_search_enabled at dispatch).
 	HyPESearch bool
@@ -108,6 +112,7 @@ func runAgenticChatTestable(
 		ModelOverride: params.PlanningModel,
 		QueryType:     vector.QueryTypeComplexReasoning,
 		GraphChunkIDs: params.GraphChunkIDs,
+		BridgeChunks:  params.BridgeChunks,
 		HyPESearch:    params.HyPESearch,
 	}
 	result1, err := searcher.Search(ctx, params.KbID, params.Query, 0, opts1)

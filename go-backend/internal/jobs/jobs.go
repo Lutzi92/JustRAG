@@ -29,6 +29,7 @@ const (
 	TypeRAGASSample               = "ragas-sample"
 	TypeReEmbedUserMemory         = "re-embed-user-memory"
 	TypeGenerateGoldenSet         = "generate-golden-set"
+	TypeEntityCanonicalizeKB      = "entity-canonicalize-kb"
 )
 
 // taskTimeouts maps each task type to a generous per-task asynq.Timeout.
@@ -52,6 +53,7 @@ var taskTimeouts = map[string]time.Duration{
 	TypeRAGASSample:               15 * time.Minute,
 	TypeReEmbedUserMemory:         1 * time.Hour,
 	TypeGenerateGoldenSet:         2 * time.Hour,
+	TypeEntityCanonicalizeKB:      1 * time.Hour,
 }
 
 // TimeoutFor returns the asynq.Timeout duration for taskType. Unknown task

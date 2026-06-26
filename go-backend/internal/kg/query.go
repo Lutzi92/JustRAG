@@ -77,6 +77,14 @@ type Store interface {
 	// chunk_ids of edges incident to that pool, capped at
 	// maxChunks. Implementation in pagerank.go.
 	PPRChunks(ctx context.Context, kbID string, seedIDs []int64, topEntities, maxChunks int, cfg PPRConfig) ([]string, error)
+	// PPRPassages runs HippoRAG-2 dual-node PPR (passages as graph nodes)
+	// seeded from seedIDs and returns the top-maxChunks chunk_ids by the
+	// passage nodes' direct PPR score. Implementation in pagerank.go.
+	PPRPassages(ctx context.Context, kbID string, seedIDs []int64, maxChunks int, cfg PPRConfig) ([]string, error)
+	// IncidentTriples returns up to cap distinct triples incident to the
+	// given entities (names resolved, weight-ordered) for the LLM
+	// triple-filter. Implementation in triples.go.
+	IncidentTriples(ctx context.Context, kbID string, entityIDs []int64, cap int) ([]IncidentTriple, error)
 	// PathChunks runs PathRAG-style path enumeration (T1-5)
 	// between two entities and returns the deduped chunk_ids
 	// across all returned paths, capped at maxChunks.
@@ -365,4 +373,49 @@ func (s *PgStore) MatchAliasesInTokens(ctx context.Context, kbID string, tokens 
 		return nil, fmt.Errorf("kg: alias rows: %w", err)
 	}
 	return out, nil
+}
+
+// CanonEntityRow is an entity plus its total (in+out) edge degree, the inputs
+// the canonicalization job needs to rank merge survivors.
+type CanonEntityRow struct {
+	ID      int64
+	Name    string
+	Type    string
+	Aliases []string
+	Degree  int
+}
+
+// EntitiesForCanonicalization loads every entity of a KB with its degree
+// (count of incident edges). Degree is computed once over the edge set like
+// GraphOverview, not via a correlated subquery.
+func (s *PgStore) EntitiesForCanonicalization(ctx context.Context, kbID string) ([]CanonEntityRow, error) {
+	if s == nil || s.pool == nil {
+		return nil, fmt.Errorf("kg: EntitiesForCanonicalization: no pool")
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT e.id, e.canonical_name, e.type, e.aliases, COALESCE(d.deg, 0)
+		  FROM kg_entities e
+		  LEFT JOIN (
+		      SELECT entity_id, count(*) AS deg FROM (
+		          SELECT src_entity_id AS entity_id FROM kg_edges WHERE kb_id = $1::uuid
+		          UNION ALL
+		          SELECT dst_entity_id FROM kg_edges WHERE kb_id = $1::uuid
+		      ) t GROUP BY entity_id
+		  ) d ON d.entity_id = e.id
+		 WHERE e.kb_id = $1::uuid
+		 ORDER BY e.id
+	`, kbID)
+	if err != nil {
+		return nil, fmt.Errorf("kg: load entities for canon: %w", err)
+	}
+	defer rows.Close()
+	out := []CanonEntityRow{}
+	for rows.Next() {
+		var r CanonEntityRow
+		if err := rows.Scan(&r.ID, &r.Name, &r.Type, &r.Aliases, &r.Degree); err != nil {
+			return nil, fmt.Errorf("kg: scan canon entity: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

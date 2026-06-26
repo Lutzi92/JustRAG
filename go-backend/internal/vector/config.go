@@ -258,6 +258,10 @@ type KBVectorConfig struct {
 	// ("recency_half_life_days"). Default 14 (the similarity⊕recency
 	// fusion setting from arXiv 2509.19376).
 	RecencyHalfLifeDays float64
+	// BridgeBoostWeight is the max score adjustment a chunk on >=3 KG bridge
+	// paths gets ("bridge_boost_weight"); scaled by min(pathCount,3)/3.
+	// Default 0.1. Only applied when the chat layer supplies BridgeChunks.
+	BridgeBoostWeight float64
 
 	// BM25TieredBoost gates a multiplicative ranking adjustment in the BM25
 	// keyword arm: chunks matching the strict (AND-required) websearch
@@ -373,5 +377,6 @@ func DefaultConfig() KBVectorConfig {
 		// is already sensible.
 		RecencyBoostWeight:  0.1,
 		RecencyHalfLifeDays: 14,
+		BridgeBoostWeight:   0.1,
 	}
 }

@@ -28,6 +28,10 @@ type SupervisorChatParams struct {
 	// them into its single SearchOptions call. Empty (default)
 	// preserves legacy behaviour.
 	GraphChunkIDs []string
+	// BridgeChunks forwards the bridge-evidence tally (chunk_id -> bridge
+	// count) into the specialist's SearchOptions for post-rerank multi-hop
+	// boosting. Nil (default) leaves the boost inert.
+	BridgeChunks map[string]int
 	// HyPESearch enables the HyPE query-time arm on this orchestrator's
 	// initial search (resolved from hype_search_enabled at dispatch).
 	HyPESearch bool
@@ -100,6 +104,7 @@ func runSupervisorChatTestable(
 		Language:      params.Language,
 		FileIDs:       params.FileIDs,
 		GraphChunkIDs: params.GraphChunkIDs,
+		BridgeChunks:  params.BridgeChunks,
 		HyPESearch:    params.HyPESearch,
 	}
 	var (

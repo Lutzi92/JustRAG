@@ -37,6 +37,9 @@ type fakeKGStore struct {
 	pprCalls   int
 	pprSeedIDs []int64
 
+	pprPassagesCalls  int
+	pprPassagesChunks []string
+
 	// PathChunks wiring (T1-5). Same shape as PPR — counters +
 	// captured args + canned result.
 	pathChunks []string
@@ -76,6 +79,57 @@ func (f *fakeKGStore) PathChunks(_ context.Context, _ string, srcID, dstID int64
 	f.pathSrcID = srcID
 	f.pathDstID = dstID
 	return f.pathChunks, f.pathErr
+}
+
+func (f *fakeKGStore) PPRPassages(_ context.Context, _ string, _ []int64, _ int, _ kg.PPRConfig) ([]string, error) {
+	f.pprPassagesCalls++
+	return f.pprPassagesChunks, nil
+}
+
+func (f *fakeKGStore) IncidentTriples(_ context.Context, _ string, _ []int64, _ int) ([]kg.IncidentTriple, error) {
+	return nil, nil
+}
+
+func TestResolveGraphChunksPPR_DualNodeDispatch(t *testing.T) {
+	store := &fakeKGStore{pprPassagesChunks: []string{"c1", "c2"}}
+	reader := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_graph_routing_ppr_dual_node_enabled": strPtr("true"),
+	}}
+	dec := GraphTraversalDecision{Fired: true, MatchedEntities: []kg.Entity{{ID: 1, CanonicalName: "A"}}}
+	out := resolveGraphChunksPPR(context.Background(), store, reader, "kb-1", dec, 5)
+	if store.pprPassagesCalls == 0 {
+		t.Error("dual-node flag on must route to PPRPassages")
+	}
+	if len(out) != 2 {
+		t.Errorf("want 2 chunks from PPRPassages, got %v", out)
+	}
+}
+
+func TestBridgeChunkTally(t *testing.T) {
+	store := &fakeKGStore{pathChunks: []string{"c1", "c2"}}
+	reader := &fakeSiteConfigReader{values: map[string]*string{}}
+	ents := []kg.Entity{{ID: 1, CanonicalName: "A"}, {ID: 2, CanonicalName: "B"}, {ID: 3, CanonicalName: "C"}}
+	tally := bridgeChunkTally(context.Background(), store, reader, "kb-1", ents, 10)
+	if tally["c1"] != 3 || tally["c2"] != 3 {
+		t.Errorf("want c1=3,c2=3 across 3 pairs, got %v", tally)
+	}
+}
+
+func TestBridgeChunkTally_FewerThanTwoEntitiesIsNil(t *testing.T) {
+	store := &fakeKGStore{pathChunks: []string{"c1"}}
+	reader := &fakeSiteConfigReader{values: map[string]*string{}}
+	if got := bridgeChunkTally(context.Background(), store, reader, "kb-1", []kg.Entity{{ID: 1}}, 10); got != nil {
+		t.Errorf("single entity must yield nil tally, got %v", got)
+	}
+}
+
+func TestBridgeChunkTally_PathErrorSkipsPair(t *testing.T) {
+	store := &fakeKGStore{pathErr: errors.New("boom")}
+	reader := &fakeSiteConfigReader{values: map[string]*string{}}
+	ents := []kg.Entity{{ID: 1}, {ID: 2}}
+	if got := bridgeChunkTally(context.Background(), store, reader, "kb-1", ents, 10); got != nil {
+		t.Errorf("path error on the only pair must yield nil tally, got %v", got)
+	}
 }
 
 // TestNeedsGraphTraversal exercises the routing predicate's full decision

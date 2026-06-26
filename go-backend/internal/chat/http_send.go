@@ -228,7 +228,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// the resolved subgraph chunks thread through whichever orchestrator
 	// handles the turn (Supervisor / Plan-Execute / Agentic / DeepChat /
 	// standard PrepareChatContext).
-	graphDec, graphChunkIDs := h.resolveGraphRouting(ctx, kbID, searchQuery, cls.QueryType)
+	graphDec, graphChunkIDs, bridgeChunks := h.resolveGraphRouting(ctx, kbID, searchQuery, cls.QueryType)
 
 	// In-chat document comparison: an attachment + at least one mode + the
 	// feature gate routes this turn to the comparison orchestrator (handled
@@ -256,7 +256,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// the comparison orchestrator) regardless of complexity classification.
 	isComplex := cls.UseHyDE && cls.UseMultiQuery
 	if (isComplex || runCompare) && streamMode {
-		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, answerHistory); handled {
+		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, bridgeChunks, answerHistory); handled {
 			return
 		}
 		// Deep chat failed — fall through to standard path.
@@ -286,6 +286,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		QueryType:             cls.QueryType,
 		Emit:                  collectEmit,
 		GraphSubgraphChunkIDs: graphChunkIDs,
+		BridgeChunks:          bridgeChunks,
 	}
 
 	// AP-C4 trajectory event (standard path): the decision was computed
@@ -371,6 +372,7 @@ func (h *Handler) tryDeepChat(
 	parentMsgID *string,
 	graphDec GraphTraversalDecision,
 	graphChunkIDs []string,
+	bridgeChunks map[string]int,
 	answerHistory []ai.ChatHistoryEntry,
 ) bool {
 	ctx, span := observability.Tracer().Start(ctx, "chat.deep_chat")
@@ -392,6 +394,7 @@ func (h *Handler) tryDeepChat(
 		PlanningModel:  EnrichmentModel(ctx, h.siteConfigReader),
 		QueryType:      queryType,
 		GraphChunkIDs:  graphChunkIDs,
+		BridgeChunks:   bridgeChunks,
 		HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
 	}
 
@@ -562,6 +565,7 @@ func (h *Handler) tryDeepChat(
 			KbSystemPrompt:  kbSystemPrompt,
 			PlanningModel:   EnrichmentModel(ctx, h.siteConfigReader),
 			GraphChunkIDs:   graphChunkIDs,
+			BridgeChunks:    bridgeChunks,
 			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
 			MultiSpecialist: ChatSupervisorMultiSpecialist(ctx, h.siteConfigReader),
 
@@ -591,6 +595,7 @@ func (h *Handler) tryDeepChat(
 			MaxDAGDepth:    ChatPlanExecuteMaxDAGDepth(ctx, h.siteConfigReader),
 			MaxDAGNodes:    ChatPlanExecuteMaxDAGNodes(ctx, h.siteConfigReader),
 			GraphChunkIDs:  graphChunkIDs,
+			BridgeChunks:   bridgeChunks,
 			HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
 		}
 		// AP-B3: tool-aware planner. Only meaningful when DAG is on
@@ -632,6 +637,7 @@ func (h *Handler) tryDeepChat(
 			MaxHops:        ChatAgenticMaxHops(ctx, h.siteConfigReader),
 			Plateau:        plateau,
 			GraphChunkIDs:  graphChunkIDs,
+			BridgeChunks:   bridgeChunks,
 			HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
 		}
 		chatCtx, err = RunAgenticChat(ctx, h.aiResolver, h.searchService, agenticParams, collectEmit)

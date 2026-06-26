@@ -365,15 +365,52 @@ func resolveReasoningLevel(body sendMessageRequest) string {
 // (no chunks resolved, or chunk-injection sub-flag disabled). The
 // "happy path" — gate fired AND chunks resolved AND injection on —
 // records inside the search pipeline via SearchOptions.GraphChunkIDs.
-func (h *Handler) resolveGraphRouting(ctx context.Context, kbID, searchQuery, queryType string) (GraphTraversalDecision, []string) {
+func (h *Handler) resolveGraphRouting(ctx context.Context, kbID, searchQuery, queryType string) (GraphTraversalDecision, []string, map[string]int) {
 	graphDec := NeedsGraphTraversal(ctx, h.kgStore, h.siteConfigReader, kbID, searchQuery, queryType)
+	// HippoRAG-2 recognition memory: refine PPR seeds before chunk resolution.
+	// Scoped to ppr mode so neighbours/paths modes are unaffected. Best-effort.
+	if graphDec.Fired &&
+		ChatGraphRoutingPathMode(ctx, h.siteConfigReader) == "ppr" &&
+		ChatGraphRoutingPPRTripleFilterEnabled(ctx, h.siteConfigReader) {
+		fn := func(c context.Context, prompt, system, kb, model string, spec *ai.StructuredSpec) (string, error) {
+			res, gerr := ai.GenerateCompletionStructured(c, h.aiResolver, prompt, system, kb, model, spec)
+			if gerr != nil {
+				return "", gerr
+			}
+			return res.Content, nil
+		}
+		graphDec.MatchedEntities = refineSeedsWithTripleFilter(
+			ctx, fn, h.kgStore, kbID, searchQuery,
+			ChatGraphRoutingPPRTripleFilterModel(ctx, h.siteConfigReader),
+			ChatGraphRoutingPPRTripleFilterMaxTriples(ctx, h.siteConfigReader),
+			graphDec.MatchedEntities,
+		)
+	}
 	graphChunkIDs := ResolveGraphChunksIfEnabled(ctx, h.kgStore, h.siteConfigReader, kbID, graphDec)
+
+	// Bridge-evidence reranking: tally chunks lying on KG paths between the
+	// (post-triple-filter) matched entities, so the search pipeline can boost
+	// multi-hop bridge chunks. Inert when the flag is off (nil tally → no boost).
+	//
+	// Known minor redundancy: when path_mode=="paths" AND inject_chunks is on,
+	// ResolveGraphChunksIfEnabled above already ran bridgeChunkTally internally
+	// (resolveGraphChunksPaths). Re-running it here with the same entities
+	// double-queries PathChunks in that specific both-on operator config. Left
+	// as-is (bounded: ≤ N² pairs, disconnected pairs short-circuit; both flags
+	// default off) rather than thread the tally back through the mode-dispatch
+	// switch (8+ call sites). Revisit if both features ship enabled by default.
+	var bridgeChunks map[string]int
+	if graphDec.Fired && ChatGraphRoutingBridgeRerankEnabled(ctx, h.siteConfigReader) {
+		bridgeChunks = bridgeChunkTally(ctx, h.kgStore, h.siteConfigReader, kbID,
+			graphDec.MatchedEntities, ChatGraphRoutingMaxChunks(ctx, h.siteConfigReader))
+	}
+
 	if graphDec.Fired && len(graphChunkIDs) == 0 && ChatGraphRoutingInjectChunks(ctx, h.siteConfigReader) {
 		observability.RecordGraphRoutingChunksInjected("no_chunks", 0)
 	} else if graphDec.Fired && !ChatGraphRoutingInjectChunks(ctx, h.siteConfigReader) {
 		observability.RecordGraphRoutingChunksInjected("skipped_disabled", 0)
 	}
-	return graphDec, graphChunkIDs
+	return graphDec, graphChunkIDs, bridgeChunks
 }
 
 // chatResponseParams carries the state shared between the streaming
