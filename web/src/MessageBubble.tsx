@@ -31,6 +31,8 @@ interface MessageBubbleProps {
     onPreviewSource?: (fileId: string, fileName: string) => void;
     onViewGraph?: (messageId: string) => void;
     animationDelay?: number;
+    kbId?: string;
+    questionText?: string;
 }
 
 interface VerificationBadgeProps {
@@ -131,7 +133,7 @@ function VerificationBadge({ verification, t }: VerificationBadgeProps) {
     );
 }
 
-function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showFollowUps, branchInfo, onSwitchBranch, onEdit, onFork, onCompare, onRegenerate, onFeedback, isEditing, onEditCancel, onPreviewSource, onViewGraph, animationDelay }: MessageBubbleProps) {
+function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showFollowUps, branchInfo, onSwitchBranch, onEdit, onFork, onCompare, onRegenerate, onFeedback, isEditing, onEditCancel, onPreviewSource, onViewGraph, animationDelay, kbId, questionText }: MessageBubbleProps) {
     const { t } = useTheme();
     const isThinking = Boolean(isStreaming && message.reasoning && !message.content);
     const isMobile = useIsMobileContext();
@@ -140,6 +142,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
     const [isFocused, setIsFocused] = useState(false);
     const [tapped, setTapped] = useState(false);
     const bubbleRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
 
     // Close actions on outside click (mobile)
     useEffect(() => {
@@ -311,13 +314,16 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                     onRegenerate={onRegenerate ? () => onRegenerate(message.id!) : undefined}
                     onFeedback={message.role === 'ai' && onFeedback ? (fb, comment) => onFeedback(message.id!, fb, comment) : undefined}
                     isMobile={isMobile}
+                    kbId={kbId}
+                    questionText={questionText}
+                    contentRef={contentRef}
                 />
             )}
 
             {message.role === 'ai' ? (
                 // role+tabIndex (instead of <button>) because the message body
                 // contains nested interactive elements of its own.
-                <div role="button" tabIndex={0} onClick={handleCitationClick} onKeyDown={handleCitationKeyDown}>
+                <div ref={contentRef} role="button" tabIndex={0} onClick={handleCitationClick} onKeyDown={handleCitationKeyDown}>
                     <MessageContent
                         content={message.content}
                         reasoning={message.reasoning}
@@ -375,6 +381,9 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                     onFeedback={onFeedback ? (fb, comment) => onFeedback(message.id!, fb, comment) : undefined}
                     position="bottom"
                     isMobile={isMobile}
+                    kbId={kbId}
+                    questionText={questionText}
+                    contentRef={contentRef}
                 />
             )}
         </motion.div>

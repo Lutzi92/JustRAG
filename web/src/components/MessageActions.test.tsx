@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { createRef } from 'react';
 import { MessageActions } from './MessageActions';
 import type { Message } from '../types';
 
@@ -17,10 +18,22 @@ vi.mock('../contexts/ThemeContext', () => ({
         unhelpfulAnswer: 'Unhelpful answer',
         feedbackCommentPlaceholder: 'Optional comment (max 2000 chars)',
         feedbackCommentSubmit: 'Send',
+        exportAnswer: 'Export answer',
+        copyWithCitations: 'Copy with citations',
+        exportMarkdown: 'Export as Markdown',
+        exportDocx: 'Export as DOCX',
+        exportPdf: 'Print / Save PDF',
+        answerCopied: 'Copied',
+        exportFailed: 'Export failed',
+        sourcesHeading: 'Sources',
       };
       return translations[key] || key;
     }
   }),
+}));
+
+vi.mock('../contexts/ToastContext', () => ({
+  useToast: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -89,6 +102,16 @@ describe('MessageActions', () => {
   it('renders no buttons when no callbacks provided', () => {
     const { container } = render(<MessageActions message={userMsg} />);
     expect(container.querySelectorAll('button')).toHaveLength(0);
+  });
+
+  it('renders the export menu button for AI messages with a contentRef', () => {
+    render(<MessageActions message={aiMsg} contentRef={createRef<HTMLDivElement>()} />);
+    expect(screen.getByLabelText('Export answer')).toBeInTheDocument();
+  });
+
+  it('does not render the export menu for user messages', () => {
+    render(<MessageActions message={userMsg} contentRef={createRef<HTMLDivElement>()} />);
+    expect(screen.queryByLabelText('Export answer')).toBeNull();
   });
 });
 

@@ -5,6 +5,7 @@ import { HAPTIC_PATTERNS, triggerHaptic } from '../utils/haptics';
 import { openExternal } from '../utils/openExternal';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
+import { AnswerExportMenu } from './AnswerExportMenu';
 
 interface MessageActionsProps {
     message: Message;
@@ -15,6 +16,9 @@ interface MessageActionsProps {
     onFeedback?: (feedback: 'positive' | 'negative' | null, comment?: string) => void;
     position?: 'top' | 'bottom';
     isMobile?: boolean;
+    kbId?: string;
+    questionText?: string;
+    contentRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 const MAX_COMMENT_LEN = 2000;
@@ -145,7 +149,7 @@ function FeedbackThumbs({ message, onFeedback, buttonStyle, iconSize, t }: Feedb
     );
 }
 
-export function MessageActions({ message, onEdit, onFork, onCompare, onRegenerate, onFeedback, position = 'top', isMobile }: MessageActionsProps) {
+export function MessageActions({ message, onEdit, onFork, onCompare, onRegenerate, onFeedback, position = 'top', isMobile, kbId, questionText, contentRef }: MessageActionsProps) {
     const { t } = useTheme();
     const { user, siteConfigs } = useAuth();
     const isUser = message.role === 'user';
@@ -237,6 +241,17 @@ export function MessageActions({ message, onEdit, onFork, onCompare, onRegenerat
                 <FeedbackThumbs
                     message={message}
                     onFeedback={onFeedback}
+                    buttonStyle={buttonStyle}
+                    iconSize={iconSize}
+                    t={t}
+                />
+            )}
+            {!isUser && contentRef && (
+                <AnswerExportMenu
+                    message={message}
+                    kbId={kbId}
+                    questionText={questionText}
+                    contentRef={contentRef}
                     buttonStyle={buttonStyle}
                     iconSize={iconSize}
                     t={t}
