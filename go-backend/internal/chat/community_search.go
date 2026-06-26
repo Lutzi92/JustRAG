@@ -13,11 +13,11 @@ type communitySearcher interface {
 	Search(ctx context.Context, kbID, query string, limit int, opts vector.SearchOptions) (*vector.SearchResult, error)
 }
 
-// retrieveCommunityPrimerIDs returns the chunk ids of the top-K KG community
-// summaries most relevant to the query (a node_kind='community_summary'-filtered
-// search). Best-effort: a search error or empty result yields nil — the caller
-// proceeds with normal retrieval.
-func retrieveCommunityPrimerIDs(ctx context.Context, searchSvc communitySearcher, kbID, query string, topK int) []string {
+// retrieveCommunityPrimers returns the top-K KG community summaries most
+// relevant to the query (a node_kind='community_summary'-filtered search),
+// WITH their content. Best-effort: a nil searcher, topK<1, a search error,
+// or an empty result yields nil.
+func retrieveCommunityPrimers(ctx context.Context, searchSvc communitySearcher, kbID, query string, topK int) []vector.SearchChunk {
 	if searchSvc == nil || topK < 1 {
 		return nil
 	}
@@ -29,8 +29,21 @@ func retrieveCommunityPrimerIDs(ctx context.Context, searchSvc communitySearcher
 	if res == nil || len(res.Chunks) == 0 {
 		return nil
 	}
-	ids := make([]string, 0, len(res.Chunks))
-	for _, c := range res.Chunks {
+	return res.Chunks
+}
+
+// retrieveCommunityPrimerIDs returns the chunk ids of the community summaries
+// (the P2-B injection lane). Delegates to retrieveCommunityPrimers; unchanged
+// behaviour — same chunks, same id order, empty ids skipped. Returns nil when
+// the delegate returns nil (error / no results / guards) to preserve the
+// pre-refactor nil contract.
+func retrieveCommunityPrimerIDs(ctx context.Context, searchSvc communitySearcher, kbID, query string, topK int) []string {
+	chunks := retrieveCommunityPrimers(ctx, searchSvc, kbID, query, topK)
+	if chunks == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(chunks))
+	for _, c := range chunks {
 		if c.ID != "" {
 			ids = append(ids, c.ID)
 		}

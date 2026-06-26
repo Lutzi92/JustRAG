@@ -442,6 +442,7 @@ func (h *Handler) tryDeepChat(
 	planExecuteEnabled := ChatPlanExecuteEnabled(ctx, h.siteConfigReader)
 
 	supervisorEnabled := ChatSupervisorEnabled(ctx, h.siteConfigReader)
+	driftEnabled := ChatDriftEnabled(ctx, h.siteConfigReader)
 
 	// Corpus-table comparison: checked first so it can take top priority over
 	// all orchestrators. The two-stage gate (keyword classifier + optional LLM
@@ -465,18 +466,27 @@ func (h *Handler) tryDeepChat(
 		willRunCorpusTable = false
 	}
 
+	// Full iterative DRIFT takes priority over the other orchestrators, but
+	// only for global-synthesis queries (its primer is wasted on narrow
+	// lookups). Narrow gate → it rarely intercepts; everything else falls
+	// through to supervisor/plan-execute/agentic/standard unchanged.
+	willRunDrift := !runCompare && !willRunCorpusTable && driftEnabled &&
+		queryType == vector.QueryTypeComplexReasoning &&
+		body.Enhance == "" &&
+		IsGlobalSynthesisQuery(searchQuery)
+
 	// Phase 3 §3.2 supervisor takes priority over both plan-execute and
 	// agentic when the gate is on. Plan §3.2 ship gate: "non-regression
 	// on lookup/enumeration; ≥ 2 pp gain on complex_reasoning MRR or
 	// nDCG" — only the eval harness can decide whether the gate flips,
 	// so this gate stays per-deployment opt-in.
-	willRunSupervisor := !runCompare && !willRunCorpusTable && supervisorEnabled &&
+	willRunSupervisor := !runCompare && !willRunCorpusTable && !willRunDrift && supervisorEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
-	willRunPlanExecute := !runCompare && !willRunCorpusTable && !willRunSupervisor && planExecuteEnabled &&
+	willRunPlanExecute := !runCompare && !willRunCorpusTable && !willRunDrift && !willRunSupervisor && planExecuteEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
-	willRunAgentic := !runCompare && !willRunCorpusTable && !willRunSupervisor && !willRunPlanExecute &&
+	willRunAgentic := !runCompare && !willRunCorpusTable && !willRunDrift && !willRunSupervisor && !willRunPlanExecute &&
 		agenticEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
@@ -485,11 +495,13 @@ func (h *Handler) tryDeepChat(
 		"supervisor_enabled", supervisorEnabled,
 		"plan_execute_enabled", planExecuteEnabled,
 		"agentic_enabled", agenticEnabled,
+		"drift_enabled", driftEnabled,
 		"corpus_table_enabled", corpusTableEnabled,
 		"query_type", queryType,
 		"enhance", body.Enhance,
 		"will_run_comparison", runCompare,
 		"will_run_corpus_table", willRunCorpusTable,
+		"will_run_drift", willRunDrift,
 		"will_run_supervisor", willRunSupervisor,
 		"will_run_plan_execute", willRunPlanExecute,
 		"will_run_agentic", willRunAgentic,
@@ -555,6 +567,23 @@ func (h *Handler) tryDeepChat(
 			MaxFiles:       ChatCorpusTableMaxFiles(ctx, h.siteConfigReader),
 			Concurrency:    ChatCorpusTableConcurrency(ctx, h.siteConfigReader),
 		}, collectEmit)
+
+	case willRunDrift:
+		driftParams := DriftChatParams{
+			KbID:           kbID,
+			Query:          searchQuery,
+			Language:       lang,
+			FileIDs:        body.SelectedFileIDs,
+			KbSystemPrompt: kbSystemPrompt,
+			PlanningModel:  ResolveFastTierModel(ctx, h.siteConfigReader, "chat_drift_model"),
+			MaxFollowups:   ChatDriftMaxFollowups(ctx, h.siteConfigReader),
+			PrimerTopK:     ChatDriftPrimerTopK(ctx, h.siteConfigReader),
+			SearchTopK:     ChatDriftSearchTopK(ctx, h.siteConfigReader),
+			GraphChunkIDs:  graphChunkIDs,
+			BridgeChunks:   bridgeChunks,
+			HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
+		}
+		chatCtx, err = RunDriftChat(ctx, h.aiResolver, h.searchService, driftParams, collectEmit)
 
 	case willRunSupervisor:
 		supervisorParams := SupervisorChatParams{
@@ -854,6 +883,8 @@ func (h *Handler) tryDeepChat(
 		mode = "comparison"
 	case willRunCorpusTable:
 		mode = "corpus_table"
+	case willRunDrift:
+		mode = "drift"
 	case willRunSupervisor:
 		mode = "supervisor"
 	case willRunPlanExecute:

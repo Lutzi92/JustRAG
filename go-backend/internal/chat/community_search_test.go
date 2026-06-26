@@ -39,6 +39,44 @@ func TestRetrieveCommunityPrimerIDs_ErrorIsNil(t *testing.T) {
 	}
 }
 
+func TestRetrieveCommunityPrimers_ReturnsChunks(t *testing.T) {
+	s := &fakeCommSearcher{res: &vector.SearchResult{Chunks: []vector.SearchChunk{
+		{ID: "c1", Content: "Cluster A summary"},
+		{ID: "c2", Content: "Cluster B summary"},
+	}}}
+	got := retrieveCommunityPrimers(context.Background(), s, "kb", "themes?", 6)
+	if len(got) != 2 || got[0].Content != "Cluster A summary" {
+		t.Fatalf("want 2 chunks with content, got %#v", got)
+	}
+	if s.gotOpt.NodeKindFilter != "community_summary" {
+		t.Errorf("want NodeKindFilter=community_summary, got %q", s.gotOpt.NodeKindFilter)
+	}
+}
+
+func TestRetrieveCommunityPrimers_ErrorAndGuards(t *testing.T) {
+	errS := &fakeCommSearcher{err: errors.New("boom")}
+	if got := retrieveCommunityPrimers(context.Background(), errS, "kb", "q", 6); got != nil {
+		t.Errorf("search error: want nil, got %#v", got)
+	}
+	// nil searcher / topK<1 → nil (guard before any Search call)
+	if got := retrieveCommunityPrimers(context.Background(), nil, "kb", "q", 6); got != nil {
+		t.Errorf("nil searcher: want nil, got %#v", got)
+	}
+	if got := retrieveCommunityPrimers(context.Background(), errS, "kb", "q", 0); got != nil {
+		t.Errorf("topK<1: want nil, got %#v", got)
+	}
+}
+
+func TestRetrieveCommunityPrimerIDs_SkipsEmptyIDs(t *testing.T) {
+	s := &fakeCommSearcher{res: &vector.SearchResult{Chunks: []vector.SearchChunk{
+		{ID: "c1", Content: "a"}, {ID: "", Content: "skip-empty-id"}, {ID: "c2", Content: "b"},
+	}}}
+	ids := retrieveCommunityPrimerIDs(context.Background(), s, "kb", "q", 6)
+	if len(ids) != 2 || ids[0] != "c1" || ids[1] != "c2" {
+		t.Errorf("MVP ID extraction (empty-id skip) regression: want [c1 c2], got %#v", ids)
+	}
+}
+
 func TestShouldInjectCommunityPrimer(t *testing.T) {
 	on := &fakeSiteConfigReader{values: map[string]*string{"chat_community_search_enabled": strPtr("true")}}
 	off := &fakeSiteConfigReader{values: map[string]*string{}}

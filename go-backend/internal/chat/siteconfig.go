@@ -637,6 +637,31 @@ func ChatCommunitySearchTopK(ctx context.Context, reader SiteConfigReader) int {
 	return readInt(ctx, reader, "chat_community_search_top_k", 8, 1, 30)
 }
 
+// ChatDriftEnabled gates the full iterative DRIFT orchestrator: for
+// global-synthesis queries, read KG community summaries (the primer),
+// generate follow-up sub-questions, search each locally, and synthesise.
+// Default off.
+func ChatDriftEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_drift_enabled", false)
+}
+
+// ChatDriftMaxFollowups caps how many follow-up sub-questions DRIFT
+// generates and searches per turn. Default 4, clamp [1,8].
+func ChatDriftMaxFollowups(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_drift_max_followups", 4, 1, 8)
+}
+
+// ChatDriftPrimerTopK is how many community summaries seed the primer.
+// Default 6, clamp [1,20].
+func ChatDriftPrimerTopK(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_drift_primer_top_k", 6, 1, 20)
+}
+
+// ChatDriftSearchTopK is the per-follow-up search limit. Default 8, clamp [1,30].
+func ChatDriftSearchTopK(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_drift_search_top_k", 8, 1, 30)
+}
+
 // ChatContextCompressionEnabled gates the T2-3 ECoRAG
 // evidentiality compression. When true and the post-sandwich
 // chunk pool exceeds ChatContextCompressionMinChunks, one

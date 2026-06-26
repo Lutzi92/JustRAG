@@ -1863,6 +1863,26 @@ func RecordCommunityPrimer(outcome string, n int) {
 	communityPrimerTotal.WithLabelValues(outcome).Add(float64(n))
 }
 
+// --- Full iterative DRIFT --------------------------------------------------
+
+var driftRunTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_drift_run_total",
+		Help: "Full iterative DRIFT orchestrator runs by outcome. Outcome " +
+			"values: primed (a community primer was present), primerless (no " +
+			"community summaries were available), fallback (follow-up " +
+			"generation failed or was empty — searched the original query).",
+		ConstLabels: commonLabels,
+	},
+	[]string{"outcome"},
+)
+
+// RecordDriftRun records a DRIFT orchestrator run outcome
+// ("primed"/"primerless"/"fallback").
+func RecordDriftRun(outcome string) {
+	driftRunTotal.WithLabelValues(outcome).Inc()
+}
+
 // --- Long-term memory (AP-D1) --------------------------------------------
 
 var (
