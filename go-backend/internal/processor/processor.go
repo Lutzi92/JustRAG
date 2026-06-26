@@ -201,6 +201,9 @@ type Processor struct {
 	// the per-KB Redis channel. nil → no events (mindmap falls back to its
 	// initial fetch). Only used on KG-extraction-enabled KBs.
 	kgPub kgEventPublisher
+	// kgCleaner clears a file's prior KG rows before re-extraction so re-ingest
+	// replaces rather than accumulates. nil → no pre-clean (back-compat).
+	kgCleaner kgDeleter
 }
 
 // indexedChunk pairs a chunk's text with its source page number.
@@ -302,6 +305,30 @@ type kgEventPublisher interface {
 
 // SetKGEventPublisher injects the mindmap live-update publisher. Optional.
 func (p *Processor) SetKGEventPublisher(pub kgEventPublisher) { p.kgPub = pub }
+
+// kgDeleter clears a file's existing knowledge-graph contribution before
+// re-extraction so a re-ingest replaces rather than accumulates KG rows.
+// *kg.PgStore satisfies it via DeleteKGForFile.
+type kgDeleter interface {
+	DeleteKGForFile(ctx context.Context, kbID, fileID string) error
+}
+
+// SetKGDeleter injects the pre-extraction KG cleaner. Optional — when nil,
+// clearStaleKG is a no-op and re-ingest behaves as before (KG accumulates).
+func (p *Processor) SetKGDeleter(d kgDeleter) { p.kgCleaner = d }
+
+// clearStaleKG removes the file's prior KG contribution before re-extraction.
+// Best-effort: a nil deleter or a delete error logs and continues, matching the
+// chunk-cleanup and KG-stage posture (KG is a side channel, never fails the file).
+func (p *Processor) clearStaleKG(ctx context.Context, kbID, fileID string) {
+	if p.kgCleaner == nil {
+		return
+	}
+	if err := p.kgCleaner.DeleteKGForFile(ctx, kbID, fileID); err != nil {
+		logctx.From(ctx).Warn("processor: pre-extraction kg cleanup failed; continuing",
+			"fileId", fileID, "error", err)
+	}
+}
 
 // kbHasActiveIngestion reports whether the KB still has a pending/processing
 // file — the mindmap "still building" signal. nil mainDB → false (no panic).
@@ -1247,6 +1274,11 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// completed/partial status.
 	if resolveKGExtractionEnabled(ctx, p.siteConfigReader) {
 		p.setStage(ctx, fileID, plan, stageKG)
+		// Clear this file's prior KG contribution before re-extracting so a
+		// re-ingest replaces rather than accumulates entities/edges. Placed
+		// INSIDE the enabled gate (not next to the early chunk cleanup) so a KB
+		// with KG extraction currently disabled keeps its existing graph.
+		p.clearStaleKG(ctx, kbID, fileID)
 		kgErr := p.runKGExtractionStage(ctx, fileID, kbID, fileName, result.Text, rawLang)
 		if kgErr != nil {
 			logctx.From(ctx).Warn("processor: kg extraction stage failed",

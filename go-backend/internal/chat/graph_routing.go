@@ -2,8 +2,6 @@ package chat
 
 import (
 	"context"
-	"strings"
-	"unicode"
 
 	"github.com/justrag/go-backend/internal/kg"
 	"github.com/justrag/go-backend/internal/logctx"
@@ -311,31 +309,5 @@ func ResolveGraphChunks(ctx context.Context, store kg.Store, kbID string, dec Gr
 // extractor's normalisation also carry hyphenated variants, so the
 // tokeniser doesn't need to reproduce them.
 func tokeniseForGraph(query string) []string {
-	if strings.TrimSpace(query) == "" {
-		return nil
-	}
-	out := make([]string, 0, 8)
-	seen := make(map[string]bool, 8)
-	current := strings.Builder{}
-	flush := func() {
-		t := current.String()
-		current.Reset()
-		if len(t) < 3 {
-			return
-		}
-		if seen[t] {
-			return
-		}
-		seen[t] = true
-		out = append(out, t)
-	}
-	for _, r := range query {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			current.WriteRune(r)
-		} else {
-			flush()
-		}
-	}
-	flush()
-	return out
+	return kg.TokenizeForGraph(query)
 }

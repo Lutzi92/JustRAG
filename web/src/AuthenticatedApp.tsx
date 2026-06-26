@@ -106,6 +106,17 @@ function AuthenticatedAppInner() {
   const [kbView, setKbView] = useState<KbViewType>('chat');
   const [currentKb, setCurrentKb] = useState<KnowledgeBase | null>(null);
 
+  // Query-scoped mindmap: which answer's subgraph the mindmap view is scoped to.
+  const [scopedMindmapMessageId, setScopedMindmapMessageId] = useState<string | null>(null);
+
+  const handleViewGraphForMessage = useCallback((messageId: string) => {
+    setScopedMindmapMessageId(messageId);
+    setKbView('mindmap');
+  }, [setKbView]);
+
+  const onCloseMindmap = useCallback(() => { setScopedMindmapMessageId(null); setKbView('chat'); }, [setKbView]);
+  const onShowWholeKb = useCallback(() => { setScopedMindmapMessageId(null); }, []); // stays in mindmap; messageId=null reloads full graph
+
   // New extracted hooks
   const kbSettings = useKbSettings();
   const viewState = useViewState({ setView, setKbView, setShowSettings: kbSettings.setShowSettings });
@@ -321,6 +332,10 @@ function AuthenticatedAppInner() {
     availableConfigs: kbSettings.availableConfigs,
     kbView,
     setKbView,
+    scopedMindmapMessageId,
+    onViewGraphForMessage: handleViewGraphForMessage,
+    onCloseMindmap,
+    onShowWholeKb,
     kbMgmt,
     handleGoHome: viewState.handleGoHome,
     handleViewHome: viewState.handleViewHome,

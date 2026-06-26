@@ -3,7 +3,7 @@ import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
-import { Brain, Loader2 } from 'lucide-react';
+import { Brain, Loader2, Network } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import type { MessageSource, TrajectoryEvent, FlaggedClaimStatus } from '../types';
 import { formatPageRanges } from '../utils/citations';
@@ -47,6 +47,20 @@ interface MessageContentProps {
      * undefined skips the highlight pass entirely.
      */
     flaggedClaims?: FlaggedClaimStatus[];
+    /**
+     * The id of the message this content belongs to. Required for the
+     * per-answer "View graph" action; passed only by MessageBubble for AI
+     * messages (other callers — e.g. the reasoning panel, ComparisonView —
+     * omit it so the button never renders there).
+     */
+    messageId?: string;
+    /**
+     * Opens the query-scoped mindmap for this answer. When provided together
+     * with messageId, a "View graph" action button is rendered. Clicking it
+     * calls onViewGraph(messageId), which switches the workspace to the
+     * mindmap view scoped to this message.
+     */
+    onViewGraph?: (messageId: string) => void;
 }
 
 /**
@@ -275,8 +289,8 @@ function buildMarkdownComponents(language: 'de' | 'en') {
     };
 }
 
-const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectCitations, semanticCitations, trajectory, flaggedClaims }: MessageContentProps) => {
-    const { language } = useTheme();
+const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectCitations, semanticCitations, trajectory, flaggedClaims, messageId, onViewGraph }: MessageContentProps) => {
+    const { language, t } = useTheme();
     const reasoningLabel = language === 'en' ? 'Chain of Thought' : 'Gedankengang';
     const markdownComponents = useMemo(() => buildMarkdownComponents(language), [language]);
 
@@ -338,6 +352,19 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
                     {addFlaggedClaimHighlights(addCitationRefs(content, sources, suspectCitations, semanticCitations, language), flaggedClaims, language)}
                 </ReactMarkdown>
             </div>
+            {onViewGraph && messageId && (
+                <div className="message-content-actions" style={{ marginTop: '0.5rem' }}>
+                    <button
+                        type="button"
+                        className="message-action-btn"
+                        onClick={() => onViewGraph(messageId)}
+                        title={t('viewGraphForAnswer')}
+                        aria-label={t('viewGraphForAnswer')}
+                    >
+                        <Network size={14} aria-hidden="true" />
+                    </button>
+                </div>
+            )}
         </>
     );
 });

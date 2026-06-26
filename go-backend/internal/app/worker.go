@@ -27,6 +27,7 @@ import (
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/kbconfig"
+	"github.com/justrag/go-backend/internal/kg"
 	"github.com/justrag/go-backend/internal/kgevents"
 	"github.com/justrag/go-backend/internal/longmem"
 	"github.com/justrag/go-backend/internal/migrate"
@@ -237,6 +238,7 @@ func RunWorker(cfg *config.Config) error {
 	proc.SetVectorPool(db.Vector)
 	proc.SetMaterializer(tabular.NewMaterializer(db.Main))
 	proc.SetKGEventPublisher(kgevents.NewPublisher(rdb.Client))
+	proc.SetKGDeleter(kg.NewPgStore(db.Main))
 	mux.HandleFunc(jobs.TypeResearchExecution, worker.Instrument(worker.NewResearchExecutionHandler(aiResolver, searchService, rdb.Client, chatStore, sharedFetcher)))
 	mux.HandleFunc(jobs.TypeAcademicResearchExecution, worker.Instrument(worker.NewAcademicResearchHandler(aiResolver, rdb.Client, chatStore, sharedFetcher)))
 	mux.HandleFunc(jobs.TypeRAGASSample, worker.Instrument(worker.NewRAGASSampleHandlerForResolver(aiResolver)))
