@@ -77,3 +77,4 @@ eval/golden/multi-hop.jsonl
 eval/golden/multi-kb.jsonl
 
 go-backend/eval-gen
+eval/golden/kg-community-global.jsonl
