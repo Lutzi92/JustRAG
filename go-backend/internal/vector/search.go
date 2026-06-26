@@ -139,6 +139,12 @@ type SearchOptions struct {
 	// to measure leaves-only vs. summary-included recall in
 	// ablations. The public chat handler never sets this — production
 	// retrieval always sees both kinds in one pool.
+	//
+	// Normal retrieval (empty NodeKindFilter) now also excludes
+	// node_kind='community_summary' by default — KG community summaries
+	// are surfaced only by the community-primed global-search path, not
+	// the normal pool. "community_summary" is itself a valid explicit
+	// filter value used by that path.
 	NodeKindFilter string
 
 	// LongContextMode is the T2-1 System-2 routing signal. When

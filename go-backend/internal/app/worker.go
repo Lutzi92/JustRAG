@@ -12,11 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/justrag/go-backend/internal/admineval"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/canonicalize"
 	"github.com/justrag/go-backend/internal/chat"
+	"github.com/justrag/go-backend/internal/community"
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/confluence"
 	"github.com/justrag/go-backend/internal/database"
@@ -387,6 +389,42 @@ func RunWorker(cfg *config.Config) error {
 		EmbedFor:   embedFor,
 		ConfirmFor: confirmFor,
 		Publish:    func(ctx context.Context, kbID string) { canonPub.PublishGraphChanged(ctx, kbID) },
+	})))
+
+	// KG community detection: admin-triggered topology-Louvain + per-community summaries per KB.
+	commStore := kg.NewPgStore(db.Main)
+	commChunkSvc := chunkService
+	commPub := kgevents.NewPublisher(rdb.Client)
+	commFileID := func(kbID string) string {
+		// deterministic per-KB synthetic file id (soft ref, no FK).
+		return uuid.NewSHA1(uuid.MustParse("6f9619ff-8b86-d011-b42d-00c04fc964ff"), []byte("kg-community:"+kbID)).String()
+	}
+	commPgConfig := "simple" // v1: BM25 over community summaries is secondary to vector retrieval; "simple" is an acceptable regconfig
+	mux.HandleFunc(jobs.TypeKGCommunitiesBuild, worker.Instrument(worker.NewKGCommunitiesBuildHandler(worker.CommunitiesDeps{
+		Store:           commStore,
+		Reader:          chatStore,
+		DeleteSummaries: func(ctx context.Context, kbID string) error { return commChunkSvc.DeleteCommunitySummaries(ctx, kbID) },
+		SummariseFor: func(kbID string) community.SummariseFunc {
+			return func(ctx context.Context, input string) (string, error) {
+				model := chat.ResolveFastTierModel(ctx, chatStore, "kg_community_summary_model")
+				res, err := ai.GenerateCompletionWithModelDeterministic(ctx, aiResolver, input,
+					"Summarise this group of related entities and their relationships into a concise paragraph capturing the community's overall theme.",
+					kbID, false, model)
+				if err != nil {
+					return "", err
+				}
+				return res.Content, nil
+			}
+		},
+		EmbedFor: func(kbID string) community.EmbedFunc {
+			return func(ctx context.Context, text string) ([]float64, error) {
+				return ai.GenerateEmbedding(ctx, aiResolver, text, kbID, embeddingCache)
+			}
+		},
+		SinkFor: func(kbID string) community.Sink {
+			return &communitySink{svc: commChunkSvc, store: commStore, kbID: kbID, fileID: commFileID(kbID), pgConfig: commPgConfig}
+		},
+		Publish: func(ctx context.Context, kbID string) { commPub.PublishGraphChanged(ctx, kbID) },
 	})))
 
 	// RSS and Confluence schedulers no longer run in the worker — they are

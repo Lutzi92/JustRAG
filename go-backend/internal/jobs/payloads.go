@@ -83,3 +83,8 @@ type GenerateGoldenSetPayload struct {
 type EntityCanonicalizePayload struct {
 	KbID string `json:"kbId"`
 }
+
+// KGCommunitiesBuildPayload is the TypeKGCommunitiesBuild task body.
+type KGCommunitiesBuildPayload struct {
+	KbID string `json:"kbId"`
+}

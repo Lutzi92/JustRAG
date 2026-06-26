@@ -116,6 +116,9 @@ type ChatSource struct {
 //
 //	[N] (summary, level 2) [Source: file.pdf, p. 4]
 func renderSourceHeader(idx int, fileName, pageAnnotation, nodeKind string, treeLevel int) string {
+	if nodeKind == "community_summary" {
+		return fmt.Sprintf("[%d] (knowledge-graph community) [Source: %s%s]", idx, fileName, pageAnnotation)
+	}
 	if nodeKind == "summary" {
 		level := treeLevel
 		if level <= 0 {
@@ -900,6 +903,25 @@ func PrepareChatContext(
 				"query":      params.SearchQuery,
 				"max_tokens": maxTokens,
 			})
+		}
+	}
+
+	// Community-primed global search: for gated global-synthesis
+	// complex_reasoning turns, fetch the top-K KG community summaries and
+	// inject their chunk ids via the GraphChunkIDs lane (fetched by id,
+	// bypassing the WHERE exclusion) so the answer is primed with
+	// corpus-level overviews. Best-effort: an empty/failed primer search
+	// leaves normal retrieval untouched.
+	if shouldInjectCommunityPrimer(ctx, siteConfig, params.QueryType, params.SearchQuery) {
+		primerIDs := retrieveCommunityPrimerIDs(ctx, searchSvc, params.KbID, params.SearchQuery,
+			ChatCommunitySearchTopK(ctx, siteConfig))
+		if len(primerIDs) > 0 {
+			opts.GraphChunkIDs = append(opts.GraphChunkIDs, primerIDs...)
+			observability.RecordCommunityPrimer("injected", len(primerIDs))
+		} else {
+			// Count the firing (Add(0) would be a no-op and leave the
+			// "empty" counter permanently stuck at zero).
+			observability.RecordCommunityPrimer("empty", 1)
 		}
 	}
 

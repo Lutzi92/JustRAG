@@ -626,6 +626,17 @@ func ChatLongContextMaxTokens(ctx context.Context, reader SiteConfigReader) int 
 	return readInt(ctx, reader, "chat_longcontext_max_tokens", 100_000, 10_000, 500_000)
 }
 
+// ChatCommunitySearchEnabled gates community-primed global search: inject KG
+// community summaries into the answer pool for global-synthesis queries. Default off.
+func ChatCommunitySearchEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_community_search_enabled", false)
+}
+
+// ChatCommunitySearchTopK is how many community summaries to inject. Default 8, clamp [1,30].
+func ChatCommunitySearchTopK(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_community_search_top_k", 8, 1, 30)
+}
+
 // ChatContextCompressionEnabled gates the T2-3 ECoRAG
 // evidentiality compression. When true and the post-sandwich
 // chunk pool exceeds ChatContextCompressionMinChunks, one

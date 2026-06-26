@@ -30,6 +30,7 @@ const (
 	TypeReEmbedUserMemory         = "re-embed-user-memory"
 	TypeGenerateGoldenSet         = "generate-golden-set"
 	TypeEntityCanonicalizeKB      = "entity-canonicalize-kb"
+	TypeKGCommunitiesBuild        = "kg-communities-build"
 )
 
 // taskTimeouts maps each task type to a generous per-task asynq.Timeout.
@@ -54,6 +55,7 @@ var taskTimeouts = map[string]time.Duration{
 	TypeReEmbedUserMemory:         1 * time.Hour,
 	TypeGenerateGoldenSet:         2 * time.Hour,
 	TypeEntityCanonicalizeKB:      1 * time.Hour,
+	TypeKGCommunitiesBuild:        1 * time.Hour,
 }
 
 // TimeoutFor returns the asynq.Timeout duration for taskType. Unknown task

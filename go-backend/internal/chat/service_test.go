@@ -389,3 +389,18 @@ func TestCountTokensApprox(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderSourceHeader_CommunitySummary(t *testing.T) {
+	got := renderSourceHeader(3, "kg", "", "community_summary", 0)
+	if got != "[3] (knowledge-graph community) [Source: kg]" {
+		t.Errorf("community header: got %q", got)
+	}
+	// RAPTOR summary still works (regression).
+	if got := renderSourceHeader(1, "doc.pdf", "", "summary", 2); got != "[1] (summary, level 2) [Source: doc.pdf]" {
+		t.Errorf("raptor header regressed: got %q", got)
+	}
+	// Plain leaf unchanged.
+	if got := renderSourceHeader(2, "doc.pdf", " p.4", "leaf", 0); got != "[2] [Source: doc.pdf p.4]" {
+		t.Errorf("leaf header: got %q", got)
+	}
+}
