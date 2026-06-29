@@ -31,6 +31,7 @@ const (
 	TypeGenerateGoldenSet         = "generate-golden-set"
 	TypeEntityCanonicalizeKB      = "entity-canonicalize-kb"
 	TypeKGCommunitiesBuild        = "kg-communities-build"
+	TypeGitRepoSync               = "git-repo-sync"
 )
 
 // taskTimeouts maps each task type to a generous per-task asynq.Timeout.
@@ -56,6 +57,7 @@ var taskTimeouts = map[string]time.Duration{
 	TypeGenerateGoldenSet:         2 * time.Hour,
 	TypeEntityCanonicalizeKB:      1 * time.Hour,
 	TypeKGCommunitiesBuild:        1 * time.Hour,
+	TypeGitRepoSync:               1 * time.Hour,
 }
 
 // TimeoutFor returns the asynq.Timeout duration for taskType. Unknown task

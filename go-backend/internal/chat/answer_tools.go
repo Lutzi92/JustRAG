@@ -475,6 +475,9 @@ type AnswerToolsParams struct {
 	// runner already extracts/emits any reasoning the provider returns; this
 	// is what asks for it. Mirrors the standard streaming path.
 	ReasoningEffort string
+	// Temperature is the sampling temperature for answer generation (admin
+	// `chat_answer_temperature`). Zero falls back to ai.DefaultAnswerTemperature.
+	Temperature float64
 }
 
 // RunAnswerWithTools is the production entry point for the answer-time
@@ -508,7 +511,7 @@ func RunAnswerWithTools(
 		}
 	}
 	messages := ai.BuildAnswerMessages(systemPrompt, config.ChatModel, p.History, p.UserPrompt)
-	runner := &liveRoundRunner{config: config, reasoningEffort: p.ReasoningEffort}
+	runner := &liveRoundRunner{config: config, reasoningEffort: p.ReasoningEffort, temperature: p.Temperature}
 	return runAnswerWithToolsWithRunner(ctx, runAnswerInput{
 		KbID:       p.KbID,
 		ChatID:     p.ChatID,
@@ -525,10 +528,14 @@ func RunAnswerWithTools(
 type liveRoundRunner struct {
 	config          *ai.ResolvedConfig
 	reasoningEffort string
+	temperature     float64
 }
 
 func (r *liveRoundRunner) Run(ctx context.Context, messages []ai.ChatMessage, tools []ai.ChatTool, toolChoice any) (<-chan roundStreamEvent, error) {
-	temp := 0.2
+	temp := r.temperature
+	if temp <= 0 {
+		temp = ai.DefaultAnswerTemperature
+	}
 	req := ai.ChatRequest{
 		Model:              r.config.ChatModel,
 		Messages:           messages,

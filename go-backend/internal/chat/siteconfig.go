@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/siteconfig"
 )
 
@@ -1079,6 +1080,16 @@ func ChatAnswerToolsEnabled(ctx context.Context, reader SiteConfigReader) bool {
 // Out-of-range or unparseable values fall back to the default.
 func ChatAnswerToolsMaxRounds(ctx context.Context, reader SiteConfigReader) int {
 	return readInt(ctx, reader, "chat_answer_tools_max_rounds", 5, 1, 10)
+}
+
+// ChatAnswerTemperature is the sampling temperature for user-facing answer
+// generation (streaming chat + answer-tools paths). Default 0.3 — a moderate
+// value that keeps answers grounded while avoiding the long-context coherence
+// loss of near-greedy decoding. Range [0, 2]. top_p / top_k are intentionally
+// not exposed: they fall back to the model's generation_config via vLLM's
+// --generation-config auto (gemma-4: top_p 0.95 / top_k 64).
+func ChatAnswerTemperature(ctx context.Context, reader SiteConfigReader) float64 {
+	return readFloat(ctx, reader, "chat_answer_temperature", ai.DefaultAnswerTemperature, 0, 2)
 }
 
 // ChatAgenticPlateauStop reports whether the Phase 1 §1.3 quality-plateau

@@ -772,6 +772,7 @@ func (h *Handler) tryDeepChat(
 			Dispatcher:      h.toolDispatcher,
 			MaxRounds:       ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
 			ReasoningEffort: reasoningLevel,
+			Temperature:     ChatAnswerTemperature(ctx, h.siteConfigReader),
 		}, streamEmit, answerTrace)
 		if err != nil {
 			writeSSE(w, map[string]string{"error": "failed to run AI stream"})
@@ -780,7 +781,7 @@ func (h *Handler) tryDeepChat(
 			return true
 		}
 	} else {
-		events, sErr := ai.StreamCompletionWithHistory(ctx, h.aiResolver, answerHistory, body.Message, chatCtx.SystemPrompt, kbID, reasoningLevel)
+		events, sErr := ai.StreamCompletionWithHistory(ctx, h.aiResolver, answerHistory, body.Message, chatCtx.SystemPrompt, kbID, reasoningLevel, ChatAnswerTemperature(ctx, h.siteConfigReader))
 		if sErr != nil {
 			writeSSE(w, map[string]string{"error": "failed to start AI stream"})
 			writeSSEDone(w)

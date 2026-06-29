@@ -491,17 +491,20 @@ button.source-card {
 
 .source-ref {
   color: var(--accent-primary);
+  background: var(--tag-bg);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
   cursor: pointer;
   font-weight: 600;
-  font-size: 0.75em;
-  margin: 0 1px;
-  border-radius: 3px;
-  padding: 0 2px;
-  transition: background 0.15s, color 0.15s;
+  font-size: 0.72em;
+  margin: 0 2px;
+  border-radius: 6px;
+  padding: 0 5px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .source-ref:hover {
   background: var(--accent-primary);
+  border-color: var(--accent-primary);
   color: #ffffff;
   text-decoration: none;
 }

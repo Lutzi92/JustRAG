@@ -39,11 +39,20 @@ type StreamEvent struct {
 // turns, use Client.StreamChatCompletion directly with Tools/ToolChoice set
 // and consume StreamChunk values (which carry ToolCallDeltas + FinishReason).
 //
+// DefaultAnswerTemperature is the sampling temperature for user-facing answer
+// generation when no per-deployment override is supplied. Callers that read
+// the admin `chat_answer_temperature` knob pass that value instead; callers
+// without a SiteConfigReader (public API, OpenAI-compat shim) pass this
+// constant. top_p / top_k are deliberately NOT set here — they fall back to
+// the model's generation_config via vLLM's --generation-config auto.
+const DefaultAnswerTemperature = 0.3
+
 // reasoningEffort is the OpenAI o-series budget ("low"/"medium"/"high"); a
 // non-empty value both requests reasoning from the provider AND enables
 // extraction/emission of the returned reasoning. Empty disables both.
-func StreamCompletion(ctx context.Context, resolver *ConfigResolver, prompt, systemPrompt, kbID, reasoningEffort string) (<-chan StreamEvent, error) {
-	return StreamCompletionWithHistory(ctx, resolver, nil, prompt, systemPrompt, kbID, reasoningEffort)
+// temperature is the sampling temperature (see DefaultAnswerTemperature).
+func StreamCompletion(ctx context.Context, resolver *ConfigResolver, prompt, systemPrompt, kbID, reasoningEffort string, temperature float64) (<-chan StreamEvent, error) {
+	return StreamCompletionWithHistory(ctx, resolver, nil, prompt, systemPrompt, kbID, reasoningEffort, temperature)
 }
 
 // StreamCompletionWithHistory is StreamCompletion plus recent conversation
@@ -51,7 +60,7 @@ func StreamCompletion(ctx context.Context, resolver *ConfigResolver, prompt, sys
 // follow-ups that reference the previous answer ("can you show this as a
 // table?") have something to refer to. A nil/empty history is byte-identical
 // to StreamCompletion.
-func StreamCompletionWithHistory(ctx context.Context, resolver *ConfigResolver, history []ChatHistoryEntry, prompt, systemPrompt, kbID, reasoningEffort string) (<-chan StreamEvent, error) {
+func StreamCompletionWithHistory(ctx context.Context, resolver *ConfigResolver, history []ChatHistoryEntry, prompt, systemPrompt, kbID, reasoningEffort string, temperature float64) (<-chan StreamEvent, error) {
 	config, err := resolver.Resolve(ctx, kbID)
 	if err != nil {
 		return nil, fmt.Errorf("ai: resolve config: %w", err)
@@ -70,11 +79,13 @@ func StreamCompletionWithHistory(ctx context.Context, resolver *ConfigResolver, 
 
 	messages := BuildAnswerMessages(systemPrompt, config.ChatModel, history, prompt)
 
-	temp := 0.2
+	if temperature <= 0 {
+		temperature = DefaultAnswerTemperature
+	}
 	req := ChatRequest{
 		Model:              config.ChatModel,
 		Messages:           messages,
-		Temperature:        &temp,
+		Temperature:        &temperature,
 		ReasoningEffort:    reasoningEffort,
 		ChatTemplateKwargs: ThinkingChatTemplateKwargs(reasoningEffort),
 	}

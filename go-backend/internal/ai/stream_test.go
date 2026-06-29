@@ -259,7 +259,7 @@ func TestStreamCompletion_ContentOnly(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "gpt-4")
-	ch, err := StreamCompletion(context.Background(), resolver, "hi", "", "", "")
+	ch, err := StreamCompletion(context.Background(), resolver, "hi", "", "", "", 0.2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestStreamCompletion_ReasoningContent(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "deepseek-r1")
-	ch, err := StreamCompletion(context.Background(), resolver, "solve", "", "", "medium")
+	ch, err := StreamCompletion(context.Background(), resolver, "solve", "", "", "medium", 0.2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestStreamCompletion_ThinkTagsInContent(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "qwen")
-	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "medium")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "medium", 0.2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestStreamCompletion_ThinkTagSplitAcrossChunks(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "qwen")
-	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "medium")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "medium", 0.2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestStreamCompletion_OpenTagSplitAcrossChunks(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "qwen")
-	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "medium")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "medium", 0.2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestStreamCompletion_SendsReasoningEffort(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "o3-mini")
-	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "high")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "high", 0.2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestStreamCompletion_OmitsReasoningEffortWhenEmpty(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "gpt-4")
-	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "", 0.2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -491,6 +491,45 @@ func TestStreamCompletion_OmitsReasoningEffortWhenEmpty(t *testing.T) {
 	}
 	if strings.Contains(body, "chat_template_kwargs") {
 		t.Errorf("request body must not carry chat_template_kwargs when disabled, got: %s", body)
+	}
+}
+
+// An explicit temperature is forwarded verbatim to the provider.
+func TestStreamCompletion_SendsTemperature(t *testing.T) {
+	var body string
+	srv := bodyCapturingSSEServer(t, &body)
+	defer srv.Close()
+
+	resolver := mockResolver(srv.URL+"/v1/", "gpt-4")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "", 0.7)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, done := collectEvents(ch); !done {
+		t.Error("expected Done event")
+	}
+	if !strings.Contains(body, `"temperature":0.7`) {
+		t.Errorf("request body must carry temperature=0.7, got: %s", body)
+	}
+}
+
+// A non-positive temperature falls back to DefaultAnswerTemperature so a
+// zero-valued caller never accidentally requests greedy decoding.
+func TestStreamCompletion_TemperatureFallsBackToDefault(t *testing.T) {
+	var body string
+	srv := bodyCapturingSSEServer(t, &body)
+	defer srv.Close()
+
+	resolver := mockResolver(srv.URL+"/v1/", "gpt-4")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, done := collectEvents(ch); !done {
+		t.Error("expected Done event")
+	}
+	if !strings.Contains(body, `"temperature":0.3`) {
+		t.Errorf("zero temperature must fall back to DefaultAnswerTemperature 0.3, got: %s", body)
 	}
 }
 

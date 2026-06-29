@@ -215,6 +215,15 @@ const SidebarLeftComp: React.FC = () => {
                     onSyncConfluenceNow={syncConfluenceNow}
                     onRetryFile={retryFile}
                     onRetryAllFailed={retryAllFailed}
+                    onAddSource={() => setShowUploadModal(true)}
+                    /* TODO(git-repo-sources): in-progress feature — SourcesSection
+                       declares these props but KbDataContext/useGitRepoSources is
+                       not wired yet. Empty placeholders keep the build green and
+                       render no git sources until the feature is finished. */
+                    gitRepoSources={[]}
+                    onUpdateGitRepoSource={() => {}}
+                    onDeleteGitRepoSource={() => {}}
+                    onSyncGitRepoNow={() => {}}
                 />
             </div>
 

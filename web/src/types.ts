@@ -262,6 +262,7 @@ export interface FileEntry {
     createdAt: string;
     selected?: boolean;
     rssFeedId?: string;
+    gitRepoSourceId?: string;
     errorStage?: string;
     errorMessage?: string;
     currentStage?: string;
@@ -388,6 +389,24 @@ export interface ConfluenceSource {
     consecutiveFailures: number;
     lastSyncedAt: string | null;
     pageCount: number;
+    syncProgress: number;
+    syncTotal: number;
+    createdAt: string;
+}
+
+export interface GitRepoSource {
+    id: string;
+    kbId: string;
+    repoUrl: string;
+    isPrivate: boolean;
+    branch: string | null;
+    hasToken: boolean;
+    status: 'active' | 'syncing' | 'error' | 'paused';
+    errorMessage: string | null;
+    consecutiveFailures: number;
+    lastSyncedAt: string | null;
+    lastCommitSha: string | null;
+    fileCount: number;
     syncProgress: number;
     syncTotal: number;
     createdAt: string;

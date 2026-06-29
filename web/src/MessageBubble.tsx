@@ -1,6 +1,7 @@
 import { memo, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import type { Message, BranchInfo, MessageVerification } from './types';
+import { FileText, ChevronDown, Check, ArrowRight } from 'lucide-react';
+import type { Message, BranchInfo, MessageVerification, MessageSource } from './types';
 import { flaggedClaimsFor } from './utils/verification';
 import { useReducedMotion, getMotionProps } from './hooks/useReducedMotion';
 import { BranchIndicator } from './components/BranchIndicator';
@@ -35,9 +36,21 @@ interface MessageBubbleProps {
     questionText?: string;
 }
 
-interface VerificationBadgeProps {
+interface ConfidenceProps {
     verification: MessageVerification;
     t: (key: string) => string;
+}
+
+// confidenceColors maps a verification verdict to the citation-trust palette
+// (shared with the old VerificationBadge): green ≥80, amber ≥60, orange <60,
+// red unverified. Used by both the always-visible confidence chip and its
+// expandable breakdown.
+function confidenceColors(verification: MessageVerification): { bg: string; color: string; labelKey: string } {
+    const { verified, score } = verification;
+    if (!verified) return { bg: '#fee2e2', color: '#991b1b', labelKey: 'verificationUnverified' };
+    if (score >= 80) return { bg: '#d1fae5', color: '#065f46', labelKey: 'verificationVerified' };
+    if (score >= 60) return { bg: '#fef3c7', color: '#92400e', labelKey: 'verificationPartial' };
+    return { bg: '#ffedd5', color: '#9a3412', labelKey: 'verificationLowConfidence' };
 }
 
 // hasFactcheckOutput reports whether the LLM-based factchecker actually
@@ -82,54 +95,60 @@ function semanticCitationSet(v: MessageVerification | null | undefined): Set<num
     return out.size > 0 ? out : undefined;
 }
 
-function VerificationBadge({ verification, t }: VerificationBadgeProps) {
-    const { verified, score, issues } = verification;
-
-    let label: string;
-    let bgColor: string;
-    let color: string;
-
-    if (!verified) {
-        label = t('verificationUnverified');
-        bgColor = '#fee2e2';
-        color = '#991b1b';
-    } else if (score >= 80) {
-        label = t('verificationVerified');
-        bgColor = '#d1fae5';
-        color = '#065f46';
-    } else if (score >= 60) {
-        label = t('verificationPartial');
-        bgColor = '#fef3c7';
-        color = '#92400e';
-    } else {
-        label = t('verificationLowConfidence');
-        bgColor = '#ffedd5';
-        color = '#9a3412';
-    }
-
-    const tooltipParts: string[] = [`${t('verificationScoreLabel')}: ${score}`];
-    if (issues.length > 0) {
-        tooltipParts.push(`${t('verificationIssuesLabel')}: ${issues.join('; ')}`);
-    }
-    const tooltip = tooltipParts.join(' | ');
-
+// ConfidenceChip is the always-visible answer-footer chip ("✓ Geprüft · 92%").
+// Clicking it toggles the ConfidenceDetails breakdown (owned by MessageBubble).
+function ConfidenceChip({ verification, t, open, onToggle }: ConfidenceProps & { open: boolean; onToggle: () => void }) {
+    const { verified, score } = verification;
+    const c = confidenceColors(verification);
     return (
-        <span
-            title={tooltip}
+        <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onToggle(); }}
+            aria-expanded={open}
             style={{
-                display: 'inline-block',
-                padding: '2px 10px',
-                borderRadius: '12px',
-                fontSize: '0.75rem',
-                fontWeight: 500,
-                backgroundColor: bgColor,
-                color: color,
-                cursor: 'default',
-                userSelect: 'none',
+                display: 'inline-flex', alignItems: 'center', gap: '4px',
+                padding: '2px 10px', borderRadius: '12px',
+                fontSize: '0.75rem', fontWeight: 500,
+                backgroundColor: c.bg, color: c.color,
+                border: 'none', cursor: 'pointer', userSelect: 'none', fontFamily: 'inherit',
             }}
         >
-            {label}
-        </span>
+            <Check size={12} aria-hidden="true" />
+            <span>{t(c.labelKey)}{verified ? ` · ${score}%` : ''}</span>
+            <ChevronDown size={12} aria-hidden="true" style={{ transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none' }} />
+        </button>
+    );
+}
+
+// ConfidenceDetails is the expandable fact-check breakdown: a score bar plus
+// per-method counts (wortgenau / semantisch / Hinweise) derived from the
+// citation validator + factuality verifier output.
+function ConfidenceDetails({ verification, t }: ConfidenceProps) {
+    const { score, issues, citations } = verification;
+    const c = confidenceColors(verification);
+    const exact = citations?.filter(x => x.verified && x.method !== 'semantic').length ?? 0;
+    const semantic = citations?.filter(x => x.verified && x.method === 'semantic').length ?? 0;
+    const hints = (issues?.length ?? 0) + (citations?.filter(x => !x.verified).length ?? 0);
+    return (
+        <div style={{
+            marginTop: '0.5rem', padding: '0.75rem',
+            background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+            borderRadius: '8px', maxWidth: '420px',
+        }}>
+            <div style={{ height: 6, borderRadius: 3, background: 'var(--border-color)', overflow: 'hidden', marginBottom: '0.6rem' }}>
+                <div style={{ height: '100%', width: `${Math.max(0, Math.min(100, score))}%`, background: c.color, borderRadius: 3, transition: 'width 0.3s' }} />
+            </div>
+            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                <span><strong style={{ color: 'var(--text-primary)' }}>{exact}</strong> {t('confidenceExactMatch')}</span>
+                <span><strong style={{ color: 'var(--text-primary)' }}>{semantic}</strong> {t('confidenceSemantic')}</span>
+                <span><strong style={{ color: 'var(--text-primary)' }}>{hints}</strong> {t('confidenceHints')}</span>
+            </div>
+            {issues && issues.length > 0 && (
+                <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.1rem', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                    {issues.map((iss, i) => <li key={i}>{iss}</li>)}
+                </ul>
+            )}
+        </div>
     );
 }
 
@@ -141,6 +160,9 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
     const [isHovered, setIsHovered] = useState(false);
     const [isFocused, setIsFocused] = useState(false);
     const [tapped, setTapped] = useState(false);
+    // §8 answer-footer expandable sections.
+    const [confOpen, setConfOpen] = useState(false);
+    const [sourcesExpanded, setSourcesExpanded] = useState(false);
     const bubbleRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
 
@@ -188,70 +210,47 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
         handleCitationClick(e);
     }, [handleCitationClick]);
 
-    // Memoize source grouping to prevent recalculation on every render
-    const sourceElements = useMemo(() => {
-        if (!message.sources || message.sources.length === 0) return null;
+    // openSourceByFile dispatches a citation/source open to the PDF viewer or
+    // the text-preview handler, depending on file type.
+    const openSourceByFile = useCallback((fileName: string, fileId?: string, firstPage = 1) => {
+        if (!fileId) return;
+        const isPdf = fileName.toLowerCase().endsWith('.pdf');
+        if (isPdf && onPdfOpen) onPdfOpen(fileId, fileName, firstPage);
+        else if (onPreviewSource) onPreviewSource(fileId, fileName);
+    }, [onPdfOpen, onPreviewSource]);
+
+    // handleOpenSource powers the §8 citation-preview "Im Dokument öffnen" link.
+    const handleOpenSource = useCallback((source: MessageSource) => {
+        openSourceByFile(source.fileName, source.fileId, source.pages?.[0] || 1);
+    }, [openSourceByFile]);
+
+    // Grouped, cited sources for the §8 answer footer (one entry per file, with
+    // merged page ranges and a per-file match count). Replaces the old
+    // "Quellen:" pill list with scannable source cards.
+    const sourceGroups = useMemo(() => {
+        if (!message.sources || message.sources.length === 0) return [];
 
         const cited = extractCitedSourceIndices(message.content, message.sources.length);
         const visibleSources = cited.size > 0
             ? message.sources.filter((_, i) => cited.has(i + 1))
             : message.sources;
 
-        if (visibleSources.length === 0) return null;
+        if (visibleSources.length === 0) return [];
 
-        const grouped = new Map<string, { fileId?: string; pages: Set<number> }>();
+        const grouped = new Map<string, { fileId?: string; pages: Set<number>; count: number }>();
         for (const s of visibleSources) {
             if (!s.fileName) continue;
-            const entry = grouped.get(s.fileName) || { fileId: s.fileId, pages: new Set() };
+            const entry = grouped.get(s.fileName) || { fileId: s.fileId, pages: new Set<number>(), count: 0 };
             if (s.pages) s.pages.forEach(p => entry.pages.add(p));
             if (s.fileId) entry.fileId = s.fileId;
+            entry.count += 1;
             grouped.set(s.fileName, entry);
         }
 
-        return [...grouped.entries()].map(([name, { fileId, pages }], idx) => {
-            const sortedPages = [...pages].sort((a, b) => a - b);
-            const pageLabel = sortedPages.length > 0 ? `, S. ${formatPageRanges(sortedPages)}` : '';
-            const isPdf = name.toLowerCase().endsWith('.pdf');
-            const firstPage = sortedPages[0] || 1;
-
-            if (isPdf && fileId && onPdfOpen) {
-                return (
-                    <span
-                        key={`${name}-${idx}`}
-                        className="source-tag source-tag-link"
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Open ${name}`}
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onPdfOpen(fileId, name, firstPage);
-                        }}
-                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onPdfOpen(fileId, name, firstPage); }}
-                    >
-                        {name}{pageLabel}
-                    </span>
-                );
-            } else if (onPreviewSource && fileId) {
-                return (
-                    <span
-                        key={`${name}-${idx}`}
-                        className="source-tag source-tag-link"
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Preview ${name}`}
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onPreviewSource(fileId, name);
-                        }}
-                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onPreviewSource(fileId, name); }}
-                    >
-                        {name}{pageLabel}
-                    </span>
-                );
-            }
-            return <span key={`${name}-${idx}`} className="source-tag">{name}{pageLabel}</span>;
-        });
-    }, [message.sources, message.content, onPdfOpen, onPreviewSource]);
+        return [...grouped.entries()].map(([name, { fileId, pages, count }]) => ({
+            name, fileId, pages: [...pages].sort((a, b) => a - b), count,
+        }));
+    }, [message.sources, message.content]);
 
     // If editing this message inline, show editor instead
     if (isEditing && message.role === 'user' && onEdit && onEditCancel && message.id) {
@@ -305,14 +304,11 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
             {branchInfo && onSwitchBranch && (
                 <BranchIndicator branchInfo={branchInfo} onSwitchBranch={onSwitchBranch} />
             )}
-            {showActions && !isStreaming && !message.isEnhanced && message.id && (
+            {/* Top hover toolbar — user messages only (edit). AI actions live in the §8 footer row. */}
+            {message.role === 'user' && showActions && !isStreaming && !message.isEnhanced && message.id && (
                 <MessageActions
                     message={message}
                     onEdit={onEdit ? () => onEdit(message.id!, message.content) : undefined}
-                    onFork={onFork ? () => onFork(message.id!) : undefined}
-                    onCompare={onCompare ? () => onCompare(message.id!) : undefined}
-                    onRegenerate={onRegenerate ? () => onRegenerate(message.id!) : undefined}
-                    onFeedback={message.role === 'ai' && onFeedback ? (fb, comment) => onFeedback(message.id!, fb, comment) : undefined}
                     isMobile={isMobile}
                     kbId={kbId}
                     questionText={questionText}
@@ -335,6 +331,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                         flaggedClaims={flaggedClaimsFor(message.verification)}
                         messageId={message.id}
                         onViewGraph={onViewGraph}
+                        onOpenSource={handleOpenSource}
                     />
                 </div>
             ) : (
@@ -345,46 +342,104 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                 <ComparisonFindings findings={message.comparisonFindings} t={t} />
             )}
 
-            {message.role === 'ai' && !isStreaming && message.verification != null && hasFactcheckOutput(message.verification) && (
-                <div style={{ marginTop: '0.75rem' }}>
-                    <VerificationBadge verification={message.verification} t={t} />
-                </div>
+            {/* §8: single calm answer footer — confidence chip + Quellen·N toggle + one action row */}
+            {message.role === 'ai' && !isStreaming && !message.isEnhanced && message.id && (
+                <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)' }}>
+                        {message.verification != null && hasFactcheckOutput(message.verification) && (
+                            <ConfidenceChip
+                                verification={message.verification}
+                                t={t}
+                                open={confOpen}
+                                onToggle={() => setConfOpen(o => !o)}
+                            />
+                        )}
+                        {sourceGroups.length > 0 && (
+                            <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setSourcesExpanded(s => !s); }}
+                                aria-expanded={sourcesExpanded}
+                                style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: '4px',
+                                    padding: '2px 10px', borderRadius: '12px',
+                                    fontSize: '0.75rem', fontWeight: 600,
+                                    background: 'var(--tag-bg)', color: 'var(--accent-primary)',
+                                    border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                                }}
+                            >
+                                <FileText size={13} aria-hidden="true" />
+                                {t('answerSourcesToggle')} · {sourceGroups.length}
+                                <ChevronDown size={12} aria-hidden="true" style={{ transition: 'transform 0.15s', transform: sourcesExpanded ? 'rotate(180deg)' : 'none' }} />
+                            </button>
+                        )}
+                        <div style={{ marginLeft: 'auto' }}>
+                            <MessageActions
+                                message={message}
+                                variant="inline"
+                                onFork={onFork ? () => onFork(message.id!) : undefined}
+                                onCompare={onCompare ? () => onCompare(message.id!) : undefined}
+                                onRegenerate={onRegenerate ? () => onRegenerate(message.id!) : undefined}
+                                onFeedback={onFeedback ? (fb, comment) => onFeedback(message.id!, fb, comment) : undefined}
+                                isMobile={isMobile}
+                                kbId={kbId}
+                                questionText={questionText}
+                                contentRef={contentRef}
+                            />
+                        </div>
+                    </div>
+
+                    {confOpen && message.verification != null && (
+                        <ConfidenceDetails verification={message.verification} t={t} />
+                    )}
+
+                    {sourcesExpanded && sourceGroups.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
+                            {sourceGroups.map((g, i) => {
+                                const isPdf = g.name.toLowerCase().endsWith('.pdf');
+                                const pageLabel = g.pages.length ? `S. ${formatPageRanges(g.pages)} · ` : '';
+                                const canOpen = !!g.fileId && (isPdf ? !!onPdfOpen : !!onPreviewSource);
+                                return (
+                                    <div key={`${g.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.6rem 0.75rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                                        <FileText size={18} aria-hidden="true" style={{ flexShrink: 0, color: 'var(--accent-primary)' }} />
+                                        <div style={{ minWidth: 0, flex: 1 }}>
+                                            <div style={{ fontWeight: 500, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{pageLabel}{g.count} {t('hitsLabel')}</div>
+                                        </div>
+                                        {canOpen && (
+                                            <button
+                                                type="button"
+                                                onClick={(e) => { e.stopPropagation(); openSourceByFile(g.name, g.fileId, g.pages[0] || 1); }}
+                                                style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-primary)', fontSize: '0.8rem', fontWeight: 600, fontFamily: 'inherit', flexShrink: 0 }}
+                                            >
+                                                {t('openInDocument')} <ArrowRight size={13} aria-hidden="true" />
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </>
             )}
-            {sourceElements && (
-                <div style={{ marginTop: '1rem' }}>
-                    <div className="source-label" style={{ marginBottom: '0.5rem' }}>{t('sourcesLabel')}</div>
-                    {sourceElements}
-                </div>
-            )}
+
             {showFollowUps && message.followUpQuestions && message.followUpQuestions.length > 0 && onFollowUpClick && (
-                <div className="follow-up-suggestions">
-                    {message.followUpQuestions.map((q, idx) => (
-                        <button
-                            key={idx}
-                            className="follow-up-chip"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                onFollowUpClick(q);
-                            }}
-                        >
-                            {q}
-                        </button>
-                    ))}
+                <div style={{ marginTop: '1rem' }}>
+                    <div className="source-label" style={{ marginBottom: '0.5rem' }}>{t('followUpsLabel')}</div>
+                    <div className="follow-up-suggestions" style={{ marginTop: 0, paddingTop: 0, borderTop: 'none' }}>
+                        {message.followUpQuestions.map((q, idx) => (
+                            <button
+                                key={idx}
+                                className="follow-up-chip"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onFollowUpClick(q);
+                                }}
+                            >
+                                {q}
+                            </button>
+                        ))}
+                    </div>
                 </div>
-            )}
-            {showActions && !isStreaming && !message.isEnhanced && message.id && message.role === 'ai' && (
-                <MessageActions
-                    message={message}
-                    onFork={onFork ? () => onFork(message.id!) : undefined}
-                    onCompare={onCompare ? () => onCompare(message.id!) : undefined}
-                    onRegenerate={onRegenerate ? () => onRegenerate(message.id!) : undefined}
-                    onFeedback={onFeedback ? (fb, comment) => onFeedback(message.id!, fb, comment) : undefined}
-                    position="bottom"
-                    isMobile={isMobile}
-                    kbId={kbId}
-                    questionText={questionText}
-                    contentRef={contentRef}
-                />
             )}
         </motion.div>
     );

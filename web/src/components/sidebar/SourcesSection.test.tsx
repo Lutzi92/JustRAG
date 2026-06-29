@@ -34,6 +34,10 @@ const baseProps = {
   onUpdateConfluenceSource: vi.fn(),
   onDeleteConfluenceSource: vi.fn(),
   onSyncConfluenceNow: vi.fn(),
+  gitRepoSources: [],
+  onUpdateGitRepoSource: vi.fn(),
+  onDeleteGitRepoSource: vi.fn(),
+  onSyncGitRepoNow: vi.fn(),
   onRetryFile: vi.fn(),
   onRetryAllFailed: vi.fn(),
 };

@@ -1,9 +1,10 @@
 // web/src/components/AnswerExportMenu.tsx
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { Download } from 'lucide-react';
 import type { Message } from '../types';
 import { HAPTIC_PATTERNS, triggerHaptic } from '../utils/haptics';
 import { useToast } from '../contexts/ToastContext';
+import { AnchoredPopover } from './AnchoredPopover';
 import {
   copyAnswerWithCitations,
   downloadAnswerMarkdown,
@@ -24,21 +25,7 @@ interface AnswerExportMenuProps {
 export function AnswerExportMenu({ message, kbId, questionText, contentRef, buttonStyle, iconSize, t }: AnswerExportMenuProps) {
   const [open, setOpen] = useState(false);
   const toast = useToast();
-  const wrapRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', onDocClick);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const heading = t('sourcesHeading');
 
@@ -82,8 +69,9 @@ export function AnswerExportMenu({ message, kbId, questionText, contentRef, butt
   const hoverOut = (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.background = 'none'; };
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative', display: 'flex' }}>
+    <div style={{ display: 'flex' }}>
       <button
+        ref={triggerRef}
         type="button"
         onClick={(e) => { e.stopPropagation(); triggerHaptic(HAPTIC_PATTERNS.action); setOpen((o) => !o); }}
         style={buttonStyle}
@@ -96,25 +84,16 @@ export function AnswerExportMenu({ message, kbId, questionText, contentRef, butt
       >
         <Download size={iconSize} />
       </button>
-      {open && (
-        <div
-          role="menu"
-          tabIndex={-1}
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }}
-          style={{
-            position: 'absolute',
-            top: '32px',
-            right: 0,
-            background: 'var(--bg-primary)',
-            border: '1px solid var(--border-color)',
-            borderRadius: '6px',
-            padding: '4px',
-            boxShadow: 'var(--shadow-md)',
-            zIndex: 20,
-            minWidth: '180px',
-          }}
-        >
+      <AnchoredPopover
+        open={open}
+        triggerRef={triggerRef}
+        onClose={() => setOpen(false)}
+        align="start"
+        width={180}
+        role="menu"
+        ariaLabel={t('exportAnswer')}
+      >
+        <div style={{ padding: '4px' }}>
           <button type="button" role="menuitem" style={itemStyle} onClick={handleCopy} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>{t('copyWithCitations')}</button>
           <button type="button" role="menuitem" style={itemStyle} onClick={handleMarkdown} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>{t('exportMarkdown')}</button>
           {kbId && (
@@ -122,7 +101,7 @@ export function AnswerExportMenu({ message, kbId, questionText, contentRef, butt
           )}
           <button type="button" role="menuitem" style={itemStyle} onClick={handlePdf} onMouseEnter={hoverIn} onMouseLeave={hoverOut}>{t('exportPdf')}</button>
         </div>
-      )}
+      </AnchoredPopover>
     </div>
   );
 }

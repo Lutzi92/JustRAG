@@ -45,6 +45,7 @@ import (
 	"github.com/justrag/go-backend/internal/fetcher"
 	"github.com/justrag/go-backend/internal/files"
 	"github.com/justrag/go-backend/internal/gencontent"
+	"github.com/justrag/go-backend/internal/gitrepo"
 	"github.com/justrag/go-backend/internal/health"
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/kb"
@@ -641,6 +642,14 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("PATCH /api/kb/{id}/confluence-sources/{sourceId}", rc.kbEditChain(confluenceHandler.UpdateSource))
 	rc.mux.Handle("DELETE /api/kb/{id}/confluence-sources/{sourceId}", rc.kbEditChain(confluenceHandler.DeleteSource))
 	rc.mux.Handle("POST /api/kb/{id}/confluence-sources/{sourceId}/sync", rc.kbEditChain(confluenceHandler.TriggerSync))
+
+	// Git repo sources (KB-level)
+	gitRepoHandler := gitrepo.NewHandler(gitrepo.NewStore(rc.infra.db.Main), rc.cfg.JWTSecret, rc.infra.asynqClient)
+	rc.mux.Handle("POST /api/kb/{id}/git-repos", rc.kbEditChain(gitRepoHandler.CreateSource))
+	rc.mux.Handle("GET /api/kb/{id}/git-repos", rc.kbViewChain(gitRepoHandler.ListSources))
+	rc.mux.Handle("PATCH /api/kb/{id}/git-repos/{sourceId}", rc.kbEditChain(gitRepoHandler.UpdateSource))
+	rc.mux.Handle("DELETE /api/kb/{id}/git-repos/{sourceId}", rc.kbEditChain(gitRepoHandler.DeleteSource))
+	rc.mux.Handle("POST /api/kb/{id}/git-repos/{sourceId}/sync", rc.kbEditChain(gitRepoHandler.TriggerSync))
 
 	// Web search (KB view permission)
 	webSearchHandler := websearch.NewHandler(rc.chatStore)

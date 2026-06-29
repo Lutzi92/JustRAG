@@ -42,6 +42,18 @@ export const translations = {
     noSources: { de: 'Noch keine Quellen. Lade eine Datei hoch oder nutze die Internet-Tools.', en: 'No sources yet. Upload a file or use web tools.' },
     backToOverview: { de: 'Zurück', en: 'Back' },
 
+    // Empty-state acquisition flow (§7)
+    emptyAddFirstSourceTitle: { de: 'Füge deine erste Quelle hinzu', en: 'Add your first source' },
+    emptyAddFirstSourceSubtitle: { de: 'Lade ein Dokument hoch oder hol dir Inhalte aus dem Web — danach kannst du Fragen stellen.', en: 'Upload a document or pull in content from the web — then you can start asking questions.' },
+    dropzoneTitle: { de: 'Dateien hierher ziehen', en: 'Drag files here' },
+    dropzoneBrowse: { de: 'oder durchsuchen', en: 'or browse' },
+    dropzoneTypes: { de: 'PDF · DOCX · TXT · MD · PPTX — bis 50 MB', en: 'PDF · DOCX · TXT · MD · PPTX — up to 50 MB' },
+    orFromWeb: { de: 'Oder aus dem Web', en: 'Or from the web' },
+    emptyWebCrawl: { de: 'Webseite crawlen', en: 'Crawl website' },
+    studioAfterwards: { de: 'Danach kannst du erstellen:', en: 'Then you can create:' },
+    chatDisabledNoSources: { de: 'Füge zuerst eine Quelle hinzu, um zu chatten…', en: 'Add a source first to start chatting…' },
+    addSourceCta: { de: 'Quelle hinzufügen', en: 'Add source' },
+
     // Web Tools
     addSources: { de: 'Quellen hinzufügen', en: 'Add Sources' },
     addInternetSources: { de: 'Internet Quellen hinzufügen', en: 'Add Internet Sources' },
@@ -145,6 +157,9 @@ export const translations = {
     rewrite: { de: 'Umschreiben', en: 'Rewrite' },
     expand: { de: 'Erweitern', en: 'Expand' },
     spell: { de: 'Rechtschreibung', en: 'Spelling' },
+    enhanceLabel: { de: 'Verbessern', en: 'Improve' },
+    enhanceNeedsDraft: { de: 'Tippe zuerst einen Entwurf, um ihn zu verbessern.', en: 'Type a draft first to improve it.' },
+    manageSources: { de: 'Quellen verwalten', en: 'Manage sources' },
     reasoningMode: { de: 'Gedankengang-Modus', en: 'Reasoning Mode' },
     reasoningLabel: { de: 'Gedankengang', en: 'Chain of Thought' },
     reasoningToggle: { de: 'Gedankengang-Modus umschalten', en: 'Toggle reasoning mode' },
@@ -387,6 +402,13 @@ export const translations = {
     // Sources
     sourcesLabel: { de: 'Quellen:', en: 'Sources:' },
     sourceCount: { de: 'Quelle', en: 'Source' },
+    openInDocument: { de: 'Im Dokument öffnen', en: 'Open in document' },
+    answerSourcesToggle: { de: 'Quellen', en: 'Sources' },
+    hitsLabel: { de: 'Treffer', en: 'hits' },
+    followUpsLabel: { de: 'Weiterfragen', en: 'Ask a follow-up' },
+    confidenceExactMatch: { de: 'wortgenau', en: 'exact match' },
+    confidenceSemantic: { de: 'semantisch', en: 'semantic' },
+    confidenceHints: { de: 'Hinweise', en: 'flags' },
     sourcesCount: { de: 'Quellen', en: 'Sources' },
     sendMessage: { de: 'Nachricht senden', en: 'Send message' },
 
@@ -567,6 +589,8 @@ export const translations = {
     feedbackCommentPlaceholder: { de: 'Optionaler Kommentar (max. 2000 Zeichen)', en: 'Optional comment (max 2000 chars)' },
     feedbackCommentSubmit: { de: 'Senden', en: 'Send' },
     feedbackCommentToggleAria: { de: 'Kommentar hinzufügen', en: 'Add comment' },
+    feedbackTitlePositive: { de: 'Was war an dieser Antwort gut?', en: 'What was good about this answer?' },
+    feedbackTitleNegative: { de: 'Was könnte an dieser Antwort besser sein?', en: 'What could be better about this answer?' },
     filesFetchError: { de: 'Fehler beim Laden der Dateien', en: 'Error loading files' },
     kbFetchError: { de: 'Fehler beim Laden der Knowledge Bases', en: 'Error loading knowledge bases' },
     kbCreateError: { de: 'Fehler beim Erstellen der Knowledge Base', en: 'Error creating knowledge base' },
@@ -717,6 +741,24 @@ export const translations = {
     filesProcessed: { de: 'Dateien verarbeitet', en: 'files processed' },
     syncing: { de: 'Synchronisierung', en: 'Syncing' },
 
+    // Git Repository
+    gitRepo: { de: 'Git-Repository', en: 'Git Repository' },
+    gitRepoDesc: { de: 'Ein Git-Repository als Quelle hinzufügen. Alle Text- und Code-Dateien werden indexiert.', en: 'Add a git repository as a source. All text and code files are indexed.' },
+    gitRepoPublic: { de: 'Öffentlich', en: 'Public' },
+    gitRepoPrivate: { de: 'Privat', en: 'Private' },
+    gitRepoUrl: { de: 'Repository-URL', en: 'Repository URL' },
+    gitRepoToken: { de: 'Access-Token', en: 'Access token' },
+    gitRepoBranch: { de: 'Branch (optional)', en: 'Branch (optional)' },
+    gitRepoBranchPlaceholder: { de: 'Standard-Branch', en: 'default branch' },
+    addGitRepo: { de: 'Repository hinzufügen', en: 'Add repository' },
+    deleteGitRepoSource: { de: 'Git-Quelle löschen', en: 'Delete git source' },
+    deleteGitRepoSourceConfirm: { de: 'Alle importierten Dateien und deren Einbettungen werden gelöscht. Fortfahren?', en: 'This will delete all imported files and their embeddings. Continue?' },
+    gitRepoSourceAdded: { de: 'Git-Repository hinzugefügt', en: 'Git repository added' },
+    gitRepoSourceDeleted: { de: 'Git-Quelle gelöscht', en: 'Git source deleted' },
+    gitRepoSourceUpdated: { de: 'Git-Quelle aktualisiert', en: 'Git source updated' },
+    gitRepoSyncTriggered: { de: 'Synchronisierung gestartet', en: 'Sync triggered' },
+    gitFiles: { de: 'Dateien', en: 'files' },
+
     // Background Jobs
     bgJobUrlFetch: { de: 'URL-Abruf läuft', en: 'URL fetch in progress' },
     bgJobWebResearch: { de: 'Web-Recherche läuft', en: 'Web research in progress' },
@@ -749,6 +791,16 @@ export const translations = {
     adminTabHealth: { de: 'System Health', en: 'System Health' },
     adminTabKbOverview: { de: 'KB-Übersicht', en: 'KB Overview' },
     adminTabGlobalKbs: { de: 'Globale KBs', en: 'Global KBs' },
+
+    // Admin Nav Groups
+    adminNavGroupConfig: { de: 'Konfiguration', en: 'Configuration' },
+    adminNavGroupUsers: { de: 'Nutzer', en: 'Users' },
+    adminNavGroupMonitoring: { de: 'Monitoring', en: 'Monitoring' },
+
+    // KB Overview controls
+    kbSearchPlaceholder: { de: 'KB suchen…', en: 'Search KBs…' },
+    columnsToggle: { de: 'Spalten', en: 'Columns' },
+    colLastActivity: { de: 'Letzte Aktivität', en: 'Last activity' },
 
     // AI Configs Tab
     aiConfigurations: { de: 'KI-Konfigurationen', en: 'AI Configurations' },
@@ -898,6 +950,8 @@ export const translations = {
     autoSpellCorrectHelp: { de: 'Suchanfragen werden vor der Suche automatisch auf Rechtschreibfehler korrigiert. Dies verbessert die Ergebnisse bei Tippfehlern (~100ms Latenz).', en: 'Search queries are automatically spell-checked before searching. Improves results for typos (~100ms latency).' },
     defaultTopK: { de: 'Standard Top-K', en: 'Default Top-K' },
     defaultTopKHelp: { de: 'Anzahl der Chunks, die bei der Suche standardmäßig abgerufen werden (Standard: 5). Höhere Werte liefern mehr Kontext.', en: 'Number of chunks retrieved by default during search (default: 5). Higher values provide more context.' },
+    chatAnswerTemperature: { de: 'Antwort-Temperatur', en: 'Answer temperature' },
+    chatAnswerTemperatureHelp: { de: 'Sampling-Temperatur für die Antwortgenerierung (Standard: 0.3, Bereich 0–2). Niedriger = deterministischer/sachlicher, höher = vielfältiger. top_p/top_k werden nicht hier gesetzt — sie kommen aus der generation_config des Modells (vLLM --generation-config auto). Gilt für gestreamte Chat-Antworten.', en: 'Sampling temperature for answer generation (default: 0.3, range 0–2). Lower = more deterministic/factual, higher = more diverse. top_p/top_k are not set here — they come from the model\'s generation_config via vLLM --generation-config auto. Applies to streamed chat answers.' },
     scoreDropThreshold: { de: 'Score-Drop-Schwellenwert', en: 'Score Drop Threshold' },
     scoreDropThresholdHelp: { de: 'Wenn der Score-Abfall zwischen aufeinanderfolgenden Ergebnissen diesen Anteil überschreitet, werden die restlichen abgeschnitten (Standard: 0.15). Setzen Sie 0 zum Deaktivieren.', en: 'When the score drop between consecutive results exceeds this fraction, remaining results are trimmed (default: 0.15). Set 0 to disable.' },
     mmrLambda: { de: 'MMR-Diversität (λ)', en: 'MMR diversity (λ)' },

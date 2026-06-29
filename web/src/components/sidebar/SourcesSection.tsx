@@ -1,9 +1,9 @@
 import React, { memo } from 'react';
 import {
     Link, Globe, Bot, FileText, Download, Trash2,
-    Rss, RefreshCw, Pause, Play, Eye, BookOpen
+    Rss, RefreshCw, Pause, Play, Eye, BookOpen, Plus, GitBranch
 } from 'lucide-react';
-import type { FileEntry, RssFeed, ConfluenceSource } from '../../types';
+import type { FileEntry, RssFeed, ConfluenceSource, GitRepoSource } from '../../types';
 import { useTheme } from '../../contexts/ThemeContext';
 import { IngestStageIndicator } from './IngestStageIndicator';
 
@@ -23,8 +23,13 @@ interface SourcesSectionProps {
     onUpdateConfluenceSource: (sourceId: string, updates: { includeAttachments?: boolean; syncInterval?: number | null; status?: 'active' | 'paused' }) => void;
     onDeleteConfluenceSource: (sourceId: string) => void;
     onSyncConfluenceNow: (sourceId: string) => void;
+    gitRepoSources: GitRepoSource[];
+    onUpdateGitRepoSource: (sourceId: string, updates: { status?: 'active' | 'paused' }) => void;
+    onDeleteGitRepoSource: (sourceId: string) => void;
+    onSyncGitRepoNow: (sourceId: string) => void;
     onRetryFile: (id: string) => void;
     onRetryAllFailed: () => void;
+    onAddSource?: () => void;
 }
 
 // Maps files.error_stage values (backend vocabulary, see
@@ -45,11 +50,12 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
     onDownloadFile, onDeleteFile,
     rssFeeds, onUpdateRssFeed, onDeleteRssFeed, onPollFeedNow, onViewFeed,
     confluenceSources, onUpdateConfluenceSource, onDeleteConfluenceSource, onSyncConfluenceNow,
-    onRetryFile, onRetryAllFailed
+    gitRepoSources, onUpdateGitRepoSource, onDeleteGitRepoSource, onSyncGitRepoNow,
+    onRetryFile, onRetryAllFailed, onAddSource
 }) => {
     const { t } = useTheme();
 
-    const nonRssFiles = files.filter(f => f.origin !== 'rss' && f.origin !== 'confluence');
+    const nonRssFiles = files.filter(f => f.origin !== 'rss' && f.origin !== 'confluence' && f.origin !== 'git');
     const rssFeedFiles = (feedId: string) => files.filter(f => f.rssFeedId === feedId);
 
     const failedCount = files.filter(f => f.status === 'error').length;
@@ -60,6 +66,24 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
 
     return (
         <div className="sidebar-left__files-section">
+            {onAddSource && (
+                <button
+                    type="button"
+                    onClick={onAddSource}
+                    className="sidebar-left__add-source-btn"
+                    style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem',
+                        width: '100%', padding: '0.6rem 0.9rem', marginBottom: '0.75rem',
+                        background: 'var(--accent-primary)', color: '#fff', border: 'none',
+                        borderRadius: '8px', cursor: 'pointer', fontFamily: 'inherit',
+                        fontSize: '0.875rem', fontWeight: 600, transition: 'background 0.15s, transform 0.15s',
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; }}
+                >
+                    <Plus size={16} aria-hidden="true" /> {t('addSourceCta')}
+                </button>
+            )}
             <div className="sidebar-left__files-header sidebar-ui__section-header">
                 <h2 className="sidebar-left__files-title">{t('sources')}</h2>
                 {failedCount > 0 && (
@@ -265,9 +289,62 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                         </div>
                     </li>
                 ))}
+
+                {gitRepoSources.map(source => {
+                    const repoName = source.repoUrl.replace(/\.git$/, '').split('/').slice(-2).join('/');
+                    return (
+                        <li key={`gitrepo-${source.id}`} className="source-card sidebar-left__file-card">
+                            <div className="sidebar-left__file-row">
+                                <div className="sidebar-left__file-origin-icon">
+                                    <GitBranch size={18} aria-hidden="true" />
+                                </div>
+                                <div className="sidebar-left__file-main sidebar-ui__item-main">
+                                    <div className="sidebar-left__file-top-row sidebar-ui__item-row">
+                                        <span className="text-button source-title sidebar-left__file-name sidebar-ui__item-title">
+                                            {repoName}{source.branch ? ` @ ${source.branch}` : ''}
+                                        </span>
+                                        <span className={`sidebar-left__rss-feed-status sidebar-left__rss-feed-status--${source.status}`}>
+                                            {source.status === 'active' ? t('active') : source.status === 'syncing' ? t('syncing') : source.status === 'paused' ? t('paused') : t('feedError')}
+                                        </span>
+                                    </div>
+                                    <div className="sidebar-left__file-meta-row">
+                                        <div className="source-meta sidebar-left__file-meta sidebar-ui__item-meta">
+                                            {source.fileCount > 0 && <span>{source.fileCount} {t('gitFiles')}</span>}
+                                            {source.lastSyncedAt && <span>{t('lastSynced')}: {new Date(source.lastSyncedAt).toLocaleString()}</span>}
+                                        </div>
+                                    </div>
+                                    {source.status === 'syncing' && source.syncTotal > 0 && (
+                                        <div style={{ marginTop: 4 }}>
+                                            <div style={{ height: 6, borderRadius: 3, background: 'var(--bg-tertiary)', overflow: 'hidden' }}>
+                                                <div style={{ height: '100%', borderRadius: 3, background: 'var(--accent-primary)', width: `${Math.round((source.syncProgress / source.syncTotal) * 100)}%`, transition: 'width 0.3s ease' }} />
+                                            </div>
+                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                                {source.syncProgress}/{source.syncTotal} {t('filesProcessed')}
+                                            </span>
+                                        </div>
+                                    )}
+                                    {source.status === 'error' && source.errorMessage && (
+                                        <div className="sidebar-left__rss-feed-error">{source.errorMessage}</div>
+                                    )}
+                                    <div className="sidebar-left__rss-feed-actions">
+                                        <button onClick={() => onSyncGitRepoNow(source.id)} title={t('pollNow')} aria-label={t('pollNow')}>
+                                            <RefreshCw size={14} />
+                                        </button>
+                                        <button onClick={() => onUpdateGitRepoSource(source.id, { status: source.status === 'active' ? 'paused' : 'active' })} disabled={source.status === 'syncing'} title={source.status === 'active' ? t('pause') : t('resume')} aria-label={source.status === 'active' ? t('pause') : t('resume')}>
+                                            {source.status === 'active' ? <Pause size={14} /> : <Play size={14} />}
+                                        </button>
+                                        <button onClick={() => onDeleteGitRepoSource(source.id)} title={t('delete')} aria-label={`${t('delete')} ${repoName}`}>
+                                            <Trash2 size={14} />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </li>
+                    );
+                })}
             </ul>
 
-            {nonRssFiles.length === 0 && rssFeeds.length === 0 && confluenceSources.length === 0 && (
+            {nonRssFiles.length === 0 && rssFeeds.length === 0 && confluenceSources.length === 0 && gitRepoSources.length === 0 && (
                 <div className="sidebar-left__empty sidebar-ui__empty">{t('noSources')}</div>
             )}
         </div>

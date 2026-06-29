@@ -15,7 +15,7 @@ interface AdminAgentTabProps {
 const STORAGE_KEY = 'admin-agent-sections-open-v1';
 
 const SECTION_CONFIGS = [
-    { id: 'general', titleKey: 'agentSectionGeneral', i18nKeys: ['defaultTopK', 'scoreDropThreshold', 'contextWindowSize'], settingKeys: ['default_top_k', 'score_drop_threshold', 'context_window_size'] },
+    { id: 'general', titleKey: 'agentSectionGeneral', i18nKeys: ['defaultTopK', 'scoreDropThreshold', 'contextWindowSize', 'chatAnswerTemperature'], settingKeys: ['default_top_k', 'score_drop_threshold', 'context_window_size', 'chat_answer_temperature'] },
     { id: 'hybrid', titleKey: 'agentSectionHybridSearch', i18nKeys: ['minSimilarityThreshold', 'mmrLambda', 'rrfWeightVector', 'rrfWeightBM25', 'bm25SimpleArmEnabled', 'bm25TieredBoostEnabled', 'hnswEfSearch', 'mrlTwoPassEnabled', 'queryInstruction', 'hyPESearchEnabled'], settingKeys: ['min_similarity_threshold', 'mmr_lambda', 'rrf_weight_vector', 'rrf_weight_bm25', 'bm25_simple_arm_enabled', 'bm25_tiered_boost_enabled', 'hnsw_ef_search', 'mrl_two_pass_enabled', 'query_instruction', 'hype_search_enabled'] },
     { id: 'reranker', titleKey: 'agentSectionReranker', i18nKeys: ['rerankBlendAlpha', 'rerankBlendAlphaLookup', 'rerankBlendAlphaEnumeration', 'rerankBlendAlphaComplexReasoning', 'rerankBlendAlphaEntity', 'hybridDynamicAlphaEnabled', 'hybridDynamicAlphaSensitivity', 'rerankUseChatTemplate', 'rerankInstruction'], settingKeys: ['rerank_blend_alpha', 'rerank_blend_alpha_lookup', 'rerank_blend_alpha_enumeration', 'rerank_blend_alpha_complex_reasoning', 'rerank_blend_alpha_entity', 'hybrid_dynamic_alpha_enabled', 'hybrid_dynamic_alpha_sensitivity', 'rerank_use_chat_template', 'rerank_instruction'] },
     { id: 'topn', titleKey: 'agentSectionPerRouteTopN', i18nKeys: ['topNLookup', 'topNEnumeration', 'topNComplexReasoning'], settingKeys: ['top_n_lookup', 'top_n_enumeration', 'top_n_complex_reasoning'] },
@@ -203,6 +203,21 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
                         />
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('contextWindowSizeHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-answer-temperature">{t('chatAnswerTemperature')}</label>
+                        <input
+                            id="chat-answer-temperature"
+                            type="number"
+                            min="0"
+                            max="2"
+                            step="0.05"
+                            value={siteConfigs.chat_answer_temperature ?? '0.3'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_answer_temperature: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatAnswerTemperatureHelp')}</p>
                     </div>
                 </Section>
 

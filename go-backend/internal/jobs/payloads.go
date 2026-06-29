@@ -39,6 +39,11 @@ type ConfluenceSyncPayload struct {
 	SourceID string `json:"sourceId"`
 }
 
+// GitRepoSyncPayload is the task payload for a Git repository source sync job.
+type GitRepoSyncPayload struct {
+	SourceID string `json:"sourceId"`
+}
+
 // RAGASSamplePayload is the JSON payload for a Phase 3 §G RAGAS sample
 // task. Carries everything the worker needs to invoke eval.Judge.Evaluate
 // without re-running search: the user's question, the AI's answer, and

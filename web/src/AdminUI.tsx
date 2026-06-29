@@ -2,9 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { Plus, ChevronLeft, ShieldCheck, Cpu, UserPlus, Search, FileText, Activity, Globe, Settings, Database } from 'lucide-react';
 import { getApiErrorMessage } from './utils/apiError';
-import { motion } from 'framer-motion';
 import { API_BASE_URL } from './api';
-import { useReducedMotion } from './hooks/useReducedMotion';
 import { useToast } from './contexts/ToastContext';
 import { useTheme } from './contexts/ThemeContext';
 import { useModalContext } from './contexts/ModalContext';
@@ -93,12 +91,13 @@ interface AdminUIProps {
     onEditGlobalKb?: (kb: { id: string; name: string }) => void;
 }
 
+type AdminTab = 'configs' | 'auth' | 'users' | 'site' | 'search' | 'agent' | 'health' | 'kb-overview' | 'global-kbs' | 'eval';
+
 export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) {
-    const reducedMotion = useReducedMotion();
     const toast = useToast();
     const { t } = useTheme();
     const { showConfirm } = useModalContext();
-    const [activeTab, setActiveTab] = useState<'configs' | 'auth' | 'users' | 'site' | 'search' | 'agent' | 'health' | 'kb-overview' | 'global-kbs' | 'eval'>('configs');
+    const [activeTab, setActiveTab] = useState<AdminTab>('configs');
     const [configs, setConfigs] = useState<AIConfig[]>([]);
     const [providers, setProviders] = useState<AuthProvider[]>([]);
     const [usersList, setUsersList] = useState<User[]>([]);
@@ -471,6 +470,23 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
         : activeTab === 'eval' ? t('evalRunner')
         : t('userManagement');
 
+    const isDataTab = activeTab === 'health' || activeTab === 'kb-overview' || activeTab === 'users';
+
+    const navItem = (tab: AdminTab, Icon: typeof Cpu, label: string) => {
+        const active = activeTab === tab;
+        return (
+            <button
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`admin-nav-item ${active ? 'active' : ''}`}
+                aria-current={active ? 'page' : undefined}
+            >
+                <Icon size={18} />
+                <span>{label}</span>
+            </button>
+        );
+    };
+
     return (
         <div className="admin-container">
             <header className="header" style={{ display: 'flex', alignItems: 'center', gap: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem', marginBottom: '2rem' }}>
@@ -483,113 +499,34 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                 </div>
             </header>
 
-            <div className="tabs" style={{ display: 'flex', gap: '2rem', marginBottom: '2rem', borderBottom: '1px solid var(--border-color)' }}>
-                <button
-                    onClick={() => setActiveTab('configs')}
-                    className={`tab-item ${activeTab === 'configs' ? 'active' : ''}`}
-                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0', background: 'none', border: 'none', cursor: 'pointer', color: activeTab === 'configs' ? 'var(--accent-primary)' : 'var(--text-secondary)', position: 'relative', fontWeight: activeTab === 'configs' ? 600 : 400 }}
-                >
-                    <Cpu size={18} />
-                    {t('adminTabAiModels')}
-                    {activeTab === 'configs' && <motion.div layoutId={reducedMotion ? undefined : "tab-underline"} style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }} />}
-                </button>
-                <button
-                    onClick={() => setActiveTab('auth')}
-                    className={`tab-item ${activeTab === 'auth' ? 'active' : ''}`}
-                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0', background: 'none', border: 'none', cursor: 'pointer', color: activeTab === 'auth' ? 'var(--accent-primary)' : 'var(--text-secondary)', position: 'relative', fontWeight: activeTab === 'auth' ? 600 : 400 }}
-                >
-                    <ShieldCheck size={18} />
-                    {t('adminTabAuth')}
-                    {activeTab === 'auth' && <motion.div layoutId={reducedMotion ? undefined : "tab-underline"} style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }} />}
-                </button>
-                {(user.role === 'superadmin' || user.role === 'admin') && (
-                    <button
-                        onClick={() => setActiveTab('users')}
-                        className={`tab-item ${activeTab === 'users' ? 'active' : ''}`}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0', background: 'none', border: 'none', cursor: 'pointer', color: activeTab === 'users' ? 'var(--accent-primary)' : 'var(--text-secondary)', position: 'relative', fontWeight: activeTab === 'users' ? 600 : 400 }}
-                    >
-                        <UserPlus size={18} />
-                        {t('adminTabUsers')}
-                        {activeTab === 'users' && <motion.div layoutId={reducedMotion ? undefined : "tab-underline"} style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }} />}
-                    </button>
-                )}
-                {user.role === 'superadmin' && (
-                    <button
-                        onClick={() => setActiveTab('search')}
-                        className={`tab-item ${activeTab === 'search' ? 'active' : ''}`}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0', background: 'none', border: 'none', cursor: 'pointer', color: activeTab === 'search' ? 'var(--accent-primary)' : 'var(--text-secondary)', position: 'relative', fontWeight: activeTab === 'search' ? 600 : 400 }}
-                    >
-                        <Search size={18} />
-                        {t('adminTabSearch')}
-                        {activeTab === 'search' && <motion.div layoutId={reducedMotion ? undefined : "tab-underline"} style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }} />}
-                    </button>
-                )}
-                {user.role === 'superadmin' && (
-                    <button
-                        onClick={() => setActiveTab('agent')}
-                        className={`tab-item ${activeTab === 'agent' ? 'active' : ''}`}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0', background: 'none', border: 'none', cursor: 'pointer', color: activeTab === 'agent' ? 'var(--accent-primary)' : 'var(--text-secondary)', position: 'relative', fontWeight: activeTab === 'agent' ? 600 : 400 }}
-                    >
-                        <FileText size={18} />
-                        {t('adminTabAgents')}
-                        {activeTab === 'agent' && <motion.div layoutId={reducedMotion ? undefined : "tab-underline"} style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }} />}
-                    </button>
-                )}
-                {user.role === 'superadmin' && (
-                    <button
-                        onClick={() => setActiveTab('eval')}
-                        className={`tab-item ${activeTab === 'eval' ? 'active' : ''}`}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0', background: 'none', border: 'none', cursor: 'pointer', color: activeTab === 'eval' ? 'var(--accent-primary)' : 'var(--text-secondary)', position: 'relative', fontWeight: activeTab === 'eval' ? 600 : 400 }}
-                    >
-                        <Activity size={18} />
-                        {t('evalRunner')}
-                        {activeTab === 'eval' && <motion.div layoutId={reducedMotion ? undefined : "tab-underline"} style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }} />}
-                    </button>
-                )}
-                {user.role === 'superadmin' && (
-                    <button
-                        onClick={() => setActiveTab('site')}
-                        className={`tab-item ${activeTab === 'site' ? 'active' : ''}`}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0', background: 'none', border: 'none', cursor: 'pointer', color: activeTab === 'site' ? 'var(--accent-primary)' : 'var(--text-secondary)', position: 'relative', fontWeight: activeTab === 'site' ? 600 : 400 }}
-                    >
-                        <Settings size={18} />
-                        {t('adminTabSettings')}
-                        {activeTab === 'site' && <motion.div layoutId={reducedMotion ? undefined : "tab-underline"} style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }} />}
-                    </button>
-                )}
-                {(user.role === 'superadmin' || user.role === 'admin') && (
-                    <button
-                        onClick={() => setActiveTab('health')}
-                        className={`tab-item ${activeTab === 'health' ? 'active' : ''}`}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0', background: 'none', border: 'none', cursor: 'pointer', color: activeTab === 'health' ? 'var(--accent-primary)' : 'var(--text-secondary)', position: 'relative', fontWeight: activeTab === 'health' ? 600 : 400 }}
-                    >
-                        <Activity size={18} />
-                        {t('adminTabHealth')}
-                        {activeTab === 'health' && <motion.div layoutId={reducedMotion ? undefined : "tab-underline"} style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }} />}
-                    </button>
-                )}
-                {(user.role === 'superadmin' || user.role === 'admin') && (
-                    <button
-                        onClick={() => setActiveTab('kb-overview')}
-                        className={`tab-item ${activeTab === 'kb-overview' ? 'active' : ''}`}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0', background: 'none', border: 'none', cursor: 'pointer', color: activeTab === 'kb-overview' ? 'var(--accent-primary)' : 'var(--text-secondary)', position: 'relative', fontWeight: activeTab === 'kb-overview' ? 600 : 400 }}
-                    >
-                        <Database size={18} />
-                        {t('adminTabKbOverview')}
-                        {activeTab === 'kb-overview' && <motion.div layoutId={reducedMotion ? undefined : "tab-underline"} style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }} />}
-                    </button>
-                )}
-                <button
-                    onClick={() => setActiveTab('global-kbs')}
-                    className={`tab-item ${activeTab === 'global-kbs' ? 'active' : ''}`}
-                    style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '1rem 0', background: 'none', border: 'none', cursor: 'pointer', color: activeTab === 'global-kbs' ? 'var(--accent-primary)' : 'var(--text-secondary)', position: 'relative', fontWeight: activeTab === 'global-kbs' ? 600 : 400 }}
-                >
-                    <Globe size={18} />
-                    {t('adminTabGlobalKbs')}
-                    {activeTab === 'global-kbs' && <motion.div layoutId={reducedMotion ? undefined : "tab-underline"} style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }} />}
-                </button>
-            </div>
+            <div className="admin-layout">
+                <nav className="admin-nav-rail" aria-label={t('adminDashboard')}>
+                    <div className="admin-nav-group">
+                        <div className="admin-nav-group-heading">{t('adminNavGroupConfig')}</div>
+                        {navItem('configs', Cpu, t('adminTabAiModels'))}
+                        {navItem('auth', ShieldCheck, t('adminTabAuth'))}
+                        {user.role === 'superadmin' && navItem('search', Search, t('adminTabSearch'))}
+                        {user.role === 'superadmin' && navItem('agent', FileText, t('adminTabAgents'))}
+                        {navItem('global-kbs', Globe, t('adminTabGlobalKbs'))}
+                        {user.role === 'superadmin' && navItem('site', Settings, t('adminTabSettings'))}
+                    </div>
+                    {(user.role === 'superadmin' || user.role === 'admin') && (
+                        <div className="admin-nav-group">
+                            <div className="admin-nav-group-heading">{t('adminNavGroupUsers')}</div>
+                            {navItem('users', UserPlus, t('adminTabUsers'))}
+                        </div>
+                    )}
+                    {(user.role === 'superadmin' || user.role === 'admin') && (
+                        <div className="admin-nav-group">
+                            <div className="admin-nav-group-heading">{t('adminNavGroupMonitoring')}</div>
+                            {navItem('kb-overview', Database, t('adminTabKbOverview'))}
+                            {navItem('health', Activity, t('adminTabHealth'))}
+                            {user.role === 'superadmin' && navItem('eval', Activity, t('evalRunner'))}
+                        </div>
+                    )}
+                </nav>
 
+                <div className={`admin-content-col ${isDataTab ? 'admin-content-col--fluid' : 'admin-content-col--form'}`}>
             {activeTab === 'health' ? (
                 <>
                     <SystemHealthDashboard />
@@ -691,12 +628,94 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     {activeTab === 'eval' && <AdminEvalTab />}
                 </section>
             )}
+                </div>
+            </div>
 
             <style>{`
                 .admin-container {
-                    max-width: 1000px;
                     margin: 0 auto;
-                    padding: 2rem;
+                    padding: 2rem clamp(1rem, 4vw, 3rem);
+                }
+                .admin-layout {
+                    display: flex;
+                    gap: 2rem;
+                    align-items: flex-start;
+                }
+                .admin-nav-rail {
+                    flex: 0 0 220px;
+                    width: 220px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 1.5rem;
+                    position: sticky;
+                    top: 1rem;
+                    max-height: calc(100vh - 2rem);
+                    overflow-y: auto;
+                }
+                .admin-content-col {
+                    flex: 1 1 auto;
+                    min-width: 0;
+                }
+                .admin-content-col--form {
+                    max-width: 760px;
+                    margin: 0 auto;
+                }
+                .admin-nav-group {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 0.25rem;
+                }
+                .admin-nav-group-heading {
+                    font-size: 0.7rem;
+                    font-weight: 600;
+                    letter-spacing: 0.05em;
+                    text-transform: uppercase;
+                    color: var(--text-secondary);
+                    padding: 0 0.75rem;
+                    margin-bottom: 0.25rem;
+                }
+                .admin-nav-item {
+                    display: flex;
+                    align-items: center;
+                    gap: 0.6rem;
+                    width: 100%;
+                    padding: 0.55rem 0.75rem;
+                    background: none;
+                    border: none;
+                    border-left: 3px solid transparent;
+                    border-radius: 0 8px 8px 0;
+                    cursor: pointer;
+                    color: var(--text-secondary);
+                    font-size: 0.9rem;
+                    font-family: inherit;
+                    text-align: left;
+                    transition: background 0.15s, color 0.15s, border-color 0.15s;
+                }
+                .admin-nav-item:hover {
+                    background: var(--tag-bg);
+                    color: var(--accent-primary);
+                }
+                .admin-nav-item.active {
+                    color: var(--accent-primary);
+                    font-weight: 600;
+                    border-left-color: var(--accent-primary);
+                    background: rgba(var(--accent-primary-rgb), 0.08);
+                }
+                @media (max-width: 768px) {
+                    .admin-layout {
+                        flex-direction: column;
+                    }
+                    .admin-nav-rail {
+                        flex: 1 1 auto;
+                        width: 100%;
+                        position: static;
+                        max-height: none;
+                        flex-direction: row;
+                        flex-wrap: wrap;
+                    }
+                    .admin-content-col--form {
+                        max-width: none;
+                    }
                 }
                 .back-button {
                     background: none;
@@ -712,9 +731,6 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                 }
                 .back-button:hover {
                     background: var(--tag-bg);
-                }
-                .tab-item:hover {
-                    color: var(--accent-primary);
                 }
                 .form-grid {
                     display: grid;

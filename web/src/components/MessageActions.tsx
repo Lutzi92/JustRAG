@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pencil, GitBranch, Columns, RefreshCw, ThumbsUp, ThumbsDown, ExternalLink } from 'lucide-react';
 import type { Message } from '../types';
 import { HAPTIC_PATTERNS, triggerHaptic } from '../utils/haptics';
@@ -6,6 +6,7 @@ import { openExternal } from '../utils/openExternal';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { AnswerExportMenu } from './AnswerExportMenu';
+import { AnchoredPopover } from './AnchoredPopover';
 
 interface MessageActionsProps {
     message: Message;
@@ -15,6 +16,12 @@ interface MessageActionsProps {
     onRegenerate?: () => void;
     onFeedback?: (feedback: 'positive' | 'negative' | null, comment?: string) => void;
     position?: 'top' | 'bottom';
+    /**
+     * 'floating' (default) is the absolutely-positioned hover toolbar.
+     * 'inline' renders the buttons as a plain, in-flow row with no box — used
+     * by the §8 single answer-footer action row.
+     */
+    variant?: 'floating' | 'inline';
     isMobile?: boolean;
     kbId?: string;
     questionText?: string;
@@ -34,6 +41,15 @@ interface FeedbackThumbsProps {
 function FeedbackThumbs({ message, onFeedback, buttonStyle, iconSize, t }: FeedbackThumbsProps) {
     const [pendingRating, setPendingRating] = useState<'positive' | 'negative' | null>(null);
     const [comment, setComment] = useState('');
+    const positiveRef = useRef<HTMLButtonElement>(null);
+    const negativeRef = useRef<HTMLButtonElement>(null);
+    // Anchor the comment popover to whichever thumb opened it (§6: open from the thumb).
+    const activeTriggerRef = pendingRating === 'negative' ? negativeRef : positiveRef;
+
+    const closePopover = () => {
+        setPendingRating(null);
+        setComment('');
+    };
 
     const submitWithComment = () => {
         if (pendingRating === null) return;
@@ -61,6 +77,7 @@ function FeedbackThumbs({ message, onFeedback, buttonStyle, iconSize, t }: Feedb
     return (
         <>
             <button
+                ref={positiveRef}
                 type="button"
                 onClick={(e) => { e.stopPropagation(); handleThumbClick('positive'); }}
                 style={{
@@ -75,6 +92,7 @@ function FeedbackThumbs({ message, onFeedback, buttonStyle, iconSize, t }: Feedb
                 <ThumbsUp size={iconSize} />
             </button>
             <button
+                ref={negativeRef}
                 type="button"
                 onClick={(e) => { e.stopPropagation(); handleThumbClick('negative'); }}
                 style={{
@@ -89,23 +107,19 @@ function FeedbackThumbs({ message, onFeedback, buttonStyle, iconSize, t }: Feedb
                 <ThumbsDown size={iconSize} />
             </button>
 
-            {pendingRating !== null && (
-                // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
-                <div
-                    onClick={(e) => e.stopPropagation()}
-                    style={{
-                        position: 'absolute',
-                        top: '32px',
-                        right: 0,
-                        background: 'var(--bg-primary)',
-                        border: '1px solid var(--border-color)',
-                        borderRadius: '6px',
-                        padding: '8px',
-                        boxShadow: 'var(--shadow-md)',
-                        zIndex: 20,
-                        width: '280px',
-                    }}
-                >
+            <AnchoredPopover
+                open={pendingRating !== null}
+                triggerRef={activeTriggerRef}
+                onClose={closePopover}
+                align="start"
+                width={280}
+                role="dialog"
+                ariaLabel={pendingRating === 'negative' ? t('feedbackTitleNegative') : t('feedbackTitlePositive')}
+            >
+                <div style={{ padding: '10px' }}>
+                    <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px' }}>
+                        {pendingRating === 'negative' ? t('feedbackTitleNegative') : t('feedbackTitlePositive')}
+                    </div>
                     {/* eslint-disable-next-line jsx-a11y/no-autofocus */}
                     <textarea autoFocus
                         value={comment}
@@ -114,6 +128,7 @@ function FeedbackThumbs({ message, onFeedback, buttonStyle, iconSize, t }: Feedb
                         rows={3}
                         style={{
                             width: '100%',
+                            boxSizing: 'border-box',
                             background: 'var(--bg-secondary)',
                             color: 'var(--text-primary)',
                             border: '1px solid var(--border-color)',
@@ -124,36 +139,55 @@ function FeedbackThumbs({ message, onFeedback, buttonStyle, iconSize, t }: Feedb
                             resize: 'vertical',
                         }}
                     />
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px', gap: '4px' }}>
-                        <button
-                            type="button"
-                            onClick={submitWithComment}
-                            disabled={comment.trim() === ''}
-                            style={{
-                                padding: '4px 10px',
-                                background: 'var(--accent-primary)',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: comment.trim() === '' ? 'not-allowed' : 'pointer',
-                                opacity: comment.trim() === '' ? 0.5 : 1,
-                                fontSize: '0.85rem',
-                            }}
-                        >
-                            {t('feedbackCommentSubmit')}
-                        </button>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', gap: '8px' }}>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                            {comment.length} / {MAX_COMMENT_LEN}
+                        </span>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                            <button
+                                type="button"
+                                onClick={closePopover}
+                                style={{
+                                    padding: '4px 10px',
+                                    background: 'none',
+                                    color: 'var(--text-secondary)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    fontSize: '0.85rem',
+                                }}
+                            >
+                                {t('cancel')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={submitWithComment}
+                                style={{
+                                    padding: '4px 10px',
+                                    background: 'var(--accent-primary)',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    fontSize: '0.85rem',
+                                }}
+                            >
+                                {t('feedbackCommentSubmit')}
+                            </button>
+                        </div>
                     </div>
                 </div>
-            )}
+            </AnchoredPopover>
         </>
     );
 }
 
-export function MessageActions({ message, onEdit, onFork, onCompare, onRegenerate, onFeedback, position = 'top', isMobile, kbId, questionText, contentRef }: MessageActionsProps) {
+export function MessageActions({ message, onEdit, onFork, onCompare, onRegenerate, onFeedback, position = 'top', variant = 'floating', isMobile, kbId, questionText, contentRef }: MessageActionsProps) {
     const { t } = useTheme();
     const { user, siteConfigs } = useAuth();
     const isUser = message.role === 'user';
     const iconSize = isMobile ? 18 : 14;
+    const isInline = variant === 'inline';
 
     const buttonStyle: React.CSSProperties = {
         background: 'none',
@@ -170,8 +204,9 @@ export function MessageActions({ message, onEdit, onFork, onCompare, onRegenerat
         justifyContent: isMobile ? 'center' : undefined,
     };
 
-    return (
-        <div style={{
+    const wrapperStyle: React.CSSProperties = isInline
+        ? { display: 'flex', gap: '2px', alignItems: 'center' }
+        : {
             position: isMobile ? 'relative' : 'absolute',
             ...(isMobile ? { marginTop: '4px' } : (position === 'top' ? { top: '-8px' } : { bottom: '-8px' })),
             right: !isMobile && isUser ? '0' : undefined,
@@ -184,7 +219,10 @@ export function MessageActions({ message, onEdit, onFork, onCompare, onRegenerat
             padding: '2px',
             boxShadow: 'var(--shadow-sm)',
             zIndex: 10,
-        }}>
+        };
+
+    return (
+        <div style={wrapperStyle}>
             {isUser && onEdit && (
                 <button
                     type="button"

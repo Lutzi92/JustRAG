@@ -1,10 +1,10 @@
 import React, { memo, useMemo, useState, useCallback } from 'react';
-import { Search, Globe, Rss, Upload, GraduationCap, BookOpen, Loader2, X, ArrowRight } from 'lucide-react';
+import { Search, Globe, Rss, Upload, GraduationCap, BookOpen, Loader2, X, ArrowRight, GitBranch } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import './SourcesGrid.css';
 
-export type SourceType = 'websearch' | 'crawl' | 'research' | 'rss' | 'upload' | 'academic' | 'confluence';
+export type SourceType = 'websearch' | 'crawl' | 'research' | 'rss' | 'upload' | 'academic' | 'confluence' | 'gitrepo';
 
 interface WebSearchProps {
     toolInput: string;
@@ -32,6 +32,7 @@ const gridItems: { type: SourceType; icon: typeof Search; labelKey: string }[] =
     { type: 'rss', icon: Rss, labelKey: 'rss' },
     { type: 'upload', icon: Upload, labelKey: 'uploadFile' },
     { type: 'confluence', icon: BookOpen, labelKey: 'confluence' },
+    { type: 'gitrepo', icon: GitBranch, labelKey: 'gitRepo' },
     { type: 'academic', icon: GraduationCap, labelKey: 'justFind' },
 ];
 
@@ -43,12 +44,14 @@ const SourcesGridComp: React.FC<SourcesGridProps> = ({ onSelect, webSearch }) =>
     const items = useMemo(() => {
         const confluenceEnabled = siteConfigs?.confluence_enabled === 'true';
         const academicEnabled = siteConfigs?.academic_search_enabled === 'true';
+        const gitRepoEnabled = siteConfigs?.git_repo_enabled === 'true';
         return gridItems.filter(i => {
             if (i.type === 'confluence' && !confluenceEnabled) return false;
             if (i.type === 'academic' && !academicEnabled) return false;
+            if (i.type === 'gitrepo' && !gitRepoEnabled) return false;
             return true;
         });
-    }, [siteConfigs?.confluence_enabled, siteConfigs?.academic_search_enabled]);
+    }, [siteConfigs?.confluence_enabled, siteConfigs?.academic_search_enabled, siteConfigs?.git_repo_enabled]);
 
     const webSearchEnabled = siteConfigs?.web_search_enabled === 'true';
 

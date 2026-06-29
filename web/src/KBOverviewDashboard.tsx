@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
-import { RefreshCw, AlertTriangle, Loader2 } from 'lucide-react';
+import { RefreshCw, AlertTriangle, Loader2, ChevronDown } from 'lucide-react';
 import { getApiErrorMessage } from './utils/apiError';
 import { API_BASE_URL } from './api';
+import { useTheme } from './contexts/ThemeContext';
 
 interface QueueStats {
     waiting: number;
@@ -35,8 +36,35 @@ interface OverviewResponse {
 
 type SortKey = keyof Pick<KBRow,
     'name' | 'ownerName' | 'fileCount' | 'totalSizeBytes' | 'failedFileCount' |
-    'processingFileCount' | 'messageCount' | 'chatCount' | 'lastFileUploadAt' |
-    'lastMessageAt' | 'createdAt'>;
+    'processingFileCount' | 'messageCount' | 'chatCount' | 'createdAt'>
+    | 'lastActivity';
+
+interface ColumnDef {
+    key: SortKey;
+    label: string;
+    numeric?: boolean;
+    optional?: boolean;
+}
+
+// Most-recent of lastFileUploadAt / lastMessageAt, as a timestamp (NaN if neither).
+function mergedActivityTs(row: KBRow): number {
+    const a = row.lastFileUploadAt ? new Date(row.lastFileUploadAt).getTime() : NaN;
+    const b = row.lastMessageAt ? new Date(row.lastMessageAt).getTime() : NaN;
+    if (Number.isNaN(a) && Number.isNaN(b)) return NaN;
+    if (Number.isNaN(a)) return b;
+    if (Number.isNaN(b)) return a;
+    return Math.max(a, b);
+}
+
+// The raw ISO string of whichever of the two timestamps is the most recent.
+function mergedActivityIso(row: KBRow): string | undefined {
+    const a = row.lastFileUploadAt ? new Date(row.lastFileUploadAt).getTime() : NaN;
+    const b = row.lastMessageAt ? new Date(row.lastMessageAt).getTime() : NaN;
+    if (Number.isNaN(a) && Number.isNaN(b)) return undefined;
+    if (Number.isNaN(a)) return row.lastMessageAt;
+    if (Number.isNaN(b)) return row.lastFileUploadAt;
+    return a >= b ? row.lastFileUploadAt : row.lastMessageAt;
+}
 
 function formatBytes(bytes: number): string {
     if (bytes <= 0) return '0 B';
@@ -60,6 +88,7 @@ function formatRelative(iso?: string): string {
 const QUEUE_NAMES = ['rag-quick', 'rag-heavy', 'rag-batch'];
 
 export default function KBOverviewDashboard() {
+    const { t } = useTheme();
     const [data, setData] = useState<OverviewResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -67,6 +96,26 @@ export default function KBOverviewDashboard() {
     const [autoRefresh, setAutoRefresh] = useState(false);
     const [sortKey, setSortKey] = useState<SortKey>('name');
     const [sortAsc, setSortAsc] = useState(true);
+    const [search, setSearch] = useState('');
+    const [optionalVisible, setOptionalVisible] = useState<Record<string, boolean>>({
+        processingFileCount: false,
+        chatCount: false,
+        createdAt: false,
+    });
+    const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
+    const columnsMenuRef = useRef<HTMLDivElement | null>(null);
+
+    // Close the column-toggle popover on outside click.
+    useEffect(() => {
+        if (!columnsMenuOpen) return;
+        const onClick = (e: MouseEvent) => {
+            if (columnsMenuRef.current && !columnsMenuRef.current.contains(e.target as Node)) {
+                setColumnsMenuOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', onClick);
+        return () => document.removeEventListener('mousedown', onClick);
+    }, [columnsMenuOpen]);
 
     const fetchData = useCallback(async () => {
         setRefreshing(true);
@@ -92,8 +141,18 @@ export default function KBOverviewDashboard() {
 
     const sortedRows = useMemo(() => {
         if (!data) return [];
-        const rows = [...data.rows];
+        const needle = search.trim().toLowerCase();
+        const rows = data.rows.filter((r) => !needle || r.name.toLowerCase().includes(needle));
         rows.sort((a, b) => {
+            // 'lastActivity' is a synthetic column merging upload + message timestamps.
+            if (sortKey === 'lastActivity') {
+                const at = mergedActivityTs(a);
+                const bt = mergedActivityTs(b);
+                if (Number.isNaN(at) && Number.isNaN(bt)) return 0;
+                if (Number.isNaN(at)) return 1;
+                if (Number.isNaN(bt)) return -1;
+                return sortAsc ? at - bt : bt - at;
+            }
             const av = a[sortKey];
             const bv = b[sortKey];
             // Nullish values sort last regardless of direction.
@@ -109,7 +168,7 @@ export default function KBOverviewDashboard() {
             return sortAsc ? cmp : -cmp;
         });
         return rows;
-    }, [data, sortKey, sortAsc]);
+    }, [data, sortKey, sortAsc, search]);
 
     const toggleSort = (key: SortKey) => {
         if (key === sortKey) {
@@ -120,19 +179,20 @@ export default function KBOverviewDashboard() {
         }
     };
 
-    const columns: { key: SortKey; label: string }[] = [
+    const ALL_COLUMNS: ColumnDef[] = [
         { key: 'name', label: 'Name' },
         { key: 'ownerName', label: 'Owner' },
-        { key: 'fileCount', label: 'Files' },
-        { key: 'totalSizeBytes', label: 'Size' },
-        { key: 'failedFileCount', label: 'Failed' },
-        { key: 'processingFileCount', label: 'Processing' },
-        { key: 'messageCount', label: 'Messages' },
-        { key: 'chatCount', label: 'Chats' },
-        { key: 'lastFileUploadAt', label: 'Last upload' },
-        { key: 'lastMessageAt', label: 'Last message' },
-        { key: 'createdAt', label: 'Created' },
+        { key: 'fileCount', label: 'Files', numeric: true },
+        { key: 'totalSizeBytes', label: 'Größe', numeric: true },
+        { key: 'failedFileCount', label: 'Failed', numeric: true },
+        { key: 'messageCount', label: 'Messages', numeric: true },
+        { key: 'lastActivity', label: t('colLastActivity') },
+        { key: 'processingFileCount', label: 'Processing', numeric: true, optional: true },
+        { key: 'chatCount', label: 'Chats', numeric: true, optional: true },
+        { key: 'createdAt', label: 'Created', optional: true },
     ];
+    const columns = ALL_COLUMNS.filter((c) => !c.optional || optionalVisible[c.key]);
+    const optionalColumns = ALL_COLUMNS.filter((c) => c.optional);
 
     const thStyle: React.CSSProperties = {
         textAlign: 'left', padding: '0.6rem 0.75rem', cursor: 'pointer',
@@ -148,11 +208,99 @@ export default function KBOverviewDashboard() {
         borderRadius: '12px', padding: '1rem 1.25rem', minWidth: '160px',
     };
 
+    const renderCell = (row: KBRow, key: SortKey): React.ReactNode => {
+        switch (key) {
+            case 'name':
+                return (
+                    <>
+                        {row.name}
+                        {row.isGlobal && <span style={{ marginLeft: 6, fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: 4, background: 'var(--accent-primary)', color: 'white' }}>global</span>}
+                        {row.isPublished && <span style={{ marginLeft: 6, fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: 4, border: '1px solid var(--border-color)' }}>published</span>}
+                    </>
+                );
+            case 'ownerName':
+                return row.ownerName ?? '—';
+            case 'fileCount':
+                return row.fileCount;
+            case 'totalSizeBytes':
+                return formatBytes(row.totalSizeBytes);
+            case 'failedFileCount':
+                return (
+                    <>
+                        {row.failedFileCount > 0 && <AlertTriangle size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />}
+                        {row.failedFileCount}
+                    </>
+                );
+            case 'messageCount':
+                return row.messageCount;
+            case 'processingFileCount':
+                return row.processingFileCount;
+            case 'chatCount':
+                return row.chatCount;
+            case 'lastActivity':
+                return formatRelative(mergedActivityIso(row));
+            case 'createdAt':
+                return formatRelative(row.createdAt);
+            default:
+                return null;
+        }
+    };
+
     return (
         <section className="admin-content" style={{ color: 'var(--text-primary)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                 <h2 style={{ margin: 0 }}>KB Overview</h2>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                    <input
+                        type="text"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder={t('kbSearchPlaceholder')}
+                        aria-label={t('kbSearchPlaceholder')}
+                        style={{
+                            background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
+                            color: 'var(--text-primary)', padding: '0.45rem 0.75rem', borderRadius: '8px',
+                            fontSize: '0.9rem', minWidth: '180px',
+                        }}
+                    />
+                    <div ref={columnsMenuRef} style={{ position: 'relative' }}>
+                        <button
+                            type="button"
+                            onClick={() => setColumnsMenuOpen((v) => !v)}
+                            aria-haspopup="true"
+                            aria-expanded={columnsMenuOpen}
+                            aria-label={t('columnsToggle')}
+                            style={{
+                                background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
+                                color: 'var(--text-primary)', padding: '0.45rem 0.75rem', borderRadius: '8px',
+                                display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer', fontSize: '0.9rem',
+                            }}
+                        >
+                            {t('columnsToggle')} <ChevronDown size={15} />
+                        </button>
+                        {columnsMenuOpen && (
+                            <div
+                                role="menu"
+                                style={{
+                                    position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 10,
+                                    background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                                    borderRadius: '8px', boxShadow: 'var(--shadow-md)', padding: '0.5rem',
+                                    minWidth: '180px', display: 'flex', flexDirection: 'column', gap: '0.25rem',
+                                }}
+                            >
+                                {optionalColumns.map((c) => (
+                                    <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.3rem 0.4rem', cursor: 'pointer', color: 'var(--text-primary)', fontSize: '0.9rem' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={!!optionalVisible[c.key]}
+                                            onChange={(e) => setOptionalVisible((prev) => ({ ...prev, [c.key]: e.target.checked }))}
+                                        />
+                                        {c.label}
+                                    </label>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-secondary)' }}>
                         <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
                         Auto-refresh (10s)
@@ -200,37 +348,52 @@ export default function KBOverviewDashboard() {
                         <thead>
                             <tr>
                                 {columns.map((c) => (
-                                    <th key={c.key} style={thStyle} onClick={() => toggleSort(c.key)}>
+                                    <th
+                                        key={c.key}
+                                        style={{ ...thStyle, textAlign: c.numeric ? 'right' : 'left' }}
+                                        onClick={() => toggleSort(c.key)}
+                                    >
                                         {c.label}{sortKey === c.key ? (sortAsc ? ' ▲' : ' ▼') : ''}
                                     </th>
                                 ))}
                             </tr>
                         </thead>
                         <tbody>
-                            {sortedRows.map((row) => (
-                                <tr key={row.id}>
-                                    <td style={tdStyle}>
-                                        {row.name}
-                                        {row.isGlobal && <span style={{ marginLeft: 6, fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: 4, background: 'var(--accent-primary)', color: 'white' }}>global</span>}
-                                        {row.isPublished && <span style={{ marginLeft: 6, fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: 4, border: '1px solid var(--border-color)' }}>published</span>}
-                                    </td>
-                                    <td style={tdStyle}>{row.ownerName ?? '—'}</td>
-                                    <td style={tdStyle}>{row.fileCount}</td>
-                                    <td style={tdStyle}>{formatBytes(row.totalSizeBytes)}</td>
-                                    <td style={{ ...tdStyle, color: row.failedFileCount > 0 ? 'var(--error, #e5484d)' : undefined }}>
-                                        {row.failedFileCount > 0 && <AlertTriangle size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />}
-                                        {row.failedFileCount}
-                                    </td>
-                                    <td style={{ ...tdStyle, color: row.processingFileCount > 0 ? 'var(--accent-primary)' : undefined }}>
-                                        {row.processingFileCount}
-                                    </td>
-                                    <td style={tdStyle}>{row.messageCount}</td>
-                                    <td style={tdStyle}>{row.chatCount}</td>
-                                    <td style={tdStyle} title={row.lastFileUploadAt}>{formatRelative(row.lastFileUploadAt)}</td>
-                                    <td style={tdStyle} title={row.lastMessageAt}>{formatRelative(row.lastMessageAt)}</td>
-                                    <td style={tdStyle} title={row.createdAt}>{formatRelative(row.createdAt)}</td>
-                                </tr>
-                            ))}
+                            {sortedRows.map((row) => {
+                                const hasFailed = row.failedFileCount > 0;
+                                const rowStyle: React.CSSProperties = hasFailed
+                                    ? { background: 'rgba(224,57,57,0.06)' }
+                                    : {};
+                                return (
+                                    <tr key={row.id} style={rowStyle}>
+                                        {columns.map((c, idx) => {
+                                            const cellStyle: React.CSSProperties = {
+                                                ...tdStyle,
+                                                textAlign: c.numeric ? 'right' : 'left',
+                                            };
+                                            if (c.key === 'failedFileCount' && hasFailed) {
+                                                cellStyle.color = 'var(--error, #e5484d)';
+                                            }
+                                            if (c.key === 'processingFileCount' && row.processingFileCount > 0) {
+                                                cellStyle.color = 'var(--accent-primary)';
+                                            }
+                                            if (idx === 0 && hasFailed) {
+                                                cellStyle.borderLeft = '3px solid var(--error, #e5484d)';
+                                            }
+                                            const title = c.key === 'lastActivity'
+                                                ? mergedActivityIso(row)
+                                                : c.key === 'createdAt'
+                                                    ? row.createdAt
+                                                    : undefined;
+                                            return (
+                                                <td key={c.key} style={cellStyle} title={title}>
+                                                    {renderCell(row, c.key)}
+                                                </td>
+                                            );
+                                        })}
+                                    </tr>
+                                );
+                            })}
                             {sortedRows.length === 0 && (
                                 <tr><td style={tdStyle} colSpan={columns.length}>Keine Knowledge Bases.</td></tr>
                             )}

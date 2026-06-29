@@ -27,6 +27,7 @@ import (
 	"github.com/justrag/go-backend/internal/fetcher"
 	"github.com/justrag/go-backend/internal/files"
 	"github.com/justrag/go-backend/internal/gencontent"
+	"github.com/justrag/go-backend/internal/gitrepo"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/kbconfig"
@@ -297,6 +298,19 @@ func RunWorker(cfg *config.Config) error {
 		AsynqClient:  rssClient,
 		Storage:      stor,
 		ChunkService: chunkService,
+	})))
+
+	// Git-repo sync: clone/pull repository, diff against stored SHAs, enqueue changed files.
+	gitStore := gitrepo.NewStore(db.Main)
+	gitSafeRT := fetcher.SafeHTTPClient(0).Transport // SSRF-safe RoundTripper (no client-level timeout; ctx bounds the clone)
+	gitrepo.InstallSafeGitTransport(gitSafeRT)
+	mux.HandleFunc(jobs.TypeGitRepoSync, worker.Instrument(gitrepo.NewSyncHandler(gitrepo.SyncDeps{
+		Store:        gitStore,
+		JWTSecret:    cfg.JWTSecret,
+		AsynqClient:  rssClient,
+		Storage:      stor,
+		ChunkDeleter: chunkService,
+		Transport:    gitSafeRT,
 	})))
 
 	// Content generation (podcast with TTS audio).

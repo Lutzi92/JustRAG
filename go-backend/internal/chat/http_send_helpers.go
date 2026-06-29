@@ -583,6 +583,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			Dispatcher:      h.toolDispatcher,
 			MaxRounds:       ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
 			ReasoningEffort: p.reasoningLevel,
+			Temperature:     ChatAnswerTemperature(ctx, h.siteConfigReader),
 		}, streamEmit, answerTrace)
 		if err != nil {
 			logctx.From(ctx).Error("chat.send: run answer-tools", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
@@ -592,7 +593,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			return
 		}
 	} else {
-		events, err := ai.StreamCompletionWithHistory(ctx, h.aiResolver, p.history, p.userMessage, systemPrompt, p.kbID, p.reasoningLevel)
+		events, err := ai.StreamCompletionWithHistory(ctx, h.aiResolver, p.history, p.userMessage, systemPrompt, p.kbID, p.reasoningLevel, ChatAnswerTemperature(ctx, h.siteConfigReader))
 		if err != nil {
 			logctx.From(ctx).Error("chat.send: start AI stream", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
 			writeSSE(w, map[string]string{"error": "failed to start AI stream"})

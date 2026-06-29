@@ -1,12 +1,14 @@
-import { memo, lazy, Suspense, useMemo } from 'react';
+import { memo, lazy, Suspense, useMemo, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
-import { Brain, Loader2, Network } from 'lucide-react';
+import { Brain, Loader2, Network, FileText, ArrowRight } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import type { MessageSource, TrajectoryEvent, FlaggedClaimStatus } from '../types';
 import { formatPageRanges } from '../utils/citations';
+import { useAnchoredPosition } from '../hooks/useAnchoredPosition';
 import { TrajectoryPanel } from './TrajectoryPanel';
 import { MarkdownTable } from './MarkdownTable';
 
@@ -61,6 +63,81 @@ interface MessageContentProps {
      * mindmap view scoped to this message.
      */
     onViewGraph?: (messageId: string) => void;
+    /**
+     * Opens the source behind a citation pill (PDF viewer or text preview).
+     * When provided, hovering an inline [N] pill shows a source-preview popover
+     * (file · page · cited passage snippet · "Im Dokument öffnen →"). Threaded
+     * from MessageBubble, which owns the onPdfOpen / onPreviewSource dispatch.
+     */
+    onOpenSource?: (source: MessageSource) => void;
+}
+
+/**
+ * CitationPreview renders the hover popover for an inline [N] citation pill.
+ * It anchors to the hovered <sup> element (a raw DOM node, not a React ref) via
+ * the shared §6 positioner and a body-level portal, so it escapes the
+ * virtualized list's transforms. Dismissal is hover-based with a short grace
+ * period (handled by the parent), distinct from AnchoredPopover's click model.
+ */
+function CitationPreview({ source, triggerRef, t, onOpenSource, onEnter, onLeave }: {
+    source: MessageSource;
+    triggerRef: React.RefObject<HTMLElement | null>;
+    t: (key: string) => string;
+    onOpenSource?: (source: MessageSource) => void;
+    onEnter: () => void;
+    onLeave: () => void;
+}) {
+    const popRef = useRef<HTMLDivElement>(null);
+    const pos = useAnchoredPosition(triggerRef, popRef, true, { placement: 'bottom', align: 'center' });
+    const pageLabel = source.pages && source.pages.length > 0 ? `S. ${formatPageRanges(source.pages)}` : '';
+    const snippet = source.content && source.content.length > 320 ? `${source.content.slice(0, 320)}…` : source.content;
+
+    return createPortal(
+        <div
+            ref={popRef}
+            role="tooltip"
+            onMouseEnter={onEnter}
+            onMouseLeave={onLeave}
+            style={{
+                ...pos.style,
+                width: 320,
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '8px',
+                boxShadow: 'var(--shadow-md)',
+                zIndex: 4000,
+                padding: '10px 12px',
+                opacity: pos.ready ? 1 : 0,
+            }}
+        >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', color: 'var(--text-primary)', fontWeight: 600, fontSize: '0.82rem' }}>
+                <FileText size={14} aria-hidden="true" style={{ flexShrink: 0, color: 'var(--accent-primary)' }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{source.fileName}</span>
+            </div>
+            {pageLabel && (
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>{pageLabel}</div>
+            )}
+            {snippet && (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.45, maxHeight: '7.5em', overflow: 'hidden' }}>
+                    {snippet}
+                </div>
+            )}
+            {onOpenSource && source.fileId && (
+                <button
+                    type="button"
+                    onClick={() => onOpenSource(source)}
+                    style={{
+                        marginTop: '8px', display: 'inline-flex', alignItems: 'center', gap: '4px',
+                        background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                        color: 'var(--accent-primary)', fontSize: '0.8rem', fontWeight: 600, fontFamily: 'inherit',
+                    }}
+                >
+                    {t('openInDocument')} <ArrowRight size={13} aria-hidden="true" />
+                </button>
+            )}
+        </div>,
+        document.body,
+    );
 }
 
 /**
@@ -289,10 +366,43 @@ function buildMarkdownComponents(language: 'de' | 'en') {
     };
 }
 
-const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectCitations, semanticCitations, trajectory, flaggedClaims, messageId, onViewGraph }: MessageContentProps) => {
+const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectCitations, semanticCitations, trajectory, flaggedClaims, messageId, onViewGraph, onOpenSource }: MessageContentProps) => {
     const { language, t } = useTheme();
     const reasoningLabel = language === 'en' ? 'Chain of Thought' : 'Gedankengang';
     const markdownComponents = useMemo(() => buildMarkdownComponents(language), [language]);
+
+    // Hover source-preview popover (§8): a delegated mouseover on the answer
+    // body detects an inline [N] pill and anchors a preview to it. The pill is
+    // raw HTML (rehype-raw), so we anchor to the live DOM node via a ref. A
+    // short grace period on mouseout lets the cursor travel into the popover.
+    const [hoveredCitation, setHoveredCitation] = useState<number | null>(null);
+    const citationTriggerRef = useRef<HTMLElement | null>(null);
+    const closeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+    const cancelClose = useCallback(() => {
+        if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = undefined; }
+    }, []);
+    const scheduleClose = useCallback(() => {
+        cancelClose();
+        closeTimerRef.current = setTimeout(() => setHoveredCitation(null), 140);
+    }, [cancelClose]);
+
+    const handleBodyPointerOver = useCallback((e: React.PointerEvent) => {
+        const sup = (e.target as HTMLElement).closest('.source-ref') as HTMLElement | null;
+        if (!sup || !sources?.length) return;
+        const idx = parseInt(sup.dataset.sourceIndex || '', 10);
+        if (Number.isNaN(idx) || idx < 1 || idx > sources.length) return;
+        cancelClose();
+        citationTriggerRef.current = sup;
+        setHoveredCitation(idx);
+    }, [sources, cancelClose]);
+
+    const handleBodyPointerOut = useCallback((e: React.PointerEvent) => {
+        if (!(e.target as HTMLElement).closest('.source-ref')) return;
+        scheduleClose();
+    }, [scheduleClose]);
+
+    const hoveredSource = hoveredCitation != null ? sources?.[hoveredCitation - 1] : undefined;
 
     return (
         <>
@@ -343,7 +453,8 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
                     </div>
                 </details>
             )}
-            <div className="markdown-content">
+            {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
+            <div className="markdown-content" onPointerOver={handleBodyPointerOver} onPointerOut={handleBodyPointerOut}>
                 <ReactMarkdown
                     remarkPlugins={REMARK_PLUGINS}
                     rehypePlugins={REHYPE_PLUGINS}
@@ -352,6 +463,16 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
                     {addFlaggedClaimHighlights(addCitationRefs(content, sources, suspectCitations, semanticCitations, language), flaggedClaims, language)}
                 </ReactMarkdown>
             </div>
+            {hoveredSource && (
+                <CitationPreview
+                    source={hoveredSource}
+                    triggerRef={citationTriggerRef}
+                    t={t}
+                    onOpenSource={onOpenSource}
+                    onEnter={cancelClose}
+                    onLeave={scheduleClose}
+                />
+            )}
             {onViewGraph && messageId && (
                 <div className="message-content-actions" style={{ marginTop: '0.5rem' }}>
                     <button
