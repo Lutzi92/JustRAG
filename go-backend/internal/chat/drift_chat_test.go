@@ -133,8 +133,8 @@ func TestRunDriftChat_FollowupSearchErrorSkips(t *testing.T) {
 	f := &fakeDriftSearcher{
 		results: []*vector.SearchResult{
 			{Chunks: []vector.SearchChunk{driftChunk("cs1", "community")}}, // primer
-			nil,                                                             // follow-up 1 errors
-			{Chunks: []vector.SearchChunk{driftChunk("a2", "f2.pdf")}},     // follow-up 2 ok
+			nil, // follow-up 1 errors
+			{Chunks: []vector.SearchChunk{driftChunk("a2", "f2.pdf")}}, // follow-up 2 ok
 		},
 		errs: []error{nil, errors.New("search boom"), nil},
 	}

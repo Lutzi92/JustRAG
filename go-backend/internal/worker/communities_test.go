@@ -62,8 +62,12 @@ func commDeps(store *fakeCommStore, reader commMapReader, published *bool) Commu
 		Store:           store,
 		Reader:          reader,
 		DeleteSummaries: func(context.Context, string) error { return nil },
-		SummariseFor:    func(string) community.SummariseFunc { return func(context.Context, string) (string, error) { return "summary", nil } },
-		EmbedFor:        func(string) community.EmbedFunc { return func(context.Context, string) ([]float64, error) { return []float64{1, 0}, nil } },
+		SummariseFor: func(string) community.SummariseFunc {
+			return func(context.Context, string) (string, error) { return "summary", nil }
+		},
+		EmbedFor: func(string) community.EmbedFunc {
+			return func(context.Context, string) ([]float64, error) { return []float64{1, 0}, nil }
+		},
 		SinkFor: func(string) community.Sink {
 			return fakeSink{store}
 		},
