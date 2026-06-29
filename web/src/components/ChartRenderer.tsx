@@ -27,6 +27,20 @@ interface ChartData {
     kbId?: string;
 }
 
+// Render the chart-error fallback. Kept as a plain helper (not a component) so
+// the parse/validation guards below can return it directly without wrapping JSX
+// in a try/catch — render-time errors are owned by React error boundaries.
+const renderChartError = (content: string, errorMessage: string) => (
+    <div className="chart-container" style={{ padding: '1.5rem', background: 'var(--bg-secondary)', border: '1px solid var(--error-color)', borderRadius: '12px' }}>
+        <div style={{ color: 'var(--error-color)', fontWeight: 600, marginBottom: '0.5rem' }}>Fehler beim Anzeigen des Diagramms</div>
+        <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{errorMessage}</div>
+        <details style={{ marginTop: '0.5rem' }}>
+            <summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Rohdaten anzeigen</summary>
+            <pre style={{ fontSize: '0.8rem', overflow: 'auto', maxHeight: '200px' }}><code>{content}</code></pre>
+        </details>
+    </div>
+);
+
 const ChartRenderer = ({ content, language }: { content: string; language?: string }) => {
     if (language !== 'chart') {
         return (
@@ -38,8 +52,13 @@ const ChartRenderer = ({ content, language }: { content: string; language?: stri
         );
     }
 
+    let data: ChartData;
     try {
-        const data: ChartData = JSON.parse(content);
+        data = JSON.parse(content);
+    } catch (e: unknown) {
+        console.error('Failed to parse chart data:', e);
+        return renderChartError(content, e instanceof Error ? e.message : 'Unknown error');
+    }
 
         // Delegate to DataExplorer if explorerConfig is present
         if (data.explorerConfig && data.fileId && data.schema && data.kbId) {
@@ -66,7 +85,7 @@ const ChartRenderer = ({ content, language }: { content: string; language?: stri
         const { type, config, series, description } = data;
 
         if (!type || !config || !series) {
-            throw new Error('Invalid chart data: missing required fields');
+            return renderChartError(content, 'Invalid chart data: missing required fields');
         }
 
         if (!Array.isArray(series) || series.length === 0) {
@@ -179,20 +198,6 @@ const ChartRenderer = ({ content, language }: { content: string; language?: stri
                 </div>
             </div>
         );
-    } catch (e: unknown) {
-        console.error('Failed to parse chart data:', e);
-        const errorMessage = e instanceof Error ? e.message : 'Unknown error';
-        return (
-            <div className="chart-container" style={{ padding: '1.5rem', background: 'var(--bg-secondary)', border: '1px solid var(--error-color)', borderRadius: '12px' }}>
-                <div style={{ color: 'var(--error-color)', fontWeight: 600, marginBottom: '0.5rem' }}>Fehler beim Anzeigen des Diagramms</div>
-                <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{errorMessage}</div>
-                <details style={{ marginTop: '0.5rem' }}>
-                    <summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Rohdaten anzeigen</summary>
-                    <pre style={{ fontSize: '0.8rem', overflow: 'auto', maxHeight: '200px' }}><code>{content}</code></pre>
-                </details>
-            </div>
-        );
-    }
 };
 
 export default ChartRenderer;

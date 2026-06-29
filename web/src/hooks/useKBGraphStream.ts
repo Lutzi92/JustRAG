@@ -18,7 +18,9 @@ export function useKBGraphStream(kbId: string, onGraphChanged: () => void): { pr
   const [processing, setProcessing] = useState(false);
   // Keep the latest callback without re-subscribing on every render.
   const onChangedRef = useRef(onGraphChanged);
-  onChangedRef.current = onGraphChanged;
+  useEffect(() => {
+    onChangedRef.current = onGraphChanged;
+  });
 
   useEffect(() => {
     if (!kbId) return;

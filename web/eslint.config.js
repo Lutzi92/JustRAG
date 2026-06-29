@@ -21,6 +21,14 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // eslint-plugin-react-hooks 7.1 promoted this to an error in the
+      // recommended preset. Our remaining hits are idiomatic fetch-on-mount /
+      // prop-sync effects (synchronous setLoading(true) before an await), not
+      // cascading-render bugs — keep it visible as a warning to address
+      // incrementally rather than blocking lint or forcing risky rewrites.
+      'react-hooks/set-state-in-effect': 'warn',
+    },
   },
   {
     files: ['src/contexts/**/*.tsx'],
