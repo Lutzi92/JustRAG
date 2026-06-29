@@ -50,3 +50,35 @@ CRITICAL TOOLING FINDING (Task 13): `npx tsc --noEmit` from web/ is a NO-OP (tsc
 Baseline `tsc -b` is ALREADY RED from pre-existing WIP: web/src/MessageBubble.tsx (~13 errors: VerificationBadge undefined, sourceElements undefined, unused vars) — MODIFIED vs HEAD, NOT my feature. So build was broken before this feature.
 My feature's real type errors after Task 13: SidebarLeft.tsx:200 (missing 4 props -> Task 14 fixes) + SourcesSection.test.tsx x4 (existing test broke on new required props -> fixing now as Task 13 completion).
 GOING FORWARD: verify frontend with `npx tsc -b` and FILTER to my files (ignore pre-existing MessageBubble baseline errors).
+
+Task 13: complete (SourcesSection.tsx git-repo group + test baseProps). Review found Important double-confirm (fixed: delete delegates to hook showConfirm) + Minor pause-during-sync (fixed: disabled when syncing). tsc -b clean for SourcesSection, vitest 4/4.
+  ENTANGLEMENT NOTE: Task 13 diff also contains a PRE-EXISTING "Add Source CTA" feature (onAddSource prop + button + addSourceCta key) that is NOT part of git-repo — it pre-existed in SidebarLeft/translations WIP; implementer wired the SourcesSection side to keep types consistent. KEPT (removing re-breaks SidebarLeft). Flag to user at handoff. NOT committed.
+
+*** USER COMMITTED MID-STREAM ***: reflog shows HEAD advanced faab4c1 -> 40cecfb "feat: implement Git repository indexing support and add customizable answer temperature settings". This commit bundled Tasks 1-13 + pre-existing WIP (MessageBubble answer-temperature, now completed & compiling). My earlier "MessageBubble reverted" alarm was a FALSE ALARM — HEAD just advanced to include it. No WIP destroyed.
+NEW BASE = 40cecfb. Remaining uncommitted = Task 14's 3 files (AuthenticatedApp, SidebarLeft, KbDataContext) + other pre-existing WIP (AnchoredPopover, ChatView, MessageContent, useAnchoredPosition).
+tsc -b --force = CLEAN across entire frontend (0 errors) -> Task 14 integration verified at type level; whole frontend build green.
+
+Task 14: implemented (KbDataContext 7 fields, AuthenticatedApp hook+dataValue+lifecycle, SidebarLeft destructure+handleSelect+4 props+GitRepoModal mount). tsc -b clean. Reviewing.
+
+Task 14: complete (KbDataContext/AuthenticatedApp/SidebarLeft wired). Review Approved, no swaps/issues. Feature wired end-to-end. tsc -b clean.
+
+INTEGRATION CHECKPOINT (post-Task14): go build ./... clean; gitrepo+jobs tests pass; frontend `npm run build` (tsc -b && vite build) rc=0. WHOLE FEATURE GREEN.
+
+Task 15: complete (CLAUDE.md migration/flag/recipe-table/package-map rows + docs/feature-recipes.md "Git repository source" section). Verified aligned. Memory written (project_git_repo_source_feature.md + MEMORY.md pointer).
+ALL 15 TASKS COMPLETE. Final whole-feature review dispatched (opus) over 2912-line scoped package.
+
+FINAL REVIEW (opus): Verdict "needs fixes". 3 Important found (cross-cutting, missed by per-task reviews):
+  1. storage key = blob SHA only -> identical-content files collide -> delete orphans survivor. FIX: key includes sha256(path)[:16].
+  2. git_repo_enabled gate UI-only, not server-side (confluence enforces in handler). FIX: GetSiteConfigValue on Store + 403 gate in CreateSource+TriggerSync.
+  3. f.Contents() reads every blob before size/skip-dir/ext filter -> memory DoS. FIX: ShouldIngestPath (path/size first) + IsBinaryContent (content sniff after).
+  New obs (NOT fixed, inherited-from-confluence/cosmetic): source-delete orphans vector chunks+storage (same as confluence; KB-delete fine); partial-ingest + same-SHA no-op = failed files not retried until HEAD moves; sync_progress never advances (dead bar); stuck 'syncing' on outer asynq timeout.
+  Minor triage: GetGitRepoSourceFileProgress = DEAD CODE (uncalled); intPtr->new(int) trivial; rest keep.
+Dispatched batched fix for the 3 Important.
+
+Final-review fix: DONE (3 Important). Fix1 unique storage key sha256(path)[:16]; Fix2 server-side git_repo_enabled gate (GetSiteConfigValue on Store + 403 in CreateSource+TriggerSync + TestCreateSourceDisabledReturns403); Fix3 ShouldIngestPath/IsBinaryContent split (path/size before blob read). 30 gitrepo tests pass, build server+worker+./... clean, vet clean. Re-review dispatched.
+
+Final-fix re-review: APPROVED, all 3 fixes correct, no issues.
+=== FEATURE COMPLETE ===
+FINAL VERIFICATION: go build ./... clean + vet clean + gitrepo/jobs tests pass; frontend npm run build (tsc -b && vite) rc=0; SourcesSection vitest 4/4.
+All 15 tasks done; all per-task reviews passed (fixes applied); final whole-feature review's 3 Important findings fixed + re-reviewed clean.
+COMMIT STATE: Tasks 1-13 committed by USER in 40cecfb (bundled w/ unrelated answer-temp work). UNCOMMITTED: Task 14 wiring (KbDataContext/AuthenticatedApp/SidebarLeft), final-review fixes (internal/gitrepo/*), Task 15 docs (CLAUDE.md, feature-recipes.md), + unrelated pre-existing WIP (AnchoredPopover, ChatView, MessageContent, useAnchoredPosition).

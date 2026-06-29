@@ -229,6 +229,13 @@ export interface KnowledgeBase {
     ttsModel: string | null;
     language?: 'en' | 'de';
     systemPrompt?: string | null;
+    // Card information-scent metadata (improvement #6) — returned by the KB list
+    // endpoints so Home cards can show size + freshness without a per-card fetch.
+    fileCount?: number;
+    failedFileCount?: number;
+    processingFileCount?: number;
+    messageCount?: number;
+    lastMessageAt?: string | null;
 }
 
 export interface GlobalKbEditor {

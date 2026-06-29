@@ -105,6 +105,16 @@ func (h *Handler) CreateSource(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	kbID := kbIDFromContext(r)
 
+	enabledVal, err := h.store.GetSiteConfigValue(ctx, "git_repo_enabled")
+	if err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to fetch site config")
+		return
+	}
+	if enabledVal == nil || *enabledVal != "true" {
+		httputil.WriteErrorCtx(ctx, w, http.StatusForbidden, "git repository sources are not enabled")
+		return
+	}
+
 	var body createSourceRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid request body")
@@ -247,6 +257,16 @@ func (h *Handler) TriggerSync(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	kbID := kbIDFromContext(r)
 	sourceID := r.PathValue("sourceId")
+
+	enabledVal, err := h.store.GetSiteConfigValue(ctx, "git_repo_enabled")
+	if err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to fetch site config")
+		return
+	}
+	if enabledVal == nil || *enabledVal != "true" {
+		httputil.WriteErrorCtx(ctx, w, http.StatusForbidden, "git repository sources are not enabled")
+		return
+	}
 
 	existing, err := h.store.GetGitRepoSourceByID(ctx, sourceID)
 	if err != nil {

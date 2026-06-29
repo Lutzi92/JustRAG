@@ -1,7 +1,7 @@
 import React, { memo } from 'react';
 import {
     Link, Globe, Bot, FileText, Download, Trash2,
-    Rss, RefreshCw, Pause, Play, Eye, BookOpen, Plus, GitBranch
+    Rss, RefreshCw, Pause, Play, Eye, BookOpen, GitBranch
 } from 'lucide-react';
 import type { FileEntry, RssFeed, ConfluenceSource, GitRepoSource } from '../../types';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -29,7 +29,6 @@ interface SourcesSectionProps {
     onSyncGitRepoNow: (sourceId: string) => void;
     onRetryFile: (id: string) => void;
     onRetryAllFailed: () => void;
-    onAddSource?: () => void;
 }
 
 // Maps files.error_stage values (backend vocabulary, see
@@ -51,7 +50,7 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
     rssFeeds, onUpdateRssFeed, onDeleteRssFeed, onPollFeedNow, onViewFeed,
     confluenceSources, onUpdateConfluenceSource, onDeleteConfluenceSource, onSyncConfluenceNow,
     gitRepoSources, onUpdateGitRepoSource, onDeleteGitRepoSource, onSyncGitRepoNow,
-    onRetryFile, onRetryAllFailed, onAddSource
+    onRetryFile, onRetryAllFailed
 }) => {
     const { t } = useTheme();
 
@@ -66,24 +65,6 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
 
     return (
         <div className="sidebar-left__files-section">
-            {onAddSource && (
-                <button
-                    type="button"
-                    onClick={onAddSource}
-                    className="sidebar-left__add-source-btn"
-                    style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem',
-                        width: '100%', padding: '0.6rem 0.9rem', marginBottom: '0.75rem',
-                        background: 'var(--accent-primary)', color: '#fff', border: 'none',
-                        borderRadius: '8px', cursor: 'pointer', fontFamily: 'inherit',
-                        fontSize: '0.875rem', fontWeight: 600, transition: 'background 0.15s, transform 0.15s',
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; }}
-                >
-                    <Plus size={16} aria-hidden="true" /> {t('addSourceCta')}
-                </button>
-            )}
             <div className="sidebar-left__files-header sidebar-ui__section-header">
                 <h2 className="sidebar-left__files-title">{t('sources')}</h2>
                 {failedCount > 0 && (

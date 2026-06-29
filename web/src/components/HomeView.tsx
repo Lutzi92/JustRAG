@@ -1,7 +1,7 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
 import {
   BookOpen, Settings, Sun, Moon, User, LogOut, Copy, Check, Plus,
-  Trash2, UserPlus, Globe, Pencil
+  Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, AlertTriangle, Loader2
 } from 'lucide-react';
 import type { KnowledgeBase, SafeAIConfig } from '../types';
 import { API_BASE_URL } from '../api';
@@ -54,9 +54,69 @@ const LoadingFallback = () => (
   </ul>
 );
 
+// lastActiveLabel renders the KB-card freshness line (improvement #6): the
+// newest of lastMessageAt / createdAt as a locale-aware "Zuletzt aktiv vor …".
+function lastActiveLabel(
+  kb: KnowledgeBase,
+  rtf: Intl.RelativeTimeFormat,
+  t: (k: string) => string,
+): string {
+  const iso = kb.lastMessageAt || kb.createdAt;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const diffMs = then - Date.now(); // negative => past
+  const min = Math.round(diffMs / 60000);
+  const hr = Math.round(diffMs / 3600000);
+  const day = Math.round(diffMs / 86400000);
+  let rel: string;
+  if (Math.abs(min) < 60) rel = rtf.format(min, 'minute');
+  else if (Math.abs(hr) < 24) rel = rtf.format(hr, 'hour');
+  else rel = rtf.format(day, 'day');
+  return `${t('kbLastActive')} ${rel}`;
+}
+
+// KbCardChips is the compact metadata slice on each Home KB card (improvement
+// #6): up to two scent chips (files · messages) plus a single needs-attention
+// chip (failed, else processing). Lucide icons (#2), status tokens (#1).
+function KbCardChips({ kb, t }: { kb: KnowledgeBase; t: (k: string) => string }) {
+  const failed = kb.failedFileCount ?? 0;
+  const processing = kb.processingFileCount ?? 0;
+  const files = kb.fileCount ?? 0;
+  const messages = kb.messageCount ?? 0;
+  if (files === 0 && messages === 0 && failed === 0 && processing === 0) return null;
+  return (
+    <div className="home-view__chip-row">
+      {files > 0 && (
+        <span className="home-view__chip">
+          <FileText size={12} aria-hidden="true" />
+          {t('kbFilesChip').replace('{n}', String(files))}
+        </span>
+      )}
+      {messages > 0 && (
+        <span className="home-view__chip">
+          <MessageSquare size={12} aria-hidden="true" />
+          {t('kbMessagesChip').replace('{n}', String(messages))}
+        </span>
+      )}
+      {failed > 0 ? (
+        <span className="home-view__chip home-view__chip--attention">
+          <AlertTriangle size={12} aria-hidden="true" />
+          {t('kbFailedChip').replace('{n}', String(failed))}
+        </span>
+      ) : processing > 0 ? (
+        <span className="home-view__chip home-view__chip--processing">
+          <Loader2 size={12} className="spin" aria-hidden="true" />
+          {t('kbProcessingChip').replace('{n}', String(processing))}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 export function HomeView(props: HomeViewProps) {
   const { theme, language, setLanguage, toggleTheme, t } = useTheme();
   const { user, siteConfigs } = useAuth();
+  const rtf = useMemo(() => new Intl.RelativeTimeFormat(language, { numeric: 'auto' }), [language]);
 
   const {
     kbs, globalKbs, currentKb, availableConfigs,
@@ -226,7 +286,8 @@ export function HomeView(props: HomeViewProps) {
                 </div>
 
                 {kb.headerText && <div className="home-view__kb-header-text">{kb.headerText}</div>}
-                <div className="source-meta home-view__kb-meta">{new Date(kb.createdAt).toLocaleDateString()}</div>
+                <div className="source-meta home-view__kb-meta">{lastActiveLabel(kb, rtf, t)}</div>
+                <KbCardChips kb={kb} t={t} />
               </li>
             ))}
           </ul>
@@ -332,7 +393,7 @@ export function HomeView(props: HomeViewProps) {
             </div>
 
             <div className="home-view__meta-row">
-              <div className="source-meta home-view__kb-meta">{new Date(kb.createdAt).toLocaleDateString()}</div>
+              <div className="source-meta home-view__kb-meta">{lastActiveLabel(kb, rtf, t)}</div>
               {kb.userId !== user?.id && (
                 <div className="home-view__owner-meta">
                   <User size={12} aria-hidden="true" />
@@ -344,6 +405,7 @@ export function HomeView(props: HomeViewProps) {
                 </div>
               )}
             </div>
+            <KbCardChips kb={kb} t={t} />
           </li>
         ))}
       </ul>

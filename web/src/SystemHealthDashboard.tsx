@@ -152,15 +152,15 @@ const QueueCard = ({ name, stats }: { name: string; stats: QueueStats }) => {
             <div style={{ fontWeight: 500, marginBottom: '0.75rem', fontSize: '0.9rem' }}>{name}</div>
             <div style={{ display: 'flex', gap: '1rem', fontSize: '0.85rem' }}>
                 <div style={{ textAlign: 'center' }}>
-                    <div style={{ color: '#cc8400', fontWeight: 600 }}>{stats.waiting}</div>
+                    <div style={{ color: 'var(--warning-text)', fontWeight: 600 }}>{stats.waiting}</div>
                     <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>Wartend</div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                    <div style={{ color: '#165a97', fontWeight: 600 }}>{stats.active}</div>
+                    <div style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>{stats.active}</div>
                     <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>Aktiv</div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                    <div style={{ color: '#c0392b', fontWeight: 600 }}>{stats.failed}</div>
+                    <div style={{ color: 'var(--error-text)', fontWeight: 600 }}>{stats.failed}</div>
                     <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>Fehler</div>
                 </div>
             </div>
@@ -171,17 +171,17 @@ const QueueCard = ({ name, stats }: { name: string; stats: QueueStats }) => {
 const HealthIndicator = ({ name, health }: { name: string; health: SubsystemHealth }) => {
     const getStatusIcon = () => {
         switch (health.status) {
-            case 'healthy': return <CheckCircle size={18} style={{ color: '#2d8f4e' }} />;
-            case 'degraded': return <AlertTriangle size={18} style={{ color: '#cc8400' }} />;
-            case 'unhealthy': return <AlertCircle size={18} style={{ color: '#c0392b' }} />;
+            case 'healthy': return <CheckCircle size={18} style={{ color: 'var(--success-text)' }} />;
+            case 'degraded': return <AlertTriangle size={18} style={{ color: 'var(--warning-text)' }} />;
+            case 'unhealthy': return <AlertCircle size={18} style={{ color: 'var(--error-text)' }} />;
         }
     };
 
     const getStatusColor = () => {
         switch (health.status) {
-            case 'healthy': return '#2d8f4e';
-            case 'degraded': return '#cc8400';
-            case 'unhealthy': return '#c0392b';
+            case 'healthy': return 'var(--success-text)';
+            case 'degraded': return 'var(--warning-text)';
+            case 'unhealthy': return 'var(--error-text)';
         }
     };
 
@@ -202,7 +202,7 @@ const HealthIndicator = ({ name, health }: { name: string; health: SubsystemHeal
             </div>
             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                 {health.latencyMs !== undefined && `${health.latencyMs}ms`}
-                {health.error && <span style={{ color: '#c0392b' }}> - {health.error}</span>}
+                {health.error && <span style={{ color: 'var(--error-text)' }}> - {health.error}</span>}
             </div>
         </div>
     );
@@ -428,7 +428,7 @@ export default function SystemHealthDashboard() {
                 height: '400px',
                 color: 'var(--text-secondary)'
             }}>
-                <AlertCircle size={48} style={{ color: '#c0392b', marginBottom: '1rem' }} />
+                <AlertCircle size={48} style={{ color: 'var(--error-text)', marginBottom: '1rem' }} />
                 <div style={{ marginBottom: '1rem' }}>{error}</div>
                 <button onClick={fetchAll} className="secondary-button">
                     Erneut versuchen
@@ -536,19 +536,19 @@ export default function SystemHealthDashboard() {
                     value={metrics.activeUsers}
                     subtitle="Letzte 15 Min"
                     icon={Users}
-                    color="#165a97"
+                    color="var(--accent-primary)"
                 />
                 <StatCard
                     title="Dateien in Verarbeitung"
                     value={metrics.processingFiles}
                     icon={FileText}
-                    color="#cc8400"
+                    color="var(--warning-text)"
                 />
                 <StatCard
                     title="Knowledge Bases"
                     value={metrics.totalKnowledgeBases}
                     icon={Database}
-                    color="#2d8f4e"
+                    color="var(--success-text)"
                 />
                 <StatCard
                     title="Dateien gesamt"
@@ -613,12 +613,12 @@ export default function SystemHealthDashboard() {
                             background: 'var(--bg-secondary)',
                             borderRadius: '8px',
                             border: '1px solid var(--border-color)',
-                            borderLeft: `3px solid ${aiHealth.status === 'healthy' ? '#2d8f4e' : aiHealth.status === 'unhealthy' ? '#c0392b' : 'var(--border-color)'}`
+                            borderLeft: `3px solid ${aiHealth.status === 'healthy' ? 'var(--success-text)' : aiHealth.status === 'unhealthy' ? 'var(--error-text)' : 'var(--border-color)'}`
                         }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                 {aiHealth.status === 'testing' && <RefreshCw size={18} className="spin" style={{ color: 'var(--text-secondary)' }} />}
-                                {aiHealth.status === 'healthy' && <CheckCircle size={18} style={{ color: '#2d8f4e' }} />}
-                                {aiHealth.status === 'unhealthy' && <AlertCircle size={18} style={{ color: '#c0392b' }} />}
+                                {aiHealth.status === 'healthy' && <CheckCircle size={18} style={{ color: 'var(--success-text)' }} />}
+                                {aiHealth.status === 'unhealthy' && <AlertCircle size={18} style={{ color: 'var(--error-text)' }} />}
                                 {aiHealth.status === 'idle' && <Cpu size={18} style={{ color: 'var(--text-secondary)' }} />}
                                 <span style={{ fontWeight: 500 }}>
                                     {aiHealth.providerName ? `KI-Anbieter (${aiHealth.providerName})` : 'KI-Anbieter'}
@@ -635,7 +635,7 @@ export default function SystemHealthDashboard() {
                                     <span style={{ color: 'var(--text-secondary)' }}>{aiHealth.latencyMs}ms</span>
                                 )}
                                 {aiHealth.status === 'unhealthy' && aiHealth.error && (
-                                    <span style={{ color: '#c0392b' }}>{aiHealth.error}</span>
+                                    <span style={{ color: 'var(--error-text)' }}>{aiHealth.error}</span>
                                 )}
                                 <button
                                     onClick={checkAiHealth}
@@ -673,13 +673,13 @@ export default function SystemHealthDashboard() {
                         value={metrics.resourceUsage.cpuLoadAvg1m}
                         max={metrics.resourceUsage.cpuCount || 4}
                         label="CPU Load (1m)"
-                        color="#165a97"
+                        color="var(--accent-primary)"
                     />
                     <GaugeBar
                         value={metrics.resourceUsage.systemMemoryUsedPercent}
                         max={100}
                         label="Systemspeicher"
-                        color="#2d8f4e"
+                        color="var(--success-text)"
                     />
                     <GaugeBar
                         value={metrics.resourceUsage.nodeHeapUsedMB}

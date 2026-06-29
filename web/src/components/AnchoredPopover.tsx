@@ -73,7 +73,6 @@ export function AnchoredPopover({
         : { ...caretBase, bottom: -caretSize / 2, borderRight: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)' };
 
     return createPortal(
-        // eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events
         <div
             ref={popoverRef}
             role={role}

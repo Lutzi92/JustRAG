@@ -453,7 +453,6 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
                     </div>
                 </details>
             )}
-            {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
             <div className="markdown-content" onPointerOver={handleBodyPointerOver} onPointerOut={handleBodyPointerOut}>
                 <ReactMarkdown
                     remarkPlugins={REMARK_PLUGINS}
@@ -465,6 +464,7 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
             </div>
             {hoveredSource && (
                 <CitationPreview
+                    key={hoveredCitation ?? undefined}
                     source={hoveredSource}
                     triggerRef={citationTriggerRef}
                     t={t}

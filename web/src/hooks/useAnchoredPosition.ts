@@ -28,8 +28,6 @@ export interface AnchoredPosition {
     /** Where the caret sits relative to the popover, and which edge it points from. */
     caretLeft: number;
     placement: AnchorPlacement;
-    /** Force a re-measure (e.g. after the popover content size changes). */
-    recompute: () => void;
 }
 
 const INITIAL: AnchoredPosition = {
@@ -37,7 +35,6 @@ const INITIAL: AnchoredPosition = {
     style: { position: 'fixed', top: -9999, left: -9999 },
     caretLeft: 0,
     placement: 'bottom',
-    recompute: () => {},
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -116,15 +113,14 @@ export function useAnchoredPosition(
             style: { position: 'fixed', top, left },
             caretLeft,
             placement,
-            recompute: compute,
         });
     }, [triggerRef, popoverRef, gap, margin, align, preferred]);
 
     useLayoutEffect(() => {
-        if (!open) {
-            setPos(prev => (prev.ready ? INITIAL : prev));
-            return;
-        }
+        // No reset on close: AnchoredPopover unmounts the portal when closed, and
+        // compute() re-measures before paint on the next open, so stale coords are
+        // never shown. (Avoids a setState-in-effect on the close branch.)
+        if (!open) return;
         compute();
         const onScroll = () => compute();
         const onResize = () => compute();

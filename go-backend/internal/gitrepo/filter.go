@@ -38,10 +38,11 @@ var allowNames = map[string]string{
 	"Dockerfile": "text/plain", "Makefile": "text/plain", "CHANGELOG": "text/markdown",
 }
 
-// ShouldIngest decides whether a repo file is pulled into the KB and the mime
-// type to record. content is the file's first bytes (≤8 KiB suffices) for the
-// binary sniff; it may be the full content for small files.
-func ShouldIngest(p string, size int, content []byte) (bool, string) {
+// ShouldIngestPath decides whether a repo file path and size qualify for
+// ingestion, returning (ok, mime). It checks the size cap, skip-dirs, extension
+// allowlist, and known-name allowlist — but does NOT read the file content.
+// Call this BEFORE reading the blob; only call IsBinaryContent on survivors.
+func ShouldIngestPath(p string, size int) (bool, string) {
 	if size > GitRepoMaxFileBytes {
 		return false, ""
 	}
@@ -65,12 +66,29 @@ func ShouldIngest(p string, size int, content []byte) (bool, string) {
 			return false, ""
 		}
 	}
-	// Binary sniff: reject if a NUL byte appears in the inspected prefix.
+	return true, mime
+}
+
+// IsBinaryContent returns true when content appears to be binary — i.e. when a
+// NUL byte appears in the first ≤8 KiB of content.
+func IsBinaryContent(content []byte) bool {
 	sniff := content
 	if len(sniff) > 8192 {
 		sniff = sniff[:8192]
 	}
-	if bytes.IndexByte(sniff, 0) >= 0 {
+	return bytes.IndexByte(sniff, 0) >= 0
+}
+
+// ShouldIngest decides whether a repo file is pulled into the KB and the mime
+// type to record. content is the file's first bytes (≤8 KiB suffices) for the
+// binary sniff; it may be the full content for small files.
+// This is a thin wrapper around ShouldIngestPath + IsBinaryContent.
+func ShouldIngest(p string, size int, content []byte) (bool, string) {
+	ok, mime := ShouldIngestPath(p, size)
+	if !ok {
+		return false, ""
+	}
+	if IsBinaryContent(content) {
 		return false, ""
 	}
 	return true, mime

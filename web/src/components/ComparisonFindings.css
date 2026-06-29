@@ -20,45 +20,49 @@
 
 .comparison-finding {
     padding: 8px 12px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border-color);
     border-left-width: 3px;
     background: var(--bg-secondary);
 }
 
 .comparison-finding.sev-high {
-    border-left-color: #e5484d;
+    border-left-color: var(--error-text);
 }
 
 .comparison-finding.sev-medium {
-    border-left-color: #f5a623;
+    border-left-color: var(--suspect-text);
 }
 
 .comparison-finding.sev-low {
-    border-left-color: #30a46c;
+    border-left-color: var(--success-text);
 }
 
 .comparison-finding .sev-badge {
     display: inline-block;
     padding: 1px 8px;
-    border-radius: 10px;
+    border-radius: var(--radius-full);
     font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.02em;
-    color: #fff;
 }
 
+/* Dark-mode-safe status pairs (improvement #1): soft tinted bg + matching
+   foreground, mirroring the answer verification badge instead of white-on-saturated. */
 .comparison-finding.sev-high .sev-badge {
-    background: #e5484d;
+    background: var(--error-bg);
+    color: var(--error-text);
 }
 
 .comparison-finding.sev-medium .sev-badge {
-    background: #f5a623;
+    background: var(--suspect-bg);
+    color: var(--suspect-text);
 }
 
 .comparison-finding.sev-low .sev-badge {
-    background: #30a46c;
+    background: var(--badge-success-bg);
+    color: var(--badge-success-foreground);
 }
 
 .comparison-finding .issue {

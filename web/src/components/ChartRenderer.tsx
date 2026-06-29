@@ -114,7 +114,7 @@ const ChartRenderer = ({ content, language }: { content: string; language?: stri
                                 cy="50%"
                                 labelLine={false}
                                 outerRadius={80}
-                                fill="#8884d8"
+                                fill={COLORS[0]}
                                 dataKey={config.valueKey || 'value'}
                                 nameKey={config.nameKey || 'name'}
                                 label={({ name, percent }: { name?: string; percent?: number }) => `${name || ''} ${((percent || 0) * 100).toFixed(0)}%`}

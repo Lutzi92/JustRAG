@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
+	"strings"
 	"sync"
 
 	"github.com/go-git/go-git/v5"
@@ -28,8 +30,8 @@ var safeTransportInstalled bool
 // CloneOptions configures CloneAndCollect.
 type CloneOptions struct {
 	URL       string
-	Branch    string           // "" => default HEAD
-	Token     string           // "" => public
+	Branch    string            // "" => default HEAD
+	Token     string            // "" => public
 	Transport http.RoundTripper // SSRF-safe; nil => go-git default (tests/local file://)
 }
 
@@ -138,13 +140,25 @@ func CloneAndCollect(ctx context.Context, opts CloneOptions) (*CloneResult, erro
 			truncated = true
 			return storer.ErrStop
 		}
+		// Reject paths that could escape the storage prefix. The storage key
+		// is derived from the blob SHA (see sync.go), so attacker-controlled
+		// path bytes never reach the storage layer — this is defense in depth
+		// to keep traversal/absolute paths out of the DB and pipeline entirely.
+		if path.IsAbs(f.Name) || strings.HasPrefix(f.Name, "/") || strings.Contains(f.Name, "..") {
+			return nil
+		}
+		// Path/size filter first — avoids reading huge or excluded blobs into memory.
+		ok, mime := ShouldIngestPath(f.Name, int(f.Size))
+		if !ok {
+			return nil
+		}
 		content, rerr := f.Contents()
 		if rerr != nil {
 			return nil // skip unreadable blob, don't fail the whole sync
 		}
 		cb := []byte(content)
-		ok, mime := ShouldIngest(f.Name, int(f.Size), cb)
-		if !ok {
+		// Binary content sniff on survivors only.
+		if IsBinaryContent(cb) {
 			return nil
 		}
 		files = append(files, RepoFile{

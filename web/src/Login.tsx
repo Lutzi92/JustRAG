@@ -151,7 +151,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                     maxWidth: '400px',
                     background: 'var(--bg-secondary)',
                     padding: '2.5rem',
-                    borderRadius: '24px',
+                    borderRadius: 'var(--radius-xl)',
                     boxShadow: 'var(--shadow-lg)',
                     border: '1px solid var(--border-color)',
                     position: 'relative'
@@ -185,7 +185,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                         display: 'inline-flex',
                         padding: '1rem',
                         background: 'var(--header-icon-bg)',
-                        borderRadius: '16px',
+                        borderRadius: 'var(--radius-lg)',
                         color: 'var(--accent-primary)',
                         marginBottom: '1rem',
                         alignItems: 'center',
@@ -205,7 +205,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                             <BookOpen size={100} />
                         )}
                     </div>
-                    <h1 style={{ fontSize: '1.75rem', color: 'var(--text-primary)', marginBottom: '0.5rem' }}>{t('welcomeBack')}</h1>
+                    <h1 style={{ font: 'var(--text-h1)', color: 'var(--text-heading)', marginBottom: '0.5rem' }}>{t('welcomeBack')}</h1>
                     <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{t('loginSubtitle')}</p>
                 </div>
 
@@ -217,7 +217,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                             padding: '0.75rem 1rem',
                             background: 'var(--error-bg, #fee2e2)',
                             color: 'var(--error-text)',
-                            borderRadius: '12px',
+                            borderRadius: 'var(--radius-md)',
                             fontSize: '0.875rem',
                             marginBottom: '1.5rem',
                             textAlign: 'center',
@@ -249,7 +249,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                                     padding: '0.75rem 1rem 0.75rem 2.75rem',
                                     background: 'var(--bg-primary)',
                                     border: '1px solid var(--border-color)',
-                                    borderRadius: '12px',
+                                    borderRadius: 'var(--radius-md)',
                                     color: 'var(--text-primary)',
                                     fontSize: '1rem',
                                     transition: 'border-color 0.2s',
@@ -280,7 +280,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                                     padding: '0.75rem 1rem 0.75rem 2.75rem',
                                     background: 'var(--bg-primary)',
                                     border: '1px solid var(--border-color)',
-                                    borderRadius: '12px',
+                                    borderRadius: 'var(--radius-md)',
                                     color: 'var(--text-primary)',
                                     fontSize: '1rem',
                                     transition: 'border-color 0.2s',
@@ -301,7 +301,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                             background: 'var(--accent-primary)',
                             color: 'white',
                             border: 'none',
-                            borderRadius: '12px',
+                            borderRadius: 'var(--radius-md)',
                             fontSize: '1rem',
                             fontWeight: 600,
                             cursor: loading ? 'not-allowed' : 'pointer',
@@ -309,7 +309,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                             alignItems: 'center',
                             justifyContent: 'center',
                             gap: '0.5rem',
-                            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                            boxShadow: 'var(--shadow-md)',
                         }}
                     >
                         <span className="icon-swap" key={loading ? 'loading' : 'login'}>{loading ? (
@@ -337,7 +337,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                             background: 'var(--bg-primary)',
                             color: 'var(--text-primary)',
                             border: '1px solid var(--border-color)',
-                            borderRadius: '12px',
+                            borderRadius: 'var(--radius-md)',
                             fontSize: '1rem',
                             fontWeight: 600,
                             textDecoration: 'none',

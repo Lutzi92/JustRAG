@@ -20,7 +20,18 @@ import {
     CheckSquare,
     Square,
     X,
+    Rocket,
+    ClipboardList,
+    Search,
+    BookOpen,
+    FlaskConical,
+    Brain,
+    CheckCircle2,
+    AlertCircle,
+    Ban,
+    Circle,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { API_BASE_URL, authFetch } from '../api';
@@ -89,17 +100,18 @@ interface AcademicResearchModeProps {
 // Status Icons & Labels
 // ---------------------------------------------------------------------------
 
-const STATUS_ICONS: Record<string, string> = {
-    started: '\u{1F680}',
-    planning: '\u{1F4CB}',
-    searching: '\u{1F50D}',
-    reading: '\u{1F4D6}',
-    analyzing: '\u{1F9EA}',
-    synthesizing: '\u{1F9E0}',
-    generating_report: '\u{1F4DD}',
-    complete: '\u2705',
-    error: '\u274C',
-    cancelled: '\u{1F6D1}',
+// Research step \u2192 lucide icon (improvement #2: one icon set, no emoji).
+const STATUS_ICONS: Record<string, LucideIcon> = {
+    started: Rocket,
+    planning: ClipboardList,
+    searching: Search,
+    reading: BookOpen,
+    analyzing: FlaskConical,
+    synthesizing: Brain,
+    generating_report: FileText,
+    complete: CheckCircle2,
+    error: AlertCircle,
+    cancelled: Ban,
 };
 
 const STATUS_LABELS: Record<string, Record<string, string>> = {
@@ -802,7 +814,12 @@ function AcademicResearchMode({
                             aria-live="polite"
                         >
                             <span className="research-mode-status-icon">
-                                {STATUS_ICONS[currentStatus] || '\u23F3'}
+                                {(() => {
+                                    const Icon = STATUS_ICONS[currentStatus];
+                                    return Icon
+                                        ? <Icon size={18} aria-hidden="true" />
+                                        : <Loader2 size={18} className="spin" aria-hidden="true" />;
+                                })()}
                             </span>
                             <span className="research-mode-status-text">
                                 {STATUS_LABELS[language]?.[currentStatus] || currentStatus}
@@ -820,17 +837,20 @@ function AcademicResearchMode({
                         role="log"
                         aria-live="polite"
                     >
-                        {events.map((event, index) => (
-                            <div
-                                key={index}
-                                className={`research-mode-event research-mode-event-${event.type}`}
-                            >
-                                <span className="research-mode-event-icon">
-                                    {STATUS_ICONS[event.type] || '\u2022'}
-                                </span>
-                                <span className="research-mode-event-message">{event.message}</span>
-                            </div>
-                        ))}
+                        {events.map((event, index) => {
+                            const EventIcon = STATUS_ICONS[event.type] || Circle;
+                            return (
+                                <div
+                                    key={index}
+                                    className={`research-mode-event research-mode-event-${event.type}`}
+                                >
+                                    <span className="research-mode-event-icon">
+                                        <EventIcon size={14} aria-hidden="true" />
+                                    </span>
+                                    <span className="research-mode-event-message">{event.message}</span>
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
             )}

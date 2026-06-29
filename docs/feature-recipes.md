@@ -272,3 +272,27 @@ No migration. Captioning rides the Docling convert call, so `docling_enabled` mu
 When on, standalone image uploads (`.png`/`.jpg`/…) also route through Docling (caption + OCR) with Tesseract as the fallback. Existing files are **not** retroactively captioned — re-ingest a KB to benefit.
 
 **Throttle / GPU contention:** Docling's calls to gemma-4 bypass `AI_MAX_CONCURRENT_REQUESTS`, so cap Docling replicas + per-pod concurrency (the `k8s/docling.yml` fixed replica count is the throttle) and raise `DOCLING_TIMEOUT_SECONDS` since captioning extends convert latency. Fast-follows available on the same request and not yet wired: `do_chart_extraction`, `do_formula_enrichment`.
+
+## Git repository source
+
+```
+git_repo_enabled = true    # master gate; default off (admin Agent panel)
+```
+
+When enabled, a grid button appears in the KB Sources panel. Clicking it opens `GitRepoModal` where the operator enters a repository URL, selects public or private (private requires a Personal Access Token), and optionally specifies a branch (defaults to the remote HEAD). Saving creates a `git_repo_sources` row; the UI lists all sources grouped under a "Git Repositories" section with a manual re-sync button.
+
+**How it works:** submitting the form enqueues a `git-repo-sync` worker task on the `rag-heavy` queue. The worker shallow-clones the repository via go-git v5 through the existing SSRF-safe transport (`fetcher.SafeHTTPClient`). On each sync it compares the remote HEAD commit SHA against the stored SHA; if unchanged the sync is a no-op. Otherwise it performs a path + blob-SHA delta reconcile: files added or modified since the last sync are ingested as individual `files` rows (`origin='git'`) through the normal chunk/embed/KG pipeline; deleted files are cascade-removed. Each file carries `git_repo_source_id`, `git_file_path`, and `git_blob_sha` for future delta tracking. Re-sync is manual-only — there is no scheduler.
+
+**Security:**
+
+- **HTTPS-only** clone; `git://` and `ssh://` URLs are rejected at validation.
+- Private-repo PATs are **encrypted at rest** via `confluence.EncryptToken` (AES-256-GCM, JWT-derived key) and are **never returned** to the client — responses carry only `hasToken: true`.
+- The SSRF-safe transport (`fetcher.SafeHTTPClient`) re-resolves hostnames at dial time and blocks requests to private/loopback/link-local ranges, preventing server-side request forgery via DNS rebinding.
+- **Per-file cap:** 1 MiB max file size; files exceeding the cap are skipped and logged.
+- **Per-repo cap:** 2000 files per sync; excess files are skipped.
+- **Clone timeout:** enforced via context deadline on the go-git `CloneContext` call.
+- Binary files are detected by NUL-byte sniff and skipped before any parse or embed call.
+
+**File filter defaults:** text and code extensions allowlist (`.go`, `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.java`, `.kt`, `.rs`, `.c`, `.cpp`, `.h`, `.cs`, `.rb`, `.php`, `.swift`, `.md`, `.txt`, `.rst`, `.yaml`, `.yml`, `.json`, `.toml`, `.xml`, `.html`, `.css`, `.sh`, `.sql`, `.proto`, …) plus known-name allowlist (`README`, `LICENSE`, `CHANGELOG`, `Makefile`, `Dockerfile`, and their common variants). Skip-list noise directories: `node_modules`, `vendor`, `dist`, `build`, `.git`, `__pycache__`, `.cache`, `.idea`, `.vscode`.
+
+Migration **0060** (`git_repo_sources` table + `files.git_repo_source_id`, `files.git_file_path`, `files.git_blob_sha` columns + `'git'` value for `files.origin`). Package `internal/gitrepo`.

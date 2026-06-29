@@ -10,10 +10,11 @@ import (
 )
 
 type fakeStore struct {
-	created      *CreateGitRepoSourceInput
-	getByID      *GitRepoSourceRow
-	updateCalled bool
-	deleteCalled bool
+	created        *CreateGitRepoSourceInput
+	getByID        *GitRepoSourceRow
+	updateCalled   bool
+	deleteCalled   bool
+	gitRepoEnabled bool // controls GetSiteConfigValue("git_repo_enabled")
 }
 
 func (f *fakeStore) CreateGitRepoSource(_ context.Context, in CreateGitRepoSourceInput) (*GitRepoSourceRow, error) {
@@ -49,9 +50,16 @@ func (f *fakeStore) DeleteGitRepoFileByID(context.Context, string) error { retur
 func (f *fakeStore) GetGitRepoSourceFileProgress(context.Context, string) (int, int, error) {
 	return 0, 0, nil
 }
+func (f *fakeStore) GetSiteConfigValue(_ context.Context, key string) (*string, error) {
+	if key == "git_repo_enabled" && f.gitRepoEnabled {
+		v := "true"
+		return &v, nil
+	}
+	return nil, nil
+}
 
 func TestCreateSourceRejectsNonHTTPS(t *testing.T) {
-	h := NewHandler(&fakeStore{}, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+	h := NewHandler(&fakeStore{gitRepoEnabled: true}, "test-jwt-secret-at-least-32-bytes-long!!", nil)
 	body, _ := json.Marshal(map[string]any{"repoUrl": "ftp://x/y", "isPrivate": false})
 	req := httptest.NewRequest("POST", "/api/kb/kb1/git-repos", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -62,7 +70,7 @@ func TestCreateSourceRejectsNonHTTPS(t *testing.T) {
 }
 
 func TestCreateSourceEncryptsToken(t *testing.T) {
-	fs := &fakeStore{}
+	fs := &fakeStore{gitRepoEnabled: true}
 	h := NewHandler(fs, "test-jwt-secret-at-least-32-bytes-long!!", nil)
 	body, _ := json.Marshal(map[string]any{"repoUrl": "https://github.com/x/y", "isPrivate": true, "accessToken": "secret-pat"})
 	req := httptest.NewRequest("POST", "/api/kb/kb1/git-repos", bytes.NewReader(body))
@@ -83,7 +91,7 @@ func TestCreateSourceEncryptsToken(t *testing.T) {
 }
 
 func TestCreateSourceRejectsPlainHTTP(t *testing.T) {
-	h := NewHandler(&fakeStore{}, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+	h := NewHandler(&fakeStore{gitRepoEnabled: true}, "test-jwt-secret-at-least-32-bytes-long!!", nil)
 	body, _ := json.Marshal(map[string]any{"repoUrl": "http://x/y", "isPrivate": false})
 	req := httptest.NewRequest("POST", "/api/kb/kb1/git-repos", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -94,7 +102,7 @@ func TestCreateSourceRejectsPlainHTTP(t *testing.T) {
 }
 
 func TestCreateSourceRejectsEmptyHost(t *testing.T) {
-	h := NewHandler(&fakeStore{}, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+	h := NewHandler(&fakeStore{gitRepoEnabled: true}, "test-jwt-secret-at-least-32-bytes-long!!", nil)
 	body, _ := json.Marshal(map[string]any{"repoUrl": "https://", "isPrivate": false})
 	req := httptest.NewRequest("POST", "/api/kb/kb1/git-repos", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -105,7 +113,7 @@ func TestCreateSourceRejectsEmptyHost(t *testing.T) {
 }
 
 func TestCreateSourcePrivateRequiresToken(t *testing.T) {
-	h := NewHandler(&fakeStore{}, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+	h := NewHandler(&fakeStore{gitRepoEnabled: true}, "test-jwt-secret-at-least-32-bytes-long!!", nil)
 	body, _ := json.Marshal(map[string]any{"repoUrl": "https://github.com/x/y", "isPrivate": true, "accessToken": ""})
 	req := httptest.NewRequest("POST", "/api/kb/kb1/git-repos", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -168,7 +176,7 @@ func TestDeleteSourceCrossKBReturns404(t *testing.T) {
 
 func TestTriggerSyncCrossKBReturns404(t *testing.T) {
 	// Source belongs to KB-B but request targets KB-A → must be 404, no enqueue.
-	fs := &fakeStore{getByID: &GitRepoSourceRow{ID: "SRC1", KbID: "KB-B"}}
+	fs := &fakeStore{getByID: &GitRepoSourceRow{ID: "SRC1", KbID: "KB-B"}, gitRepoEnabled: true}
 	h := NewHandler(fs, "test-jwt-secret-at-least-32-bytes-long!!", nil) // asynqClient nil
 	req := httptest.NewRequest("POST", "/api/kb/KB-A/git-repos/SRC1/sync", nil)
 	req.SetPathValue("id", "KB-A")
@@ -177,5 +185,21 @@ func TestTriggerSyncCrossKBReturns404(t *testing.T) {
 	h.TriggerSync(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestCreateSourceDisabledReturns403(t *testing.T) {
+	// git_repo_enabled is not set → CreateSource must return 403 and NOT create any source.
+	fs := &fakeStore{} // gitRepoEnabled defaults to false
+	h := NewHandler(fs, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+	body, _ := json.Marshal(map[string]any{"repoUrl": "https://github.com/x/y", "isPrivate": false})
+	req := httptest.NewRequest("POST", "/api/kb/kb1/git-repos", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.CreateSource(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
+	}
+	if fs.created != nil {
+		t.Fatal("CreateGitRepoSource must not be called when feature is disabled")
 	}
 }

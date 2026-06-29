@@ -1,4 +1,4 @@
-import { useState, lazy, Suspense, useCallback } from 'react';
+import { useState, lazy, Suspense, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import { motion } from 'framer-motion';
 import { Loader2, HelpCircle } from 'lucide-react';
@@ -26,6 +26,7 @@ import { useKnowledgeBases } from './hooks/useKnowledgeBases';
 import { useSharing } from './hooks/useSharing';
 import { useRssFeeds } from './hooks/useRssFeeds';
 import { useConfluenceSources } from './hooks/useConfluenceSources';
+import { useGitRepoSources } from './hooks/useGitRepoSources';
 import { useViewState, type ViewType, type KbViewType } from './hooks/useViewState';
 import { useKbSettings } from './hooks/useKbSettings';
 import { useKbLifecycle } from './hooks/useKbLifecycle';
@@ -153,6 +154,11 @@ function AuthenticatedAppInner() {
     fetchFiles: fileMgmt.fetchFiles,
   });
 
+  const gitRepoHook = useGitRepoSources({
+    currentKb,
+    fetchFiles: fileMgmt.fetchFiles,
+  });
+
   const content = useGeneratedContent({
     currentKb, files: fileMgmt.files,
   });
@@ -183,6 +189,13 @@ function AuthenticatedAppInner() {
     showSettings: kbSettings.showSettings,
     setShowSettings: kbSettings.setShowSettings,
   });
+
+  const { fetchGitRepoSources } = gitRepoHook;
+  useEffect(() => {
+    if (currentKb) {
+      fetchGitRepoSources(currentKb.id);
+    }
+  }, [currentKb, fetchGitRepoSources]);
 
   // Cross-hook handlers. The setters are destructured into stable locals so
   // the useCallback dep arrays don't have to depend on the whole hook objects
@@ -384,6 +397,13 @@ function AuthenticatedAppInner() {
     fetchConfluenceSpacePages: confluenceHook.fetchSpacePages,
     fetchConfluencePageChildren: confluenceHook.fetchPageChildren,
     fetchConfluenceAllSpacePages: confluenceHook.fetchAllSpacePages,
+    gitRepoSources: gitRepoHook.gitRepoSources,
+    gitRepoLoading: gitRepoHook.gitRepoLoading,
+    fetchGitRepoSources: gitRepoHook.fetchGitRepoSources,
+    addGitRepoSource: gitRepoHook.addGitRepoSource,
+    updateGitRepoSource: gitRepoHook.updateGitRepoSource,
+    deleteGitRepoSource: gitRepoHook.deleteGitRepoSource,
+    syncGitRepoNow: gitRepoHook.syncGitRepoNow,
     handleSelectContent,
     handleExpandStudio,
   };

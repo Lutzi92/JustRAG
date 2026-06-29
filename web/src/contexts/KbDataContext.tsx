@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import type { RssFeed, GeneratedContent, ConfluenceSource, ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath } from '../types';
+import type { RssFeed, GeneratedContent, ConfluenceSource, ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath, GitRepoSource } from '../types';
 import type { useFileManagement } from '../hooks/useFileManagement';
 import type { useWebTools } from '../hooks/useWebTools';
 import type { useGeneratedContent } from '../hooks/useGeneratedContent';
@@ -33,6 +33,14 @@ export interface KbDataContextValue {
   fetchConfluenceSpacePages: (spaceKey: string) => Promise<ConfluencePage[]>;
   fetchConfluencePageChildren: (pageId: string) => Promise<ConfluencePage[]>;
   fetchConfluenceAllSpacePages: (spaceKey: string) => Promise<ConfluencePageWithPath[]>;
+  // Git Repo Sources
+  gitRepoSources: GitRepoSource[];
+  gitRepoLoading: boolean;
+  fetchGitRepoSources: (kbId?: string) => void;
+  addGitRepoSource: (data: { repoUrl: string; isPrivate: boolean; accessToken?: string; branch?: string }) => void;
+  updateGitRepoSource: (sourceId: string, updates: { status?: 'active' | 'paused' }) => void;
+  deleteGitRepoSource: (sourceId: string) => void;
+  syncGitRepoNow: (sourceId: string) => void;
   // Actions
   handleSelectContent: (item: GeneratedContent) => void;
   handleExpandStudio: () => void;

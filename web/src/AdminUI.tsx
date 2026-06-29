@@ -683,7 +683,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     background: none;
                     border: none;
                     border-left: 3px solid transparent;
-                    border-radius: 0 8px 8px 0;
+                    border-radius: 0 var(--radius-md) var(--radius-md) 0;
                     cursor: pointer;
                     color: var(--text-secondary);
                     font-size: 0.9rem;
@@ -723,7 +723,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     color: var(--text-primary);
                     cursor: pointer;
                     padding: 0.5rem;
-                    border-radius: 50%;
+                    border-radius: var(--radius-full);
                     display: flex;
                     align-items: center;
                     justify-content: center;
@@ -750,13 +750,13 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     background: var(--bg-primary);
                     border: 1px solid var(--border-color);
                     padding: 0.8rem;
-                    border-radius: 8px;
+                    border-radius: var(--radius-md);
                     color: var(--text-primary);
                 }
                 .result-card {
                     background: var(--bg-secondary);
                     border: 1px solid var(--border-color);
-                    border-radius: 12px;
+                    border-radius: var(--radius-lg);
                     padding: 1.5rem;
                     margin-bottom: 1rem;
                 }
@@ -769,7 +769,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     font-size: 0.75rem;
                     font-weight: bold;
                     padding: 0.1rem 0.5rem;
-                    border-radius: 12px;
+                    border-radius: var(--radius-full);
                     text-transform: uppercase;
                 }
                 .icon-button {
@@ -777,7 +777,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     border: 1px solid var(--border-color);
                     color: var(--text-primary);
                     padding: 0.5rem;
-                    border-radius: 8px;
+                    border-radius: var(--radius-md);
                     cursor: pointer;
                     transition: border-color 0.2s, color 0.2s, background 0.2s;
                 }
@@ -785,31 +785,21 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     background: var(--tag-bg);
                 }
                 .icon-button.delete:hover {
-                    background: #FEF2F2;
-                    color: #c0392b;
-                    border-color: #FECACA;
-                }
-                [data-theme='dark'] .icon-button.delete:hover {
-                    background: #451A1A;
-                    color: #F87171;
-                    border-color: #7F1D1D;
+                    background: var(--error-bg);
+                    color: var(--error-text);
+                    border-color: var(--error-text);
                 }
                 .icon-button.activate:hover {
-                    background: #DCFCE7;
-                    color: #2d8f4e;
-                    border-color: #86EFAC;
-                }
-                [data-theme='dark'] .icon-button.activate:hover {
-                    background: #052E16;
-                    color: #4ADE80;
-                    border-color: #065F46;
+                    background: var(--success-bg);
+                    color: var(--success-text);
+                    border-color: var(--success-text);
                 }
                 .secondary-button {
                     background: none;
                     border: 1px solid var(--border-color);
                     color: var(--text-primary);
                     padding: 0.8rem 1.5rem;
-                    border-radius: 12px;
+                    border-radius: var(--radius-md);
                     cursor: pointer;
                     font-family: inherit;
                     transition: border-color 0.2s, color 0.2s, background 0.2s;

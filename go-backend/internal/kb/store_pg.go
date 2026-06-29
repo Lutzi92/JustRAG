@@ -72,6 +72,30 @@ const kbSelectCols = `kb.id, kb.name, kb.user_id, kb.description, kb.is_global, 
        kb.system_prompt, kb.header_text, kb.example_prompts, kb.studio_config,
        kb.chunk_size, kb.chunk_overlap, kb.created_at`
 
+// kbStatsCols / kbStatsJoins add per-KB card metadata (file + message counts,
+// last activity) for the list endpoints. The aggregates run as correlated
+// LATERAL subqueries evaluated once per returned row (≤ limit), so no N+1 and
+// no full-table GROUP BY. Mirrors what /api/admin/kb-overview computes. The
+// outer query must alias knowledge_bases as `kb`.
+const kbStatsCols = `,
+       COALESCE(fs.file_count, 0)::int            AS file_count,
+       COALESCE(fs.failed_file_count, 0)::int     AS failed_file_count,
+       COALESCE(fs.processing_file_count, 0)::int AS processing_file_count,
+       COALESCE(ms.message_count, 0)::int         AS message_count,
+       ms.last_message_at                         AS last_message_at`
+
+const kbStatsJoins = `
+       LEFT JOIN LATERAL (
+           SELECT COUNT(*)                                              AS file_count,
+                  COUNT(*) FILTER (WHERE status IN ('error','partial'))      AS failed_file_count,
+                  COUNT(*) FILTER (WHERE status IN ('pending','processing')) AS processing_file_count
+           FROM files f WHERE f.kb_id = kb.id
+       ) fs ON true
+       LEFT JOIN LATERAL (
+           SELECT COUNT(m.id) AS message_count, MAX(m.created_at) AS last_message_at
+           FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.kb_id = kb.id
+       ) ms ON true`
+
 const kbSelectColsNoAlias = `id, name, user_id, description, is_global, is_published,
        language, ai_config_id, chat_model, embedding_model, rerank_model, tts_model, stt_model,
        system_prompt, header_text, example_prompts, studio_config, chunk_size, chunk_overlap, created_at,
@@ -103,6 +127,28 @@ func toKBRow(r kbFullRow) KBRow {
 		OwnerLastName:  r.OwnerLastName,
 		OwnerUsername:  r.OwnerUsername,
 	}
+}
+
+// kbListRow scans a knowledge_bases row plus the card-metadata aggregates from
+// kbStatsCols. Embedding kbFullRow keeps the base column mapping in one place;
+// pgx.RowToStructByName flattens the embedded fields.
+type kbListRow struct {
+	kbFullRow
+	FileCount           int        `db:"file_count"`
+	FailedFileCount     int        `db:"failed_file_count"`
+	ProcessingFileCount int        `db:"processing_file_count"`
+	MessageCount        int        `db:"message_count"`
+	LastMessageAt       *time.Time `db:"last_message_at"`
+}
+
+func toKBRowWithStats(r kbListRow) KBRow {
+	row := toKBRow(r.kbFullRow)
+	row.FileCount = r.FileCount
+	row.FailedFileCount = r.FailedFileCount
+	row.ProcessingFileCount = r.ProcessingFileCount
+	row.MessageCount = r.MessageCount
+	row.LastMessageAt = r.LastMessageAt
+	return row
 }
 
 // ---------------------------------------------------------------------------
@@ -145,9 +191,9 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 		SELECT ` + kbSelectCols + `,
 		       u.first_name AS owner_first_name,
 		       u.last_name  AS owner_last_name,
-		       u.username   AS owner_username
+		       u.username   AS owner_username` + kbStatsCols + `
 		FROM knowledge_bases kb
-		LEFT JOIN users u ON kb.user_id = u.id
+		LEFT JOIN users u ON kb.user_id = u.id` + kbStatsJoins + `
 		WHERE kb.user_id = $1
 		   OR EXISTS (
 		       SELECT 1 FROM knowledge_base_shares
@@ -156,14 +202,14 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 		ORDER BY kb.created_at DESC
 		LIMIT $2 OFFSET $3`
 
-	rows, err := pgxutil.QueryRows[kbFullRow](ctx, s.pool, sql, userID, limit, offset)
+	rows, err := pgxutil.QueryRows[kbListRow](ctx, s.pool, sql, userID, limit, offset)
 	if err != nil {
 		return []KBRow{}, err
 	}
 
 	result := make([]KBRow, len(rows))
 	for i, r := range rows {
-		result[i] = toKBRow(r)
+		result[i] = toKBRowWithStats(r)
 	}
 	return result, nil
 }
@@ -181,28 +227,28 @@ func (s *PGStore) ListGlobalKnowledgeBases(ctx context.Context, userID string, i
 	var sql string
 	if isAdmin {
 		sql = `
-			SELECT ` + kbSelectColsNoAlias + `
-			FROM knowledge_bases
+			SELECT ` + kbSelectColsNoAlias + kbStatsCols + `
+			FROM knowledge_bases kb` + kbStatsJoins + `
 			WHERE is_global = true
 			ORDER BY created_at DESC
 			LIMIT $1`
 	} else {
 		sql = `
-			SELECT ` + kbSelectColsNoAlias + `
-			FROM knowledge_bases
+			SELECT ` + kbSelectColsNoAlias + kbStatsCols + `
+			FROM knowledge_bases kb` + kbStatsJoins + `
 			WHERE is_global = true AND is_published = true
 			ORDER BY created_at DESC
 			LIMIT $1`
 	}
 
-	rows, err := pgxutil.QueryRows[kbFullRow](ctx, s.pool, sql, listKnowledgeBasesMaxLimit)
+	rows, err := pgxutil.QueryRows[kbListRow](ctx, s.pool, sql, listKnowledgeBasesMaxLimit)
 	if err != nil {
 		return []KBRow{}, err
 	}
 
 	result := make([]KBRow, len(rows))
 	for i, r := range rows {
-		result[i] = toKBRow(r)
+		result[i] = toKBRowWithStats(r)
 	}
 	return result, nil
 }

@@ -21,6 +21,7 @@ import { CrawlModal } from './sidebar/CrawlModal';
 import { RssModal } from './sidebar/RssModal';
 import { FileUploadModal } from './sidebar/FileUploadModal';
 import { ConfluenceModal } from './sidebar/ConfluenceModal';
+import { GitRepoModal } from './sidebar/GitRepoModal';
 import { ACCEPTED_FILE_TYPES } from '../constants';
 import './SidebarLeft.css';
 
@@ -34,6 +35,7 @@ const SidebarLeftComp: React.FC = () => {
         rssFeeds, rssLoading, addRssFeed, updateRssFeed, deleteRssFeed, pollFeedNow,
         confluenceSources, updateConfluenceSource, deleteConfluenceSource, syncConfluenceNow,
         confluenceConnection, confluenceLoading,
+        gitRepoSources, gitRepoLoading, addGitRepoSource, updateGitRepoSource, deleteGitRepoSource, syncGitRepoNow,
         saveConfluenceConnection, addConfluenceSource,
         fetchConfluenceSpaces, fetchConfluenceSpacePages, fetchConfluencePageChildren, fetchConfluenceAllSpacePages,
     } = useKbData();
@@ -80,6 +82,10 @@ const SidebarLeftComp: React.FC = () => {
         }
         if (type === 'confluence') {
             setActiveSourceModal('confluence');
+            return;
+        }
+        if (type === 'gitrepo') {
+            setActiveSourceModal('gitrepo');
             return;
         }
         if (type === 'crawl') {
@@ -215,15 +221,10 @@ const SidebarLeftComp: React.FC = () => {
                     onSyncConfluenceNow={syncConfluenceNow}
                     onRetryFile={retryFile}
                     onRetryAllFailed={retryAllFailed}
-                    onAddSource={() => setShowUploadModal(true)}
-                    /* TODO(git-repo-sources): in-progress feature — SourcesSection
-                       declares these props but KbDataContext/useGitRepoSources is
-                       not wired yet. Empty placeholders keep the build green and
-                       render no git sources until the feature is finished. */
-                    gitRepoSources={[]}
-                    onUpdateGitRepoSource={() => {}}
-                    onDeleteGitRepoSource={() => {}}
-                    onSyncGitRepoNow={() => {}}
+                    gitRepoSources={gitRepoSources}
+                    onUpdateGitRepoSource={updateGitRepoSource}
+                    onDeleteGitRepoSource={deleteGitRepoSource}
+                    onSyncGitRepoNow={syncGitRepoNow}
                 />
             </div>
 
@@ -276,6 +277,12 @@ const SidebarLeftComp: React.FC = () => {
                 fetchSpacePages={fetchConfluenceSpacePages}
                 fetchPageChildren={fetchConfluencePageChildren}
                 fetchAllSpacePages={fetchConfluenceAllSpacePages}
+            />
+            <GitRepoModal
+                show={activeSourceModal === 'gitrepo'}
+                onClose={closeSourceModal}
+                loading={gitRepoLoading}
+                onAdd={addGitRepoSource}
             />
             <FileUploadModal
                 show={showUploadModal}

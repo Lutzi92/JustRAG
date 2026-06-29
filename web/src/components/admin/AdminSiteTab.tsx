@@ -121,6 +121,23 @@ export default function AdminSiteTab({ siteConfigs, setSiteConfigs, onSubmit, on
                     </div>
                 )}
 
+                <hr style={{ border: 'none', borderTop: '1px solid var(--border-color)', margin: '0.5rem 0' }} />
+                <h3 style={{ margin: 0 }}>{t('gitRepoSettings')}</h3>
+
+                <div className="input-group">
+                    <label htmlFor="git-repo-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                        <input
+                            id="git-repo-enabled"
+                            type="checkbox"
+                            checked={siteConfigs.git_repo_enabled === 'true'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, git_repo_enabled: e.target.checked ? 'true' : 'false' }))}
+                            style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        />
+                        {t('gitRepoEnabled')}
+                    </label>
+                    <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('gitRepoEnabledHelp')}</p>
+                </div>
+
                 <button type="submit" className="search-button" style={{ width: 'fit-content' }}>
                     <Save size={18} /> {t('saveSettings')}
                 </button>

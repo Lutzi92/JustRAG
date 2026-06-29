@@ -47,6 +47,16 @@ type KBRow struct {
 	OwnerFirstName *string `json:"ownerFirstName,omitempty" db:"owner_first_name"`
 	OwnerLastName  *string `json:"ownerLastName,omitempty"  db:"owner_last_name"`
 	OwnerUsername  *string `json:"ownerUsername,omitempty"  db:"owner_username"`
+
+	// Card information-scent metadata — populated only by the list queries
+	// (ListKnowledgeBases / ListGlobalKnowledgeBases) via cheap per-row LATERAL
+	// aggregates, so the Home KB cards can show size + freshness without an
+	// N+1 fetch. Zero/omitted on single-row fetches (create / get-by-id).
+	FileCount           int        `json:"fileCount"`
+	FailedFileCount     int        `json:"failedFileCount"`
+	ProcessingFileCount int        `json:"processingFileCount"`
+	MessageCount        int        `json:"messageCount"`
+	LastMessageAt       *time.Time `json:"lastMessageAt,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,8 @@ package gitrepo
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -157,7 +159,14 @@ func syncGitRepoSource(ctx context.Context, deps SyncDeps, sourceID string) erro
 	// Create + enqueue ingest for new/changed files.
 	created := 0
 	for _, f := range toCreate {
-		storagePath := fmt.Sprintf("gitrepo/%s/%s", sourceID, f.Path)
+		// Storage key is derived from the (trusted, hex) blob SHA, never the
+		// repo-relative path — a crafted repo could otherwise use a path like
+		// "../../x" to escape the gitrepo/{sourceID}/ prefix (path traversal).
+		// The repo path is preserved separately as the display name / GitFilePath,
+		// which never forms a storage key. CloneAndCollect also rejects absolute
+		// and ".." paths as defense in depth.
+		pathHash := func() string { h := sha256.Sum256([]byte(f.Path)); return hex.EncodeToString(h[:])[:16] }()
+		storagePath := fmt.Sprintf("gitrepo/%s/%s-%s", sourceID, f.BlobSHA, pathHash)
 		if err := deps.Storage.StoreFile(ctx, storagePath, f.Content, f.MimeType); err != nil {
 			slog.Warn("store git file failed", "path", f.Path, "error", err)
 			continue

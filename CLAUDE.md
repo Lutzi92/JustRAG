@@ -24,6 +24,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `raptor_*` — per-file RAPTOR hierarchical summary trees (`raptor_clustering_algorithm` selects kmeans vs leiden)
 - `chat_tabular_*`, `tabular_semantic_*` — structured spreadsheet Q&A + fuzzy free-text-cell search + charts/pivots (Phase 1/2/3; `chat_tabular_charts_enabled` is the Phase-3 flag)
 - `mcp_server_enabled` — expose each KB as an MCP server at `POST /api/v1/kb/{id}/mcp` (single tool `ask_kb`, runs the real RAG pipeline; per-KB access via existing API-key + KB-permission chain). Default off. `internal/mcpserver`.
+- `git_repo_enabled` — gated KB source that shallow-clones a git repository (go-git v5, HTTPS-only, optional PAT encrypted at rest) and ingests text/code files as individual `files` rows (`origin='git'`) under one grouped source; manual re-sync only; default off. `internal/gitrepo`; migration 0060.
 - `ragas_*`, `factcheck_*`, `citation_validation_*`, `langfuse_*` — validation + observability
 - `model_tier_fast` — deployment-wide default for fast-tier tasks (CRAG grader, KG extractor, contextual enricher, factuality / Self-RAG verifier, DAG critic, longmem extractor, KB router, RAPTOR summariser, **query decomposer, longmem conflict classifier, evidentiality classifier, HyPE question generator, golden-set question generator, sufficient-context gate, comparison section checker** (`chat_compare_model`), **DRIFT follow-up generator** (`chat_drift_model`)); per-task `*_model` keys override. All fast-tier JSON calls send strict `json_schema` Structured Outputs (vLLM guided_json) with auto-downgrade to `json_object` on backend rejection; tolerant parsing stays as last resort (`ai.GenerateCompletionStructured` / `structuredCompletionFn`). Sole exception: the tool-aware DAG planner (free-form per-tool `args` is incompatible with strict mode).
 
@@ -48,6 +49,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 | 0052 | `message_chunks` (answer→chunk links for the online feedback loop) |
 | 0054 | `files.error_stage` + `error_message` (ingestion error visibility + per-file/per-KB retry) |
 | 0059 | `kg_communities` (GraphRAG community detection) |
+| 0060 | `git_repo_sources` + `files.git_repo_source_id`/`git_file_path`/`git_blob_sha` (git repository ingestion) |
 
 **Vector tables** are dim-keyed (`document_chunks_2560`, `document_chunks_4096`, …); switching the embedder requires a re-ingest.
 
@@ -185,7 +187,7 @@ Grouped by responsibility — names match directory names exactly. Long-form beh
 | Storage / data | `database`, `store`, `storage`, `pgxutil`, `files`, `kbaccess`, `cascade` | Postgres pools, file lifecycle, KB access ACLs, cascade-delete |
 | Admin | `adminagentmetrics`, `adminconfigs`, `admineval`, `adminglobalkbs`, `adminmaintenance`, `adminmcp`, `adminproviders`, `adminusers`, `kb`, `users`, `apikeys`, `auditlogs` | Admin endpoints + matching site_config readers |
 | Eval / observability | `eval`, `observability`, `logctx`, `analytics`, `health`, `systemhealth`, `apidocs` | Golden-set eval harness, Prometheus metrics, structured logging, health checks |
-| Background workers | `worker`, `jobs`, `fetcher`, `crawler`, `rss`, `research`, `confluence`, `academic`, `gencontent`, `contentgen` | Asynq tasks: ingestion, RSS polling, Confluence crawl, research agent, content generation |
+| Background workers | `worker`, `jobs`, `fetcher`, `crawler`, `rss`, `research`, `confluence`, `gitrepo`, `academic`, `gencontent`, `contentgen` | Asynq tasks: ingestion, RSS polling, Confluence crawl, git-repo sync, research agent, content generation |
 | Misc | `config`, `siteconfig`, `publicapi`, `publicconfigs`, `proxy`, `openaicompat`, `httpclient`, `redisclient`, `safego`, `misc`, `websearch` | Bootstrap, public API, OpenAI-compatible compatibility layer, panic-safe goroutines |
 
 ## Feature enablement recipes
@@ -215,6 +217,7 @@ Most chat-pipeline features default OFF. The **full toggle blocks** (combined fl
 | Image captioning + better tables (Docling) | `docling_enabled` + `docling_picture_description_enabled` (+ `docling_picture_area_threshold`, `docling_table_mode`) — gemma-4 vision wired **on the sidecar** | — | Image captioning + better tables (Docling) |
 | Full iterative DRIFT | `chat_drift_enabled` (+ `_max_followups`, `_primer_top_k`, `_search_top_k`, `_model`) | 0059 | Full iterative DRIFT |
 | KB-as-MCP-server (ask_kb) | `mcp_server_enabled` (global, default off) | — | KB-as-MCP-server |
+| Git repository source | `git_repo_enabled` | 0060 | Git repository source |
 
 Mutual exclusions and ordering gotchas (e.g. `chat_self_rag_enabled` REPLACES `chat_factuality_verifier_enabled`; `raptor_enabled` vs `parent_child_enabled`; the T1-2 dim re-embed sequence before `chat_longmem_recall_semantic`) are documented inline in each recipe.
 

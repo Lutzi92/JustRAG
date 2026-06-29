@@ -329,6 +329,37 @@
   color: var(--text-secondary);
 }
 
+/* KB-card information scent (improvement #6) — compact metadata chips. */
+.home-view__chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  margin-block-start: var(--space-2);
+}
+
+.home-view__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font: var(--text-sm);
+  white-space: nowrap;
+}
+
+.home-view__chip--attention {
+  color: var(--error-text);
+  background: var(--error-bg);
+}
+
+.home-view__chip--processing {
+  color: var(--accent-primary);
+  background: var(--accent-primary-translucent);
+}
+
 .home-view__admin-fab {
   position: fixed;
   bottom: 2rem;

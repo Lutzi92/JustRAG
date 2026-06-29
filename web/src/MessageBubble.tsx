@@ -47,10 +47,12 @@ interface ConfidenceProps {
 // expandable breakdown.
 function confidenceColors(verification: MessageVerification): { bg: string; color: string; labelKey: string } {
     const { verified, score } = verification;
-    if (!verified) return { bg: '#fee2e2', color: '#991b1b', labelKey: 'verificationUnverified' };
-    if (score >= 80) return { bg: '#d1fae5', color: '#065f46', labelKey: 'verificationVerified' };
-    if (score >= 60) return { bg: '#fef3c7', color: '#92400e', labelKey: 'verificationPartial' };
-    return { bg: '#ffedd5', color: '#9a3412', labelKey: 'verificationLowConfidence' };
+    // Status-color tokens (improvement #1) — dark-mode-safe, and "Partial" now shares
+    // the same amber as suspect citations (--suspect-*), removing the two-ambers split.
+    if (!verified) return { bg: 'var(--error-bg)', color: 'var(--error-text)', labelKey: 'verificationUnverified' };
+    if (score >= 80) return { bg: 'var(--badge-success-bg)', color: 'var(--badge-success-foreground)', labelKey: 'verificationVerified' };
+    if (score >= 60) return { bg: 'var(--suspect-bg)', color: 'var(--suspect-text)', labelKey: 'verificationPartial' };
+    return { bg: 'var(--warning-bg)', color: 'var(--warning-text)', labelKey: 'verificationLowConfidence' };
 }
 
 // hasFactcheckOutput reports whether the LLM-based factchecker actually
@@ -107,7 +109,7 @@ function ConfidenceChip({ verification, t, open, onToggle }: ConfidenceProps & {
             aria-expanded={open}
             style={{
                 display: 'inline-flex', alignItems: 'center', gap: '4px',
-                padding: '2px 10px', borderRadius: '12px',
+                padding: '2px 10px', borderRadius: 'var(--radius-full)',
                 fontSize: '0.75rem', fontWeight: 500,
                 backgroundColor: c.bg, color: c.color,
                 border: 'none', cursor: 'pointer', userSelect: 'none', fontFamily: 'inherit',
@@ -133,10 +135,10 @@ function ConfidenceDetails({ verification, t }: ConfidenceProps) {
         <div style={{
             marginTop: '0.5rem', padding: '0.75rem',
             background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
-            borderRadius: '8px', maxWidth: '420px',
+            borderRadius: 'var(--radius-md)', maxWidth: '420px',
         }}>
-            <div style={{ height: 6, borderRadius: 3, background: 'var(--border-color)', overflow: 'hidden', marginBottom: '0.6rem' }}>
-                <div style={{ height: '100%', width: `${Math.max(0, Math.min(100, score))}%`, background: c.color, borderRadius: 3, transition: 'width 0.3s' }} />
+            <div style={{ height: 6, borderRadius: 'var(--radius-full)', background: 'var(--border-color)', overflow: 'hidden', marginBottom: '0.6rem' }}>
+                <div style={{ height: '100%', width: `${Math.max(0, Math.min(100, score))}%`, background: c.color, borderRadius: 'var(--radius-full)', transition: 'width 0.3s' }} />
             </div>
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                 <span><strong style={{ color: 'var(--text-primary)' }}>{exact}</strong> {t('confidenceExactMatch')}</span>
@@ -283,7 +285,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                 fontSize: '0.9rem',
                 border: `1px dashed var(--msg-enhanced-border)`,
                 alignSelf: 'flex-end',
-                borderRadius: '20px 20px 4px 20px',
+                borderRadius: 'var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl)',
                 padding: '0.5rem 1rem'
             } : { position: 'relative' as const }}
             onMouseEnter={isMobile ? undefined : () => setIsHovered(true)}
@@ -319,7 +321,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
             {message.role === 'ai' ? (
                 // role+tabIndex (instead of <button>) because the message body
                 // contains nested interactive elements of its own.
-                <div ref={contentRef} role="button" tabIndex={0} onClick={handleCitationClick} onKeyDown={handleCitationKeyDown}>
+                <div ref={contentRef} role="button" tabIndex={0} onClick={handleCitationClick} onKeyDown={handleCitationKeyDown} style={{ minWidth: 0 }}>
                     <MessageContent
                         content={message.content}
                         reasoning={message.reasoning}
@@ -361,7 +363,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                                 aria-expanded={sourcesExpanded}
                                 style={{
                                     display: 'inline-flex', alignItems: 'center', gap: '4px',
-                                    padding: '2px 10px', borderRadius: '12px',
+                                    padding: '2px 10px', borderRadius: 'var(--radius-full)',
                                     fontSize: '0.75rem', fontWeight: 600,
                                     background: 'var(--tag-bg)', color: 'var(--accent-primary)',
                                     border: 'none', cursor: 'pointer', fontFamily: 'inherit',
@@ -399,7 +401,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                                 const pageLabel = g.pages.length ? `S. ${formatPageRanges(g.pages)} · ` : '';
                                 const canOpen = !!g.fileId && (isPdf ? !!onPdfOpen : !!onPreviewSource);
                                 return (
-                                    <div key={`${g.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.6rem 0.75rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                                    <div key={`${g.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.6rem 0.75rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
                                         <FileText size={18} aria-hidden="true" style={{ flexShrink: 0, color: 'var(--accent-primary)' }} />
                                         <div style={{ minWidth: 0, flex: 1 }}>
                                             <div style={{ fontWeight: 500, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div>

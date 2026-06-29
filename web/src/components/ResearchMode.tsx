@@ -13,6 +13,11 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
 import { copyToClipboard } from '../utils/clipboard';
 import DOMPurify from 'dompurify';
+import {
+    Rocket, ClipboardList, Search, BookOpen, Brain, RefreshCw, FileText,
+    CheckCircle2, AlertCircle, Ban, Loader2, Circle, X, ChevronRight, ChevronDown,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 interface ResearchProgressEvent {
     type: 'started' | 'planning' | 'searching' | 'reading' | 'synthesizing' | 'refining' | 'generating_report' | 'complete' | 'error' | 'cancelled';
@@ -54,17 +59,19 @@ interface ResearchModeProps {
     onRunningChange?: (running: boolean) => void;
 }
 
-const STATUS_ICONS: Record<string, string> = {
-    started: '🚀',
-    planning: '📋',
-    searching: '🔍',
-    reading: '📖',
-    synthesizing: '🧠',
-    refining: '🔄',
-    generating_report: '📝',
-    complete: '✅',
-    error: '❌',
-    cancelled: '🛑',
+// Research step → lucide icon (improvement #2: one icon set, no emoji). Status
+// colour comes from the surrounding research-mode-status-* CSS via currentColor.
+const STATUS_ICONS: Record<string, LucideIcon> = {
+    started: Rocket,
+    planning: ClipboardList,
+    searching: Search,
+    reading: BookOpen,
+    synthesizing: Brain,
+    refining: RefreshCw,
+    generating_report: FileText,
+    complete: CheckCircle2,
+    error: AlertCircle,
+    cancelled: Ban,
 };
 
 const STATUS_LABELS: Record<string, Record<string, string>> = {
@@ -518,7 +525,7 @@ export default function ResearchMode({ kbId, onClose, loadedSession, onSessionSa
                         onClick={onClose}
                         aria-label={labels.closeButton}
                     >
-                        ✕
+                        <X size={18} aria-hidden="true" />
                     </button>
                 </div>
             </div>
@@ -531,7 +538,7 @@ export default function ResearchMode({ kbId, onClose, loadedSession, onSessionSa
                     aria-expanded={!sectionsCollapsed}
                 >
                     <span className="research-mode-accordion-icon">
-                        {sectionsCollapsed ? '▶' : '▼'}
+                        {sectionsCollapsed ? <ChevronRight size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
                     </span>
                     <span>{sectionsCollapsed ? labels.showDetails : labels.hideDetails}</span>
                     {sectionsCollapsed && (
@@ -598,7 +605,12 @@ export default function ResearchMode({ kbId, onClose, loadedSession, onSessionSa
                             aria-live="polite"
                         >
                             <span className="research-mode-status-icon">
-                                {STATUS_ICONS[currentStatus] || '⏳'}
+                                {(() => {
+                                    const Icon = STATUS_ICONS[currentStatus];
+                                    return Icon
+                                        ? <Icon size={18} aria-hidden="true" />
+                                        : <Loader2 size={18} className="spin" aria-hidden="true" />;
+                                })()}
                             </span>
                             <span className="research-mode-status-text">
                                 {STATUS_LABELS[language][currentStatus] || currentStatus}
@@ -616,16 +628,19 @@ export default function ResearchMode({ kbId, onClose, loadedSession, onSessionSa
                         role="log"
                         aria-live="polite"
                     >
-                        {events.map((event, index) => (
-                            <div key={index} className={`research-mode-event research-mode-event-${event.type}`}>
-                                <span className="research-mode-event-icon">
-                                    {STATUS_ICONS[event.type] || '•'}
-                                </span>
-                                <span className="research-mode-event-message">
-                                    {event.message}
-                                </span>
-                            </div>
-                        ))}
+                        {events.map((event, index) => {
+                            const EventIcon = STATUS_ICONS[event.type] || Circle;
+                            return (
+                                <div key={index} className={`research-mode-event research-mode-event-${event.type}`}>
+                                    <span className="research-mode-event-icon">
+                                        <EventIcon size={14} aria-hidden="true" />
+                                    </span>
+                                    <span className="research-mode-event-message">
+                                        {event.message}
+                                    </span>
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
             )}
@@ -633,7 +648,7 @@ export default function ResearchMode({ kbId, onClose, loadedSession, onSessionSa
             {/* Error Display */}
             {error && (
                 <div className="research-mode-error">
-                    <span className="research-mode-error-icon">❌</span>
+                    <span className="research-mode-error-icon"><AlertCircle size={18} aria-hidden="true" /></span>
                     <span>{error}</span>
                 </div>
             )}
@@ -648,7 +663,7 @@ export default function ResearchMode({ kbId, onClose, loadedSession, onSessionSa
                         style={{ borderTop: 'none' }}
                     >
                         <span className="research-mode-accordion-icon">
-                            {findingsCollapsed ? '▶' : '▼'}
+                            {findingsCollapsed ? <ChevronRight size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
                         </span>
                         <span>{findingsCollapsed ? labels.showFindings : labels.hideFindings}</span>
                         <span className="research-mode-accordion-summary">
@@ -664,7 +679,7 @@ export default function ResearchMode({ kbId, onClose, loadedSession, onSessionSa
                                     <div className="research-mode-finding-sources">
                                         {finding.sources.map((source, sIndex) => (
                                             <span key={sIndex} className="research-mode-finding-source">
-                                                📄 {source.fileName}
+                                                <FileText size={14} aria-hidden="true" style={{ verticalAlign: 'text-bottom', marginRight: 4 }} /> {source.fileName}
                                                 {source.pages?.length ? ` (p. ${source.pages.join('-')})` : ''}
                                             </span>
                                         ))}

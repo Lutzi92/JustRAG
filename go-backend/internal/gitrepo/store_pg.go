@@ -2,9 +2,11 @@ package gitrepo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/pgxutil"
@@ -107,6 +109,7 @@ type Store interface {
 	CreateGitRepoFile(ctx context.Context, in CreateGitRepoFileInput) (string, error)
 	DeleteGitRepoFileByID(ctx context.Context, fileID string) error
 	GetGitRepoSourceFileProgress(ctx context.Context, sourceID string) (total, done int, err error)
+	GetSiteConfigValue(ctx context.Context, key string) (*string, error)
 }
 
 type PGStore struct{ pool *pgxpool.Pool }
@@ -237,6 +240,19 @@ func (s *PGStore) DeleteGitRepoFileByID(ctx context.Context, fileID string) erro
 		return fmt.Errorf("DeleteGitRepoFileByID: %w", err)
 	}
 	return nil
+}
+
+func (s *PGStore) GetSiteConfigValue(ctx context.Context, key string) (*string, error) {
+	const sql = `SELECT value FROM site_configs WHERE key = $1`
+	var value *string
+	err := s.pool.QueryRow(ctx, sql, key).Scan(&value)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("GetSiteConfigValue: %w", err)
+	}
+	return value, nil
 }
 
 func (s *PGStore) GetGitRepoSourceFileProgress(ctx context.Context, sourceID string) (total, done int, err error) {
