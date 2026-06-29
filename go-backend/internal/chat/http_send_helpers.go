@@ -573,15 +573,16 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			catalog = mcpDisp.AnswerToolCatalog(p.kbID)
 		}
 		err := RunAnswerWithTools(ctx, AnswerToolsParams{
-			AIResolver:   h.aiResolver,
-			KbID:         p.kbID,
-			ChatID:       p.chatID,
-			SystemPrompt: systemPrompt,
-			UserPrompt:   p.userMessage,
-			History:      p.history,
-			Tools:        catalog,
-			Dispatcher:   h.toolDispatcher,
-			MaxRounds:    ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
+			AIResolver:      h.aiResolver,
+			KbID:            p.kbID,
+			ChatID:          p.chatID,
+			SystemPrompt:    systemPrompt,
+			UserPrompt:      p.userMessage,
+			History:         p.history,
+			Tools:           catalog,
+			Dispatcher:      h.toolDispatcher,
+			MaxRounds:       ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
+			ReasoningEffort: p.reasoningLevel,
 		}, streamEmit, answerTrace)
 		if err != nil {
 			logctx.From(ctx).Error("chat.send: run answer-tools", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
@@ -591,7 +592,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			return
 		}
 	} else {
-		events, err := ai.StreamCompletionWithHistory(ctx, h.aiResolver, p.history, p.userMessage, systemPrompt, p.kbID, p.reasoningLevel != "")
+		events, err := ai.StreamCompletionWithHistory(ctx, h.aiResolver, p.history, p.userMessage, systemPrompt, p.kbID, p.reasoningLevel)
 		if err != nil {
 			logctx.From(ctx).Error("chat.send: start AI stream", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
 			writeSSE(w, map[string]string{"error": "failed to start AI stream"})
@@ -629,6 +630,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		"stage", "llm_completion",
 		"answer_len", len(fullResponse),
 		"reasoning_len", reasoningBuf.Len(),
+		"reasoning_level", p.reasoningLevel,
 		"source_count", len(sources),
 		"low_confidence", len(sources) < 3,
 		"stream", true,

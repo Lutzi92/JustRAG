@@ -443,7 +443,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 			"userMessageId": userMsg.ID,
 		})
 
-		events, err := ai.StreamCompletion(ctx, h.aiResolver, body.Message, systemPrompt, kbID, reasoningLevel != "")
+		events, err := ai.StreamCompletion(ctx, h.aiResolver, body.Message, systemPrompt, kbID, reasoningLevel)
 		if err != nil {
 			writeSSE(w, map[string]string{"error": "failed to start AI stream"})
 			writeSSEDone(w)

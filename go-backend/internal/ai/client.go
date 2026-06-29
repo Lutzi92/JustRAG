@@ -200,6 +200,35 @@ type ChatRequest struct {
 	// structured forced choice `{type:"function",function:{name}}`. Typed as
 	// `any` so the OpenAI variants round-trip without a sum-type stand-in.
 	ToolChoice any `json:"tool_choice,omitempty"`
+	// ReasoningEffort asks an OpenAI o-series-compatible provider to produce
+	// chain-of-thought at the given budget ("low"/"medium"/"high"). It is the
+	// request-side signal that *makes* the model think; without it a
+	// reasoning-flagged model emits no reasoning_content/<think> unless it
+	// happens to think by default. Empty means "do not request reasoning" and
+	// (via omitempty) the field is dropped entirely, preserving byte-identical
+	// request bytes for every non-reasoning call site.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// ChatTemplateKwargs is a vLLM-specific passthrough (forwarded as-is by the
+	// LiteLLM gateway) that injects kwargs into the model's chat template. For
+	// gemma-4 / Qwen3-style thinking models this is how reasoning mode is
+	// actually switched on: {"enable_thinking": true}. Verified 2026-06-29 that
+	// our LiteLLM→vLLM stack does NOT auto-translate reasoning_effort into
+	// enable_thinking, so the switch must be sent explicitly. nil → dropped via
+	// omitempty (non-reasoning calls keep their original request bytes).
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
+}
+
+// ThinkingChatTemplateKwargs returns the chat_template_kwargs that switch a
+// gemma-4 / Qwen3-style model into thinking mode, or nil when reasoning is
+// disabled (effort == ""). Kept as a single helper so the stream and
+// answer-tools request builders stay in sync. ReasoningEffort is still sent
+// alongside this (it carries the level and is honored by providers that DO map
+// it); enable_thinking is the switch our gateway actually requires.
+func ThinkingChatTemplateKwargs(effort string) map[string]any {
+	if effort == "" {
+		return nil
+	}
+	return map[string]any{"enable_thinking": true}
 }
 
 // ResponseFormat requests a structured output from the model. OpenAI's

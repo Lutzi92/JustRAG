@@ -259,7 +259,7 @@ func TestStreamCompletion_ContentOnly(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "gpt-4")
-	ch, err := StreamCompletion(context.Background(), resolver, "hi", "", "", false)
+	ch, err := StreamCompletion(context.Background(), resolver, "hi", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestStreamCompletion_ReasoningContent(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "deepseek-r1")
-	ch, err := StreamCompletion(context.Background(), resolver, "solve", "", "", true)
+	ch, err := StreamCompletion(context.Background(), resolver, "solve", "", "", "medium")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestStreamCompletion_ThinkTagsInContent(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "qwen")
-	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", true)
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "medium")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestStreamCompletion_ThinkTagSplitAcrossChunks(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "qwen")
-	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", true)
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "medium")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestStreamCompletion_OpenTagSplitAcrossChunks(t *testing.T) {
 	defer srv.Close()
 
 	resolver := mockResolver(srv.URL+"/v1/", "qwen")
-	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", true)
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "medium")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -405,6 +405,92 @@ func TestStreamCompletion_OpenTagSplitAcrossChunks(t *testing.T) {
 	}
 	if got := content.String(); got != "beforeafter" {
 		t.Errorf("content: got %q, want %q", got, "beforeafter")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// reasoning_effort request-side wiring
+// ---------------------------------------------------------------------------
+
+// bodyCapturingSSEServer is sseServer plus a hook that records the raw request
+// body of the (single) chat completion call, so tests can assert on what was
+// sent to the provider.
+func bodyCapturingSSEServer(t *testing.T, captured *string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		*captured = string(b)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl := w.(http.Flusher)
+		fmt.Fprintf(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n")
+		fl.Flush()
+		fmt.Fprintf(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"}}]}\n\n")
+		fl.Flush()
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		fl.Flush()
+	}))
+}
+
+// A non-empty reasoning effort must be sent to the provider as
+// "reasoning_effort": this is the request-side signal that makes an o-series
+// model produce chain-of-thought. Without it the (otherwise complete) display
+// pipeline has nothing to show.
+func TestStreamCompletion_SendsReasoningEffort(t *testing.T) {
+	var body string
+	srv := bodyCapturingSSEServer(t, &body)
+	defer srv.Close()
+
+	resolver := mockResolver(srv.URL+"/v1/", "o3-mini")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "high")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	events, done := collectEvents(ch)
+	if !done {
+		t.Error("expected Done event")
+	}
+
+	if !strings.Contains(body, `"reasoning_effort":"high"`) {
+		t.Errorf("request body must carry reasoning_effort=high, got: %s", body)
+	}
+	// The LiteLLM→vLLM gateway does not translate reasoning_effort into
+	// enable_thinking, so the explicit chat_template_kwargs switch must also
+	// be present — that is what actually puts gemma-4 into thinking mode.
+	if !strings.Contains(body, `"chat_template_kwargs":{"enable_thinking":true}`) {
+		t.Errorf("request body must carry chat_template_kwargs.enable_thinking=true, got: %s", body)
+	}
+	// The returned reasoning must still flow through to the caller.
+	var reasoning strings.Builder
+	for _, e := range events {
+		reasoning.WriteString(e.Reasoning)
+	}
+	if got := reasoning.String(); got != "thinking" {
+		t.Errorf("reasoning: got %q, want %q", got, "thinking")
+	}
+}
+
+// An empty effort must NOT add reasoning_effort to the request — omitempty
+// keeps non-reasoning calls byte-identical to the pre-feature request.
+func TestStreamCompletion_OmitsReasoningEffortWhenEmpty(t *testing.T) {
+	var body string
+	srv := bodyCapturingSSEServer(t, &body)
+	defer srv.Close()
+
+	resolver := mockResolver(srv.URL+"/v1/", "gpt-4")
+	ch, err := StreamCompletion(context.Background(), resolver, "q", "", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, done := collectEvents(ch); !done {
+		t.Error("expected Done event")
+	}
+
+	if strings.Contains(body, "reasoning_effort") {
+		t.Errorf("request body must not carry reasoning_effort when disabled, got: %s", body)
+	}
+	if strings.Contains(body, "chat_template_kwargs") {
+		t.Errorf("request body must not carry chat_template_kwargs when disabled, got: %s", body)
 	}
 }
 

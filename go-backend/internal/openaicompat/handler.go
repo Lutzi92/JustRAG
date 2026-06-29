@@ -567,7 +567,7 @@ func (h *Handler) streamResponse(
 		},
 	})
 
-	events, err := ai.StreamCompletionWithHistory(ctx, h.aiResolver, history, prompt, systemPrompt, kbID, false)
+	events, err := ai.StreamCompletionWithHistory(ctx, h.aiResolver, history, prompt, systemPrompt, kbID, "")
 	if err != nil {
 		// The initial assistant-role chunk has already gone out, so we can't
 		// fall back to an HTTP error. Log for operators and emit an

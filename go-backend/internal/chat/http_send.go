@@ -762,15 +762,16 @@ func (h *Handler) tryDeepChat(
 			catalog = mcpDisp.AnswerToolCatalog(kbID)
 		}
 		err = RunAnswerWithTools(ctx, AnswerToolsParams{
-			AIResolver:   h.aiResolver,
-			KbID:         kbID,
-			ChatID:       chatID,
-			SystemPrompt: chatCtx.SystemPrompt,
-			UserPrompt:   body.Message,
-			History:      answerHistory,
-			Tools:        catalog,
-			Dispatcher:   h.toolDispatcher,
-			MaxRounds:    ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
+			AIResolver:      h.aiResolver,
+			KbID:            kbID,
+			ChatID:          chatID,
+			SystemPrompt:    chatCtx.SystemPrompt,
+			UserPrompt:      body.Message,
+			History:         answerHistory,
+			Tools:           catalog,
+			Dispatcher:      h.toolDispatcher,
+			MaxRounds:       ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
+			ReasoningEffort: reasoningLevel,
 		}, streamEmit, answerTrace)
 		if err != nil {
 			writeSSE(w, map[string]string{"error": "failed to run AI stream"})
@@ -779,7 +780,7 @@ func (h *Handler) tryDeepChat(
 			return true
 		}
 	} else {
-		events, sErr := ai.StreamCompletionWithHistory(ctx, h.aiResolver, answerHistory, body.Message, chatCtx.SystemPrompt, kbID, reasoningLevel != "")
+		events, sErr := ai.StreamCompletionWithHistory(ctx, h.aiResolver, answerHistory, body.Message, chatCtx.SystemPrompt, kbID, reasoningLevel)
 		if sErr != nil {
 			writeSSE(w, map[string]string{"error": "failed to start AI stream"})
 			writeSSEDone(w)
@@ -816,6 +817,11 @@ func (h *Handler) tryDeepChat(
 		"stage", "llm_completion",
 		"answer_len", len(fullResponse),
 		"reasoning_len", reasoningBuf.Len(),
+		// reasoning_level is "" when the request did not enable reasoning;
+		// "low"/"medium"/"high" when it did. A non-empty value here with
+		// reasoning_len=0 means the provider returned no reasoning_content
+		// despite enable_thinking being sent; "" means the toggle was off.
+		"reasoning_level", reasoningLevel,
 		"source_count", len(chatCtx.Sources),
 		"low_confidence", len(chatCtx.Sources) < 3,
 		"stream", true,

@@ -470,6 +470,11 @@ type AnswerToolsParams struct {
 	Tools      []ai.ChatTool
 	Dispatcher ToolDispatcher
 	MaxRounds  int
+	// ReasoningEffort ("low"/"medium"/"high", or "" for off) is the o-series
+	// request-side signal that makes the model produce chain-of-thought. The
+	// runner already extracts/emits any reasoning the provider returns; this
+	// is what asks for it. Mirrors the standard streaming path.
+	ReasoningEffort string
 }
 
 // RunAnswerWithTools is the production entry point for the answer-time
@@ -503,7 +508,7 @@ func RunAnswerWithTools(
 		}
 	}
 	messages := ai.BuildAnswerMessages(systemPrompt, config.ChatModel, p.History, p.UserPrompt)
-	runner := &liveRoundRunner{config: config}
+	runner := &liveRoundRunner{config: config, reasoningEffort: p.ReasoningEffort}
 	return runAnswerWithToolsWithRunner(ctx, runAnswerInput{
 		KbID:       p.KbID,
 		ChatID:     p.ChatID,
@@ -518,17 +523,20 @@ func RunAnswerWithTools(
 // keyed by the resolved kb config and lifts each ai.StreamChunk to the
 // roundStreamEvent the loop expects.
 type liveRoundRunner struct {
-	config *ai.ResolvedConfig
+	config          *ai.ResolvedConfig
+	reasoningEffort string
 }
 
 func (r *liveRoundRunner) Run(ctx context.Context, messages []ai.ChatMessage, tools []ai.ChatTool, toolChoice any) (<-chan roundStreamEvent, error) {
 	temp := 0.2
 	req := ai.ChatRequest{
-		Model:       r.config.ChatModel,
-		Messages:    messages,
-		Temperature: &temp,
-		Tools:       tools,
-		ToolChoice:  toolChoice,
+		Model:              r.config.ChatModel,
+		Messages:           messages,
+		Temperature:        &temp,
+		Tools:              tools,
+		ToolChoice:         toolChoice,
+		ReasoningEffort:    r.reasoningEffort,
+		ChatTemplateKwargs: ai.ThinkingChatTemplateKwargs(r.reasoningEffort),
 	}
 	client := ai.CachedClient(r.config.BaseURL, r.config.APIKey)
 	rawCh, err := client.StreamChatCompletion(ctx, req)
