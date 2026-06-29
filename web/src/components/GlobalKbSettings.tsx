@@ -78,7 +78,8 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
     const fetchFiles = useCallback(async () => {
         try {
             const res = await axios.get(`${API_BASE_URL}/api/kb/${kb.id}/files`);
-            setFiles(res.data);
+            // On the global KB, hide failed uploads from the file list.
+            setFiles((res.data as FileEntry[]).filter(f => f.status !== 'error'));
         } catch (err: unknown) {
             console.error('Failed to fetch files:', err);
             toast.error(t('filesFetchError'));

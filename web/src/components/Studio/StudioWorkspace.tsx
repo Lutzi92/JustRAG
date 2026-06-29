@@ -214,7 +214,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         }
 
         const title = selectedItem.title;
-        let contentHtml = '';
+        let contentHtml: string;
 
         if (isMarkdownArtifact(selectedItem.type)) {
             // Render markdown to HTML with proper structure

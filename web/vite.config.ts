@@ -87,17 +87,21 @@ export default defineConfig({
   ],
   build: {
     target: 'es2022',
-    minify: 'esbuild',
+    minify: 'oxc',
     sourcemap: false,
     reportCompressedSize: false,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom'],
-          'vendor-ui': ['framer-motion', 'lucide-react'],
-          'vendor-charts': ['recharts'],
-          'vendor-markdown': ['react-markdown', 'remark-gfm'],
-        }
+        // Vite 8 uses rolldown, whose manualChunks is function-only (the
+        // Rollup object form is unsupported). Same four vendor chunks, keyed
+        // on the node_modules package path.
+        manualChunks: (id) => {
+          if (!id.includes('node_modules')) return;
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'vendor-react';
+          if (/[\\/]node_modules[\\/](framer-motion|motion|motion-dom|motion-utils|lucide-react)[\\/]/.test(id)) return 'vendor-ui';
+          if (/[\\/]node_modules[\\/]recharts[\\/]/.test(id)) return 'vendor-charts';
+          if (/[\\/]node_modules[\\/](react-markdown|remark-gfm)[\\/]/.test(id)) return 'vendor-markdown';
+        },
       }
     }
   }
