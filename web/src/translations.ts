@@ -191,6 +191,7 @@ export const translations = {
     mindMapNodeHint: { de: 'Knoten anklicken, um im Chat danach zu fragen', en: 'Click a node to ask about it in chat' },
     mindMapAskPrompt: { de: 'Erzähl mir mehr über', en: 'Tell me more about' },
     viewGraphForAnswer: { de: 'Graph zu dieser Antwort', en: 'View graph for this answer' },
+    viewGraphLabel: { de: 'Wissensgraph', en: 'Knowledge graph' },
     showWholeKb: { de: 'Ganze Wissensbasis', en: 'Show whole KB' },
     scopedToThisAnswer: { de: 'Auf diese Antwort beschränkt', en: 'Scoped to this answer' },
     sourcesFor: { de: 'Quellen für', en: 'Sources for' },

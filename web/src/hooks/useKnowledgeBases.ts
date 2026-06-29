@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import type { KnowledgeBase, GeneratedContent } from '../types';
 import { API_BASE_URL } from '../api';
@@ -27,7 +27,7 @@ export function useKnowledgeBases({
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
   const [globalKbs, setGlobalKbs] = useState<KnowledgeBase[]>([]);
 
-  const fetchKBs = useCallback(async () => {
+  const fetchKBs = useCallback(async (opts?: { silent?: boolean }) => {
     try {
       const [kbRes, globalRes] = await Promise.all([
         axios.get(`${API_BASE_URL}/api/kb`),
@@ -37,9 +37,24 @@ export function useKnowledgeBases({
       setGlobalKbs(Array.isArray(globalRes.data) ? globalRes.data : []);
     } catch (err: unknown) {
       console.error('Failed to fetch KBs:', err);
-      toast.error(t('kbFetchError'));
+      // Suppress the error toast for background polling so a transient network
+      // blip while files are processing doesn't spam the user.
+      if (!opts?.silent) toast.error(t('kbFetchError'));
     }
   }, [t, toast]);
+
+  // Live processing count: while any KB still has files being ingested
+  // (status pending/processing), poll the KB lists so the per-card
+  // "processing" chip updates without a manual refresh. Polling stops on its
+  // own once nothing is processing, so there is no idle traffic.
+  const anyProcessing = [...kbs, ...globalKbs].some(
+    (kb) => (kb.processingFileCount ?? 0) > 0,
+  );
+  useEffect(() => {
+    if (!anyProcessing) return;
+    const id = setInterval(() => { void fetchKBs({ silent: true }); }, 4000);
+    return () => clearInterval(id);
+  }, [anyProcessing, fetchKBs]);
 
   const handleSelectKB = useCallback((kb: KnowledgeBase) => {
     setCurrentKb(kb);

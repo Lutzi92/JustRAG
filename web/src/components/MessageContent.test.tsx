@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import MessageContent from './MessageContent';
 import type { TrajectoryEvent } from '../types';
 import * as ThemeContext from '../contexts/ThemeContext';
@@ -187,25 +186,9 @@ describe('MessageContent', () => {
         );
     });
 
-    it('renders the View graph button and calls onViewGraph with the message id when clicked', async () => {
-        // t() returns the key in this test mock, so the button is labelled
-        // 'viewGraphForAnswer'.
-        vi.mocked(ThemeContext.useTheme).mockReturnValue({
-            language: 'en',
-            t: (k: string) => k,
-        } as unknown as ReturnType<typeof ThemeContext.useTheme>);
-
-        const onViewGraph = vi.fn();
-        render(<MessageContent content="An answer." messageId="m-1" onViewGraph={onViewGraph} />);
-
-        await userEvent.click(screen.getByLabelText('viewGraphForAnswer'));
-        expect(onViewGraph).toHaveBeenCalledWith('m-1');
-    });
-
-    it('does not render the View graph button without onViewGraph', () => {
-        render(<MessageContent content="An answer." messageId="m-1" />);
-        expect(screen.queryByLabelText('viewGraphForAnswer')).toBeNull();
-    });
+    // The per-answer knowledge-graph control moved out of MessageContent into
+    // the MessageBubble §8 footer (rendered as the .graph-pill next to
+    // "Quellen · N"), so its tests now live with MessageBubble's footer.
 
     it('strips citation markers from exported table cells', async () => {
         const { exportRowsToXlsx } = await import('../utils/exportXlsx');

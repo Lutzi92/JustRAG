@@ -205,7 +205,10 @@ export function MessageActions({ message, onEdit, onFork, onCompare, onRegenerat
     };
 
     const wrapperStyle: React.CSSProperties = isInline
-        ? { display: 'flex', gap: '2px', alignItems: 'center' }
+        // flexWrap + justify-end + min-width:0 let the cluster reflow its buttons
+        // onto a second row instead of overflowing the right edge of a narrow
+        // message column (mobile 44px touch targets exceed the column width).
+        ? { display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '2px', alignItems: 'center', minWidth: 0 }
         : {
             position: isMobile ? 'relative' : 'absolute',
             ...(isMobile ? { marginTop: '4px' } : (position === 'top' ? { top: '-8px' } : { bottom: '-8px' })),

@@ -65,12 +65,15 @@
   --input-bg: var(--bg-secondary);
   --header-icon-bg: #eaf7ff;
   --error-text: #c0392b;
-  --error: var(--error-text); /* alias: fixes var(--error, …) typo call sites (improvement #1) */
+  --error: var(--error-text);
+  /* alias: fixes var(--error, …) typo call sites (improvement #1) */
   --error-bg: #fdecea;
-  --success-text: #207d3e; /* darkened -> WCAG AA on white (was 4.08:1) */
+  --success-text: #207d3e;
+  /* darkened -> WCAG AA on white (was 4.08:1) */
   --success-bg: #e5f0cf;
   --warning-bg: #ffce7b;
-  --warning-text: #8a4b09; /* ≥ 4.5:1 on #ffce7b (improvement #1) */
+  --warning-text: #8a4b09;
+  /* ≥ 4.5:1 on #ffce7b (improvement #1) */
   --placeholder-text: #767676;
   --code-bg: #2b2b2b;
   --code-text: #f2f2f2;
@@ -117,7 +120,8 @@
   --success-text: #6dd590;
   --success-bg: #1a3020;
   --warning-bg: #4a3a1a;
-  --warning-text: #f5b971; /* ≥ 4.5:1 on #4a3a1a (improvement #1) */
+  --warning-text: #f5b971;
+  /* ≥ 4.5:1 on #4a3a1a (improvement #1) */
   --placeholder-text: #8a8a8a;
   --code-bg: #0d1219;
   --code-text: #e8eaed;
@@ -126,7 +130,8 @@
   --suspect-text: #fbbf24;
   --suspect-bg: #3b2a0a;
   --suspect-border: #fbbf24;
-  --text-heading: var(--text-primary); /* headings track primary text on dark (improvement #4) */
+  --text-heading: var(--text-primary);
+  /* headings track primary text on dark (improvement #4) */
 }
 
 /* Themed scrollbars */
@@ -135,13 +140,29 @@
   scrollbar-color: var(--border-color) transparent;
 }
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--accent-primary); }
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary);
+}
 
 /* Selection color */
-::selection { background: rgba(var(--accent-primary-rgb), 0.25); color: inherit; }
+::selection {
+  background: rgba(var(--accent-primary-rgb), 0.25);
+  color: inherit;
+}
 
 body {
   margin: 0;
@@ -156,7 +177,9 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.02'/%3E%3C/svg%3E");
 }
 
-h1, h2, h3 {
+h1,
+h2,
+h3 {
   font-family: var(--font-sans);
   font-weight: 600;
   color: var(--text-heading);
@@ -277,7 +300,8 @@ button.source-card {
 }
 
 .source-title {
-  font: var(--text-h3); /* improvement #4 — card/item title */
+  font: var(--text-h3);
+  /* improvement #4 — card/item title */
   margin-bottom: 0.25rem;
   white-space: nowrap;
   overflow: hidden;
@@ -285,7 +309,8 @@ button.source-card {
 }
 
 .source-meta {
-  font: var(--text-sm); /* improvement #4 — secondary meta */
+  font: var(--text-sm);
+  /* improvement #4 — secondary meta */
   color: var(--text-secondary);
 }
 
@@ -296,6 +321,14 @@ button.source-card {
   flex-direction: column;
   background-color: var(--bg-secondary);
   position: relative;
+  /* min-width:0 is the keystone of the action-bar overflow fix: a flex:1 item
+     defaults to min-width:auto, so this panel otherwise refuses to shrink below
+     its widest child (a wide code fence/table/URL), growing the whole column
+     past the viewport. The per-message min-width:0 chain below only takes effect
+     once this ancestor can shrink. The action bar now lives in flow inside the
+     answer-footer flex row (it wraps, never clips), so no overflow-x:clip
+     workaround is needed here. */
+  min-width: 0;
 }
 
 .chat-header {
@@ -310,13 +343,33 @@ button.source-card {
 .messages-container {
   flex: 1;
   overflow-y: auto;
-  padding: 2rem;
+  /* Vertical-only padding. This element is the react-virtuoso scroller, which
+     sizes its virtualized item list to the scroller's clientWidth (padding
+     INCLUDED). Horizontal padding here therefore becomes pure right-side
+     overflow: every message row is shifted right by the left padding and runs
+     past the scroller's right edge, clipping the right-aligned answer-footer
+     action bar. Keep horizontal insets off the scroller — the max-width:80%
+     centering below already provides the side gutters. */
+  padding: 2rem 0;
   display: flex;
   flex-direction: column;
   gap: 2rem;
   max-width: 80%;
   margin: 0 auto;
   width: 100%;
+  /* Complete the min-width:0 chain from .chat-area down to the message column,
+     so no intermediate flex link can let a wide descendant re-expand the row. */
+  min-width: 0;
+}
+
+/* The horizontal message gutter lives on the virtuoso item list (the element
+   virtuoso sizes and lays items out within), NOT on the scroller above —
+   padding on the scroller overflows the right edge and clips the action bar.
+   data-testid is emitted by react-virtuoso in production builds, not just tests. */
+.messages-container [data-testid="virtuoso-item-list"] {
+  box-sizing: border-box;
+  padding-left: 2rem;
+  padding-right: 2rem;
 }
 
 .message-bubble {
@@ -471,7 +524,7 @@ button.source-card {
   overflow-x: auto;
 }
 
-.md-table > table {
+.md-table>table {
   margin: 0;
 }
 
@@ -535,6 +588,31 @@ button.source-card {
 }
 
 .source-tag-link:hover {
+  background: var(--accent-primary);
+  color: #ffffff;
+}
+
+/* Per-answer "Wissensgraph" affordance: same accent-pill family as
+   .source-tag / .follow-up-chip / the §8 Quellen·N toggle. Token-driven, so it
+   recolours correctly in dark mode for free; accent-fill on hover mirrors
+   .source-tag-link:hover. */
+.graph-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  background: var(--tag-bg);
+  color: var(--accent-primary);
+  border: none;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.graph-pill:hover {
   background: var(--accent-primary);
   color: #ffffff;
 }
@@ -619,7 +697,8 @@ button.source-card {
 }
 
 .source-label {
-  font: var(--text-caption); /* improvement #4 — overline/label (QUELLEN) */
+  font: var(--text-caption);
+  /* improvement #4 — overline/label (QUELLEN) */
   letter-spacing: 0.05em;
   color: var(--text-secondary);
 }
@@ -729,7 +808,8 @@ button.source-card {
 
 .send-button:disabled {
   background: var(--border-color);
-  color: var(--text-secondary); /* glyph was white on #ccc = 1.6:1 */
+  color: var(--text-secondary);
+  /* glyph was white on #ccc = 1.6:1 */
   cursor: not-allowed;
 }
 
@@ -758,13 +838,14 @@ button.source-card {
   pointer-events: none;
 }
 
-.empty-state > * {
+.empty-state>* {
   position: relative;
   z-index: 1;
 }
 
 .empty-state h1 {
-  font: var(--text-display); /* improvement #4 — page hero; mobile step below */
+  font: var(--text-display);
+  /* improvement #4 — page hero; mobile step below */
   color: var(--text-primary);
   margin-bottom: 1rem;
 }
@@ -792,7 +873,9 @@ button.source-card {
 }
 
 @keyframes ai-streaming-pulse {
-  0%, 100% {
+
+  0%,
+  100% {
     box-shadow: none;
   }
 
@@ -828,7 +911,9 @@ button.source-card {
 }
 
 @keyframes loading-dot-pulse {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 0.3;
     transform: scale(0.8);
   }
@@ -1066,10 +1151,12 @@ button.source-card {
   background: var(--accent-primary);
   color: #ffffff;
 }
+
 .btn--primary:hover:not(:disabled) {
   background: var(--accent-secondary);
   box-shadow: var(--shadow-md);
 }
+
 .btn--primary:active:not(:disabled) {
   transform: translateY(0);
   box-shadow: none;
@@ -1081,10 +1168,12 @@ button.source-card {
   color: var(--text-primary);
   border-color: var(--border-color);
 }
+
 .btn--secondary:hover:not(:disabled) {
   background: var(--bg-hover);
   border-color: var(--accent-primary);
 }
+
 .btn--secondary:active:not(:disabled) {
   background: var(--tag-bg);
 }
@@ -1095,9 +1184,11 @@ button.source-card {
   color: var(--accent-primary);
   padding: 0 var(--space-2);
 }
+
 .btn--tertiary:hover:not(:disabled) {
   background: var(--tag-bg);
 }
+
 .btn--tertiary:active:not(:disabled) {
   background: transparent;
 }
@@ -1107,9 +1198,11 @@ button.source-card {
   background: var(--error-bg);
   color: var(--error-text);
 }
+
 .btn--destructive:hover:not(:disabled) {
   border-color: var(--error-text);
 }
+
 .btn--destructive:active:not(:disabled) {
   transform: translateY(0);
 }
@@ -1121,10 +1214,12 @@ button.source-card {
   background: none;
   color: var(--text-secondary);
 }
+
 .btn--icon:hover:not(:disabled) {
   background: var(--tag-bg);
   color: var(--text-primary);
 }
+
 .btn--icon.btn--icon-bordered {
   border-color: var(--border-color);
   background: var(--bg-primary);
@@ -1135,6 +1230,7 @@ button.source-card {
   .btn {
     min-height: 44px;
   }
+
   .btn--icon {
     min-width: 44px;
   }
@@ -1152,11 +1248,13 @@ button.source-card {
 .secondary-button:active:not(:disabled) {
   background: var(--tag-bg);
 }
+
 .secondary-button:disabled,
 .text-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
 .search-button:active:not(:disabled) {
   transform: translateY(0);
 }
@@ -1395,7 +1493,8 @@ button.source-card {
 
 .research-mode-header h2 {
   margin: 0;
-  font: var(--text-h1); /* improvement #4 */
+  font: var(--text-h1);
+  /* improvement #4 */
   color: var(--text-primary);
 }
 
@@ -1925,8 +2024,15 @@ button.source-card {
 }
 
 @keyframes icon-swap-in {
-  0% { opacity: 0; transform: scale(0.5); }
-  100% { opacity: 1; transform: scale(1); }
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .icon-swap {
@@ -1970,8 +2076,15 @@ button.source-card {
 @media (max-width: 1023px) {
   .messages-container {
     max-width: 100%;
-    padding: 0.75rem;
+    /* Vertical-only — horizontal padding on the virtuoso scroller overflows the
+       right edge and clips the action bar (see the desktop rule above). */
+    padding: 0.75rem 0;
     gap: 1rem;
+  }
+
+  .messages-container [data-testid="virtuoso-item-list"] {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
   }
 
   .input-container {
@@ -2054,13 +2167,23 @@ button.source-card {
 }
 
 @keyframes bg-jobs-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2110,7 +2233,7 @@ button.source-card {
   color: var(--text-secondary);
 }
 
-.node-sources-panel > button {
+.node-sources-panel>button {
   align-self: flex-start;
   cursor: pointer;
 }

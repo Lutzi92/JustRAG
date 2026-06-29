@@ -1,6 +1,6 @@
 import { memo, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { FileText, ChevronDown, Check, ArrowRight } from 'lucide-react';
+import { FileText, ChevronDown, Check, ArrowRight, Network } from 'lucide-react';
 import type { Message, BranchInfo, MessageVerification, MessageSource } from './types';
 import { flaggedClaimsFor } from './utils/verification';
 import { useReducedMotion, getMotionProps } from './hooks/useReducedMotion';
@@ -331,8 +331,6 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                         semanticCitations={semanticCitationSet(message.verification)}
                         trajectory={message.trajectory}
                         flaggedClaims={flaggedClaimsFor(message.verification)}
-                        messageId={message.id}
-                        onViewGraph={onViewGraph}
                         onOpenSource={handleOpenSource}
                     />
                 </div>
@@ -347,7 +345,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
             {/* §8: single calm answer footer — confidence chip + Quellen·N toggle + one action row */}
             {message.role === 'ai' && !isStreaming && !message.isEnhanced && message.id && (
                 <>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', minWidth: 0, marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)' }}>
                         {message.verification != null && hasFactcheckOutput(message.verification) && (
                             <ConfidenceChip
                                 verification={message.verification}
@@ -374,7 +372,22 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                                 <ChevronDown size={12} aria-hidden="true" style={{ transition: 'transform 0.15s', transform: sourcesExpanded ? 'rotate(180deg)' : 'none' }} />
                             </button>
                         )}
-                        <div style={{ marginLeft: 'auto' }}>
+                        {/* Per-answer knowledge-graph pill — joins the source-affordance family
+                            in the footer. Only shown when the answer has a cited subgraph, so
+                            it's never a dead control. */}
+                        {onViewGraph && sourceGroups.length > 0 && (
+                            <button
+                                type="button"
+                                className="graph-pill"
+                                onClick={(e) => { e.stopPropagation(); onViewGraph(message.id!); }}
+                                title={t('viewGraphForAnswer')}
+                                aria-label={t('viewGraphForAnswer')}
+                            >
+                                <Network size={13} aria-hidden="true" />
+                                {t('viewGraphLabel')}
+                            </button>
+                        )}
+                        <div style={{ marginLeft: 'auto', minWidth: 0 }}>
                             <MessageActions
                                 message={message}
                                 variant="inline"
