@@ -3,7 +3,9 @@ package fetcher
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsPrivateIP(t *testing.T) {
@@ -100,5 +102,60 @@ func TestValidateURL(t *testing.T) {
 				t.Errorf("validateURL(%q) err=%v, wantErr=%v", tc.url, err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestParseProxyHost(t *testing.T) {
+	cases := []struct {
+		raw, wantHostPort, wantHost string
+	}{
+		{"http://10.60.3.254:3128", "10.60.3.254:3128", "10.60.3.254"},
+		{"10.60.3.254:3128", "10.60.3.254:3128", "10.60.3.254"},
+		{"http://proxy.example:8080", "proxy.example:8080", "proxy.example"},
+		{"HTTP://Proxy.Example:8080", "proxy.example:8080", "proxy.example"},
+		{"", "", ""},
+	}
+	for _, tc := range cases {
+		hp, h := parseProxyHost(tc.raw)
+		if hp != tc.wantHostPort || h != tc.wantHost {
+			t.Errorf("parseProxyHost(%q) = (%q,%q), want (%q,%q)", tc.raw, hp, h, tc.wantHostPort, tc.wantHost)
+		}
+	}
+}
+
+// The configured egress proxy on a private IP must be dialable (not rejected as
+// an SSRF target); a private IP that is NOT the proxy must stay blocked.
+func TestSafeDialContext_ExemptsConfiguredProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("http_proxy", "")
+	t.Setenv("ALL_PROXY", "")
+	t.Setenv("all_proxy", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("HTTPS_PROXY", "http://10.60.3.254:3128")
+
+	dial := safeDialContext(150 * time.Millisecond)
+
+	// Dialing the proxy's own (private) address must NOT be an SSRF refusal —
+	// it should reach a real dial attempt (connection refused / timeout).
+	_, err := dial(context.Background(), "tcp", "10.60.3.254:3128")
+	if err != nil && strings.Contains(err.Error(), "ssrf dial: ") && strings.Contains(err.Error(), "private IP") {
+		t.Errorf("configured proxy must be exempt from SSRF block, got: %v", err)
+	}
+
+	// A different private IP (not the proxy) must still be SSRF-blocked.
+	_, err = dial(context.Background(), "tcp", "10.0.0.5:443")
+	if err == nil || !strings.Contains(err.Error(), "private IP") {
+		t.Errorf("non-proxy private IP must be blocked, got: %v", err)
+	}
+}
+
+func TestSafeDialContext_NoProxyStillBlocksPrivate(t *testing.T) {
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		t.Setenv(k, "")
+	}
+	dial := safeDialContext(150 * time.Millisecond)
+	_, err := dial(context.Background(), "tcp", "10.60.3.254:3128")
+	if err == nil || !strings.Contains(err.Error(), "private IP") {
+		t.Errorf("with no proxy configured, private IP must be blocked, got: %v", err)
 	}
 }

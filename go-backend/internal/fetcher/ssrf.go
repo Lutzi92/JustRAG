@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -157,6 +158,59 @@ func validateURL(ctx context.Context, rawURL string) error {
 	return nil
 }
 
+// proxyEndpoints parses the HTTP(S)_PROXY / ALL_PROXY environment into the set
+// of lowercased "host:port" and "host" strings the transport may dial when
+// egressing through a proxy. safeDialContext exempts these from the private-IP
+// block so a trusted egress proxy on a private IP is reachable.
+func proxyEndpoints() map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, key := range []string{
+		"HTTPS_PROXY", "https_proxy",
+		"HTTP_PROXY", "http_proxy",
+		"ALL_PROXY", "all_proxy",
+	} {
+		hostPort, host := parseProxyHost(os.Getenv(key))
+		if hostPort != "" {
+			set[hostPort] = struct{}{}
+		}
+		if host != "" {
+			set[host] = struct{}{}
+		}
+	}
+	return set
+}
+
+// parseProxyHost extracts the lowercased host:port and host from a proxy env
+// value, which may be a full URL ("http://10.0.0.1:3128") or a bare authority
+// ("10.0.0.1:3128"). Returns empty strings when raw is empty or unparseable.
+func parseProxyHost(raw string) (hostPort, host string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", ""
+	}
+	return strings.ToLower(u.Host), strings.ToLower(u.Hostname())
+}
+
+// isProxyEndpoint reports whether the dialed address (host:port) or its bare
+// host matches a configured egress proxy.
+func isProxyEndpoint(proxies map[string]struct{}, addr, host string) bool {
+	if len(proxies) == 0 {
+		return false
+	}
+	if _, ok := proxies[strings.ToLower(addr)]; ok {
+		return true
+	}
+	_, ok := proxies[strings.ToLower(host)]
+	return ok
+}
+
 // safeDialContext returns a DialContext function that re-resolves the host,
 // picks a public IP, and dials *that IP* directly with the original hostname
 // preserved for SNI / certificate validation. This closes the DNS-rebinding
@@ -168,13 +222,23 @@ func validateURL(ctx context.Context, rawURL string) error {
 // happy-eyeballs — attempts are sequential, not concurrent/staggered).
 func safeDialContext(dialTimeout time.Duration) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: dialTimeout}
+	// Operator-configured egress proxies, read once when the dialer is built
+	// (proxy env is fixed for a process's lifetime). When a proxy is used,
+	// net/http dials the PROXY's address here — not the target — and that
+	// address is commonly a private IP under k8s/corporate networking. Without
+	// this exemption the SSRF block rejects the trusted proxy itself
+	// ("proxyconnect tcp: ssrf dial: private IP ..."), breaking all egress.
+	proxies := proxyEndpoints()
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, fmt.Errorf("ssrf dial: split host: %w", err)
 		}
 		host = strings.TrimSuffix(host, ".")
-		allowPrivate := ctxAllowsPrivate(ctx)
+		// Exempt the configured egress proxy from the private-IP rejection. The
+		// SSRF check still applies to direct dials (NO_PROXY targets stay
+		// blocked) and to redirect hops (validateURL in CheckRedirect).
+		allowPrivate := ctxAllowsPrivate(ctx) || isProxyEndpoint(proxies, addr, host)
 		// IP literal: validate and dial.
 		if ip := net.ParseIP(host); ip != nil {
 			if !allowPrivate && isPrivateIP(ip) {
