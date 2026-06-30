@@ -26,6 +26,7 @@ var publicConfigKeys = map[string]bool{
 	"web_search_enabled":      true,
 	"academic_search_enabled": true,
 	"academic_search_name":    true,
+	"git_repo_enabled":        true,
 }
 
 // sensitiveConfigKeys hold secrets that must never be echoed back to a client,
