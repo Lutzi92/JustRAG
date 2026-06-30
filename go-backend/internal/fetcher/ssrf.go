@@ -159,9 +159,11 @@ func validateURL(ctx context.Context, rawURL string) error {
 }
 
 // proxyEndpoints parses the HTTP(S)_PROXY / ALL_PROXY environment into the set
-// of lowercased "host:port" and "host" strings the transport may dial when
-// egressing through a proxy. safeDialContext exempts these from the private-IP
-// block so a trusted egress proxy on a private IP is reachable.
+// of lowercased "host:port" strings the transport may dial when egressing
+// through a proxy. safeDialContext exempts these from the private-IP block so a
+// trusted egress proxy on a private IP is reachable. The exemption is scoped to
+// the exact host:port — never a bare host — so a DIFFERENT port on the proxy's
+// IP (e.g. an attacker-supplied http://proxy-ip:6379/) stays SSRF-blocked.
 func proxyEndpoints() map[string]struct{} {
 	set := make(map[string]struct{})
 	for _, key := range []string{
@@ -169,45 +171,51 @@ func proxyEndpoints() map[string]struct{} {
 		"HTTP_PROXY", "http_proxy",
 		"ALL_PROXY", "all_proxy",
 	} {
-		hostPort, host := parseProxyHost(os.Getenv(key))
-		if hostPort != "" {
+		if hostPort := parseProxyHostPort(os.Getenv(key)); hostPort != "" {
 			set[hostPort] = struct{}{}
-		}
-		if host != "" {
-			set[host] = struct{}{}
 		}
 	}
 	return set
 }
 
-// parseProxyHost extracts the lowercased host:port and host from a proxy env
-// value, which may be a full URL ("http://10.0.0.1:3128") or a bare authority
-// ("10.0.0.1:3128"). Returns empty strings when raw is empty or unparseable.
-func parseProxyHost(raw string) (hostPort, host string) {
+// parseProxyHostPort returns the lowercased host:port of a proxy env value,
+// which may be a full URL ("http://10.0.0.1:3128") or a bare authority
+// ("10.0.0.1:3128"). When no port is given it synthesizes the scheme's default
+// so the entry still matches the real dialed address. Returns "" when raw is
+// empty or has no host.
+func parseProxyHostPort(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", ""
+		return ""
 	}
 	if !strings.Contains(raw, "://") {
 		raw = "http://" + raw
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return "", ""
+	if err != nil || u.Hostname() == "" {
+		return ""
 	}
-	return strings.ToLower(u.Host), strings.ToLower(u.Hostname())
+	port := u.Port()
+	if port == "" {
+		switch u.Scheme {
+		case "https":
+			port = "443"
+		case "socks5", "socks5h":
+			port = "1080"
+		default:
+			port = "80"
+		}
+	}
+	return strings.ToLower(net.JoinHostPort(u.Hostname(), port))
 }
 
-// isProxyEndpoint reports whether the dialed address (host:port) or its bare
-// host matches a configured egress proxy.
-func isProxyEndpoint(proxies map[string]struct{}, addr, host string) bool {
+// isProxyEndpoint reports whether the dialed host:port exactly matches a
+// configured egress proxy.
+func isProxyEndpoint(proxies map[string]struct{}, hostPort string) bool {
 	if len(proxies) == 0 {
 		return false
 	}
-	if _, ok := proxies[strings.ToLower(addr)]; ok {
-		return true
-	}
-	_, ok := proxies[strings.ToLower(host)]
+	_, ok := proxies[hostPort]
 	return ok
 }
 
@@ -235,10 +243,12 @@ func safeDialContext(dialTimeout time.Duration) func(ctx context.Context, networ
 			return nil, fmt.Errorf("ssrf dial: split host: %w", err)
 		}
 		host = strings.TrimSuffix(host, ".")
-		// Exempt the configured egress proxy from the private-IP rejection. The
-		// SSRF check still applies to direct dials (NO_PROXY targets stay
+		// Exempt the configured egress proxy from the private-IP rejection,
+		// matched on the exact host:port. The SSRF check still applies to direct
+		// dials (NO_PROXY targets, and other ports on the proxy host, stay
 		// blocked) and to redirect hops (validateURL in CheckRedirect).
-		allowPrivate := ctxAllowsPrivate(ctx) || isProxyEndpoint(proxies, addr, host)
+		dialedHostPort := strings.ToLower(net.JoinHostPort(host, port))
+		allowPrivate := ctxAllowsPrivate(ctx) || isProxyEndpoint(proxies, dialedHostPort)
 		// IP literal: validate and dial.
 		if ip := net.ParseIP(host); ip != nil {
 			if !allowPrivate && isPrivateIP(ip) {

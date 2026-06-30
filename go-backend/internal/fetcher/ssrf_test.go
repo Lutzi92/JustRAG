@@ -105,20 +105,20 @@ func TestValidateURL(t *testing.T) {
 	}
 }
 
-func TestParseProxyHost(t *testing.T) {
-	cases := []struct {
-		raw, wantHostPort, wantHost string
-	}{
-		{"http://10.60.3.254:3128", "10.60.3.254:3128", "10.60.3.254"},
-		{"10.60.3.254:3128", "10.60.3.254:3128", "10.60.3.254"},
-		{"http://proxy.example:8080", "proxy.example:8080", "proxy.example"},
-		{"HTTP://Proxy.Example:8080", "proxy.example:8080", "proxy.example"},
-		{"", "", ""},
+func TestParseProxyHostPort(t *testing.T) {
+	cases := []struct{ raw, want string }{
+		{"http://10.60.3.254:3128", "10.60.3.254:3128"},
+		{"10.60.3.254:3128", "10.60.3.254:3128"},
+		{"http://proxy.example:8080", "proxy.example:8080"},
+		{"HTTP://Proxy.Example:8080", "proxy.example:8080"},
+		{"http://10.60.3.254", "10.60.3.254:80"},   // default http port synthesized
+		{"https://10.60.3.254", "10.60.3.254:443"}, // default https port synthesized
+		{":3128", ""},                              // malformed: no host
+		{"", ""},
 	}
 	for _, tc := range cases {
-		hp, h := parseProxyHost(tc.raw)
-		if hp != tc.wantHostPort || h != tc.wantHost {
-			t.Errorf("parseProxyHost(%q) = (%q,%q), want (%q,%q)", tc.raw, hp, h, tc.wantHostPort, tc.wantHost)
+		if got := parseProxyHostPort(tc.raw); got != tc.want {
+			t.Errorf("parseProxyHostPort(%q) = %q, want %q", tc.raw, got, tc.want)
 		}
 	}
 }
@@ -146,6 +146,14 @@ func TestSafeDialContext_ExemptsConfiguredProxy(t *testing.T) {
 	_, err = dial(context.Background(), "tcp", "10.0.0.5:443")
 	if err == nil || !strings.Contains(err.Error(), "private IP") {
 		t.Errorf("non-proxy private IP must be blocked, got: %v", err)
+	}
+
+	// A DIFFERENT PORT on the proxy's own IP must stay blocked — the exemption
+	// is scoped to the exact host:port, so an attacker URL like
+	// http://10.60.3.254:6379/ (Redis) cannot ride the proxy exemption.
+	_, err = dial(context.Background(), "tcp", "10.60.3.254:6379")
+	if err == nil || !strings.Contains(err.Error(), "private IP") {
+		t.Errorf("non-proxy port on proxy host must be blocked, got: %v", err)
 	}
 }
 
