@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,9 +16,11 @@ import (
 
 	"github.com/justrag/go-backend/internal/fetcher"
 	"github.com/justrag/go-backend/internal/files"
+	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/rss"
 	"github.com/justrag/go-backend/internal/storage"
+	"github.com/justrag/go-backend/internal/widcert"
 )
 
 // rssFetchTimeout is the per-item hard cap for a full-text article fetch.
@@ -33,6 +36,16 @@ type urlFetcher interface {
 	Fetch(ctx context.Context, rawURL string, opts fetcher.Options) (*fetcher.Result, error)
 }
 
+// widResolver is the minimal slice of *widcert.Client the poller needs.
+type widResolver interface {
+	Fetch(ctx context.Context, name string) (*widcert.Advisory, error)
+}
+
+// siteConfigReader reads the WID enrichment kill switch.
+type siteConfigReader interface {
+	GetSiteConfigValue(ctx context.Context, key string) (*string, error)
+}
+
 // RSSPollDeps holds the dependencies for the RSS poll handler.
 type RSSPollDeps struct {
 	RSSStore    rss.RSSStore
@@ -40,6 +53,8 @@ type RSSPollDeps struct {
 	Storage     storage.Storage
 	AsynqClient *asynq.Client
 	Fetcher     urlFetcher
+	WIDClient   widResolver      // optional; nil disables WID enrichment
+	SiteConfig  siteConfigReader // optional; nil = kill switch defaults ON
 }
 
 // NewRSSPollHandler returns an asynq.HandlerFunc that polls an RSS feed,
@@ -104,7 +119,7 @@ func NewRSSPollHandler(deps RSSPollDeps) asynq.HandlerFunc {
 			fileName := rssItemFileName(item)
 
 			// Build markdown content, fetching the linked page's full text when enabled.
-			content := resolveRSSItemContent(ctx, deps.Fetcher, feed, item)
+			content := resolveRSSItemContent(ctx, deps.Fetcher, deps.WIDClient, deps.SiteConfig, feed, item)
 
 			// Store to storage.
 			storagePath := storage.GetStoragePath("rss", feed.KbID, fileName)
@@ -289,22 +304,70 @@ func buildRSSItemContentWithBody(item *gofeed.Item, body string) string {
 	return sb.String()
 }
 
-// resolveRSSItemContent returns the document body for an item, fetching the
-// linked page's full text when the feed opts in and the fetch succeeds.
-func resolveRSSItemContent(ctx context.Context, f urlFetcher, feed *rss.RSSFeedRow, item *gofeed.Item) string {
-	if feed.FetchFullText && item.Link != "" && f != nil {
-		fctx, cancel := context.WithTimeout(ctx, rssFetchTimeout)
-		res, err := f.Fetch(fctx, item.Link, fetcher.Options{Mode: fetcher.ModeAuto, Timeout: rssFetchTimeout})
-		cancel()
-		if err == nil && res != nil && isUsableFullText(res.Markdown, feedItemBody(item)) {
-			return buildRSSItemContentWithBody(item, res.Markdown)
+// widEnrichmentEnabled reports the kill switch state; defaults ON (nil reader,
+// nil value, or unparseable all mean enabled).
+func widEnrichmentEnabled(ctx context.Context, sc siteConfigReader) bool {
+	if sc == nil {
+		return true
+	}
+	v, err := sc.GetSiteConfigValue(ctx, "rss_wid_enrichment_enabled")
+	if err != nil || v == nil {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(*v)) {
+	case "false", "0":
+		return false
+	default:
+		return true
+	}
+}
+
+// resolveRSSItemContent returns the document body for an item. For
+// wid.cert-bund.de links it fetches the structured WID JSON; otherwise it uses
+// the generic full-text fetch, then the feed's own content. All paths fail open.
+func resolveRSSItemContent(ctx context.Context, f urlFetcher, wid widResolver, sc siteConfigReader, feed *rss.RSSFeedRow, item *gofeed.Item) string {
+	if feed.FetchFullText && item.Link != "" {
+		// WID structured enrichment.
+		if wid != nil && isWIDLink(item.Link) && widEnrichmentEnabled(ctx, sc) {
+			if name := widcert.ExtractName(item.Title, item.GUID, item.Link); name != "" {
+				adv, err := wid.Fetch(ctx, name)
+				switch {
+				case err == nil && adv != nil:
+					return widcert.FormatMarkdown(adv)
+				case err != nil:
+					slog.Warn("WID enrichment failed, falling back",
+						"feedId", feed.ID, "advisory", name, "error", httputil.SanitizeError(err))
+				default:
+					slog.Warn("WID enrichment returned no advisory, falling back",
+						"feedId", feed.ID, "advisory", name)
+				}
+			}
 		}
-		fetchedChars := 0
-		if res != nil {
-			fetchedChars = len(strings.TrimSpace(res.Markdown))
+
+		// Generic full-text fetch.
+		if f != nil {
+			fctx, cancel := context.WithTimeout(ctx, rssFetchTimeout)
+			res, err := f.Fetch(fctx, item.Link, fetcher.Options{Mode: fetcher.ModeAuto, Timeout: rssFetchTimeout})
+			cancel()
+			if err == nil && res != nil && isUsableFullText(res.Markdown, feedItemBody(item)) {
+				return buildRSSItemContentWithBody(item, res.Markdown)
+			}
+			fetchedChars := 0
+			if res != nil {
+				fetchedChars = len(strings.TrimSpace(res.Markdown))
+			}
+			slog.Warn("RSS full-text fetch unusable, using feed content",
+				"feedId", feed.ID, "link", item.Link, "error", err, "fetchedChars", fetchedChars)
 		}
-		slog.Warn("RSS full-text fetch unusable, using feed content",
-			"feedId", feed.ID, "link", item.Link, "error", err, "fetchedChars", fetchedChars)
 	}
 	return buildRSSItemContent(item)
+}
+
+// isWIDLink reports whether link's host is the WID advisory host.
+func isWIDLink(link string) bool {
+	u, err := url.Parse(link)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), widcert.Host)
 }

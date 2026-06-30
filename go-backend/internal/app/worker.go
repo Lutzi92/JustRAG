@@ -45,6 +45,7 @@ import (
 	"github.com/justrag/go-backend/internal/storage"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/vector"
+	"github.com/justrag/go-backend/internal/widcert"
 	"github.com/justrag/go-backend/internal/worker"
 )
 
@@ -235,6 +236,8 @@ func RunWorker(cfg *config.Config) error {
 		Storage:     stor,
 		AsynqClient: rssClient,
 		Fetcher:     sharedFetcher,
+		WIDClient:   widcert.NewClient(),
+		SiteConfig:  chatStore,
 	})))
 	proc.SetSiteConfigReader(chatStore)
 	proc.SetKBOverrideLister(kbconfig.NewStore(db.Main))

@@ -20,6 +20,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 - `bm25_simple_arm_enabled`, `bm25_tiered_boost_enabled` — BM25 keyword-arm tuning
 - `hybrid_dynamic_alpha_*` — per-query α shift from BPE-token rarity
 - `recency_*` — exponential-decay freshness boost post-rerank (RSS/Confluence KBs; keyed on files.created_at)
+- `rss_wid_enrichment_enabled` — when an RSS item links to a CERT-Bund/WID advisory (`wid.cert-bund.de`), fetch the WID JSON API and ingest structured markdown (CVSS scores, affected products, CVE list, references) instead of generic HTML full-text. Requires the feed's `fetch_full_text=true`. Default **ON** (kill switch). `internal/widcert`; enrichment branch in `worker/rsspoll.go`.
 - `contextual_enrichment*`, `parent_child_*`, `docling_*` (incl. `_picture_description_enabled` + `_picture_area_threshold` for gemma-4 image captioning, `_table_mode` fast/accurate), `late_chunking_*`, `embedding_batch_size`, `ingest_enrich_concurrency` (default 10), `kg_extraction_concurrency` (default 4) — ingestion (the two `*_concurrency` keys cap per-file LLM fan-out; see also the `AI_MAX_CONCURRENT_REQUESTS` runtime note for the global ceiling)
 - `raptor_*` — per-file RAPTOR hierarchical summary trees (`raptor_clustering_algorithm` selects kmeans vs leiden)
 - `chat_tabular_*`, `tabular_semantic_*` — structured spreadsheet Q&A + fuzzy free-text-cell search + charts/pivots (Phase 1/2/3; `chat_tabular_charts_enabled` is the Phase-3 flag)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/justrag/go-backend/internal/fetcher"
 	"github.com/justrag/go-backend/internal/rss"
+	"github.com/justrag/go-backend/internal/widcert"
 )
 
 type stubFetcher struct {
@@ -51,7 +52,7 @@ var longArticle = strings.Repeat("Detailed advisory body describing the vulnerab
 func TestResolveRSSItemContent_FetchSuccess(t *testing.T) {
 	f := &stubFetcher{res: &fetcher.Result{Markdown: longArticle}}
 	feed := &rss.RSSFeedRow{ID: "f1", FetchFullText: true}
-	out := resolveRSSItemContent(context.Background(), f, feed, feedItem())
+	out := resolveRSSItemContent(context.Background(), f, nil, stubSiteConfig{}, feed, feedItem())
 	if !strings.Contains(out, "Detailed advisory body") {
 		t.Errorf("expected fetched body, got: %q", out)
 	}
@@ -67,7 +68,7 @@ func TestResolveRSSItemContent_FetchSuccess(t *testing.T) {
 func TestResolveRSSItemContent_ShortJunkFallsBack(t *testing.T) {
 	f := &stubFetcher{res: &fetcher.Result{Markdown: "Warn- und Informationsdienst"}}
 	feed := &rss.RSSFeedRow{ID: "f1", FetchFullText: true}
-	out := resolveRSSItemContent(context.Background(), f, feed, feedItem())
+	out := resolveRSSItemContent(context.Background(), f, nil, stubSiteConfig{}, feed, feedItem())
 	if !strings.Contains(out, "short summary") {
 		t.Errorf("expected fallback to feed summary on junk extraction, got: %q", out)
 	}
@@ -99,7 +100,7 @@ func TestIsUsableFullText(t *testing.T) {
 func TestResolveRSSItemContent_FetchErrorFallsBack(t *testing.T) {
 	f := &stubFetcher{err: errors.New("boom")}
 	feed := &rss.RSSFeedRow{ID: "f1", FetchFullText: true}
-	out := resolveRSSItemContent(context.Background(), f, feed, feedItem())
+	out := resolveRSSItemContent(context.Background(), f, nil, stubSiteConfig{}, feed, feedItem())
 	if !strings.Contains(out, "short summary") {
 		t.Errorf("expected fallback to feed content, got: %q", out)
 	}
@@ -108,7 +109,7 @@ func TestResolveRSSItemContent_FetchErrorFallsBack(t *testing.T) {
 func TestResolveRSSItemContent_EmptyMarkdownFallsBack(t *testing.T) {
 	f := &stubFetcher{res: &fetcher.Result{Markdown: "   "}}
 	feed := &rss.RSSFeedRow{ID: "f1", FetchFullText: true}
-	out := resolveRSSItemContent(context.Background(), f, feed, feedItem())
+	out := resolveRSSItemContent(context.Background(), f, nil, stubSiteConfig{}, feed, feedItem())
 	if !strings.Contains(out, "short summary") {
 		t.Errorf("expected fallback on empty markdown, got: %q", out)
 	}
@@ -117,11 +118,87 @@ func TestResolveRSSItemContent_EmptyMarkdownFallsBack(t *testing.T) {
 func TestResolveRSSItemContent_DisabledSkipsFetch(t *testing.T) {
 	f := &stubFetcher{res: &fetcher.Result{Markdown: "FULL ARTICLE BODY"}}
 	feed := &rss.RSSFeedRow{ID: "f1", FetchFullText: false}
-	out := resolveRSSItemContent(context.Background(), f, feed, feedItem())
+	out := resolveRSSItemContent(context.Background(), f, nil, stubSiteConfig{}, feed, feedItem())
 	if f.called {
 		t.Error("fetcher should not be called when FetchFullText is false")
 	}
 	if !strings.Contains(out, "short summary") {
 		t.Errorf("expected feed content, got: %q", out)
+	}
+}
+
+type stubWID struct {
+	adv    *widcert.Advisory
+	err    error
+	called bool
+}
+
+func (s *stubWID) Fetch(_ context.Context, name string) (*widcert.Advisory, error) {
+	s.called = true
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.adv, nil
+}
+
+type stubSiteConfig struct{ val *string }
+
+func (s stubSiteConfig) GetSiteConfigValue(_ context.Context, _ string) (*string, error) {
+	return s.val, nil
+}
+
+func widItem() *gofeed.Item {
+	return &gofeed.Item{
+		Title:       "WID-SEC-2026-2038: OpenSSL",
+		Link:        "https://wid.cert-bund.de/portal/wid/WID-SEC-2026-2038",
+		Description: "short summary",
+	}
+}
+
+func TestResolveRSSItemContent_WIDEnriched(t *testing.T) {
+	wid := &stubWID{adv: &widcert.Advisory{Name: "WID-SEC-2026-2038", Title: "OpenSSL", CVEs: []string{"CVE-2026-1"}}}
+	feed := &rss.RSSFeedRow{ID: "f1", FetchFullText: true}
+	out := resolveRSSItemContent(context.Background(), nil, wid, stubSiteConfig{}, feed, widItem())
+	if !wid.called {
+		t.Fatal("WID client should have been called for a wid.cert-bund.de link")
+	}
+	if !strings.Contains(out, "# WID-SEC-2026-2038: OpenSSL") || !strings.Contains(out, "CVE-2026-1") {
+		t.Errorf("expected structured WID markdown, got: %q", out)
+	}
+}
+
+func TestResolveRSSItemContent_WIDKillSwitchOff(t *testing.T) {
+	off := "false"
+	wid := &stubWID{adv: &widcert.Advisory{Name: "x"}}
+	f := &stubFetcher{res: &fetcher.Result{Markdown: longArticle}}
+	feed := &rss.RSSFeedRow{ID: "f1", FetchFullText: true}
+	out := resolveRSSItemContent(context.Background(), f, wid, stubSiteConfig{val: &off}, feed, widItem())
+	if wid.called {
+		t.Error("WID client must not be called when kill switch is off")
+	}
+	if !strings.Contains(out, "Detailed advisory body") {
+		t.Errorf("expected fallback to generic full-text path, got: %q", out)
+	}
+}
+
+func TestResolveRSSItemContent_WIDFetchErrorFallsBack(t *testing.T) {
+	wid := &stubWID{err: errors.New("boom")}
+	feed := &rss.RSSFeedRow{ID: "f1", FetchFullText: true}
+	out := resolveRSSItemContent(context.Background(), nil, wid, stubSiteConfig{}, feed, widItem())
+	if !strings.Contains(out, "short summary") {
+		t.Errorf("expected fallback to feed summary on WID error, got: %q", out)
+	}
+}
+
+func TestResolveRSSItemContent_NonWIDUnaffected(t *testing.T) {
+	wid := &stubWID{adv: &widcert.Advisory{Name: "x"}}
+	f := &stubFetcher{res: &fetcher.Result{Markdown: longArticle}}
+	feed := &rss.RSSFeedRow{ID: "f1", FetchFullText: true}
+	out := resolveRSSItemContent(context.Background(), f, wid, stubSiteConfig{}, feed, feedItem()) // example.com link
+	if wid.called {
+		t.Error("WID client must not be called for non-WID links")
+	}
+	if !strings.Contains(out, "Detailed advisory body") {
+		t.Errorf("non-WID link should use generic full-text path, got: %q", out)
 	}
 }
