@@ -1,7 +1,7 @@
 import { lazy, Suspense, useMemo } from 'react';
 import {
   BookOpen, Settings, Sun, Moon, User, LogOut, Copy, Check, Plus,
-  Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, AlertTriangle, Loader2
+  Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, Loader2
 } from 'lucide-react';
 import type { KnowledgeBase, SafeAIConfig } from '../types';
 import { API_BASE_URL } from '../api';
@@ -79,11 +79,10 @@ function lastActiveLabel(
 // #6): up to two scent chips (files · messages) plus a single needs-attention
 // chip (failed, else processing). Lucide icons (#2), status tokens (#1).
 function KbCardChips({ kb, t }: { kb: KnowledgeBase; t: (k: string) => string }) {
-  const failed = kb.failedFileCount ?? 0;
   const processing = kb.processingFileCount ?? 0;
   const files = kb.fileCount ?? 0;
   const messages = kb.messageCount ?? 0;
-  if (files === 0 && messages === 0 && failed === 0 && processing === 0) return null;
+  if (files === 0 && messages === 0 && processing === 0) return null;
   return (
     <div className="home-view__chip-row">
       {files > 0 && (
@@ -98,17 +97,12 @@ function KbCardChips({ kb, t }: { kb: KnowledgeBase; t: (k: string) => string })
           {t('kbMessagesChip').replace('{n}', String(messages))}
         </span>
       )}
-      {failed > 0 ? (
-        <span className="home-view__chip home-view__chip--attention">
-          <AlertTriangle size={12} aria-hidden="true" />
-          {t('kbFailedChip').replace('{n}', String(failed))}
-        </span>
-      ) : processing > 0 ? (
+      {processing > 0 && (
         <span className="home-view__chip home-view__chip--processing">
           <Loader2 size={12} className="spin" aria-hidden="true" />
           {t('kbProcessingChip').replace('{n}', String(processing))}
         </span>
-      ) : null}
+      )}
     </div>
   );
 }
