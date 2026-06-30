@@ -11,10 +11,14 @@ import (
 	"time"
 
 	"github.com/justrag/go-backend/internal/fetcher"
+	"github.com/justrag/go-backend/internal/httpclient"
 )
 
 // fetchTimeout caps the entire two-step fetch.
 const fetchTimeout = 15 * time.Second
+
+// maxRedirects caps redirect hops for a single WID request.
+const maxRedirects = 10
 
 // Client fetches WID advisories. The zero value is not usable; use NewClient.
 type Client struct {
@@ -22,15 +26,34 @@ type Client struct {
 	baseURL string // "https://wid.cert-bund.de"; overridable in tests
 }
 
-// NewClient returns a Client using the SSRF-safe shared HTTP transport
-// (fetcher.SafeHTTPClient), whose safeDialContext blocks private/link-local/
-// loopback ranges at dial time — including after any redirect — so a hijacked
-// or compromised WID host cannot redirect us at an internal metadata endpoint.
+// NewClient returns a Client over the proxy-aware shared HTTP transport
+// (httpclient.New honours HTTP(S)_PROXY), so it works behind a corporate / k8s
+// egress proxy on a private IP. fetcher.SafeHTTPClient must NOT be used here:
+// its dial-time private-IP block rejects the egress proxy's own address as an
+// SSRF target (observed in prod: "proxyconnect tcp: ssrf dial: private IP ...").
+//
+// The SSRF protection that actually matters for this fixed, trusted host —
+// refusing a redirect to an internal metadata endpoint — is enforced at the
+// redirect layer via checkRedirect. That also works through a proxy, whereas a
+// dial-time check never sees the real target once the request is proxied.
 func NewClient() *Client {
+	hc := httpclient.New(fetchTimeout)
+	hc.CheckRedirect = checkRedirect
 	return &Client{
-		http:    fetcher.SafeHTTPClient(fetchTimeout),
+		http:    hc,
 		baseURL: "https://" + Host,
 	}
+}
+
+// checkRedirect caps hop count and refuses any redirect whose target resolves
+// to a private / loopback / link-local address (e.g. a 302 to 169.254.169.254
+// cloud metadata). fetcher.ValidateURL re-resolves the host, catching both
+// literal private IPs and hostnames that resolve to them.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("widcert: stopped after %d redirects", maxRedirects)
+	}
+	return fetcher.ValidateURL(req.Context(), req.URL.String())
 }
 
 // Fetch resolves name -> uuid -> content JSON and parses it into an Advisory.
