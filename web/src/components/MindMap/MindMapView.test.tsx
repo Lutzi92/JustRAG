@@ -22,6 +22,10 @@ vi.mock('@xyflow/react', () => ({
   Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
 }));
 vi.mock('@xyflow/react/dist/style.css', () => ({}));
+vi.mock('./GraphExportPanel', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  GraphExportPanel: (props: any) => <div data-testid="graph-export-panel" data-scoped={String(props.scoped)} />,
+}));
 
 const mockedGet = axios.get as unknown as Mock;
 
@@ -40,5 +44,31 @@ describe('MindMapView scoped mode', () => {
     render(<MindMapView kbId="kb1" onAskAbout={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(mockedGet).toHaveBeenCalled());
     expect(mockedGet.mock.calls[0][0]).not.toContain('messageId');
+  });
+});
+
+describe('MindMapView export panel', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('renders the export panel once a graph has loaded', async () => {
+    mockedGet.mockResolvedValueOnce({
+      data: {
+        nodes: [{ id: 1, name: 'Alice', type: 'org', degree: 1 }],
+        edges: [],
+      },
+    });
+    const { findByTestId } = render(
+      <MindMapView kbId="kb1" onAskAbout={() => {}} onClose={() => {}} />,
+    );
+    expect(await findByTestId('graph-export-panel')).toBeTruthy();
+  });
+
+  it('does not render the export panel while the graph is empty', async () => {
+    mockedGet.mockResolvedValueOnce({ data: { nodes: [], edges: [], processing: false } });
+    const { queryByTestId } = render(
+      <MindMapView kbId="kb1" onAskAbout={() => {}} onClose={() => {}} />,
+    );
+    await waitFor(() => expect(mockedGet).toHaveBeenCalled());
+    expect(queryByTestId('graph-export-panel')).toBeNull();
   });
 });

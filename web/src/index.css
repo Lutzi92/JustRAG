@@ -2246,3 +2246,25 @@ button.source-card {
   line-height: 1;
   color: var(--text-secondary);
 }
+.graph-export-menu { position: relative; }
+.graph-export-btn {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--bg-secondary); color: var(--text-primary);
+    border: 1px solid var(--border-color); border-radius: var(--radius-md);
+    padding: 6px 10px; font-size: 0.8rem; cursor: pointer;
+    box-shadow: var(--shadow-md);
+}
+.graph-export-btn:hover { border-color: var(--accent-primary); }
+.graph-export-list {
+    position: absolute; top: calc(100% + 4px); left: 0; margin: 0; padding: 4px;
+    list-style: none; min-width: 140px; z-index: 20;
+    background: var(--bg-secondary); border: 1px solid var(--border-color);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-md);
+}
+.graph-export-list li { margin: 0; }
+.graph-export-list button {
+    display: block; width: 100%; text-align: left;
+    background: none; border: none; color: var(--text-primary);
+    padding: 6px 8px; font-size: 0.8rem; border-radius: var(--radius-sm); cursor: pointer;
+}
+.graph-export-list button:hover { background: var(--tag-bg); }

@@ -11,6 +11,7 @@ import { API_BASE_URL } from '../../api';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useKBGraphStream } from '../../hooks/useKBGraphStream';
 import { NodeSourcesPanel } from './NodeSourcesPanel';
+import { GraphExportPanel } from './GraphExportPanel';
 
 interface MindMapViewProps {
     kbId: string;
@@ -101,6 +102,8 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
     const [sources, setSources] = useState<Record<string, NodeSource[]>>({});
     // currently selected node id (scoped mode opens a sources side panel).
     const [selectedNode, setSelectedNode] = useState<string | null>(null);
+    // Raw graph as fetched, retained for export (the dagre layout above is lossy).
+    const [rawGraph, setRawGraph] = useState<GraphData | null>(null);
 
     const loadGraph = useCallback(() => {
         let cancelled = false;
@@ -120,6 +123,7 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
                 const laid = layoutGraph(data);
                 setNodes(laid.nodes);
                 setEdges(laid.edges);
+                setRawGraph({ nodes: data.nodes, edges: data.edges });
                 setNames(Object.fromEntries(data.nodes.map(n => [String(n.id), n.name])));
                 setSources(Object.fromEntries(data.nodes.map(n => [String(n.id), n.sources ?? []])));
                 setStatus('ready');
@@ -198,6 +202,7 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
                         <Background />
                         <Controls />
                         <MiniMap pannable zoomable />
+                        {rawGraph && <GraphExportPanel graph={rawGraph} scoped={!!messageId} t={t} />}
                     </ReactFlow>
                 ) : (
                     <div style={{

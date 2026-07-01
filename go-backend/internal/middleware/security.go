@@ -20,7 +20,11 @@ import "net/http"
 // then splice the result into the 'sha256-…' token below. The browser
 // console logs the expected hash on a CSP violation, which is the quickest
 // source of truth when the two disagree.
-const DefaultCSP = "default-src 'self'; script-src 'self' 'sha256-ieoeWczDHkReVBsRBqaal5AFMlBtNjMzgwKvLqi/tSU='; style-src 'self' 'unsafe-inline'; frame-src 'self' blob:; media-src 'self' blob:"
+// img-src permits data: and blob: so the mind-map PNG export works: the
+// html-to-image library rasterizes the graph by loading an SVG as a data: URL
+// image and drawing it to a canvas. Without this, img-src inherits
+// default-src 'self' and browsers block that image load, failing the export.
+const DefaultCSP = "default-src 'self'; script-src 'self' 'sha256-ieoeWczDHkReVBsRBqaal5AFMlBtNjMzgwKvLqi/tSU='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob:; media-src 'self' blob:"
 
 // SecurityHeaders sets the standard security response headers. emitHSTS
 // gates Strict-Transport-Security: HSTS has no effect over plain HTTP, and
