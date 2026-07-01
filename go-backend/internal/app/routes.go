@@ -663,6 +663,7 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.kgGraphHandler = kggraph.NewHandler(rc.kgStore)
 	rc.mux.Handle("GET /api/kb/{id}/graph", rc.kbViewChain(rc.kgGraphHandler.GetGraph))
 	rc.mux.Handle("GET /api/kb/{id}/graph/stream", rc.kbViewChain(rc.kgGraphHandler.StreamGraph))
+	rc.mux.Handle("GET /api/kb/{id}/graph/entity/{entityId}", rc.kbViewChain(rc.kgGraphHandler.GetEntity))
 
 	// Add sources (KB edit permission)
 	rc.mux.Handle("POST /api/kb/{id}/add-sources", rc.kbEditChain(rc.filesHandler.AddSources))

@@ -90,3 +90,45 @@ PNG DEACTIVATED (2026-07-01, user request — exported image was illegible/mis-s
   Test: removed PNG-delegation test; added GraphML-download test + "does not offer PNG" regression guard. MindMap suite 17/17, tsc/lint/build clean.
   RETAINED for later re-enable: exportPng.ts (+test, still green), html-to-image dep, and the security.go CSP img-src data: blob: change (harmless; needed when PNG returns). Known open issue for PNG: illegible capture — suspect standalone getNodesBounds bounds (React Flow warned to use the useReactFlow() hook version) → fix bounds before re-enabling.
 Export bundle now ships: GraphML + JSON + CSV (all verified working live earlier).
+
+=== PHASE 2: "Make the Graph a Tool" ===
+Plan: docs/superpowers/plans/2026-07-01-mindmap-graph-tool-phase2.md
+Mode: subagent-driven, main, BUILD-ONLY (no commits; user commits). Phase-1 changes already uncommitted in tree.
+Baseline snapshot for per-task diffs: scratchpad/phase2-baseline (refreshed after each passing task).
+Task 1 (kg.EntityDetail store method + integration test): PENDING
+Task 2 (kggraph GetEntity handler + route + unit tests): PENDING
+Task 3 (useGraphInteractions hook + tests): PENDING
+Task 4 (GraphToolbar search+filter + i18n/css + test): PENDING
+Task 5 (EntityCard + i18n/css + test): PENDING
+Task 6 (wire MindMapView + ChatView; delete NodeSourcesPanel; full verify): PENDING
+
+Task 1: COMPLETE (build-only, uncommitted, review Approved). kg.EntityDetail + Neighbor + ErrEntityNotFound in query.go; entity_detail_integration_test.go (skipped, no DB). build/vet clean. IDOR guard verified.
+  Minors (final triage): sources-loop computes key before empty-FileID guard (unreachable; readability); integration test doesn't assert len(Sources)>0.
+
+Task 2: COMPLETE (build-only, uncommitted, review Approved). kggraph GetEntity handler + widened Store iface + route (routes.go:666). TestGetEntity 3/3, build/vet clean. No Critical/Important.
+  Minors (final triage): OK test doesn't assert Type/Aliases/Degree; BadID doesn't cover id<=0 path; error tests don't assert body message.
+
+Task 3: COMPLETE (build-only, uncommitted, review Approved after fix wave). useGraphInteractions hook.
+  Review found 2 IMPORTANT (both fixed, controller-verified in source): (1) useMemo-as-side-effect state reset -> replaced with lazy useState(()=>new Set(allTypes)) + render-time prevKey!==activeKey guard; (2) edge hover-dim too strict -> litEdge now `!hoveredId || (lit(source)&&lit(target))` (&& chosen over spec's || so edges to dimmed non-neighbors also dim — cleaner). +edge-opacity test. vitest 5/5, tsc/lint clean. eslint-disable removed.
+  Minors (final triage): selectedId/setSelected untested (trivial useState).
+
+Task 4: COMPLETE (build-only, uncommitted, review Pass). GraphToolbar (search+type chips) + 2 i18n keys + .graph-toolbar css. 2 tests, tsc/lint clean. No Critical/Important.
+  Minors (final triage): React.FC w/o React import (consistent w/ existing MindMap files); trim path not asserted in test.
+
+Task 5: COMPLETE (build-only, uncommitted, review Pass). EntityCard (fetch detail + neighbors + clickable sources + Ask; error-path keeps Ask) + 3 i18n keys + .entity-card css. 3 tests, tsc/lint clean. No Critical/Important.
+  Minors (final triage): React.FC w/o React import (consistent); .entity-card max-height:70% may be no-op without sized ancestor.
+
+Task 6: COMPLETE (build-only, uncommitted, review Pass after fix wave). MindMapView+ChatView integration; NodeSourcesPanel deleted.
+  Review found 2 IMPORTANT (both fixed, controller-verified): (I1) click→EntityCard integration test only checked toolbar -> mock ReactFlow now renders rf-fire-node-click button; test fires click + asserts entity-card data-entity='Alice' (also fixed a mock useNodesState instability causing double-fetch); (I2) Esc-to-deselect missing -> useEffect on selectedId added. Minors folded: decorated memoized; onPaneClick useCallback.
+  MindMap suite 27/27, tsc/lint/build clean.
+
+=== PHASE 2 ALL TASKS COMPLETE — proceeding to final whole-branch review (opus) ===
+
+FINAL WHOLE-BRANCH REVIEW (opus): "Ready to merge" — 0 Critical, 0 Important.
+  Verified: Go↔TS JSON contract exact match (fileId/fileName/chunkId, neighbor id/name/type/rel), IDOR guard solid (all 4 queries kb-scoped, params bound, no injection), Ask→handleFollowUpClick→real cited answer, source→handlePreviewSource compatible, ChatView sole MindMapView caller passes onOpenSource.
+  New Minors (non-blocking, for user to decide): (1) useGraphInteractions returns fresh object each render → Esc listener/onNode* callbacks re-bind (perf churn, decorated still memoized so no loop); (2) EntityCard passes raw s.fileName (''→preview-not-supported toast if file deleted; graceful); (3) in-graph search targets unfiltered rawGraph so can fitView to a type-filtered-hidden node (UX papercut).
+
+=== PHASE 2 COMPLETE (build-only, uncommitted). Consolidated verify: go build+kg/kggraph tests green; MindMap vitest 27/27; tsc -b clean. ===
+NEW files: web/src/components/MindMap/{useGraphInteractions,GraphToolbar,EntityCard}.{ts,tsx}+tests; go-backend/internal/kg/entity_detail_integration_test.go.
+MOD: go-backend/internal/kg/query.go, kggraph/handler.go+test, app/routes.go; web MindMapView.tsx+test, ChatView.tsx, translations.ts, index.css.
+DEL: web/src/components/MindMap/NodeSourcesPanel.tsx+test.

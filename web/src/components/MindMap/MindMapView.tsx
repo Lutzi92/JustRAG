@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import {
     ReactFlow, Background, Controls, MiniMap,
-    useNodesState, useEdgesState, type Node, type Edge,
+    useNodesState, useEdgesState, type Node, type Edge, type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
@@ -10,15 +10,19 @@ import { Loader2, Network, X } from 'lucide-react';
 import { API_BASE_URL } from '../../api';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useKBGraphStream } from '../../hooks/useKBGraphStream';
-import { NodeSourcesPanel } from './NodeSourcesPanel';
 import { GraphExportPanel } from './GraphExportPanel';
+import { GraphToolbar } from './GraphToolbar';
+import { EntityCard } from './EntityCard';
+import { useGraphInteractions } from './useGraphInteractions';
 
 interface MindMapViewProps {
     kbId: string;
-    // onAskAbout prefills the chat input with a question about the clicked
-    // entity and switches back to the chat view.
+    // onAskAbout submits a question about the clicked entity and switches back
+    // to the chat view.
     onAskAbout: (entityName: string) => void;
     onClose: () => void;
+    // Opens a source document in the viewer (e.g. PDF or text preview).
+    onOpenSource: (fileId: string, fileName: string) => void;
     // Query-scoped mindmap (wired in a later task). When set, the view should
     // load the per-answer subgraph for this message id instead of the whole-KB
     // graph; null = whole-KB graph. Declared now so callers type-check.
@@ -91,19 +95,16 @@ function layoutGraph(data: GraphData): { nodes: Node[]; edges: Edge[] } {
 
 type Status = 'loading' | 'ready' | 'error' | 'empty';
 
-export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onClose, messageId, onShowWholeKb }) => {
+export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onClose, onOpenSource, messageId, onShowWholeKb }) => {
     const { t } = useTheme();
     const [status, setStatus] = useState<Status>('loading');
     const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-    // node id -> entity name, for the click-to-ask handler.
-    const [names, setNames] = useState<Record<string, string>>({});
-    // node id -> source chunks, for the (scoped) provenance UI.
-    const [sources, setSources] = useState<Record<string, NodeSource[]>>({});
-    // currently selected node id (scoped mode opens a sources side panel).
-    const [selectedNode, setSelectedNode] = useState<string | null>(null);
-    // Raw graph as fetched, retained for export (the dagre layout above is lossy).
+    // Raw graph as fetched, retained for export and entity lookup.
     const [rawGraph, setRawGraph] = useState<GraphData | null>(null);
+
+    const interactions = useGraphInteractions(rawGraph ?? { nodes: [], edges: [] });
+    const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
 
     const loadGraph = useCallback(() => {
         let cancelled = false;
@@ -124,8 +125,6 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
                 setNodes(laid.nodes);
                 setEdges(laid.edges);
                 setRawGraph({ nodes: data.nodes, edges: data.edges });
-                setNames(Object.fromEntries(data.nodes.map(n => [String(n.id), n.name])));
-                setSources(Object.fromEntries(data.nodes.map(n => [String(n.id), n.sources ?? []])));
                 setStatus('ready');
             })
             .catch(() => { if (!cancelled) setStatus('error'); });
@@ -141,10 +140,34 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
     const { processing } = useKBGraphStream(kbId, loadGraph);
 
     const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-        if (messageId) { setSelectedNode(node.id); return; }
-        const name = names[node.id] ?? (node.data?.label as string | undefined);
-        if (name) onAskAbout(name);
-    }, [messageId, names, onAskAbout]);
+        interactions.setSelected(node.id);
+    }, [interactions]);
+
+    const onNodeMouseEnter = useCallback((_: React.MouseEvent, node: Node) => interactions.setHovered(node.id), [interactions]);
+    const onNodeMouseLeave = useCallback(() => interactions.setHovered(null), [interactions]);
+
+    const onSearch = useCallback((query: string) => {
+        if (!query || !rawGraph || !rfInstance) return;
+        const q = query.toLowerCase();
+        const match = rawGraph.nodes.find(n => n.name.toLowerCase().includes(q));
+        if (match) {
+            interactions.setSelected(String(match.id));
+            rfInstance.fitView({ nodes: [{ id: String(match.id) }], duration: 400, maxZoom: 1.5 });
+        }
+    }, [rawGraph, rfInstance, interactions]);
+
+    // Esc deselects the active entity card.
+    useEffect(() => {
+        if (!interactions.selectedId) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') interactions.setSelected(null); };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, [interactions.selectedId, interactions]);
+
+    const { decorate } = interactions;
+    const decorated = useMemo(() => decorate(nodes, edges), [decorate, nodes, edges]);
+
+    const onPaneClick = useCallback(() => interactions.setSelected(null), [interactions]);
 
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
@@ -191,11 +214,15 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
                 )}
                 {status === 'ready' ? (
                     <ReactFlow
-                        nodes={nodes}
-                        edges={edges}
+                        nodes={decorated.nodes}
+                        edges={decorated.edges}
                         onNodesChange={onNodesChange}
                         onEdgesChange={onEdgesChange}
                         onNodeClick={onNodeClick}
+                        onNodeMouseEnter={onNodeMouseEnter}
+                        onNodeMouseLeave={onNodeMouseLeave}
+                        onPaneClick={onPaneClick}
+                        onInit={setRfInstance}
                         fitView
                         minZoom={0.1}
                     >
@@ -203,6 +230,7 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
                         <Controls />
                         <MiniMap pannable zoomable />
                         {rawGraph && <GraphExportPanel graph={rawGraph} scoped={!!messageId} t={t} />}
+                        {rawGraph && <GraphToolbar allTypes={interactions.allTypes} activeTypes={interactions.activeTypes} onToggleType={interactions.toggleType} onSearch={onSearch} t={t} />}
                     </ReactFlow>
                 ) : (
                     <div style={{
@@ -220,12 +248,15 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
                         )}</>)}
                     </div>
                 )}
-                {selectedNode && (
-                    <NodeSourcesPanel
-                        entityName={names[selectedNode] ?? ''}
-                        sources={sources[selectedNode] ?? []}
-                        onAsk={() => { const n = names[selectedNode]; if (n) onAskAbout(n); setSelectedNode(null); }}
-                        onClose={() => setSelectedNode(null)}
+                {interactions.selectedId && (
+                    <EntityCard
+                        kbId={kbId}
+                        entityId={interactions.selectedId}
+                        entityName={rawGraph?.nodes.find(n => String(n.id) === interactions.selectedId)?.name ?? ''}
+                        onAsk={(name) => { onAskAbout(name); interactions.setSelected(null); }}
+                        onOpenSource={onOpenSource}
+                        onClose={() => interactions.setSelected(null)}
+                        t={t}
                     />
                 )}
             </div>

@@ -12,11 +12,13 @@ import (
 )
 
 type fakeStore struct {
-	graph    kg.GraphOverview
-	max      int
-	err      error
-	scoped   kg.ScopedGraph
-	scopeErr error
+	graph         kg.GraphOverview
+	max           int
+	err           error
+	scoped        kg.ScopedGraph
+	scopeErr      error
+	entityDetail  kg.EntityDetail
+	entityErr     error
 }
 
 func (f *fakeStore) GraphOverview(_ context.Context, _ string, maxNodes int) (kg.GraphOverview, error) {
@@ -30,6 +32,10 @@ func (f *fakeStore) KBHasActiveIngestion(_ context.Context, _ string) (bool, err
 
 func (f *fakeStore) ScopedGraphForMessage(_ context.Context, _, _ string) (kg.ScopedGraph, error) {
 	return f.scoped, f.scopeErr
+}
+
+func (f *fakeStore) EntityDetail(_ context.Context, _ string, _ int64) (kg.EntityDetail, error) {
+	return f.entityDetail, f.entityErr
 }
 
 func TestGetGraph_Returns200(t *testing.T) {
@@ -144,5 +150,53 @@ func TestGetGraph_NoMessageID_UsesOverview(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	if _, hasScoped := body["scoped"]; hasScoped {
 		t.Errorf("overview path must not set scoped flag")
+	}
+}
+
+func TestGetEntity_OK(t *testing.T) {
+	store := &fakeStore{entityDetail: kg.EntityDetail{
+		ID: 7, Name: "Alice, Inc.", Type: "org", Aliases: []string{"Alice"}, Degree: 3,
+		Sources:   []kg.NodeSource{{FileID: "f1", FileName: "report.pdf", ChunkID: "c1"}},
+		Neighbors: []kg.Neighbor{{ID: 9, Name: "Bob", Type: "person", Rel: "employs"}},
+	}}
+	h := kggraph.NewHandler(store)
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/kb-1/graph/entity/7", nil)
+	req.SetPathValue("id", "kb-1")
+	req.SetPathValue("entityId", "7")
+	rec := httptest.NewRecorder()
+	h.GetEntity(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var got kg.EntityDetail
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ID != 7 || got.Name != "Alice, Inc." || len(got.Sources) != 1 || len(got.Neighbors) != 1 {
+		t.Errorf("unexpected detail: %+v", got)
+	}
+}
+
+func TestGetEntity_NotFound(t *testing.T) {
+	h := kggraph.NewHandler(&fakeStore{entityErr: kg.ErrEntityNotFound})
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/kb-1/graph/entity/7", nil)
+	req.SetPathValue("id", "kb-1")
+	req.SetPathValue("entityId", "7")
+	rec := httptest.NewRecorder()
+	h.GetEntity(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("code = %d", rec.Code)
+	}
+}
+
+func TestGetEntity_BadID(t *testing.T) {
+	h := kggraph.NewHandler(&fakeStore{})
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/kb-1/graph/entity/abc", nil)
+	req.SetPathValue("id", "kb-1")
+	req.SetPathValue("entityId", "abc")
+	rec := httptest.NewRecorder()
+	h.GetEntity(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d", rec.Code)
 	}
 }

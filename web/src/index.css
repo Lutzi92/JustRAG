@@ -2246,6 +2246,13 @@ button.source-card {
   line-height: 1;
   color: var(--text-secondary);
 }
+
+.entity-card { max-height: 70%; overflow-y: auto; }
+.entity-card .entity-card-type { font-size: 0.75rem; color: var(--text-secondary); }
+.entity-card .entity-card-src { background: none; border: none; color: var(--accent-primary); cursor: pointer; padding: 0; text-align: left; font-size: 0.82rem; }
+.entity-card .entity-card-src:hover { text-decoration: underline; }
+.entity-card .entity-card-neighbors { font-size: 0.8rem; color: var(--text-secondary); }
+
 .graph-export-menu { position: relative; }
 .graph-export-btn {
     display: flex; align-items: center; gap: 6px;
@@ -2268,3 +2275,16 @@ button.source-card {
     padding: 6px 8px; font-size: 0.8rem; border-radius: var(--radius-sm); cursor: pointer;
 }
 .graph-export-list button:hover { background: var(--tag-bg); }
+.graph-toolbar { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.graph-toolbar input {
+    background: var(--bg-secondary); color: var(--text-primary);
+    border: 1px solid var(--border-color); border-radius: var(--radius-md);
+    padding: 6px 10px; font-size: 0.8rem; width: 180px; box-shadow: var(--shadow-md);
+}
+.graph-toolbar-chips { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; max-width: 220px; }
+.graph-type-chip {
+    background: var(--tag-bg); color: var(--text-primary);
+    border: 1px solid var(--border-color); border-radius: var(--radius-full);
+    padding: 2px 8px; font-size: 0.72rem; cursor: pointer;
+}
+.graph-type-chip[aria-pressed="false"] { opacity: 0.4; }

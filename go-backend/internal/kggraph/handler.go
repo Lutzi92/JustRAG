@@ -25,6 +25,7 @@ type Store interface {
 	GraphOverview(ctx context.Context, kbID string, maxNodes int) (kg.GraphOverview, error)
 	KBHasActiveIngestion(ctx context.Context, kbID string) (bool, error)
 	ScopedGraphForMessage(ctx context.Context, kbID, messageID string) (kg.ScopedGraph, error)
+	EntityDetail(ctx context.Context, kbID string, entityID int64) (kg.EntityDetail, error)
 }
 
 // Handler serves the KG overview + live update endpoints.
@@ -124,4 +125,26 @@ func (h *Handler) StreamGraph(w http.ResponseWriter, r *http.Request) {
 		// is normal. Heartbeat-write failure (client gone) ends the relay.
 		InactivityTimeout: 24 * time.Hour,
 	})
+}
+
+// GetEntity returns one entity's detail (type, aliases, degree, sources,
+// neighbors) for the mind-map entity card. KB-scoped via kbViewChain.
+func (h *Handler) GetEntity(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	kbID := kbIDFrom(ctx, r)
+	id, err := strconv.ParseInt(r.PathValue("entityId"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid entity id")
+		return
+	}
+	detail, err := h.store.EntityDetail(ctx, kbID, id)
+	if errors.Is(err, kg.ErrEntityNotFound) {
+		httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "entity not found")
+		return
+	}
+	if err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to load entity")
+		return
+	}
+	httputil.WriteJSONCtx(ctx, w, http.StatusOK, detail)
 }

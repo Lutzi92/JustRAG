@@ -375,6 +375,125 @@ func (s *PgStore) MatchAliasesInTokens(ctx context.Context, kbID string, tokens 
 	return out, nil
 }
 
+// ErrEntityNotFound is returned by EntityDetail when the requested entity does
+// not exist within the given KB (IDOR guard: a valid entity in another KB
+// produces the same error as a non-existent entity).
+var ErrEntityNotFound = errors.New("entity not found")
+
+// Neighbor is one directly-connected entity returned by EntityDetail.
+type Neighbor struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Rel  string `json:"rel"`
+}
+
+// EntityDetail is the on-demand detail for one KG entity, backing the
+// mind-map entity card.
+type EntityDetail struct {
+	ID        int64        `json:"id"`
+	Name      string       `json:"name"`
+	Type      string       `json:"type"`
+	Aliases   []string     `json:"aliases"`
+	Degree    int          `json:"degree"`
+	Sources   []NodeSource `json:"sources"`
+	Neighbors []Neighbor   `json:"neighbors"`
+}
+
+// EntityDetail loads one entity (scoped to kbID) plus its degree, source files,
+// and depth-1 neighbors. Returns ErrEntityNotFound if the entity does not exist
+// in this KB.
+func (s *PgStore) EntityDetail(ctx context.Context, kbID string, entityID int64) (EntityDetail, error) {
+	var d EntityDetail
+
+	// 1. Entity row, scoped by kb_id (IDOR guard).
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, canonical_name, type, aliases
+		   FROM kg_entities
+		  WHERE kb_id = $1::uuid AND id = $2`,
+		kbID, entityID,
+	).Scan(&d.ID, &d.Name, &d.Type, &d.Aliases)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return EntityDetail{}, ErrEntityNotFound
+	}
+	if err != nil {
+		return EntityDetail{}, err
+	}
+
+	// 2. Degree = count of incident edge rows.
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM kg_edges
+		  WHERE kb_id = $1::uuid AND (src_entity_id = $2 OR dst_entity_id = $2)`,
+		kbID, entityID,
+	).Scan(&d.Degree); err != nil {
+		return EntityDetail{}, err
+	}
+
+	// 3. Sources: kg_edges.file_id -> files, deduped on fileID|chunkID.
+	d.Sources = []NodeSource{}
+	rows, err := s.pool.Query(ctx,
+		`SELECT COALESCE(e.file_id::text,''), COALESCE(f.name,''), COALESCE(e.chunk_id::text,'')
+		   FROM kg_edges e
+		   LEFT JOIN files f ON f.id = e.file_id
+		  WHERE e.kb_id = $1::uuid
+		    AND (e.src_entity_id = $2 OR e.dst_entity_id = $2)
+		    AND e.file_id IS NOT NULL
+		  LIMIT 500`,
+		kbID, entityID,
+	)
+	if err != nil {
+		return EntityDetail{}, err
+	}
+	seen := map[string]struct{}{}
+	for rows.Next() {
+		var ns NodeSource
+		if err := rows.Scan(&ns.FileID, &ns.FileName, &ns.ChunkID); err != nil {
+			rows.Close()
+			return EntityDetail{}, err
+		}
+		if ns.FileID == "" {
+			continue
+		}
+		key := ns.FileID + "|" + ns.ChunkID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		d.Sources = append(d.Sources, ns)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return EntityDetail{}, err
+	}
+
+	// 4. Neighbors: reuse the depth-1 subgraph walk, dedup by neighbor id, cap 8.
+	sub, err := s.LookupSubgraph(ctx, kbID, entityID, 1)
+	if err != nil {
+		return EntityDetail{}, err
+	}
+	d.Neighbors = []Neighbor{}
+	nseen := map[int64]struct{}{}
+	for _, e := range sub.Edges {
+		if e.Other.ID == 0 || e.Other.ID == entityID {
+			continue
+		}
+		if _, ok := nseen[e.Other.ID]; ok {
+			continue
+		}
+		nseen[e.Other.ID] = struct{}{}
+		d.Neighbors = append(d.Neighbors, Neighbor{
+			ID:   e.Other.ID,
+			Name: e.Other.CanonicalName,
+			Type: e.Other.Type,
+			Rel:  e.Rel,
+		})
+		if len(d.Neighbors) >= 8 {
+			break
+		}
+	}
+	return d, nil
+}
+
 // CanonEntityRow is an entity plus its total (in+out) edge degree, the inputs
 // the canonicalization job needs to rank merge survivors.
 type CanonEntityRow struct {
