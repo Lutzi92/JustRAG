@@ -7,6 +7,54 @@ interface RawGraph { nodes: RawNode[]; edges: RawEdge[]; }
 
 const DIM = 0.15;
 
+// filterByType removes nodes whose type is not active, plus any edge incident to
+// a removed node. Removing (rather than flagging `hidden`) keeps React Flow from
+// processing filtered-out elements at all.
+export function filterByType(
+    nodes: Node[], edges: Edge[], activeTypes: Set<string>, typeById: Map<string, string>,
+): { nodes: Node[]; edges: Edge[] } {
+    const visible = (id: string) => {
+        const ty = typeById.get(id);
+        return ty === undefined || activeTypes.has(ty);
+    };
+    return {
+        nodes: nodes.filter(n => visible(n.id)),
+        edges: edges.filter(e => visible(e.source) && visible(e.target)),
+    };
+}
+
+// litNodeSet returns the node ids that stay bright on hover (the hovered node +
+// its direct neighbors), or null when nothing is hovered (everything bright).
+export function litNodeSet(hoveredId: string | null, adjacency: Map<string, Set<string>>): Set<string> | null {
+    if (!hoveredId) return null;
+    const lit = new Set<string>([hoveredId]);
+    for (const n of adjacency.get(hoveredId) ?? []) lit.add(n);
+    return lit;
+}
+
+// buildDimCss produces a stylesheet that dims every node/edge except the lit
+// ones, targeting React Flow's `data-id` DOM attributes. Applying the hover
+// highlight via CSS (instead of rebuilding the nodes/edges arrays) means
+// hovering never re-renders node components — the browser just recomposites
+// opacity. Returns '' when nothing is hovered. Scoped under `.mm-graph` so it
+// only affects this graph instance. Edges are re-lit only when both endpoints
+// are lit.
+export function buildDimCss(lit: Set<string> | null, edges: Edge[]): string {
+    if (!lit) return '';
+    const nodeSel = [...lit]
+        .map(id => `.mm-graph .react-flow__node[data-id="${id}"]`)
+        .join(',');
+    const edgeSel = edges
+        .filter(e => lit.has(e.source) && lit.has(e.target))
+        .map(e => `.mm-graph .react-flow__edge[data-id="${e.id}"]`)
+        .join(',');
+    return [
+        `.mm-graph .react-flow__node,.mm-graph .react-flow__edge{opacity:${DIM};transition:opacity .12s ease}`,
+        nodeSel ? `${nodeSel}{opacity:1}` : '',
+        edgeSel ? `${edgeSel}{opacity:1}` : '',
+    ].filter(Boolean).join('\n');
+}
+
 export function useGraphInteractions(graph: RawGraph) {
     const [hoveredId, setHovered] = useState<string | null>(null);
     const [selectedId, setSelected] = useState<string | null>(null);
@@ -51,25 +99,16 @@ export function useGraphInteractions(graph: RawGraph) {
         return m;
     }, [graph]);
 
-    const decorate = useCallback((nodes: Node[], edges: Edge[]) => {
-        const neighbors = hoveredId ? (adjacency.get(hoveredId) ?? new Set<string>()) : null;
-        const lit = (id: string) => !hoveredId || id === hoveredId || (neighbors?.has(id) ?? false);
-        const visible = (id: string) => {
-            const ty = typeById.get(id);
-            return ty === undefined || activeTypes.has(ty);
-        };
-        const outNodes = nodes.map(n => ({
-            ...n,
-            hidden: !visible(n.id),
-            style: { ...n.style, opacity: lit(n.id) ? 1 : DIM },
-        }));
-        const outEdges = edges.map(e => {
-            const hiddenEdge = !visible(e.source) || !visible(e.target);
-            const litEdge = !hoveredId || (lit(e.source) && lit(e.target));
-            return { ...e, hidden: hiddenEdge, style: { ...e.style, opacity: litEdge ? 1 : DIM } };
-        });
-        return { nodes: outNodes, edges: outEdges };
-    }, [hoveredId, adjacency, typeById, activeTypes]);
+    // Type filtering is independent of hover, so its identity only changes when
+    // the active-type set (or the graph) changes — not on every mouse move.
+    const applyTypeFilter = useCallback(
+        (nodes: Node[], edges: Edge[]) => filterByType(nodes, edges, activeTypes, typeById),
+        [activeTypes, typeById],
+    );
 
-    return { hoveredId, setHovered, selectedId, setSelected, allTypes, activeTypes, toggleType, decorate };
+    // The lit set changes on hover, but it is a small Set — the nodes/edges
+    // arrays passed to React Flow stay referentially stable across hovers.
+    const litNodes = useMemo(() => litNodeSet(hoveredId, adjacency), [hoveredId, adjacency]);
+
+    return { hoveredId, setHovered, selectedId, setSelected, allTypes, activeTypes, toggleType, applyTypeFilter, litNodes };
 }

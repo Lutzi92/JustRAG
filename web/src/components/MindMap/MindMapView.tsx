@@ -13,7 +13,7 @@ import { useKBGraphStream } from '../../hooks/useKBGraphStream';
 import { GraphExportPanel } from './GraphExportPanel';
 import { GraphToolbar } from './GraphToolbar';
 import { EntityCard } from './EntityCard';
-import { useGraphInteractions } from './useGraphInteractions';
+import { useGraphInteractions, buildDimCss } from './useGraphInteractions';
 
 interface MindMapViewProps {
     kbId: string;
@@ -164,8 +164,13 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
         return () => document.removeEventListener('keydown', onKey);
     }, [interactions.selectedId, interactions]);
 
-    const { decorate } = interactions;
-    const decorated = useMemo(() => decorate(nodes, edges), [decorate, nodes, edges]);
+    // Type filtering rebuilds the arrays only when the active-type set changes;
+    // hover dimming is applied purely through injected CSS (dimCss) so mousing
+    // over nodes never re-renders the graph. Keeping `filtered` stable across
+    // hovers is what removes the large-graph lag.
+    const { applyTypeFilter, litNodes } = interactions;
+    const filtered = useMemo(() => applyTypeFilter(nodes, edges), [applyTypeFilter, nodes, edges]);
+    const dimCss = useMemo(() => buildDimCss(litNodes, filtered.edges), [litNodes, filtered.edges]);
 
     const onPaneClick = useCallback(() => interactions.setSelected(null), [interactions]);
 
@@ -213,25 +218,29 @@ export const MindMapView: React.FC<MindMapViewProps> = ({ kbId, onAskAbout, onCl
                     </div>
                 )}
                 {status === 'ready' ? (
-                    <ReactFlow
-                        nodes={decorated.nodes}
-                        edges={decorated.edges}
-                        onNodesChange={onNodesChange}
-                        onEdgesChange={onEdgesChange}
-                        onNodeClick={onNodeClick}
-                        onNodeMouseEnter={onNodeMouseEnter}
-                        onNodeMouseLeave={onNodeMouseLeave}
-                        onPaneClick={onPaneClick}
-                        onInit={setRfInstance}
-                        fitView
-                        minZoom={0.1}
-                    >
-                        <Background />
-                        <Controls />
-                        <MiniMap pannable zoomable />
-                        {rawGraph && <GraphExportPanel graph={rawGraph} scoped={!!messageId} t={t} />}
-                        {rawGraph && <GraphToolbar allTypes={interactions.allTypes} activeTypes={interactions.activeTypes} onToggleType={interactions.toggleType} onSearch={onSearch} t={t} />}
-                    </ReactFlow>
+                    <div className="mm-graph" style={{ height: '100%', width: '100%' }}>
+                        {dimCss && <style>{dimCss}</style>}
+                        <ReactFlow
+                            nodes={filtered.nodes}
+                            edges={filtered.edges}
+                            onNodesChange={onNodesChange}
+                            onEdgesChange={onEdgesChange}
+                            onNodeClick={onNodeClick}
+                            onNodeMouseEnter={onNodeMouseEnter}
+                            onNodeMouseLeave={onNodeMouseLeave}
+                            onPaneClick={onPaneClick}
+                            onInit={setRfInstance}
+                            fitView
+                            minZoom={0.1}
+                            onlyRenderVisibleElements
+                        >
+                            <Background />
+                            <Controls />
+                            <MiniMap pannable zoomable />
+                            {rawGraph && <GraphExportPanel graph={rawGraph} scoped={!!messageId} t={t} />}
+                            {rawGraph && <GraphToolbar allTypes={interactions.allTypes} activeTypes={interactions.activeTypes} onToggleType={interactions.toggleType} onSearch={onSearch} t={t} />}
+                        </ReactFlow>
+                    </div>
                 ) : (
                     <div style={{
                         position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
