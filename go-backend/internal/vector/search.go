@@ -161,6 +161,17 @@ type SearchOptions struct {
 	// from normal-mode is NOT poisoned by long-context shape and
 	// vice-versa (the shape hash differs).
 	LongContextMode bool
+
+	// CreatedAfter / CreatedBefore bound the retrieval pool to documents
+	// whose effective date (files.created_at in phase 1) falls within the
+	// window. Nil = no bound. Resolved early in Search() into file IDs via
+	// the main DB and folded into the existing FileIDs path — the chunk
+	// tables live in the vector DB (possibly a separate database) so a
+	// cross-DB join to files is not safe. A window that matches zero files
+	// short-circuits to an empty result. Set by the date tools; never by
+	// the query-cache shape directly (it rides the FileIDs shape field).
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
 }
 
 // Query-type classification labels surfaced via Prometheus and structured
@@ -516,6 +527,22 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	// cache eliminates the per-search DB round-trip without delaying
 	// operator changes meaningfully.
 	siteCfg := s.loadSiteConfigCached(ctx)
+
+	// Date-window filter: resolve the window to file IDs via the main DB and
+	// fold them into opts.FileIDs so the existing file_id = ANY(...) path and
+	// the query-cache shape both pick it up. A zero-match window returns an
+	// empty result rather than falling through to an unfiltered search.
+	if opts.CreatedAfter != nil || opts.CreatedBefore != nil {
+		dateIDs, derr := s.fileIDsInDateRange(ctx, kbID, opts.CreatedAfter, opts.CreatedBefore)
+		if derr != nil {
+			return nil, fmt.Errorf("search: date-window file resolution: %w", derr)
+		}
+		opts.FileIDs = intersectFileIDs(opts.FileIDs, dateIDs)
+		if len(opts.FileIDs) == 0 {
+			return &SearchResult{}, nil
+		}
+	}
+
 	pgConfig := PgTextSearchConfig(lang)
 
 	// Apply configured default_top_k when the caller passes 0 (matches Node.js:

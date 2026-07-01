@@ -9,6 +9,7 @@ import {
   addMessageToTree,
   updateMessageInTree,
   remapMessageId,
+  nearestPersistedAncestorId,
 } from './messageTree';
 
 // ---------------------------------------------------------------------------
@@ -280,5 +281,36 @@ describe('remapMessageId', () => {
     const map = buildMessageMap(linearMessages);
     const updated = remapMessageId(map, 'nonexistent', 'real');
     expect(updated.size).toBe(map.size);
+  });
+});
+
+describe('nearestPersistedAncestorId', () => {
+  // A failed send leaves a temp-error leaf whose ancestors up to the last
+  // real message are all temp ids: temp-error -> temp-user -> <real parent>.
+  const map = buildMessageMap([
+    msg('real-a1', 'ai', 'real-u1'),
+    msg('temp-user-123', 'user', 'real-a1'),
+    msg('temp-error-123', 'ai', 'temp-user-123'),
+  ]);
+
+  it('returns the id itself when it is already persisted (non-temp)', () => {
+    expect(nearestPersistedAncestorId(map, 'real-a1')).toBe('real-a1');
+  });
+
+  it('walks past temp ancestors to the nearest persisted id', () => {
+    expect(nearestPersistedAncestorId(map, 'temp-error-123')).toBe('real-a1');
+  });
+
+  it('returns null when the whole chain is temp / unpersisted', () => {
+    const allTemp = buildMessageMap([
+      msg('temp-user-9', 'user'),
+      msg('temp-error-9', 'ai', 'temp-user-9'),
+    ]);
+    expect(nearestPersistedAncestorId(allTemp, 'temp-error-9')).toBeNull();
+  });
+
+  it('returns null for null/undefined input', () => {
+    expect(nearestPersistedAncestorId(map, undefined)).toBeNull();
+    expect(nearestPersistedAncestorId(map, null)).toBeNull();
   });
 });

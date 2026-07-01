@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/justrag/go-backend/internal/mcp"
 	"github.com/justrag/go-backend/internal/vector"
@@ -25,10 +26,12 @@ import (
 // KbSearchArgs is the documented argument shape for the kb_search
 // built-in tool.
 type KbSearchArgs struct {
-	Query   string   `json:"query"`
-	TopK    int      `json:"top_k,omitempty"`
-	FileIDs []string `json:"file_ids,omitempty"`
-	KbID    string   `json:"kb_id,omitempty"` // populated by the orchestrator
+	Query    string   `json:"query"`
+	TopK     int      `json:"top_k,omitempty"`
+	FileIDs  []string `json:"file_ids,omitempty"`
+	KbID     string   `json:"kb_id,omitempty"` // populated by the orchestrator
+	DateFrom string   `json:"date_from,omitempty"`
+	DateTo   string   `json:"date_to,omitempty"`
 }
 
 // kbSearchInputSchema is the JSON Schema embedded into the registered
@@ -45,6 +48,8 @@ const kbSearchInputSchema = `{
       "items": { "type": "string" },
       "description": "Optional file-ID allow-list to restrict the search."
     }
+    ,"date_from": { "type": "string", "description": "Optional inclusive start date (ISO YYYY-MM-DD) to restrict results to documents added on/after it. Compute from the current date in the system prompt." },
+    "date_to":   { "type": "string", "description": "Optional inclusive end date (ISO YYYY-MM-DD)." }
   }
 }`
 
@@ -80,9 +85,27 @@ func kbSearchHandler(svc SearchService) mcp.ToolHandlerFunc {
 		if args.KbID == "" {
 			return mcp.ToolResult{}, fmt.Errorf("kb_search: kb_id was not injected by the orchestrator")
 		}
+		var createdAfter, createdBefore *time.Time
+		if args.DateFrom != "" {
+			d, perr := time.Parse("2006-01-02", args.DateFrom)
+			if perr != nil {
+				return mcp.ToolResult{}, fmt.Errorf("kb_search: date_from must be ISO YYYY-MM-DD: %w", perr)
+			}
+			createdAfter = &d
+		}
+		if args.DateTo != "" {
+			d, perr := time.Parse("2006-01-02", args.DateTo)
+			if perr != nil {
+				return mcp.ToolResult{}, fmt.Errorf("kb_search: date_to must be ISO YYYY-MM-DD: %w", perr)
+			}
+			end := d.Add(24*time.Hour - time.Second)
+			createdBefore = &end
+		}
 		opts := vector.SearchOptions{
-			FileIDs:   args.FileIDs,
-			QueryType: vector.QueryTypeComplexReasoning,
+			FileIDs:       args.FileIDs,
+			QueryType:     vector.QueryTypeComplexReasoning,
+			CreatedAfter:  createdAfter,
+			CreatedBefore: createdBefore,
 		}
 		res, err := svc.Search(ctx, args.KbID, args.Query, args.TopK, opts)
 		if err != nil {

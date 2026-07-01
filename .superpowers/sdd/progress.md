@@ -132,3 +132,31 @@ FINAL WHOLE-BRANCH REVIEW (opus): "Ready to merge" — 0 Critical, 0 Important.
 NEW files: web/src/components/MindMap/{useGraphInteractions,GraphToolbar,EntityCard}.{ts,tsx}+tests; go-backend/internal/kg/entity_detail_integration_test.go.
 MOD: go-backend/internal/kg/query.go, kggraph/handler.go+test, app/routes.go; web MindMapView.tsx+test, ChatView.tsx, translations.ts, index.css.
 DEL: web/src/components/MindMap/NodeSourcesPanel.tsx+test.
+
+=== FEATURE: Date-aware chat (2026-07-01) ===
+Plan: docs/superpowers/plans/2026-07-01-date-aware-chat.md
+Spec: docs/superpowers/specs/2026-07-01-date-aware-chat-design.md
+Mode: subagent-driven, main, BUILD-ONLY (no commits by subagents/controller; user commits).
+Baseline tree for per-task diffs: scratchpad/date-baseline-tree.txt (helper: scratchpad/date-pkg.sh; advance after each passing task).
+NOTE: tree already has unrelated uncommitted changes incl. http_send.go (parent-id work) — Task 3 also edits http_send.go; per-task tree-diffs isolate only date changes.
+Tasks: 1 config readers | 2 prompt helpers | 3 thread date line (6 orchestrators+http_send+eval) | 4 date-window filter (split-DB) | 5 recent_documents tool | 6 kb_search date params | 7 docs
+Task 1: COMPLETE (build-only, review clean — Approved). ChatDate{Awareness,Timezone,Tools}Enabled+MaxResults in siteconfig.go:1430+; reused existing fakeSiteConfigReader/strPtr. test PASS, build clean. No issues.
+Task 2: COMPLETE (build-only, review clean — Approved). prompts.CurrentDateLine + ChatSystemPromptWithDate + deWeekdays (prompts.go:489+), "time" import. 2/2 tests, build clean. No issues.
+Task 3: COMPLETE (build-only, review Approved). date_prompt.go SystemPromptDateLine + 6 params structs+literals + 6 call-site swaps + eval "". DEVIATION (sound): dateLine threaded into tryDeepChat (5/6 literals live there, not SendMessage) — computed once. 119-line http_send churn = gofmt colon re-align (cosmetic). build/vet/tests green.
+Task 4: COMPLETE (build-only, review Approved). SearchOptions.CreatedAfter/Before + fileIDsInDateRange + intersectFileIDs + effectiveDateExpr (recency_boost.go); Search() resolution block (search.go:531-544) before cache lookup, empty short-circuit. FIX (controller, 1-line): Warn log on nil-mainDB fail-open (Important finding). build/vet/test green.
+Task 5: COMPLETE (build-only, review Approved + controller enhancement). recent_documents.go (tool+RecentDocsStore+PgxRecentDocsStore) + test (6 cases) + routes.go registration (gated ChatDateToolsEnabled). ENHANCEMENT (controller): wired chat_date_tools_max_results via maxResults func(ctx)int (was dead knob) + test. build/vet/tests green.
+Task 6: COMPLETE (build-only, review Approved). kb_search.go date_from/date_to (ungated, optional) → SearchOptions.CreatedAfter/Before; +kb_search_test.go capturing fake (date-set + nil cases). Schema JSON valid. build/vet/tests green. MINOR (deferred): date-parse dup with recent_documents (2 sites, diff semantics — YAGNI).
+Task 7: COMPLETE (docs). CLAUDE.md flag bullet + feature-recipes table row + docs/feature-recipes.md section. CONTROLLER FIX: agent hallucinated per-user TZ lookup chain + wrong recent_documents params (after/before RFC3339 + 7-day default) — rewritten accurate (date_from required ISO, date_to optional, global TZ only).
+
+Task 7: COMPLETE (see above).
+=== DATE-AWARE CHAT FEATURE COMPLETE (build-only, uncommitted; user commits) ===
+Final whole-branch review (opus): READY TO MERGE — 0 Critical, 0 Important, 3 Minor (all deferred).
+Consolidated verify: go build ./cmd/server ./cmd/worker OK; go test chat/prompts/vector/mcp-builtin/eval all green; go vet clean.
+NEW files: internal/chat/date_prompt.go(+test), internal/prompts/prompts_date_test.go, internal/vector/date_filter_test.go, internal/mcp/builtin/recent_documents.go(+test).
+MOD: internal/chat/{siteconfig.go,siteconfig_readers_test.go,http_send.go,agentic_chat.go,plan_execute_chat.go,deep_chat.go,supervisor_chat.go,drift_chat.go,service.go}, internal/prompts/prompts.go, internal/vector/{search.go,recency_boost.go}, internal/mcp/builtin/kb_search.go(+test), internal/app/routes.go, internal/eval/answer.go, CLAUDE.md, docs/feature-recipes.md.
+DEFERRED MINORS: M1 tool dates parsed UTC-midnight vs Berlin-resolved "today" → ~2h day-boundary skew on timestamptz (fix: ParseInLocation, needs TZ threaded into the 2 tool handlers); M2 date-parse dup across kb_search+recent_documents (extract helper if 3rd site); M3 recent_documents default before=time.Now() server-local (harmless).
+REMAINING: user commit; live smoke (enable chat_answer_tools + chat_date_tools, ask "was wurde heute hinzugefügt?").
+
+POST-FEATURE: Admin Agent-panel controls added (user reported "nothing in admin ui").
+  web/src/components/admin/AdminAgentTab.tsx (+SECTION_CONFIGS dateAware entry + <Section> w/ 4 controls) + web/src/translations.ts (DE/EN labels+Help).
+  Default-ON chat_date_awareness_enabled uses checked={v!=='false'&&v!=='0'} (mirrors chat_answer_history_enabled). tsc -b + lint + build clean. Build-only/uncommitted.

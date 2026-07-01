@@ -118,7 +118,7 @@ export function useChat({
   const stream = useChatStream({
     currentKb, files, enhance,
     reasoningEnabled, reasoningLevel, language,
-    setMessageTree, setActiveLeafId,
+    setMessageTree, messageTreeRef, setActiveLeafId,
     activeChatIdRef, activeChatId, setActiveChatId, setChats,
     fetchChats, fetchChatsTimerRef,
     t,

@@ -5,6 +5,7 @@ import (
 	"context"
 	"math"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/justrag/go-backend/internal/logctx"
@@ -93,4 +94,69 @@ func (s *SearchService) fileCreatedTimes(ctx context.Context, fileIDs []string) 
 		out[id] = ts
 	}
 	return out, rows.Err()
+}
+
+// effectiveDateExpr is the SQL expression for a file's effective date used
+// by every date-window query. Phase 1: ingest time. Phase 2 (when a
+// published_at column lands) becomes COALESCE(published_at, created_at).
+const effectiveDateExpr = "created_at"
+
+// fileIDsInDateRange returns the IDs of files in kbID whose effective date
+// falls within [after, before] (either bound may be nil = unbounded).
+// Queries the main DB (files lives there, not in the vector pool).
+func (s *SearchService) fileIDsInDateRange(ctx context.Context, kbID string, after, before *time.Time) ([]string, error) {
+	if s.mainDB == nil {
+		// Unlike the recency boost (which merely skips a score adjustment on a
+		// nil mainDB), a nil mainDB here empties the date-window file set and
+		// short-circuits Search to zero results — indistinguishable from "no
+		// documents in that window". Log it so a misconfiguration is not
+		// mistaken for an empty window. Fail-open keeps the existing contract.
+		logctx.From(ctx).Warn("date-window filter: main DB unavailable, returning no matches", "kb_id", kbID)
+		return nil, nil
+	}
+	sql := `SELECT id::text FROM files WHERE kb_id = $1::uuid`
+	args := []any{kbID}
+	if after != nil {
+		args = append(args, *after)
+		sql += " AND " + effectiveDateExpr + " >= $" + strconv.Itoa(len(args))
+	}
+	if before != nil {
+		args = append(args, *before)
+		sql += " AND " + effectiveDateExpr + " <= $" + strconv.Itoa(len(args))
+	}
+	rows, err := s.mainDB.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// intersectFileIDs returns the set intersection of a and b, preserving a's
+// order. When a is empty ("no caller restriction") the whole of b is
+// returned. Used to combine a caller-supplied FileIDs allow-list with the
+// date-window-resolved IDs.
+func intersectFileIDs(a, b []string) []string {
+	if len(a) == 0 {
+		return b
+	}
+	inB := make(map[string]struct{}, len(b))
+	for _, id := range b {
+		inB[id] = struct{}{}
+	}
+	out := make([]string, 0, len(a))
+	for _, id := range a {
+		if _, ok := inB[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }

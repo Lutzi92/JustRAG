@@ -1351,3 +1351,50 @@ func TestChatCorpusTableClamp(t *testing.T) {
 		t.Fatalf("max_files with value 0 (below min): got %d, want 50 (default)", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Date-aware chat readers tests
+// ---------------------------------------------------------------------------
+
+func TestChatDateReaders(t *testing.T) {
+	ctx := context.Background()
+
+	// Defaults (nil reader → all defaults).
+	if got := ChatDateAwarenessEnabled(ctx, nil); got != true {
+		t.Errorf("ChatDateAwarenessEnabled default = %v, want true", got)
+	}
+	if got := ChatDateTimezone(ctx, nil); got != "Europe/Berlin" {
+		t.Errorf("ChatDateTimezone default = %q, want Europe/Berlin", got)
+	}
+	if got := ChatDateToolsEnabled(ctx, nil); got != false {
+		t.Errorf("ChatDateToolsEnabled default = %v, want false", got)
+	}
+	if got := ChatDateToolsMaxResults(ctx, nil); got != 50 {
+		t.Errorf("ChatDateToolsMaxResults default = %d, want 50", got)
+	}
+
+	// Overrides via a struct-backed fake reader.
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_date_awareness_enabled": strPtr("false"),
+		"chat_date_timezone":          strPtr("UTC"),
+		"chat_date_tools_enabled":     strPtr("true"),
+		"chat_date_tools_max_results": strPtr("10"),
+	}}
+	if ChatDateAwarenessEnabled(ctx, r) != false {
+		t.Error("awareness override not applied")
+	}
+	if ChatDateTimezone(ctx, r) != "UTC" {
+		t.Error("timezone override not applied")
+	}
+	if ChatDateToolsEnabled(ctx, r) != true {
+		t.Error("tools-enabled override not applied")
+	}
+	if ChatDateToolsMaxResults(ctx, r) != 10 {
+		t.Error("max-results override not applied")
+	}
+
+	// Blank timezone falls back to default.
+	if got := ChatDateTimezone(ctx, &fakeSiteConfigReader{values: map[string]*string{"chat_date_timezone": strPtr("  ")}}); got != "Europe/Berlin" {
+		t.Errorf("blank timezone = %q, want Europe/Berlin", got)
+	}
+}

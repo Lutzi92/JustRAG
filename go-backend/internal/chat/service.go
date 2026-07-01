@@ -71,6 +71,10 @@ type ChatContextParams struct {
 	// count) into vector.SearchOptions.BridgeChunks for post-rerank
 	// multi-hop boosting. Nil (default) leaves the boost inert.
 	BridgeChunks map[string]int
+	// CurrentDateLine is the localized current-date line to append to the
+	// answer system prompt (empty when chat_date_awareness_enabled is off).
+	// Set at dispatch via SystemPromptDateLine.
+	CurrentDateLine string
 }
 
 // ChatSource represents a single source document surfaced in a chat response.
@@ -1093,7 +1097,7 @@ func PrepareChatContext(
 		sb.WriteString(params.KbSystemPrompt)
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString(prompts.ChatSystemPrompt(params.Language))
+	sb.WriteString(prompts.ChatSystemPromptWithDate(params.Language, params.CurrentDateLine))
 	switch {
 	case abstain:
 		sb.WriteString(prompts.ChatAbstainNotice(params.Language))

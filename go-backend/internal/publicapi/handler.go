@@ -360,10 +360,10 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// ------------------------------------------------------------------
 	// 5. Condense follow-up query
 	// ------------------------------------------------------------------
-	var parentMsgID *string
-	if body.ParentMessageID != "" {
-		parentMsgID = &body.ParentMessageID
-	}
+	// Guard the uuid `messages` columns against a non-uuid parentMessageId
+	// (invalid client input) — it would 22P02 on both the ancestor lookup and
+	// the message insert. Treating it as absent falls back to full-chat history.
+	parentMsgID := chat.SanitizeParentMessageID(body.ParentMessageID)
 
 	searchQuery, _ := chat.CondenseFollowUp(ctx, h.aiResolver, chatStoreAdapter{h.store}, chatID, parentMsgID, body.Message, kbID, lang)
 

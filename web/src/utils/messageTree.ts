@@ -163,6 +163,33 @@ export function addMessageToTree(map: Map<string, Message>, msg: Message): Map<s
 }
 
 /**
+ * Client-side placeholder ids (temp-user-*, temp-ai-*, temp-error-*,
+ * temp-enhanced-*) are assigned before/without the server persisting a row.
+ * They must never be sent to the backend as a parentMessageId — the messages
+ * table keys on uuid, so a temp id triggers a 22P02 error and the whole
+ * conversation history is dropped.
+ */
+export function isTempMessageId(id: string): boolean {
+    return id.startsWith('temp-');
+}
+
+/**
+ * Walk up the parent chain from `id` and return the first persisted (non-temp)
+ * message id, or null if none exists. Used to pick a safe parentMessageId for
+ * the next turn after a failed send left a temp-error leaf whose ancestors are
+ * all unpersisted temp ids.
+ */
+export function nearestPersistedAncestorId(map: Map<string, Message>, id: string | null | undefined): string | null {
+    let current: string | null = id ?? null;
+    while (current) {
+        if (!isTempMessageId(current)) return current;
+        const msg: Message | undefined = map.get(current);
+        current = msg?.parentMessageId ?? null;
+    }
+    return null;
+}
+
+/**
  * Update a message in the tree by ID, preserving childIds.
  */
 export function updateMessageInTree(map: Map<string, Message>, msgId: string, updates: Partial<Message>): Map<string, Message> {

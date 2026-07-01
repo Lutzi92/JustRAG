@@ -30,7 +30,7 @@ func GenerateAnswer(ctx context.Context, completer Completer, question string, c
 		fmt.Fprintf(&ctxBuilder, "[%d] Source: %s\n%s\n\n---\n\n", i+1, fileNames[i], contents[i])
 	}
 
-	systemPrompt := prompts.ChatSystemPrompt(lang)
+	systemPrompt := prompts.ChatSystemPromptWithDate(lang, "")
 	userPrompt := fmt.Sprintf("%s\n\nQUESTION:\n%s", ctxBuilder.String(), question)
 
 	return completer.Complete(ctx, userPrompt, systemPrompt)

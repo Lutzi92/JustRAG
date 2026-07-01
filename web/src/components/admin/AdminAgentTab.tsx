@@ -33,6 +33,7 @@ const SECTION_CONFIGS = [
     { id: 'observability', titleKey: 'agentSectionObservability', i18nKeys: ['langfuseBaseUrl'], settingKeys: ['langfuse_base_url'] },
     { id: 'tools', titleKey: 'agentSectionTools', i18nKeys: ['chatCodeExecEnabled'], settingKeys: ['mcp_servers', 'chat_use_mcp_tools', 'chat_code_exec_enabled'] },
     { id: 'tabular', titleKey: 'agentSectionTabular', i18nKeys: ['chatTabularQueryEnabled', 'chatTabularSemanticColumnsEnabled', 'tabularSemanticMinAvgLen', 'tabularSemanticMinDistinctRatio', 'chatTabularChartsEnabled'], settingKeys: ['chat_tabular_query_enabled', 'chat_tabular_semantic_columns_enabled', 'tabular_semantic_min_avg_len', 'tabular_semantic_min_distinct_ratio', 'chat_tabular_charts_enabled'] },
+    { id: 'dateAware', titleKey: 'agentSectionDateAware', i18nKeys: ['chatDateAwarenessEnabled', 'chatDateTimezone', 'chatDateToolsEnabled', 'chatDateToolsMaxResults'], settingKeys: ['chat_date_awareness_enabled', 'chat_date_timezone', 'chat_date_tools_enabled', 'chat_date_tools_max_results'] },
 ] as const;
 type SectionId = typeof SECTION_CONFIGS[number]['id'];
 
@@ -2135,6 +2136,63 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             {t('chatTabularChartsEnabled')}
                         </label>
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatTabularChartsEnabledHelp')}</p>
+                    </div>
+                </Section>
+
+                <Section title={t('agentSectionDateAware')} {...sectionState('dateAware')}>
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-date-awareness-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="chat-date-awareness-enabled"
+                                type="checkbox"
+                                checked={siteConfigs.chat_date_awareness_enabled !== 'false' && siteConfigs.chat_date_awareness_enabled !== '0'}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, chat_date_awareness_enabled: e.target.checked ? 'true' : 'false' }))}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('chatDateAwarenessEnabled')}
+                        </label>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatDateAwarenessEnabledHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-date-timezone">{t('chatDateTimezone')}</label>
+                        <input
+                            id="chat-date-timezone"
+                            type="text"
+                            placeholder="Europe/Berlin"
+                            value={siteConfigs.chat_date_timezone ?? ''}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_date_timezone: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatDateTimezoneHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-date-tools-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="chat-date-tools-enabled"
+                                type="checkbox"
+                                checked={siteConfigs.chat_date_tools_enabled === 'true' || siteConfigs.chat_date_tools_enabled === '1'}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, chat_date_tools_enabled: e.target.checked ? 'true' : 'false' }))}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('chatDateToolsEnabled')}
+                        </label>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatDateToolsEnabledHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-date-tools-max-results">{t('chatDateToolsMaxResults')}</label>
+                        <input
+                            id="chat-date-tools-max-results"
+                            type="number"
+                            min="1"
+                            max="500"
+                            value={siteConfigs.chat_date_tools_max_results || '50'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_date_tools_max_results: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatDateToolsMaxResultsHelp')}</p>
                     </div>
                 </Section>
 

@@ -1784,6 +1784,31 @@ export const translations = {
     },
 
     // ---------------------------------------------------------------
+    // Date-aware chat
+    // ---------------------------------------------------------------
+    agentSectionDateAware: { de: 'Datumsbewusster Chat', en: 'Date-aware chat' },
+    chatDateAwarenessEnabled: { de: 'Datumsbewusstsein aktivieren', en: 'Enable date awareness' },
+    chatDateAwarenessEnabledHelp: {
+        de: 'Kill-Switch. Wenn aktiviert, wird das aktuelle Datum (in der unten konfigurierten Zeitzone aufgelöst) in den Antwort-Prompt eingefügt, damit die Antwort-LLM relative Zeitangaben wie "heute" oder "seit letzter Woche" korrekt einordnen kann. Standard: an.',
+        en: 'Kill switch. When on, the current date (resolved in the timezone configured below) is injected into the answer prompt so the answer LLM can correctly interpret relative time references like "today" or "since last week". Default: on.',
+    },
+    chatDateTimezone: { de: 'Zeitzone', en: 'Timezone' },
+    chatDateTimezoneHelp: {
+        de: 'IANA-Zeitzonenkennung, die zur Auflösung von "heute" für das Datumsbewusstsein verwendet wird. Default: Europe/Berlin.',
+        en: 'IANA timezone identifier used to resolve "today" for date awareness. Default: Europe/Berlin.',
+    },
+    chatDateToolsEnabled: { de: 'Datums-Tool aktivieren ("Kürzlich hinzugefügt")', en: 'Enable date tool (recent documents)' },
+    chatDateToolsEnabledHelp: {
+        de: 'Aktiviert das MCP-Tool recent_documents, mit dem die Antwort-LLM gezielt nach kürzlich hinzugefügten Dokumenten fragen kann (z. B. "was wurde heute hinzugefügt"). Zeitfenster basieren auf dem Ingest-Datum der Datei, nicht auf ihrem Inhaltsdatum. Erfordert zusätzlich, dass Antwort-Tools (chat_answer_tools_enabled) aktiviert sind. Standard: aus.',
+        en: 'Enables the recent_documents MCP tool, letting the answer LLM specifically ask for recently added documents (e.g. "what was added today"). Windows are based on a file\'s ingest date, not its content date. Also requires answer-time tools (chat_answer_tools_enabled) to be enabled. Default: off.',
+    },
+    chatDateToolsMaxResults: { de: 'Datums-Tool: max. Ergebnisse', en: 'Date tool: max results' },
+    chatDateToolsMaxResultsHelp: {
+        de: 'Obergrenze für die Anzahl der vom recent_documents-Tool zurückgegebenen Dokumente. Bereich [1, 500]; Default 50.',
+        en: 'Upper bound on the number of documents returned by the recent_documents tool. Range [1, 500]; default 50.',
+    },
+
+    // ---------------------------------------------------------------
     // T2-1 Long-context (System 2) routing
     // ---------------------------------------------------------------
     chatLongcontextEnabled: { de: 'Long-Context-Routing (System 2)', en: 'Long-context routing (System 2)' },

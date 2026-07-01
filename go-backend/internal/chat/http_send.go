@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -58,6 +59,21 @@ type sendMessageRequest struct {
 	ReasoningLevel   string   `json:"reasoningLevel"` // "low", "medium", "high"
 	AttachmentID     string   `json:"attachmentId"`
 	ComparisonModes  []string `json:"comparisonModes"`
+}
+
+// SanitizeParentMessageID returns a pointer to id when it is a valid UUID, and
+// nil otherwise (including the empty string). Client placeholder ids such as
+// "temp-error-…" must never reach the uuid `messages` columns; treating an
+// invalid id as absent avoids the 22P02 error and falls back to full-chat
+// history. Shared with the public API handler, which parses the same field.
+func SanitizeParentMessageID(id string) *string {
+	if id == "" {
+		return nil
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		return nil
+	}
+	return &id
 }
 
 // ---------------------------------------------------------------------------
@@ -190,10 +206,15 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		lang = defaultLanguage
 	}
 
-	var parentMsgID *string
-	if body.ParentMessageID != "" {
-		parentMsgID = &body.ParentMessageID
-	}
+	// Current-date line for date-aware answers (empty when disabled).
+	dateLine := SystemPromptDateLine(ctx, h.siteConfigReader, lang)
+
+	// Guard the uuid `messages` columns against client placeholder ids: a
+	// non-uuid parent (e.g. "temp-error-…" left by a failed send) triggers
+	// SQLSTATE 22P02 on both the ancestor lookup and the message insert, which
+	// silently drops the whole conversation history. Treating it as absent falls
+	// back to full-chat history instead.
+	parentMsgID := SanitizeParentMessageID(body.ParentMessageID)
 
 	// Recent turns, loaded once: the answer-history block (every answer
 	// path) and the transform-follow-up route both need them. CondenseFollowUp
@@ -256,7 +277,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// the comparison orchestrator) regardless of complexity classification.
 	isComplex := cls.UseHyDE && cls.UseMultiQuery
 	if (isComplex || runCompare) && streamMode {
-		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, bridgeChunks, answerHistory); handled {
+		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, dateLine, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, bridgeChunks, answerHistory); handled {
 			return
 		}
 		// Deep chat failed — fall through to standard path.
@@ -278,6 +299,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		KbID:                  kbID,
 		SearchQuery:           searchQuery,
 		Language:              lang,
+		CurrentDateLine:       dateLine,
 		Enhance:               body.Enhance,
 		FileIDs:               body.SelectedFileIDs,
 		HyDE:                  cls.UseHyDE,
@@ -367,7 +389,7 @@ func (h *Handler) tryDeepChat(
 	ctx context.Context,
 	w http.ResponseWriter,
 	r *http.Request,
-	chatID, kbID, lang, searchQuery, queryType, kbSystemPrompt, reasoningLevel string,
+	chatID, kbID, lang, dateLine, searchQuery, queryType, kbSystemPrompt, reasoningLevel string,
 	body sendMessageRequest,
 	parentMsgID *string,
 	graphDec GraphTraversalDecision,
@@ -383,19 +405,20 @@ func (h *Handler) tryDeepChat(
 	// model when one is set, so deep chat stays responsive while the
 	// streamed answer still uses the main ChatModel.
 	deepParams := DeepChatParams{
-		KbID:           kbID,
-		ChatID:         chatID,
-		Message:        body.Message,
-		Query:          searchQuery,
-		Language:       lang,
-		FileIDs:        body.SelectedFileIDs,
-		KbSystemPrompt: kbSystemPrompt,
-		ReasoningLevel: reasoningLevel,
-		PlanningModel:  EnrichmentModel(ctx, h.siteConfigReader),
-		QueryType:      queryType,
-		GraphChunkIDs:  graphChunkIDs,
-		BridgeChunks:   bridgeChunks,
-		HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
+		KbID:            kbID,
+		ChatID:          chatID,
+		Message:         body.Message,
+		Query:           searchQuery,
+		Language:        lang,
+		FileIDs:         body.SelectedFileIDs,
+		KbSystemPrompt:  kbSystemPrompt,
+		ReasoningLevel:  reasoningLevel,
+		PlanningModel:   EnrichmentModel(ctx, h.siteConfigReader),
+		QueryType:       queryType,
+		GraphChunkIDs:   graphChunkIDs,
+		BridgeChunks:    bridgeChunks,
+		HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
+		CurrentDateLine: dateLine,
 	}
 
 	// We need to save the user message before starting SSE, because SSE
@@ -570,18 +593,19 @@ func (h *Handler) tryDeepChat(
 
 	case willRunDrift:
 		driftParams := DriftChatParams{
-			KbID:           kbID,
-			Query:          searchQuery,
-			Language:       lang,
-			FileIDs:        body.SelectedFileIDs,
-			KbSystemPrompt: kbSystemPrompt,
-			PlanningModel:  ResolveFastTierModel(ctx, h.siteConfigReader, "chat_drift_model"),
-			MaxFollowups:   ChatDriftMaxFollowups(ctx, h.siteConfigReader),
-			PrimerTopK:     ChatDriftPrimerTopK(ctx, h.siteConfigReader),
-			SearchTopK:     ChatDriftSearchTopK(ctx, h.siteConfigReader),
-			GraphChunkIDs:  graphChunkIDs,
-			BridgeChunks:   bridgeChunks,
-			HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
+			KbID:            kbID,
+			Query:           searchQuery,
+			Language:        lang,
+			CurrentDateLine: dateLine,
+			FileIDs:         body.SelectedFileIDs,
+			KbSystemPrompt:  kbSystemPrompt,
+			PlanningModel:   ResolveFastTierModel(ctx, h.siteConfigReader, "chat_drift_model"),
+			MaxFollowups:    ChatDriftMaxFollowups(ctx, h.siteConfigReader),
+			PrimerTopK:      ChatDriftPrimerTopK(ctx, h.siteConfigReader),
+			SearchTopK:      ChatDriftSearchTopK(ctx, h.siteConfigReader),
+			GraphChunkIDs:   graphChunkIDs,
+			BridgeChunks:    bridgeChunks,
+			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
 		}
 		chatCtx, err = RunDriftChat(ctx, h.aiResolver, h.searchService, driftParams, collectEmit)
 
@@ -590,6 +614,7 @@ func (h *Handler) tryDeepChat(
 			KbID:            kbID,
 			Query:           searchQuery,
 			Language:        lang,
+			CurrentDateLine: dateLine,
 			FileIDs:         body.SelectedFileIDs,
 			KbSystemPrompt:  kbSystemPrompt,
 			PlanningModel:   EnrichmentModel(ctx, h.siteConfigReader),
@@ -609,23 +634,24 @@ func (h *Handler) tryDeepChat(
 			planningModel = EnrichmentModel(ctx, h.siteConfigReader)
 		}
 		planExecuteParams := PlanExecuteParams{
-			KbID:           kbID,
-			Query:          searchQuery,
-			Language:       lang,
-			FileIDs:        body.SelectedFileIDs,
-			KbSystemPrompt: kbSystemPrompt,
-			PlanningModel:  planningModel,
-			MaxSubQueries:  ChatPlanExecuteMaxSubQueries(ctx, h.siteConfigReader),
-			MaxIterations:  ChatPlanExecuteMaxIterations(ctx, h.siteConfigReader),
-			TokenBudget:    ChatPlanExecuteTokenBudget(ctx, h.siteConfigReader),
-			Plateau:        plateau,
-			Tools:          planExecuteTools,
-			DAG:            ChatPlanExecuteDAG(ctx, h.siteConfigReader),
-			MaxDAGDepth:    ChatPlanExecuteMaxDAGDepth(ctx, h.siteConfigReader),
-			MaxDAGNodes:    ChatPlanExecuteMaxDAGNodes(ctx, h.siteConfigReader),
-			GraphChunkIDs:  graphChunkIDs,
-			BridgeChunks:   bridgeChunks,
-			HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
+			KbID:            kbID,
+			Query:           searchQuery,
+			Language:        lang,
+			CurrentDateLine: dateLine,
+			FileIDs:         body.SelectedFileIDs,
+			KbSystemPrompt:  kbSystemPrompt,
+			PlanningModel:   planningModel,
+			MaxSubQueries:   ChatPlanExecuteMaxSubQueries(ctx, h.siteConfigReader),
+			MaxIterations:   ChatPlanExecuteMaxIterations(ctx, h.siteConfigReader),
+			TokenBudget:     ChatPlanExecuteTokenBudget(ctx, h.siteConfigReader),
+			Plateau:         plateau,
+			Tools:           planExecuteTools,
+			DAG:             ChatPlanExecuteDAG(ctx, h.siteConfigReader),
+			MaxDAGDepth:     ChatPlanExecuteMaxDAGDepth(ctx, h.siteConfigReader),
+			MaxDAGNodes:     ChatPlanExecuteMaxDAGNodes(ctx, h.siteConfigReader),
+			GraphChunkIDs:   graphChunkIDs,
+			BridgeChunks:    bridgeChunks,
+			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
 		}
 		// AP-B3: tool-aware planner. Only meaningful when DAG is on
 		// AND a dispatcher is wired AND the gate is set. Catalog is
@@ -657,17 +683,18 @@ func (h *Handler) tryDeepChat(
 
 	case willRunAgentic:
 		agenticParams := AgenticChatParams{
-			KbID:           kbID,
-			Query:          searchQuery,
-			Language:       lang,
-			FileIDs:        body.SelectedFileIDs,
-			KbSystemPrompt: kbSystemPrompt,
-			PlanningModel:  EnrichmentModel(ctx, h.siteConfigReader),
-			MaxHops:        ChatAgenticMaxHops(ctx, h.siteConfigReader),
-			Plateau:        plateau,
-			GraphChunkIDs:  graphChunkIDs,
-			BridgeChunks:   bridgeChunks,
-			HyPESearch:     HyPESearchEnabled(ctx, h.siteConfigReader),
+			KbID:            kbID,
+			Query:           searchQuery,
+			Language:        lang,
+			CurrentDateLine: dateLine,
+			FileIDs:         body.SelectedFileIDs,
+			KbSystemPrompt:  kbSystemPrompt,
+			PlanningModel:   EnrichmentModel(ctx, h.siteConfigReader),
+			MaxHops:         ChatAgenticMaxHops(ctx, h.siteConfigReader),
+			Plateau:         plateau,
+			GraphChunkIDs:   graphChunkIDs,
+			BridgeChunks:    bridgeChunks,
+			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
 		}
 		chatCtx, err = RunAgenticChat(ctx, h.aiResolver, h.searchService, agenticParams, collectEmit)
 

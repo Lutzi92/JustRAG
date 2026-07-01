@@ -32,6 +32,10 @@ type DriftChatParams struct {
 	GraphChunkIDs  []string
 	BridgeChunks   map[string]int
 	HyPESearch     bool
+	// CurrentDateLine is the localized current-date line to append to the
+	// answer system prompt (empty when chat_date_awareness_enabled is off).
+	// Set at dispatch via SystemPromptDateLine.
+	CurrentDateLine string
 }
 
 // driftFollowupFn is the injectable seam for ai.GenerateDriftFollowups.
@@ -145,7 +149,7 @@ func runDriftChatTestable(
 		sb.WriteString(params.KbSystemPrompt)
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString(prompts.ChatSystemPrompt(params.Language))
+	sb.WriteString(prompts.ChatSystemPromptWithDate(params.Language, params.CurrentDateLine))
 	if IsLowConfidence(accumulated) {
 		sb.WriteString(prompts.ChatLowConfidenceNotice(params.Language))
 	}

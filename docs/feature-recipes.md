@@ -257,6 +257,31 @@ Security: uploads are user-scoped — an attachment is readable only by the user
 
 > Follow-up: the `chat_compare_*` keys are **not** yet surfaced in the admin Agent panel (`web/src/components/admin/AdminAgentTab.tsx` is a hand-written component, not driven by `siteconfig/registry.go`). Until that JSX is added, set these keys directly in `site_config` (e.g. via the generic site-config editor / SQL). Verify admin-UI exposure as a separate frontend task.
 
+## Date-aware chat
+
+```
+chat_date_awareness_enabled   = true                    # default ON; kill switch for date injection
+chat_date_timezone            = Europe/Berlin           # IANA timezone used to resolve "today" (deployment-wide)
+chat_date_tools_enabled       = false                   # gate for recent_documents tool; default off
+chat_date_tools_max_results   = 50                      # [1,500] cap on files returned per recent_documents call
+```
+
+**Date injection (always-on by default):** when `chat_date_awareness_enabled = true`, the current date is injected into the answer system prompt for all six answer orchestrators (standard/`PrepareChatContext`, the legacy `RunDeepChat`, supervisor, plan-execute, agentic, and DRIFT), allowing the LLM to resolve temporal queries like "what was added today", "since May", or "recent changes". The date line is computed once per request at dispatch and threaded onto each orchestrator's params. Set the flag to `false` to disable date context entirely (the answer prompt then stays byte-identical to the pre-feature prompt).
+
+**Timezone resolution:** `chat_date_timezone` is a single deployment-wide IANA timezone (default `Europe/Berlin`) used to resolve "today" — there is no per-user or per-KB override. Fail-open: if the timezone string is invalid or unparseable, resolution falls back to UTC.
+
+**Recent-documents tool:** the `recent_documents` MCP tool lists files added to the current KB within a date window (newest first, name + origin + date). It requires:
+- `chat_date_tools_enabled = true` (gate; default off — when off the tool returns a "disabled" message)
+- `chat_answer_tools_enabled = true` (answer-time tools must be enabled for the LLM to call any MCP tool)
+
+Parameters: `date_from` (required, ISO `YYYY-MM-DD`) and `date_to` (optional, ISO `YYYY-MM-DD`; defaults to now, treated as inclusive of the whole day). The LLM computes these absolute dates from the injected current date. Results are capped at `chat_date_tools_max_results`. `kb_id` is injected automatically at dispatch.
+
+**Search date filtering:** the `kb_search` MCP tool accepts optional `date_from` / `date_to` params (ISO `YYYY-MM-DD`, always available and ungated) that constrain retrieval to files whose ingest date falls in the window — independent of whether the recent-documents tool is enabled. Because the chunk tables (vector DB) and `files` (main DB) may be separate databases, the window is resolved to file IDs via the main DB and folded into the existing file-ID filter rather than a cross-DB join; a zero-match window returns no results.
+
+**Date column:** date windows key on `files.created_at` (file ingest timestamp). A future phase 2 feature will introduce a per-file `published_at` column for corpora with explicit publication dates (RSS feeds, news archives, etc.); the single `effectiveDateExpr` constant in `internal/vector/recency_boost.go` will swap in the published-at column when it becomes available, requiring no config change.
+
+Code: `internal/chat/date_prompt.go` (injection), `internal/mcp/builtin/recent_documents.go` (tool implementation), `internal/mcp/builtin/kb_search.go` (search date params).
+
 ## Image captioning + better tables (Docling)
 
 ```

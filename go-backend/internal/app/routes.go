@@ -702,6 +702,18 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 	mcpRegistry.RegisterBuiltin(builtin.NewChunkRead(rc.searchService))
 	mcpRegistry.RegisterBuiltin(builtin.NewDocumentOutline(rc.searchService))
 
+	// Date-aware listing: recent_documents lists files added to a KB in a
+	// date window. Gated by chat_date_tools_enabled (default off); the
+	// answer LLM computes the window from the injected current date.
+	dateToolsEnabled := func(ctx context.Context) bool {
+		return chat.ChatDateToolsEnabled(ctx, rc.chatStore)
+	}
+	dateToolsMaxResults := func(ctx context.Context) int {
+		return chat.ChatDateToolsMaxResults(ctx, rc.chatStore)
+	}
+	mcpRegistry.RegisterBuiltin(builtin.NewRecentDocuments(
+		builtin.NewPgxRecentDocsStore(rc.infra.db.Main), dateToolsEnabled, dateToolsMaxResults))
+
 	// AP-B2 non-retrieval tools: calculator (in-process arithmetic),
 	// sql_query (read-only SELECT against allowlisted tables),
 	// code_exec (gVisor-sandboxed Python). The sql_query tool MUST run

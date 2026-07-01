@@ -8,6 +8,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 
 - `chat_*` — chat orchestrators, gates, post-response
 - `chat_answer_history_*`, `chat_transform_followup_enabled` — answer-time conversation history (the answer LLM was single-turn until 2026-06) + retrieval-free reformat follow-ups ("das als Tabelle"); both **default ON** (correctness fixes; the keys are kill switches)
+- `chat_date_awareness_enabled` (default **ON**, kill switch) — injects the current date (`chat_date_timezone`, default `Europe/Berlin`) into the answer system prompt so the LLM resolves "today"/"yesterday"/"since May". `chat_date_tools_enabled` (default off) + `chat_date_tools_max_results` (default 50) enable the `recent_documents` MCP tool (list files added in a date window). `kb_search` also accepts optional `date_from`/`date_to` (always available). Date windows key on `files.created_at` (ingest time; a future `published_at` swaps in via the single `effectiveDateExpr` in `internal/vector/recency_boost.go`). `internal/chat/date_prompt.go`, `internal/mcp/builtin/recent_documents.go`.
 - `chat_longmem_*` — per-user long-term memory (incl. `_recall_semantic`, `_conflict_*` for ANN + Mem0 conflict resolution)
 - `chat_longcontext_*` — System-2 long-context routing for global-synthesis queries
 - `chat_context_compression_*` — ECoRAG evidentiality-based post-rerank filtering
@@ -215,6 +216,7 @@ Most chat-pipeline features default OFF. The **full toggle blocks** (combined fl
 | Tabular Q&A (table_query) | `chat_tabular_query_enabled` (+ `_semantic_columns_enabled`, `_charts_enabled`) — **needs OPERATOR PREREQUISITE grants** | 0048 | Structured spreadsheet Q&A |
 | HyPE | `hype_enabled` (ingest) + `hype_search_enabled` (query) | — | HyPE — hypothetical prompt embeddings |
 | In-chat document comparison | `chat_compare_enabled` (+ `_model`, `_max_sections`, `_concurrency`, `_peers_per_section`, `_attachment_ttl_hours`, `_max_file_bytes`) | — | In-chat document comparison |
+| Date-aware chat | `chat_date_awareness_enabled` (on), `chat_date_tools_enabled`, `chat_date_timezone` | — | Date-aware chat |
 | Image captioning + better tables (Docling) | `docling_enabled` + `docling_picture_description_enabled` (+ `docling_picture_area_threshold`, `docling_table_mode`) — gemma-4 vision wired **on the sidecar** | — | Image captioning + better tables (Docling) |
 | Full iterative DRIFT | `chat_drift_enabled` (+ `_max_followups`, `_primer_top_k`, `_search_top_k`, `_model`) | 0059 | Full iterative DRIFT |
 | KB-as-MCP-server (ask_kb) | `mcp_server_enabled` (global, default off) | — | KB-as-MCP-server |

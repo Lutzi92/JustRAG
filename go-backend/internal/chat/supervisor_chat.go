@@ -49,6 +49,10 @@ type SupervisorChatParams struct {
 	// Set from chat_supervisor_multi_specialist. False (default)
 	// preserves the legacy single-pass behaviour.
 	MultiSpecialist bool
+	// CurrentDateLine is the localized current-date line to append to the
+	// answer system prompt (empty when chat_date_awareness_enabled is off).
+	// Set at dispatch via SystemPromptDateLine.
+	CurrentDateLine string
 }
 
 // RunSupervisorChat is the production entry point. It routes the query
@@ -167,7 +171,7 @@ func runSupervisorChatTestable(
 		sb.WriteString(params.KbSystemPrompt)
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString(prompts.ChatSystemPrompt(params.Language))
+	sb.WriteString(prompts.ChatSystemPromptWithDate(params.Language, params.CurrentDateLine))
 	switch {
 	case abstain:
 		sb.WriteString(prompts.ChatAbstainNotice(params.Language))

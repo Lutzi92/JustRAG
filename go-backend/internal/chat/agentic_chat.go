@@ -43,6 +43,10 @@ type AgenticChatParams struct {
 	// HyPESearch enables the HyPE query-time arm on this orchestrator's
 	// initial search (resolved from hype_search_enabled at dispatch).
 	HyPESearch bool
+	// CurrentDateLine is the localized current-date line to append to the
+	// answer system prompt (empty when chat_date_awareness_enabled is off).
+	// Set at dispatch via SystemPromptDateLine.
+	CurrentDateLine string
 }
 
 // searchInvoker is the minimal vector.SearchService surface RunAgenticChat
@@ -266,7 +270,7 @@ func runAgenticChatTestable(
 		sb.WriteString(params.KbSystemPrompt)
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString(prompts.ChatSystemPrompt(params.Language))
+	sb.WriteString(prompts.ChatSystemPromptWithDate(params.Language, params.CurrentDateLine))
 	if IsLowConfidence(accumulated) {
 		sb.WriteString(prompts.ChatLowConfidenceNotice(params.Language))
 	}

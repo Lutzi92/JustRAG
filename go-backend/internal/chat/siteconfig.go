@@ -1418,3 +1418,41 @@ func CompareAttachmentTTLHours(ctx context.Context, r SiteConfigReader) int {
 func CompareMaxFileBytes(ctx context.Context, r SiteConfigReader) int {
 	return readInt(ctx, r, "chat_compare_max_file_bytes", 10485760, 1024, 104857600)
 }
+
+// ---------------------------------------------------------------------------
+// Date-aware chat (chat_date_*)
+// ---------------------------------------------------------------------------
+
+// ChatDateAwarenessEnabled gates injecting the current date into the
+// answer system prompt so the LLM can resolve "today"/"yesterday"/"since
+// May". Default ON — a correctness fix; the flag exists only as a kill
+// switch. Tunable via "chat_date_awareness_enabled".
+func ChatDateAwarenessEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_date_awareness_enabled", true)
+}
+
+// ChatDateTimezone is the IANA timezone used to resolve "today" for the
+// injected date line and to parse the date tools' ISO date args. Default
+// "Europe/Berlin"; a blank value falls back to the default, and an
+// unparseable name falls back to UTC at use time. Tunable via
+// "chat_date_timezone".
+func ChatDateTimezone(ctx context.Context, reader SiteConfigReader) string {
+	tz := readString(ctx, reader, "chat_date_timezone")
+	if tz == "" {
+		return "Europe/Berlin"
+	}
+	return tz
+}
+
+// ChatDateToolsEnabled gates the recent_documents MCP tool (list files
+// added in a date window). Default OFF — opt-in like the other
+// answer-time tools. Tunable via "chat_date_tools_enabled".
+func ChatDateToolsEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_date_tools_enabled", false)
+}
+
+// ChatDateToolsMaxResults caps the recent_documents result list. Range
+// [1, 500]; default 50. Tunable via "chat_date_tools_max_results".
+func ChatDateToolsMaxResults(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_date_tools_max_results", 50, 1, 500)
+}

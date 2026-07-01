@@ -3,7 +3,7 @@ import type { Message, MessageSource, MessageVerification, StructuredTable, Know
 import { API_BASE_URL, authFetch } from '../api';
 import { HAPTIC_PATTERNS, triggerHaptic } from '../utils/haptics';
 import {
-  addMessageToTree, updateMessageInTree, remapMessageId,
+  addMessageToTree, updateMessageInTree, remapMessageId, nearestPersistedAncestorId,
 } from '../utils/messageTree';
 import { parseSseStream } from '../utils/sseParser';
 
@@ -16,6 +16,7 @@ interface UseChatStreamParams {
   language: string;
   // Tree state setters from useMessageTree
   setMessageTree: React.Dispatch<React.SetStateAction<Map<string, Message>>>;
+  messageTreeRef: React.MutableRefObject<Map<string, Message>>;
   setActiveLeafId: (id: string | null) => void;
   // Chat state from useChat
   activeChatIdRef: React.MutableRefObject<string | null>;
@@ -37,7 +38,7 @@ interface UseChatStreamParams {
 export function useChatStream({
   currentKb, files, enhance,
   reasoningEnabled, reasoningLevel, language,
-  setMessageTree, setActiveLeafId,
+  setMessageTree, messageTreeRef, setActiveLeafId,
   activeChatIdRef, setActiveChatId, setChats,
   fetchChats, fetchChatsTimerRef,
   t,
@@ -58,7 +59,12 @@ export function useChatStream({
     if (!userMessage.trim() || !currentKb || loading || selectedFiles.length === 0) return;
     triggerHaptic(HAPTIC_PATTERNS.send);
 
-    const parentId = editParentId || activeLeafId || undefined;
+    // The active leaf can be an unpersisted temp id (e.g. a temp-error node from
+    // a failed send). Resolve to the nearest persisted ancestor so we never post
+    // a temp id as parentMessageId — doing so hits the uuid `messages` columns
+    // and drops the whole conversation history (SQLSTATE 22P02).
+    const rawParentId = editParentId || activeLeafId || undefined;
+    const parentId = nearestPersistedAncestorId(messageTreeRef.current, rawParentId) ?? undefined;
     const tempUserMsgId = `temp-user-${Date.now()}`;
     const tempAiMsgId = `temp-ai-${Date.now()}`;
 
@@ -318,7 +324,7 @@ export function useChatStream({
         setLoading(false);
       }
     }
-  }, [currentKb, loading, files, enhance, reasoningEnabled, reasoningLevel, language, fetchChats, t, activeChatIdRef, fetchChatsTimerRef, setActiveChatId, setActiveLeafId, setChats, setMessageTree]);
+  }, [currentKb, loading, files, enhance, reasoningEnabled, reasoningLevel, language, fetchChats, t, activeChatIdRef, fetchChatsTimerRef, messageTreeRef, setActiveChatId, setActiveLeafId, setChats, setMessageTree]);
 
   const cancelStream = useCallback(() => {
     chatAbortRef.current?.abort();
