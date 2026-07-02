@@ -498,15 +498,68 @@ var deWeekdays = map[time.Weekday]string{
 	time.Sunday:    "Sonntag",
 }
 
-// CurrentDateLine returns the localized "current date" line to append to
+// dateAnchorOffsets are the day offsets spelled out in the date line's
+// reference ladder. 1–7 covers "letzte N Tage" phrasings; 14 and 30 anchor
+// "two weeks" / "a month".
+var dateAnchorOffsets = []int{1, 2, 3, 4, 5, 6, 7, 14, 30}
+
+// CurrentDateLine returns the localized "current date" block to append to
 // the chat system prompt so the answer LLM can resolve relative dates
-// ("today", "yesterday", "since May"). Format: weekday name + ISO date.
+// ("today", "yesterday", "since May"). Beyond the weekday + ISO date it
+// carries a precomputed day-anchor ladder: LLMs are unreliable at calendar
+// subtraction (month-boundary borrows especially), so windows like "the
+// last 5 days" must resolve by lookup, not arithmetic.
 func CurrentDateLine(lang string, now time.Time) string {
 	iso := now.Format("2006-01-02")
-	if lang == "de" {
-		return fmt.Sprintf("Aktuelles Datum: %s, %s.", deWeekdays[now.Weekday()], iso)
+	day := func(n int) string { return now.AddDate(0, 0, -n).Format("2006-01-02") }
+
+	var anchors strings.Builder
+	for i, n := range dateAnchorOffsets {
+		if i > 0 {
+			anchors.WriteString("; ")
+		}
+		switch {
+		case n == 1 && lang == "de":
+			fmt.Fprintf(&anchors, "gestern = %s", day(n))
+		case n == 1:
+			fmt.Fprintf(&anchors, "yesterday = %s", day(n))
+		case n == 2 && lang == "de":
+			fmt.Fprintf(&anchors, "vorgestern (vor 2 Tagen) = %s", day(n))
+		case n == 2:
+			fmt.Fprintf(&anchors, "day before yesterday (2 days ago) = %s", day(n))
+		case lang == "de":
+			fmt.Fprintf(&anchors, "vor %d Tagen = %s", n, day(n))
+		default:
+			fmt.Fprintf(&anchors, "%d days ago = %s", n, day(n))
+		}
 	}
-	return fmt.Sprintf("Current date: %s, %s.", now.Weekday().String(), iso)
+
+	// Calendar anchors: ISO week (Monday–Sunday) and calendar month, so
+	// "diese/letzte Woche" and "dieser/letzter Monat" resolve by lookup too.
+	fmtDate := func(t time.Time) string { return t.Format("2006-01-02") }
+	thisWeekStart := now.AddDate(0, 0, -((int(now.Weekday()) + 6) % 7))
+	thisWeekEnd := thisWeekStart.AddDate(0, 0, 6)
+	lastWeekStart := thisWeekStart.AddDate(0, 0, -7)
+	lastWeekEnd := thisWeekStart.AddDate(0, 0, -1)
+	thisMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	thisMonthEnd := thisMonthStart.AddDate(0, 1, -1)
+	lastMonthStart := thisMonthStart.AddDate(0, -1, 0)
+	lastMonthEnd := thisMonthStart.AddDate(0, 0, -1)
+
+	if lang == "de" {
+		fmt.Fprintf(&anchors,
+			"; diese Woche (Mo–So) = %s bis %s; letzte Woche = %s bis %s; dieser Monat = %s bis %s; letzter Monat = %s bis %s",
+			fmtDate(thisWeekStart), fmtDate(thisWeekEnd), fmtDate(lastWeekStart), fmtDate(lastWeekEnd),
+			fmtDate(thisMonthStart), fmtDate(thisMonthEnd), fmtDate(lastMonthStart), fmtDate(lastMonthEnd))
+		return fmt.Sprintf("Aktuelles Datum: %s, %s.\nDatums-Referenz: %s. Ein Zeitraum wie \"die letzten N Tage\" umfasst alle Daten von (heute minus N Tage) bis heute einschließlich — nutze die Referenz oben, statt selbst zu rechnen.",
+			deWeekdays[now.Weekday()], iso, anchors.String())
+	}
+	fmt.Fprintf(&anchors,
+		"; this week (Mon–Sun) = %s to %s; last week = %s to %s; this month = %s to %s; last month = %s to %s",
+		fmtDate(thisWeekStart), fmtDate(thisWeekEnd), fmtDate(lastWeekStart), fmtDate(lastWeekEnd),
+		fmtDate(thisMonthStart), fmtDate(thisMonthEnd), fmtDate(lastMonthStart), fmtDate(lastMonthEnd))
+	return fmt.Sprintf("Current date: %s, %s.\nDate reference: %s. A window like \"the last N days\" includes all dates from (today minus N days) through today inclusive — use the reference above instead of computing dates yourself.",
+		now.Weekday().String(), iso, anchors.String())
 }
 
 // ChatSystemPromptWithDate returns ChatSystemPrompt(lang) with the given
