@@ -260,10 +260,14 @@ Security: uploads are user-scoped — an attachment is readable only by the user
 ## Date-aware chat
 
 ```
-chat_date_awareness_enabled   = true                    # default ON; kill switch for date injection
-chat_date_timezone            = Europe/Berlin           # IANA timezone used to resolve "today" (deployment-wide)
-chat_date_tools_enabled       = false                   # gate for recent_documents tool; default off
-chat_date_tools_max_results   = 50                      # [1,500] cap on files returned per recent_documents call
+chat_date_awareness_enabled       = true                # default ON; kill switch for date injection
+chat_date_timezone                = Europe/Berlin       # IANA timezone used to resolve "today" (deployment-wide)
+chat_date_tools_enabled           = false               # gate for recent_documents tool; default off
+chat_date_tools_max_results       = 50                  # [1,500] cap on files returned per recent_documents call
+chat_recency_listing_enabled      = true                # default ON; kill switch for the deterministic recency-listing path
+chat_recency_listing_window_days  = 7                   # [1,365] window "new" resolves to when the query names none
+chat_recency_listing_max_results  = 50                  # [1,500] cap on the injected file listing
+chat_recency_listing_name_match_enabled = true          # default ON; include name-labeled files (NEU/new) outside the window
 ```
 
 **Date injection (always-on by default):** when `chat_date_awareness_enabled = true`, the current date is injected into the answer system prompt for all six answer orchestrators (standard/`PrepareChatContext`, the legacy `RunDeepChat`, supervisor, plan-execute, agentic, and DRIFT), allowing the LLM to resolve temporal queries like "what was added today", "since May", or "recent changes". The date line is computed once per request at dispatch and threaded onto each orchestrator's params. Set the flag to `false` to disable date context entirely (the answer prompt then stays byte-identical to the pre-feature prompt).
@@ -278,9 +282,13 @@ Parameters: `date_from` (required, ISO `YYYY-MM-DD`) and `date_to` (optional, IS
 
 **Search date filtering:** the `kb_search` MCP tool accepts optional `date_from` / `date_to` params (ISO `YYYY-MM-DD`, always available and ungated) that constrain retrieval to files whose ingest date falls in the window — independent of whether the recent-documents tool is enabled. Because the chunk tables (vector DB) and `files` (main DB) may be separate databases, the window is resolved to file IDs via the main DB and folded into the existing file-ID filter rather than a cross-DB join; a zero-match window returns no results.
 
+**Deterministic recency listing (default ON):** queries that ask "what is new / recently added" ("Welche neuen Meldungen gibt es?", "What's new?", "Welche Artikel wurden in den letzten 5 Tagen veröffentlicht?") carry almost no semantic signal, so plain BM25+vector retrieval returns an arbitrary subset of recent files and the enumeration pre-pass — which only verifies items already in context — cannot recover the rest (observed in production 2026-07-02: 1 of many new advisories listed). When `chat_recency_listing_enabled = true` and the regex classifier `IsRecencyListingQuery` fires (precision-over-recall: recency adjectives anchored to document nouns, so "neue Erkenntnisse"/"new features" do not match), `PrepareChatContext` (a) sets `SearchOptions.CreatedAfter` to the window start — day-start of today − `chat_recency_listing_window_days` in `chat_date_timezone`, overridden by an explicit window in the query ("in den letzten 5 Tagen", "von heute") — so retrieved chunks and citations come from recent files only, and (b) fetches the complete file listing for the window from the main DB and injects it as a system-prompt addendum: the listing, not the semantic top-k, is the completeness contract. An at-cap listing (`chat_recency_listing_max_results`) is disclosed as incomplete in the prompt; an empty window instructs the model to answer "nothing new since <date>". The listing supersedes the enumeration pre-pass for these queries (two competing completeness contracts would conflict). Fail-open: a lister error reverts to legacy retrieval. Standard-path only (`PrepareChatContext`); orchestrator paths for complex_reasoning queries are unaffected, as is the eval harness unless it routes through the standard path. No migration.
+
+**Name-marker arm (`chat_recency_listing_name_match_enabled`, default ON):** some corpora label new items in the file NAME — CERT-Bund advisories carry "NEU" vs "UPDATE" in the title — so "neue Meldungen" can target the labeled subset rather than ingest recency. When the query literally mentions "neu"/"new" (any inflection; purely temporal phrasings like "aktuelle Warnungen" or "zuletzt hinzugefügt" do not trigger it), files whose name matches the word-boundary regex `\m(neu|new)\M` are fetched regardless of window, merged into the listing (out-of-window matches annotated with their date and label provenance), and — when safe (no user file selection to respect, window listing not truncated) — retrieval switches from the `CreatedAfter` window to an explicit `FileIDs` union so the labeled files' chunks stay citable. The addendum also instructs the model to consider name status labels when the question targets them. A marker-lookup error keeps the window arm (fail-open).
+
 **Date column:** date windows key on `files.created_at` (file ingest timestamp). A future phase 2 feature will introduce a per-file `published_at` column for corpora with explicit publication dates (RSS feeds, news archives, etc.); the single `effectiveDateExpr` constant in `internal/vector/recency_boost.go` will swap in the published-at column when it becomes available, requiring no config change.
 
-Code: `internal/chat/date_prompt.go` (injection), `internal/mcp/builtin/recent_documents.go` (tool implementation), `internal/mcp/builtin/kb_search.go` (search date params).
+Code: `internal/chat/date_prompt.go` (injection), `internal/chat/recency_classifier.go` + `internal/chat/recency_listing.go` (recency listing), `internal/mcp/builtin/recent_documents.go` (tool implementation), `internal/mcp/builtin/kb_search.go` (search date params).
 
 ## Image captioning + better tables (Docling)
 

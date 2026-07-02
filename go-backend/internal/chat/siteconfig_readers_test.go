@@ -1398,3 +1398,52 @@ func TestChatDateReaders(t *testing.T) {
 		t.Errorf("blank timezone = %q, want Europe/Berlin", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Recency-listing readers tests
+// ---------------------------------------------------------------------------
+
+func TestChatRecencyListingReaders(t *testing.T) {
+	ctx := context.Background()
+
+	// Defaults (nil reader): correctness fix → on by default, 7-day
+	// window, 50-entry listing cap.
+	if got := ChatRecencyListingEnabled(ctx, nil); got != true {
+		t.Errorf("ChatRecencyListingEnabled default = %v, want true", got)
+	}
+	if got := ChatRecencyListingWindowDays(ctx, nil); got != 7 {
+		t.Errorf("ChatRecencyListingWindowDays default = %d, want 7", got)
+	}
+	if got := ChatRecencyListingMaxResults(ctx, nil); got != 50 {
+		t.Errorf("ChatRecencyListingMaxResults default = %d, want 50", got)
+	}
+
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_recency_listing_enabled":     strPtr("false"),
+		"chat_recency_listing_window_days": strPtr("3"),
+		"chat_recency_listing_max_results": strPtr("100"),
+	}}
+	if ChatRecencyListingEnabled(ctx, r) != false {
+		t.Error("enabled override not applied")
+	}
+	if ChatRecencyListingWindowDays(ctx, r) != 3 {
+		t.Error("window-days override not applied")
+	}
+	if ChatRecencyListingMaxResults(ctx, r) != 100 {
+		t.Error("max-results override not applied")
+	}
+
+	// Out-of-range values fall back to the default (readInt semantics).
+	if got := ChatRecencyListingWindowDays(ctx, &fakeSiteConfigReader{values: map[string]*string{"chat_recency_listing_window_days": strPtr("9999")}}); got != 7 {
+		t.Errorf("window-days out-of-range = %d, want default 7", got)
+	}
+
+	// Name-marker lookup: default ON, kill switch.
+	if got := ChatRecencyListingNameMatchEnabled(ctx, nil); got != true {
+		t.Errorf("ChatRecencyListingNameMatchEnabled default = %v, want true", got)
+	}
+	offNM := &fakeSiteConfigReader{values: map[string]*string{"chat_recency_listing_name_match_enabled": strPtr("false")}}
+	if ChatRecencyListingNameMatchEnabled(ctx, offNM) != false {
+		t.Error("name-match override not applied")
+	}
+}

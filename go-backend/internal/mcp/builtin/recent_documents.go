@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/mcp"
@@ -17,8 +18,11 @@ import (
 // may pass a configured cap in a future revision.
 const recentDocumentsMaxDefault = 50
 
-// RecentDocRow is one file surfaced by recent_documents.
+// RecentDocRow is one file surfaced by recent_documents. ID is unused by
+// the tool's own text rendering but consumed by chat's recency-listing
+// path (retrieval scoping by file ID).
 type RecentDocRow struct {
+	ID        string
 	Name      string
 	Origin    string
 	CreatedAt time.Time
@@ -142,7 +146,7 @@ func (s *PgxRecentDocsStore) RecentDocuments(ctx context.Context, kbID string, a
 		return nil, fmt.Errorf("recent_documents: no db pool")
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT name, origin, created_at
+		`SELECT id::text, name, origin, created_at
 		   FROM files
 		  WHERE kb_id = $1::uuid AND created_at >= $2 AND created_at <= $3
 		  ORDER BY created_at DESC
@@ -152,10 +156,38 @@ func (s *PgxRecentDocsStore) RecentDocuments(ctx context.Context, kbID string, a
 		return nil, err
 	}
 	defer rows.Close()
+	return scanRecentDocRows(rows)
+}
+
+// NameMarkerDocuments lists files in kbID whose name matches the given
+// case-insensitive Postgres regex (word-boundary anchors expected, e.g.
+// `\m(neu|new)\M`), newest first. Backs the recency-listing name-marker
+// arm in chat: corpora like CERT-Bund advisories carry "NEU"/"UPDATE" as
+// a status label in the title, so "neue Meldungen" can target the labeled
+// subset regardless of ingest recency.
+func (s *PgxRecentDocsStore) NameMarkerDocuments(ctx context.Context, kbID, nameRegex string, limit int) ([]RecentDocRow, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("recent_documents: no db pool")
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id::text, name, origin, created_at
+		   FROM files
+		  WHERE kb_id = $1::uuid AND name ~* $2
+		  ORDER BY created_at DESC
+		  LIMIT $3`,
+		kbID, nameRegex, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRecentDocRows(rows)
+}
+
+func scanRecentDocRows(rows pgx.Rows) ([]RecentDocRow, error) {
 	var out []RecentDocRow
 	for rows.Next() {
 		var r RecentDocRow
-		if err := rows.Scan(&r.Name, &r.Origin, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Origin, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

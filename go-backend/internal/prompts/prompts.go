@@ -772,6 +772,59 @@ func EnumerationVerifiedMatchesAddendum(lang, matchesJSON string) string {
 		"- If the list is empty, tell the user the context contains no matches for the criterion. Do not invent matches."
 }
 
+// RecencyListingAddendum returns the system-prompt addendum for
+// recency-listing queries ("Welche neuen Meldungen gibt es?"): the
+// authoritative, deterministically-fetched list of documents added to the
+// KB within the window. Injected because semantic retrieval cannot
+// guarantee every recent file's chunks reach top-k — the listing, not the
+// context blocks, is the completeness contract for "what is new" answers.
+// entries are preformatted "name (added YYYY-MM-DD)" lines, newest first;
+// sinceISO is the inclusive window start (ISO date, resolved in the
+// configured timezone); truncated=true means the listing hit its cap and
+// must be disclosed as incomplete.
+func RecencyListingAddendum(lang string, entries []string, sinceISO string, truncated bool) string {
+	var list strings.Builder
+	for _, e := range entries {
+		list.WriteString("- ")
+		list.WriteString(e)
+		list.WriteString("\n")
+	}
+	if lang == "de" {
+		s := fmt.Sprintf("\n\nNEU HINZUGEFÜGTE DOKUMENTE: Die folgende Liste wurde deterministisch aus der Datenbank ermittelt und enthält ALLE Dokumente, die seit dem %s zu dieser Wissensdatenbank hinzugefügt wurden (neueste zuerst):\n", sinceISO)
+		if len(entries) == 0 {
+			return s + "(keine)\n\nVorgaben: Teile dem Nutzer mit, dass in diesem Zeitraum keine neuen Dokumente hinzugekommen sind. Präsentiere keine älteren Kontextinhalte als 'neu'."
+		}
+		s += list.String() +
+			"\nVorgaben für die Antwort:\n" +
+			"- Wenn die Frage nach neuen/aktuellen Dokumenten oder Meldungen fragt, ist DIESE Liste die maßgebliche und vollständige Antwortgrundlage — nicht die Kontextblöcke allein.\n" +
+			"- Führe JEDEN passenden Listeneintrag als eigenen Punkt auf. Keine Zusammenfassung, kein 'unter anderem'.\n" +
+			"- Schränkt die Frage thematisch ein (z.B. 'neue Meldungen zu Citrix'), nenne nur die thematisch passenden Einträge.\n" +
+			"- Nutze Kontextblöcke [N] für Details und Zitate, wo vorhanden; Einträge ohne Kontextblock nennst du ohne Zitat.\n" +
+			"- Dateinamen können Status-Kennzeichnungen wie 'NEU' oder 'UPDATE' tragen (z.B. CERT-Advisories). Zielt die Frage auf so gekennzeichnete Einträge (z.B. 'neue Meldungen' = mit 'NEU' markiert), berücksichtige die Kennzeichnung im Namen zusätzlich zum Hinzufügedatum.\n" +
+			"- Leite die Dokumenttitel aus den Dateinamen ab (Suffixe wie '_<hash>.md' kannst du weglassen)."
+		if truncated {
+			s += "\n- ACHTUNG: Die Liste ist gekappt und damit unvollständig — weise darauf hin, dass es weitere neue Dokumente gibt."
+		}
+		return s
+	}
+	s := fmt.Sprintf("\n\nRECENTLY ADDED DOCUMENTS: The following list was resolved deterministically from the database and contains ALL documents added to this knowledge base since %s (newest first):\n", sinceISO)
+	if len(entries) == 0 {
+		return s + "(none)\n\nRequirements: Tell the user that no documents were added in this window. Do not present older context content as 'new'."
+	}
+	s += list.String() +
+		"\nRequirements for the answer:\n" +
+		"- When the question asks for new/recent documents or items, THIS list is the authoritative and complete basis for the answer — not the context blocks alone.\n" +
+		"- Render EVERY matching list entry as its own bullet. No summarizing, no 'among others'.\n" +
+		"- If the question narrows by topic (e.g. 'new advisories about Citrix'), include only the topically matching entries.\n" +
+		"- Use context blocks [N] for details and citations where available; entries without a context block are listed without a citation.\n" +
+		"- File names may carry status labels like 'NEU' or 'UPDATE' (e.g. CERT advisories). If the question targets labeled items (e.g. 'new advisories' = labeled 'NEU'), consider the label in the name in addition to the added date.\n" +
+		"- Derive document titles from the file names (suffixes like '_<hash>.md' may be dropped)."
+	if truncated {
+		s += "\n- CAUTION: The list is capped and therefore incomplete — say that there are additional new documents."
+	}
+	return s
+}
+
 // FlashcardSystemPrompt returns the system prompt for flashcard generation.
 func FlashcardSystemPrompt(lang string) string {
 	if lang == "de" {

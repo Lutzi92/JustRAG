@@ -75,6 +75,11 @@ type ChatContextParams struct {
 	// answer system prompt (empty when chat_date_awareness_enabled is off).
 	// Set at dispatch via SystemPromptDateLine.
 	CurrentDateLine string
+	// RecencyLister backs the deterministic recency-listing path for
+	// "what is new / recently added" queries (see recency_listing.go).
+	// Nil disables the path — public API / OpenAI-compat / mcpserver
+	// callers leave it unset.
+	RecencyLister RecencyLister
 }
 
 // ChatSource represents a single source document surfaced in a chat response.
@@ -929,6 +934,23 @@ func PrepareChatContext(
 		}
 	}
 
+	// Deterministic recency listing: for "what is new / recently added"
+	// queries, window-scope retrieval to recently created files and
+	// fetch the complete file listing for the window (injected as a
+	// system-prompt addendum below). Semantic retrieval alone returns an
+	// arbitrary subset for these content-free queries — prod bug
+	// 2026-07-02, "Welche neuen Meldungen gibt es?" listed 1 of many.
+	recency := applyRecencyListing(ctx, siteConfig, params.RecencyLister,
+		params.KbID, params.SearchQuery, &opts, time.Now())
+	if recency.fired && params.Emit != nil {
+		params.Emit(map[string]any{
+			"type":         "recency_listing",
+			"since":        recency.sinceISO,
+			"files_listed": len(recency.entries),
+			"truncated":    recency.truncated,
+		})
+	}
+
 	// Sub-question decomposition (DecomposeRAG, T1-1). Fires only for
 	// complex_reasoning queries when the operator flag is on. Distinct
 	// from MultiQuery (paraphrase): decomposition produces semantically
@@ -1040,7 +1062,12 @@ func PrepareChatContext(
 	// 9 project matches → 6 cited in prose. Skipped for abstain paths
 	// because there are no matches to enumerate then.
 	var enumerationMatches []ai.EnumerationMatch
-	runEnumeration := !abstain && IsEnumerationQuery(params.SearchQuery, params.Language)
+	// The recency listing supersedes the enumeration pre-pass: both are
+	// completeness contracts, but the extraction pass can only verify
+	// items already in context, which is exactly what recency queries
+	// can't rely on. Two competing "authoritative list" addenda would
+	// also conflict in the prompt.
+	runEnumeration := !abstain && !recency.fired && IsEnumerationQuery(params.SearchQuery, params.Language)
 	if params.ForceEnumerationPrepass != nil {
 		runEnumeration = !abstain && *params.ForceEnumerationPrepass
 	}
@@ -1110,6 +1137,12 @@ func PrepareChatContext(
 		// improvising from the raw chunks.
 		matchesJSON := ai.FormatEnumerationMatchesJSON(enumerationMatches)
 		sb.WriteString(prompts.EnumerationVerifiedMatchesAddendum(params.Language, matchesJSON))
+	}
+	if recency.fired {
+		// Injected even when empty: the model should answer "nothing new
+		// was added since <date>" instead of presenting older context
+		// content as new.
+		sb.WriteString(prompts.RecencyListingAddendum(params.Language, recency.entries, recency.sinceISO, recency.truncated))
 	}
 	sb.WriteString("\n\nCONTEXT:\n")
 	sb.WriteString(contextText)

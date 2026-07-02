@@ -1807,6 +1807,26 @@ export const translations = {
         de: 'Obergrenze für die Anzahl der vom recent_documents-Tool zurückgegebenen Dokumente. Bereich [1, 500]; Default 50.',
         en: 'Upper bound on the number of documents returned by the recent_documents tool. Range [1, 500]; default 50.',
     },
+    chatRecencyListingEnabled: { de: 'Neuheits-Listing aktivieren ("Was ist neu?")', en: 'Enable recency listing ("What\'s new?")' },
+    chatRecencyListingEnabledHelp: {
+        de: 'Kill-Switch. Fragen wie "Welche neuen Meldungen gibt es?" werden deterministisch beantwortet: Die Suche wird auf kürzlich hinzugefügte Dokumente eingegrenzt und die vollständige Dateiliste des Zeitfensters wird der Antwort-LLM mitgegeben — semantische Suche allein liefert für solche Fragen nur eine zufällige Teilmenge. Standard: an.',
+        en: 'Kill switch. Questions like "Which new advisories are there?" are answered deterministically: retrieval is scoped to recently added documents and the complete file listing for the window is provided to the answer LLM — semantic search alone returns an arbitrary subset for such questions. Default: on.',
+    },
+    chatRecencyListingNameMatchEnabled: { de: 'Neuheits-Listing: Namens-Kennzeichnung berücksichtigen', en: 'Recency listing: match name labels' },
+    chatRecencyListingNameMatchEnabledHelp: {
+        de: 'Manche Korpora kennzeichnen neue Einträge im Dateinamen (z.B. CERT-Advisories mit "NEU" vs. "UPDATE"). Wenn aktiviert und die Frage "neu" erwähnt, werden auch so gekennzeichnete Dokumente außerhalb des Zeitfensters in Liste und Suche einbezogen. Standard: an.',
+        en: 'Some corpora label new items in the file name (e.g. CERT advisories with "NEU" vs. "UPDATE"). When on and the question mentions "new", documents labeled this way outside the time window are also included in the listing and retrieval. Default: on.',
+    },
+    chatRecencyListingWindowDays: { de: 'Neuheits-Listing: Zeitfenster (Tage)', en: 'Recency listing: window (days)' },
+    chatRecencyListingWindowDaysHelp: {
+        de: 'Zeitfenster, auf das sich "neu" bezieht, wenn die Frage keines nennt ("in den letzten 5 Tagen" überschreibt diesen Wert). Bereich [1, 365]; Default 7.',
+        en: 'Window that "new" resolves to when the question names none (an explicit "in the last 5 days" overrides this value). Range [1, 365]; default 7.',
+    },
+    chatRecencyListingMaxResults: { de: 'Neuheits-Listing: max. Einträge', en: 'Recency listing: max entries' },
+    chatRecencyListingMaxResultsHelp: {
+        de: 'Obergrenze für die eingefügte Dateiliste. Wird sie erreicht, weist die Antwort darauf hin, dass die Liste unvollständig ist. Bereich [1, 500]; Default 50.',
+        en: 'Upper bound on the injected file listing. When hit, the answer discloses that the list is incomplete. Range [1, 500]; default 50.',
+    },
 
     // ---------------------------------------------------------------
     // T2-1 Long-context (System 2) routing

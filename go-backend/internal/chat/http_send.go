@@ -309,6 +309,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		Emit:                  collectEmit,
 		GraphSubgraphChunkIDs: graphChunkIDs,
 		BridgeChunks:          bridgeChunks,
+		RecencyLister:         h.recencyLister,
 	}
 
 	// AP-C4 trajectory event (standard path): the decision was computed

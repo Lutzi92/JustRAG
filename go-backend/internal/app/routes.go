@@ -813,6 +813,14 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 			rc.infra.rdb.Client,
 			time.Duration(chat.CompareAttachmentTTLHours(context.Background(), rc.chatStore))*time.Hour,
 		)),
+		// Deterministic recency listing for "what is new / recently
+		// added" queries: window-scoped retrieval + complete file
+		// listing addendum. Reuses the recent_documents store; the
+		// adapter exists because chat cannot import mcp/builtin
+		// (import cycle).
+		chat.WithRecencyLister(&recencyListerAdapter{
+			store: builtin.NewPgxRecentDocsStore(rc.infra.db.Main),
+		}),
 	}
 	if rc.agentDecisionStore != nil {
 		chatOpts = append(chatOpts, chat.WithDecisionRecorder(&decisionRecorderAdapter{store: rc.agentDecisionStore}))
@@ -1149,6 +1157,37 @@ func isServiceWorkerAsset(path string) bool {
 // The conversion is a flat field-by-field copy. If the two structs ever
 // drift, a compile-time error here is the canary; this adapter is the
 // only call site that touches both.
+// recencyListerAdapter implements chat.RecencyLister on top of the
+// recent_documents tool's store. Lives here (not chat/) because chat
+// cannot import mcp/builtin without an import cycle.
+type recencyListerAdapter struct {
+	store *builtin.PgxRecentDocsStore
+}
+
+func (a *recencyListerAdapter) RecentDocuments(ctx context.Context, kbID string, after, before time.Time, limit int) ([]chat.RecencyDoc, error) {
+	rows, err := a.store.RecentDocuments(ctx, kbID, after, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	return toRecencyDocs(rows), nil
+}
+
+func (a *recencyListerAdapter) DocumentsWithNameMarker(ctx context.Context, kbID, nameRegex string, limit int) ([]chat.RecencyDoc, error) {
+	rows, err := a.store.NameMarkerDocuments(ctx, kbID, nameRegex, limit)
+	if err != nil {
+		return nil, err
+	}
+	return toRecencyDocs(rows), nil
+}
+
+func toRecencyDocs(rows []builtin.RecentDocRow) []chat.RecencyDoc {
+	out := make([]chat.RecencyDoc, len(rows))
+	for i, r := range rows {
+		out[i] = chat.RecencyDoc{ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt}
+	}
+	return out
+}
+
 type decisionRecorderAdapter struct {
 	store *adminagentmetrics.PgStore
 }

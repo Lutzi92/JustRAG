@@ -1456,3 +1456,39 @@ func ChatDateToolsEnabled(ctx context.Context, reader SiteConfigReader) bool {
 func ChatDateToolsMaxResults(ctx context.Context, reader SiteConfigReader) int {
 	return readInt(ctx, reader, "chat_date_tools_max_results", 50, 1, 500)
 }
+
+// ChatRecencyListingEnabled gates the deterministic recency-listing path:
+// when a query asks "what is new / recently added" (IsRecencyListingQuery),
+// retrieval is window-scoped via SearchOptions.CreatedAfter and the
+// complete file listing for the window is injected as a system-prompt
+// addendum. Default ON — a correctness fix for date-aware chat (semantic
+// retrieval cannot answer temporal listing questions completely); the flag
+// exists as a kill switch. Tunable via "chat_recency_listing_enabled".
+func ChatRecencyListingEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_recency_listing_enabled", true)
+}
+
+// ChatRecencyListingWindowDays is the window "neu"/"new" resolves to when
+// the query names no explicit timeframe. Range [1, 365]; default 7.
+// Tunable via "chat_recency_listing_window_days".
+func ChatRecencyListingWindowDays(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_recency_listing_window_days", 7, 1, 365)
+}
+
+// ChatRecencyListingMaxResults caps the injected file listing. Range
+// [1, 500]; default 50. Tunable via "chat_recency_listing_max_results".
+func ChatRecencyListingMaxResults(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_recency_listing_max_results", 50, 1, 500)
+}
+
+// ChatRecencyListingNameMatchEnabled gates the name-marker arm of the
+// recency listing: when the query literally says "neu"/"new", files whose
+// NAME carries that word (word-boundary match — CERT-Bund advisories are
+// labeled "NEU" vs "UPDATE" in the title) are merged into the listing and
+// the retrieval scope even when older than the window, because "neue
+// Meldungen" can target the labeled subset rather than ingest recency.
+// Default ON; kill switch. Tunable via
+// "chat_recency_listing_name_match_enabled".
+func ChatRecencyListingNameMatchEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_recency_listing_name_match_enabled", true)
+}

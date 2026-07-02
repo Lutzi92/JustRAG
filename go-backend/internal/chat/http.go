@@ -43,6 +43,7 @@ type Handler struct {
 	kgStore            kg.Store                // optional, AP-C4 graph-routing heuristic
 	longmemStore       longmem.Store           // optional, AP-D1 per-user memory
 	tabularCatalog     TabularCatalogChecker   // optional, Phase-3 chart-guidance gate
+	recencyLister      RecencyLister           // optional, deterministic recency-listing path
 	// raptorDescendants is the Phase F bridge that resolves a set of
 	// RAPTOR summary chunk ids to their transitive leaf descendants.
 	// Used by runPostResponseTasks to feed the citation validator's
@@ -219,6 +220,16 @@ func WithKBRouterCandidates(l KBRouterCandidateLister) HandlerOption {
 func WithTabularCatalog(c TabularCatalogChecker) HandlerOption {
 	return func(h *Handler) {
 		h.tabularCatalog = c
+	}
+}
+
+// WithRecencyLister attaches the recency-listing file lookup backing the
+// deterministic "what is new / recently added" path (recency_listing.go).
+// Production wiring adapts mcp/builtin.PgxRecentDocsStore. Optional —
+// when absent, recency queries fall back to plain semantic retrieval.
+func WithRecencyLister(l RecencyLister) HandlerOption {
+	return func(h *Handler) {
+		h.recencyLister = l
 	}
 }
 
