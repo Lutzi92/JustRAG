@@ -15,12 +15,14 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/prompts"
+	"github.com/justrag/go-backend/internal/siteconfig"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -59,6 +61,11 @@ type sendMessageRequest struct {
 	ReasoningLevel   string   `json:"reasoningLevel"` // "low", "medium", "high"
 	AttachmentID     string   `json:"attachmentId"`
 	ComparisonModes  []string `json:"comparisonModes"`
+	// TeamID / AgentID select a user-created agent team (or single agent)
+	// for this turn — sticky per chat session (persisted on the chat row).
+	// Mutually exclusive; TeamID wins if both are set.
+	TeamID  string `json:"teamId"`
+	AgentID string `json:"agentId"`
 }
 
 // SanitizeParentMessageID returns a pointer to id when it is a valid UUID, and
@@ -259,6 +266,16 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	compareEnabled := CompareEnabled(ctx, h.siteConfigReader)
 	runCompare := willRunComparison(compareEnabled, body.AttachmentID, body.ComparisonModes)
 
+	// Explicit user-created team/agent selection: beats every flag-driven
+	// orchestrator (but not the comparison attachment), runs regardless of
+	// query classification — the team router is the triage. Enhance passes
+	// stay retrieval-transform turns and bypass it.
+	var teamSel *teamSelection
+	if body.Enhance == "" {
+		teamSel = h.resolveTeamSelection(ctx, body, kbID)
+	}
+	h.persistChatSelection(ctx, chatID, body)
+
 	// Follow-up over a prior upload: when an attachment rides along but this is
 	// NOT a fresh comparison run (no modes), inject a capped block of the
 	// uploaded document + prior findings into the KB system prompt so the user
@@ -276,8 +293,8 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// Comparison turns also route through tryDeepChat (its switch dispatches
 	// the comparison orchestrator) regardless of complexity classification.
 	isComplex := cls.UseHyDE && cls.UseMultiQuery
-	if (isComplex || runCompare) && streamMode {
-		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, dateLine, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, bridgeChunks, answerHistory); handled {
+	if (isComplex || runCompare || teamSel != nil) && streamMode {
+		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, dateLine, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, bridgeChunks, answerHistory, teamSel); handled {
 			return
 		}
 		// Deep chat failed — fall through to standard path.
@@ -397,6 +414,7 @@ func (h *Handler) tryDeepChat(
 	graphChunkIDs []string,
 	bridgeChunks map[string]int,
 	answerHistory []ai.ChatHistoryEntry,
+	teamSel *teamSelection,
 ) bool {
 	ctx, span := observability.Tracer().Start(ctx, "chat.deep_chat")
 	defer span.End()
@@ -490,11 +508,20 @@ func (h *Handler) tryDeepChat(
 		willRunCorpusTable = false
 	}
 
+	// Explicit user-created team/agent selection takes priority over every
+	// flag-driven orchestrator (but not the comparison attachment) — the
+	// team router is the triage, so it also supersedes the corpus-table
+	// heuristic classifier.
+	willRunTeam := !runCompare && teamSel != nil && body.Enhance == ""
+	if willRunTeam {
+		willRunCorpusTable = false
+	}
+
 	// Full iterative DRIFT takes priority over the other orchestrators, but
 	// only for global-synthesis queries (its primer is wasted on narrow
 	// lookups). Narrow gate → it rarely intercepts; everything else falls
 	// through to supervisor/plan-execute/agentic/standard unchanged.
-	willRunDrift := !runCompare && !willRunCorpusTable && driftEnabled &&
+	willRunDrift := !runCompare && !willRunCorpusTable && !willRunTeam && driftEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == "" &&
 		IsGlobalSynthesisQuery(searchQuery)
@@ -504,13 +531,13 @@ func (h *Handler) tryDeepChat(
 	// on lookup/enumeration; ≥ 2 pp gain on complex_reasoning MRR or
 	// nDCG" — only the eval harness can decide whether the gate flips,
 	// so this gate stays per-deployment opt-in.
-	willRunSupervisor := !runCompare && !willRunCorpusTable && !willRunDrift && supervisorEnabled &&
+	willRunSupervisor := !runCompare && !willRunCorpusTable && !willRunTeam && !willRunDrift && supervisorEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
-	willRunPlanExecute := !runCompare && !willRunCorpusTable && !willRunDrift && !willRunSupervisor && planExecuteEnabled &&
+	willRunPlanExecute := !runCompare && !willRunCorpusTable && !willRunTeam && !willRunDrift && !willRunSupervisor && planExecuteEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
-	willRunAgentic := !runCompare && !willRunCorpusTable && !willRunDrift && !willRunSupervisor && !willRunPlanExecute &&
+	willRunAgentic := !runCompare && !willRunCorpusTable && !willRunTeam && !willRunDrift && !willRunSupervisor && !willRunPlanExecute &&
 		agenticEnabled &&
 		queryType == vector.QueryTypeComplexReasoning &&
 		body.Enhance == ""
@@ -525,6 +552,7 @@ func (h *Handler) tryDeepChat(
 		"enhance", body.Enhance,
 		"will_run_comparison", runCompare,
 		"will_run_corpus_table", willRunCorpusTable,
+		"will_run_team", willRunTeam,
 		"will_run_drift", willRunDrift,
 		"will_run_supervisor", willRunSupervisor,
 		"will_run_plan_execute", willRunPlanExecute,
@@ -579,6 +607,53 @@ func (h *Handler) tryDeepChat(
 			chatCtx.SystemPrompt = prompts.ComparisonSummaryPrompt(lang) +
 				"\n\n" + renderFindingsForSummary(cmpFindings)
 		}
+
+	case willRunTeam:
+		params := TeamParams{
+			KbID:                 kbID,
+			ChatID:               chatID,
+			Query:                searchQuery,
+			Language:             lang,
+			CurrentDateLine:      dateLine,
+			KbSystemPrompt:       kbSystemPrompt,
+			FileIDs:              body.SelectedFileIDs,
+			GraphChunkIDs:        graphChunkIDs,
+			BridgeChunks:         bridgeChunks,
+			HyPESearch:           HyPESearchEnabled(ctx, h.siteConfigReader),
+			RouterModel:          AgentTeamRouterModel(ctx, h.siteConfigReader),
+			PlanningModel:        EnrichmentModel(ctx, h.siteConfigReader),
+			ToolMaxRounds:        2,
+			AllowPrivilegedTools: AgentsAllowPrivilegedTools(ctx, h.siteConfigReader),
+		}
+		if teamSel.team != nil {
+			params.Team = teamSel.team.Team
+			params.Members = teamSel.team.Members
+		} else {
+			params.Members = []agentteams.AgentRecord{*teamSel.agent}
+		}
+		// Tools only when the deployment's MCP layer is wired + gated on.
+		if h.toolDispatcher != nil && ChatUseMCPTools(ctx, h.siteConfigReader) {
+			if mcpDisp, ok := h.toolDispatcher.(*MCPDispatcher); ok {
+				params.ToolDispatcher = mcpDisp
+			}
+		}
+		// Per-agent retrieval-knob overlay: agent config → (KB-overlaid)
+		// reader → global. Cloning the search service mirrors forKB.
+		params.SearcherForAgent = func(a agentteams.AgentRecord) vector.Searcher {
+			if len(a.Config) == 0 {
+				return h.searchService
+			}
+			overrides := make(map[string]*string, len(a.Config))
+			for k, v := range a.Config {
+				overrides[k] = &v
+			}
+			overlay := siteconfig.NewAgentOverlay(h.siteConfigReader, overrides)
+			if ss, ok := h.searchService.(*vector.SearchService); ok {
+				return ss.CloneWithSiteConfigReader(overlay)
+			}
+			return h.searchService
+		}
+		chatCtx, err = RunTeamChat(ctx, h.aiResolver, h.searchService, params, collectEmit)
 
 	case willRunCorpusTable:
 		chatCtx, err = RunCorpusTableChat(ctx, h.aiResolver, h.searchService, h.corpusChunks, CorpusTableParams{
@@ -916,6 +991,8 @@ func (h *Handler) tryDeepChat(
 	switch {
 	case runCompare:
 		mode = "comparison"
+	case willRunTeam:
+		mode = "team"
 	case willRunCorpusTable:
 		mode = "corpus_table"
 	case willRunDrift:
@@ -941,4 +1018,63 @@ func (h *Handler) tryDeepChat(
 	writeSSEDone(w)
 	sseFinished = true
 	return true
+}
+
+// ---------------------------------------------------------------------------
+// Explicit team/agent selection
+// ---------------------------------------------------------------------------
+
+// teamSelection is the resolved explicit team/agent pick for one turn.
+type teamSelection struct {
+	team  *agentteams.TeamForChat
+	agent *agentteams.AgentRecord
+}
+
+// resolveTeamSelection loads and authorizes the request's team/agent pick.
+// Fail-soft: any load failure (not attached, disabled, deleted, DB error)
+// logs and returns nil so the turn degrades to the standard path instead of
+// erroring the chat.
+func (h *Handler) resolveTeamSelection(ctx context.Context, body sendMessageRequest, kbID string) *teamSelection {
+	if h.teamLoader == nil {
+		return nil
+	}
+	switch {
+	case body.TeamID != "":
+		tfc, err := h.teamLoader.LoadTeamForChat(ctx, body.TeamID, kbID)
+		if err != nil {
+			logctx.From(ctx).Warn("chat.team_selection.load_failed",
+				"team_id", body.TeamID, "kb_id", kbID, "error", err)
+			return nil
+		}
+		if len(tfc.Members) == 0 {
+			logctx.From(ctx).Warn("chat.team_selection.empty_team", "team_id", body.TeamID)
+			return nil
+		}
+		return &teamSelection{team: tfc}
+	case body.AgentID != "":
+		a, err := h.teamLoader.LoadAgentForChat(ctx, body.AgentID, kbID)
+		if err != nil {
+			logctx.From(ctx).Warn("chat.agent_selection.load_failed",
+				"agent_id", body.AgentID, "kb_id", kbID, "error", err)
+			return nil
+		}
+		return &teamSelection{agent: a}
+	}
+	return nil
+}
+
+// persistChatSelection stores the request's team/agent pick on the chat row
+// so reopening the chat restores it. Always runs (a cleared picker must
+// clear the row). Best-effort.
+func (h *Handler) persistChatSelection(ctx context.Context, chatID string, body sendMessageRequest) {
+	var teamID, agentID *string
+	if body.TeamID != "" {
+		teamID = &body.TeamID
+	}
+	if body.AgentID != "" {
+		agentID = &body.AgentID
+	}
+	if err := h.store.UpdateChatAgentSelection(ctx, chatID, teamID, agentID); err != nil {
+		logctx.From(ctx).Warn("chat.selection.persist_failed", "chat_id", chatID, "error", err)
+	}
 }

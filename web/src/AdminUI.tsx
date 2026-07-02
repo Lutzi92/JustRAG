@@ -140,7 +140,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
         api_key: '',
         base_url: 'https://api.openai.com/v1/',
         chat_models: [{ name: 'gpt-4o-mini', isReasoning: false, isEmbedding: false, isRerank: false, isTts: false, isStt: false }],
-        embedding_models: [{ name: 'text-embedding-3-small', isReasoning: false, isEmbedding: true, isRerank: false, isTts: false, isStt: false, dimensions: 1536 }],
+        embedding_models: [{ name: 'text-embedding-3-small', isReasoning: false, isEmbedding: true, isRerank: false, isTts: false, isStt: false, dimensions: 0 }],
         rerank_models: [],
         tts_models: [],
         stt_models: []
@@ -394,7 +394,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
             api_key: '',
             base_url: 'https://api.openai.com/v1/',
             chat_models: [{ name: 'gpt-4o-mini', isReasoning: false, isEmbedding: false, isRerank: false, isTts: false, isStt: false }],
-            embedding_models: [{ name: 'text-embedding-3-small', isReasoning: false, isEmbedding: true, isRerank: false, isTts: false, isStt: false, dimensions: 1536 }],
+            embedding_models: [{ name: 'text-embedding-3-small', isReasoning: false, isEmbedding: true, isRerank: false, isTts: false, isStt: false, dimensions: 0 }],
             rerank_models: [],
             tts_models: [],
             stt_models: []

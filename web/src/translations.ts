@@ -385,6 +385,7 @@ export const translations = {
     editProvider: { de: 'Anbieter bearbeiten', en: 'Edit provider' },
     deleteProvider: { de: 'Anbieter löschen', en: 'Delete provider' },
     vectorDimensions: { de: 'Vektor-Dimensionen', en: 'Vector dimensions' },
+    vectorDimensionsHelp: { de: 'Vektor-Dimensionen: leer = automatisch (native Größe des Modells). Ein Wert fordert MRL-gekürzte Vektoren an — nur setzen, wenn das Modell Matryoshka-Kürzung unterstützt; Änderung erfordert Re-Ingest.', en: 'Vector dimensions: empty = auto (model-native size). A value requests MRL-truncated vectors — only set if the model supports Matryoshka truncation; changing it requires a re-ingest.' },
     flashcardFlip: { de: 'Zum Umdrehen drücken', en: 'Press to flip' },
     enterUrl: { de: 'URL eingeben', en: 'Enter URL' },
     bold: { de: 'Fett', en: 'Bold' },

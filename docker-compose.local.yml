@@ -108,7 +108,7 @@ services:
         condition: service_healthy
 
   db:
-    image: pgvector/pgvector:0.8.2-pg18
+    image: pgvector/pgvector:0.8.4-pg18
     restart: unless-stopped
     ports:
       - "${WORKER_BIND_IP:-127.0.0.1}:5432:5432"

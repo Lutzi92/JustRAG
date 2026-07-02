@@ -39,6 +39,13 @@ type ResolvedConfig struct {
 	TtsModel        string   // empty if none configured
 	SttModel        string   // empty if none configured
 	ReasoningModels []string // names of models where is_reasoning = true
+
+	// EmbeddingDimensions is the admin-configured output size for
+	// EmbeddingModel (ai_models.dimensions). 0 means "auto": use the model's
+	// native size and do NOT send a `dimensions` parameter. A positive value
+	// asks the provider for MRL-truncated vectors of that size (OpenAI-style
+	// `dimensions` request field).
+	EmbeddingDimensions int
 }
 
 // AIProviderInfo holds the raw provider fields needed for config resolution.
@@ -57,6 +64,9 @@ type AIModelInfo struct {
 	IsRerank    bool
 	IsTts       bool
 	IsStt       bool
+	// Dimensions is the admin-configured embedding output size.
+	// 0 = auto (model-native, no truncation requested).
+	Dimensions int
 }
 
 // KBModelOverrides holds the optional model-name overrides stored on a KB row.
@@ -290,6 +300,7 @@ func (r *ConfigResolver) resolve(ctx context.Context, kbID string) (*ResolvedCon
 	}
 	if len(embeddingModels) > 0 {
 		cfg.EmbeddingModel = embeddingModels[0].Name
+		cfg.EmbeddingDimensions = embeddingModels[0].Dimensions
 	}
 	if len(rerankModels) > 0 {
 		cfg.RerankModel = rerankModels[0].Name
@@ -308,6 +319,16 @@ func (r *ConfigResolver) resolve(ctx context.Context, kbID string) (*ResolvedCon
 		}
 		if overrides.EmbeddingModel != nil && *overrides.EmbeddingModel != "" {
 			cfg.EmbeddingModel = *overrides.EmbeddingModel
+			// Re-resolve dimensions for the override model. Unknown names
+			// (models not in this provider's list) fall back to 0 = auto —
+			// we can't know the native size, so we must not send a guess.
+			cfg.EmbeddingDimensions = 0
+			for _, m := range embeddingModels {
+				if m.Name == cfg.EmbeddingModel {
+					cfg.EmbeddingDimensions = m.Dimensions
+					break
+				}
+			}
 		}
 		if overrides.RerankModel != nil && *overrides.RerankModel != "" {
 			cfg.RerankModel = *overrides.RerankModel

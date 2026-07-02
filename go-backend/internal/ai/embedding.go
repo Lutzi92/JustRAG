@@ -29,6 +29,21 @@ func (e *ZeroVectorError) Error() string {
 	return fmt.Sprintf("embedding model %q returned zero vector for text at index %d", e.Model, e.Index)
 }
 
+// DimensionMismatchError is returned when the provider's embedding size does
+// not match the configured (requested) dimensions — i.e. the backend ignored
+// or mishandled the `dimensions` parameter. Deterministic; never retried.
+// Without this guard a backend that ignores the parameter would silently
+// re-populate the wrong dim-keyed vector table.
+type DimensionMismatchError struct {
+	Model string
+	Want  int
+	Got   int
+}
+
+func (e *DimensionMismatchError) Error() string {
+	return fmt.Sprintf("embedding model %q returned %d-dim vector but %d dimensions are configured (backend ignored the dimensions parameter?)", e.Model, e.Got, e.Want)
+}
+
 // ---------------------------------------------------------------------------
 // Public functions
 // ---------------------------------------------------------------------------
@@ -113,6 +128,12 @@ func GenerateEmbeddings(ctx context.Context, resolver *ConfigResolver, texts []s
 	}
 	span.SetAttributes(attribute.String("rag.embed.model", cfg.EmbeddingModel))
 
+	// Cache keys are scoped by requested dimensions: the same (model, text)
+	// pair yields different vectors at different truncation sizes, and a
+	// stale native-size entry served after an operator configures truncation
+	// would poison the dim-keyed vector tables.
+	cacheModel := embeddingCacheModel(cfg.EmbeddingModel, cfg.EmbeddingDimensions)
+
 	// Check cache for each text — only send uncached texts to the API.
 	// Pre-size the uncached slices to len(texts) so the cold-start path
 	// (every text is uncached, e.g. fresh document ingestion) doesn't pay
@@ -126,7 +147,7 @@ func GenerateEmbeddings(ctx context.Context, resolver *ConfigResolver, texts []s
 		// One pipelined MGET for the whole batch instead of len(texts) serial
 		// GETs — the cold-start ingestion path (a 100-text batch, every text a
 		// miss) previously paid 100 round-trips just to discover they all miss.
-		cached := cache.GetMany(ctx, cfg.EmbeddingModel, texts)
+		cached := cache.GetMany(ctx, cacheModel, texts)
 		for i := range texts {
 			if cached[i] != nil {
 				observability.RecordEmbeddingCacheHit()
@@ -163,7 +184,7 @@ func GenerateEmbeddings(ctx context.Context, resolver *ConfigResolver, texts []s
 
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		embeddings, err := doEmbeddingBatch(ctx, client, cfg.EmbeddingModel, uncachedTexts, timeout)
+		embeddings, err := doEmbeddingBatch(ctx, client, cfg.EmbeddingModel, cfg.EmbeddingDimensions, uncachedTexts, timeout)
 		if err == nil {
 			// Place API results into the correct positions.
 			for j, idx := range uncachedIndices {
@@ -186,16 +207,15 @@ func GenerateEmbeddings(ctx context.Context, resolver *ConfigResolver, texts []s
 				}
 				safego.GoCtx(ctx, func() {
 					defer bgCancel()
-					cache.SetMany(bgCtx, cfg.EmbeddingModel, batchTexts, batchVecs)
+					cache.SetMany(bgCtx, cacheModel, batchTexts, batchVecs)
 				})
 			}
 
 			return result, nil
 		}
 
-		// Zero-vector errors are deterministic — never retry.
-		var zve *ZeroVectorError
-		if errors.As(err, &zve) {
+		// Deterministic failures — never retry.
+		if isDeterministicEmbeddingError(err) {
 			return nil, err
 		}
 
@@ -222,13 +242,17 @@ func GenerateEmbeddings(ctx context.Context, resolver *ConfigResolver, texts []s
 
 // doEmbeddingBatch performs a single batch embedding call with the given timeout.
 // The caller supplies the client so its connection pool is reused across retries.
-func doEmbeddingBatch(ctx context.Context, client *Client, model string, texts []string, timeout time.Duration) ([][]float64, error) {
+// dimensions > 0 requests MRL-truncated vectors of that size and rejects
+// responses of any other length (a backend silently ignoring the parameter
+// must not re-populate the wrong dim-keyed vector table).
+func doEmbeddingBatch(ctx context.Context, client *Client, model string, dimensions int, texts []string, timeout time.Duration) ([][]float64, error) {
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	resp, err := client.Embedding(callCtx, &EmbeddingRequest{
-		Model: model,
-		Input: texts,
+		Model:      model,
+		Input:      texts,
+		Dimensions: dimensions,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ai: embedding request: %w", err)
@@ -244,10 +268,24 @@ func doEmbeddingBatch(ctx context.Context, client *Client, model string, texts [
 		if isZeroVector(d.Embedding) {
 			return nil, &ZeroVectorError{Model: model, Index: d.Index}
 		}
+		if dimensions > 0 && len(d.Embedding) != dimensions {
+			return nil, &DimensionMismatchError{Model: model, Want: dimensions, Got: len(d.Embedding)}
+		}
 		result[d.Index] = d.Embedding
 	}
 
 	return result, nil
+}
+
+// embeddingCacheModel returns the model identifier used for embedding-cache
+// keys. dims > 0 appends a suffix so truncated and native vectors of the
+// same model never share a key; dims == 0 keeps the historical bare-model
+// key, so existing cache entries stay valid for unconfigured deployments.
+func embeddingCacheModel(model string, dims int) string {
+	if dims <= 0 {
+		return model
+	}
+	return fmt.Sprintf("%s#dim=%d", model, dims)
 }
 
 // isZeroVector returns true when every element of v is 0 (or v is empty).
@@ -310,7 +348,7 @@ func GenerateEmbeddingsLateChunked(ctx context.Context, resolver *ConfigResolver
 	for _, w := range windows {
 		windowTexts := chunks[w.start:w.end]
 		timeout := 30*time.Second + time.Duration(len(windowTexts))*2*time.Second
-		vecs, err := doLateChunkedBatchWithRetry(ctx, client, cfg.EmbeddingModel, windowTexts, timeout)
+		vecs, err := doLateChunkedBatchWithRetry(ctx, client, cfg.EmbeddingModel, cfg.EmbeddingDimensions, windowTexts, timeout)
 		if err != nil {
 			return nil, err
 		}
@@ -362,7 +400,7 @@ func packLateChunkingWindows(chunks []string, maxTokens int) []lateChunkingWindo
 	return windows
 }
 
-func doLateChunkedBatchWithRetry(ctx context.Context, client *Client, model string, texts []string, timeout time.Duration) ([][]float64, error) {
+func doLateChunkedBatchWithRetry(ctx context.Context, client *Client, model string, dimensions int, texts []string, timeout time.Duration) ([][]float64, error) {
 	const maxAttempts = 3
 	backoff := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
 
@@ -373,6 +411,7 @@ func doLateChunkedBatchWithRetry(ctx context.Context, client *Client, model stri
 			Model:        model,
 			Input:        texts,
 			LateChunking: true,
+			Dimensions:   dimensions,
 		})
 		cancel()
 		if err == nil {
@@ -384,13 +423,15 @@ func doLateChunkedBatchWithRetry(ctx context.Context, client *Client, model stri
 				if isZeroVector(d.Embedding) {
 					return nil, &ZeroVectorError{Model: model, Index: d.Index}
 				}
+				if dimensions > 0 && len(d.Embedding) != dimensions {
+					return nil, &DimensionMismatchError{Model: model, Want: dimensions, Got: len(d.Embedding)}
+				}
 				result[d.Index] = d.Embedding
 			}
 			return result, nil
 		}
 
-		var zve *ZeroVectorError
-		if errors.As(err, &zve) {
+		if isDeterministicEmbeddingError(err) {
 			return nil, err
 		}
 
@@ -406,4 +447,23 @@ func doLateChunkedBatchWithRetry(ctx context.Context, client *Client, model stri
 		}
 	}
 	return nil, fmt.Errorf("ai: late-chunked embedding failed after %d attempts: %w", maxAttempts, lastErr)
+}
+
+// isDeterministicEmbeddingError reports whether err is guaranteed to recur on
+// retry: zero-vector responses, dimension mismatches, and client-side API
+// errors (4xx, e.g. vLLM rejecting the `dimensions` parameter for a model
+// without declared Matryoshka support). 408 (timeout) and 429 (rate limit)
+// are transient and stay retryable.
+func isDeterministicEmbeddingError(err error) bool {
+	var zve *ZeroVectorError
+	var dme *DimensionMismatchError
+	if errors.As(err, &zve) || errors.As(err, &dme) {
+		return true
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		s := apiErr.StatusCode
+		return s >= 400 && s < 500 && s != 408 && s != 429
+	}
+	return false
 }

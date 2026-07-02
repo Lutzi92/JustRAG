@@ -87,6 +87,10 @@ func (m *mockStore) GetKBSystemPrompt(_ context.Context, _ string) (*string, err
 	return nil, nil
 }
 
+func (m *mockStore) UpdateChatAgentSelection(_ context.Context, _ string, _, _ *string) error {
+	return m.err
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

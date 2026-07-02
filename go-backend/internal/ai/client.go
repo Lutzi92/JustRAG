@@ -418,6 +418,12 @@ type EmbeddingRequest struct {
 	// `late_chunking: true` in the JSON body. Providers that don't
 	// recognise the field ignore it and return standard embeddings.
 	LateChunking bool `json:"late_chunking,omitempty"`
+	// Dimensions, when > 0, asks the provider for MRL-truncated vectors of
+	// that size (OpenAI-style). 0 omits the field — required for providers
+	// and models without Matryoshka support. Callers must verify the
+	// returned vector length: vLLM rejects unsupported values, but other
+	// backends may silently ignore the field.
+	Dimensions int `json:"dimensions,omitempty"`
 }
 
 // EmbeddingData holds a single embedding vector with its index.

@@ -108,6 +108,41 @@ func IsPerKB(key string) bool {
 	return ok
 }
 
+// IsPerAgent reports whether key may be overridden per-agent (user-created
+// agents). The per-agent surface is the per-KB registry minus ingestion-time
+// keys — RequiresReingest knobs act at ingest, so overriding them per chat
+// turn would be a silent no-op that confuses users.
+func IsPerAgent(key string) bool {
+	fld, ok := byKey[key]
+	return ok && !fld.RequiresReingest
+}
+
+// AgentFields returns the ordered per-agent-overridable registry subset
+// (safe to expose as JSON to the agent-form UI).
+func AgentFields() []KBConfigField {
+	out := make([]KBConfigField, 0, len(kbConfigRegistry))
+	for _, fld := range kbConfigRegistry {
+		if !fld.RequiresReingest {
+			out = append(out, fld)
+		}
+	}
+	return out
+}
+
+// ValidateAgentConfig checks every key/value in an agent's config map:
+// membership in the per-agent surface plus the registry's type/range rules.
+func ValidateAgentConfig(cfg map[string]string) error {
+	for k, v := range cfg {
+		if !IsPerAgent(k) {
+			return fmt.Errorf("%q is not a per-agent configurable key", k)
+		}
+		if err := Validate(k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Validate checks that key is a registry key and value parses to its type and
 // satisfies any Min/Max/Enum constraint. Returns nil when valid.
 func Validate(key, value string) error {

@@ -42,6 +42,7 @@ type aiModelInfoRow struct {
 	IsRerank    bool   `db:"is_rerank"`
 	IsTts       bool   `db:"is_tts"`
 	IsStt       bool   `db:"is_stt"`
+	Dimensions  int    `db:"dimensions"`
 }
 
 // kbModelOverridesRow is an internal struct for scanning model-override columns on knowledge_bases.
@@ -107,7 +108,7 @@ func (s *PGStore) GetAIProviderByID(ctx context.Context, id string) (*AIProvider
 // GetAIModelsByProvider returns all models belonging to providerID.
 func (s *PGStore) GetAIModelsByProvider(ctx context.Context, providerID string) ([]AIModelInfo, error) {
 	rows, err := pgxutil.QueryRows[aiModelInfoRow](ctx, s.pool,
-		`SELECT name, is_reasoning, is_embedding, is_rerank, is_tts, is_stt
+		`SELECT name, is_reasoning, is_embedding, is_rerank, is_tts, is_stt, dimensions
 		 FROM ai_models WHERE provider_id = $1`, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("GetAIModelsByProvider: %w", err)

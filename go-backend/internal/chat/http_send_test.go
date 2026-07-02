@@ -98,6 +98,10 @@ func (m *mockStore) GetKBSystemPrompt(_ context.Context, _ string) (*string, err
 	return nil, nil
 }
 
+func (m *mockStore) UpdateChatAgentSelection(_ context.Context, _ string, _, _ *string) error {
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Helper: create a Handler with nil AI / search dependencies (sufficient for
 // request-validation tests that never reach the AI call).

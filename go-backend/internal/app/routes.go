@@ -23,6 +23,7 @@ import (
 	"github.com/justrag/go-backend/internal/adminmcp"
 	"github.com/justrag/go-backend/internal/adminproviders"
 	"github.com/justrag/go-backend/internal/adminusers"
+	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/analytics"
 	"github.com/justrag/go-backend/internal/apidocs"
@@ -134,6 +135,17 @@ type routeCtx struct {
 	// Per-KB settings
 	kbConfigStore   *kbconfig.Store
 	kbConfigHandler *kbconfig.Handler
+
+	// Agent teams (user-defined agents + teams attachable to a KB). The
+	// store is also consumed directly by the chat handler wiring (routes
+	// for the answer-time orchestrator), so it lives on routeCtx even
+	// though registerAgentTeamRoutes is the only thing that needs the
+	// handler. The handler is constructed inside registerChatRoutes
+	// (after the *mcp.Registry exists, since AvailableTools closes over
+	// it) and stashed here so registerAgentTeamRoutes — called after
+	// registerChatRoutes returns — can pick it up.
+	agentTeamsStore   *agentteams.Store
+	agentTeamsHandler *agentteams.Handler
 }
 
 // setupRoutes registers all HTTP routes on the given mux using the provided
@@ -152,6 +164,7 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	chatStore := chat.NewStore(infra.db.Main)
 	kbConfigStore := kbconfig.NewStore(infra.db.Main)
 	kbConfigHandler := kbconfig.NewHandler(kbConfigStore, chatStore)
+	agentTeamsStore := agentteams.NewStore(infra.db.Main)
 	queryCache := vector.NewQueryCache(infra.db.Vector)
 	queryCache.StartWriter(ctx)
 	// Track the sweeper goroutine so routeCleanup can drain it before the
@@ -268,6 +281,7 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 		},
 		kbConfigStore:   kbConfigStore,
 		kbConfigHandler: kbConfigHandler,
+		agentTeamsStore: agentTeamsStore,
 		analyticsChain: func(h http.HandlerFunc) http.Handler {
 			return authMiddleware.Authenticate(
 				kbMw.RequireKBPermission("view")(
@@ -303,6 +317,7 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	registerAdminRoutes(rc)
 	registerKBRoutes(rc)
 	registerChatRoutes(ctx, rc, chatRL)
+	registerAgentTeamRoutes(rc)
 	registerFileRoutes(rc)
 	registerContentGenRoutes(rc, generateRL)
 	registerResearchRoutes(rc, researchRL)
@@ -774,6 +789,30 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 	// caller attached".
 	mcpRegistry.RegisterBuiltin(builtin.NewMemoryWrite(sessionMemoryStore, nil))
 
+	// Agent teams: user-defined agents (name + system prompt + tool
+	// allowlist + model) attachable to a KB, and teams grouping several
+	// agents. The handler is built here (rather than in setupRoutes,
+	// alongside agentTeamsStore) because AvailableTools closes over
+	// mcpRegistry, which does not exist until this function runs.
+	// Privileged tools (sql_query, code_exec, ...) are excluded from the
+	// agent-creation tool picker unless chat_agents_allow_privileged_tools
+	// is on. Stashed on rc so registerAgentTeamRoutes (called after this
+	// function returns) can wire up the HTTP routes.
+	rc.agentTeamsHandler = agentteams.NewHandler(rc.agentTeamsStore, agentteams.HandlerDeps{
+		AvailableTools: func(ctx context.Context) (map[string]bool, error) {
+			allowPrivileged := chat.AgentsAllowPrivilegedTools(ctx, rc.chatStore)
+			out := map[string]bool{}
+			for _, t := range mcpRegistry.List("") {
+				if mcp.PrivilegedTools[t.Name] && !allowPrivileged {
+					continue
+				}
+				out[t.Name] = true
+			}
+			return out, nil
+		},
+		ModelExists: rc.agentTeamsStore.ModelExists,
+	})
+
 	// AP-A4: adapter that translates the kb.Store's ListKnowledgeBases
 	// result into the candidate shape the chat-side router expects.
 	// Lives here in routes (the wiring layer) instead of inside the
@@ -821,6 +860,7 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 		chat.WithRecencyLister(&recencyListerAdapter{
 			store: builtin.NewPgxRecentDocsStore(rc.infra.db.Main),
 		}),
+		chat.WithTeamLoader(rc.agentTeamsStore),
 	}
 	if rc.agentDecisionStore != nil {
 		chatOpts = append(chatOpts, chat.WithDecisionRecorder(&decisionRecorderAdapter{store: rc.agentDecisionStore}))
@@ -868,6 +908,32 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 
 	// Chat — feedback
 	rc.mux.Handle("POST /api/kb/{id}/chats/{chatId}/messages/{messageId}/feedback", rc.kbViewChain(chatHandler.SubmitFeedback))
+}
+
+// registerAgentTeamRoutes wires the user-defined-agent and agent-team CRUD
+// endpoints plus the per-KB attach/detach surface. Must run after
+// registerChatRoutes has populated rc.agentTeamsHandler (AvailableTools
+// closes over the *mcp.Registry built there).
+func registerAgentTeamRoutes(rc *routeCtx) {
+	h := rc.agentTeamsHandler
+	// Owner-scoped CRUD: auth only; handlers scope by user_id.
+	rc.mux.Handle("GET /api/agents", rc.authMw.Authenticate(http.HandlerFunc(h.ListAgents)))
+	rc.mux.Handle("POST /api/agents", rc.authMw.Authenticate(http.HandlerFunc(h.CreateAgent)))
+	rc.mux.Handle("GET /api/agents/registry", rc.authMw.Authenticate(http.HandlerFunc(h.GetRegistry)))
+	rc.mux.Handle("GET /api/agents/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.GetAgent)))
+	rc.mux.Handle("PUT /api/agents/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.UpdateAgent)))
+	rc.mux.Handle("DELETE /api/agents/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.DeleteAgent)))
+	rc.mux.Handle("GET /api/agent-teams", rc.authMw.Authenticate(http.HandlerFunc(h.ListTeams)))
+	rc.mux.Handle("POST /api/agent-teams", rc.authMw.Authenticate(http.HandlerFunc(h.CreateTeam)))
+	rc.mux.Handle("GET /api/agent-teams/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.GetTeam)))
+	rc.mux.Handle("PUT /api/agent-teams/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.UpdateTeam)))
+	rc.mux.Handle("DELETE /api/agent-teams/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.DeleteTeam)))
+	// KB attachment: view to list (picker), edit to attach/detach.
+	rc.mux.Handle("GET /api/kb/{id}/agents", rc.kbViewChain(h.ListKBAgents))
+	rc.mux.Handle("PUT /api/kb/{id}/agents/{agentId}", rc.kbEditChain(h.AttachAgent))
+	rc.mux.Handle("DELETE /api/kb/{id}/agents/{agentId}", rc.kbEditChain(h.DetachAgent))
+	rc.mux.Handle("PUT /api/kb/{id}/teams/{teamId}", rc.kbEditChain(h.AttachTeam))
+	rc.mux.Handle("DELETE /api/kb/{id}/teams/{teamId}", rc.kbEditChain(h.DetachTeam))
 }
 
 func registerFileRoutes(rc *routeCtx) {

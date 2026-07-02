@@ -286,3 +286,11 @@ func mergeSpecialistChunksRRF(k int, lists ...[]vector.SearchChunk) []vector.Sea
 	}
 	return out
 }
+
+// MergeChunksRRF is the exported form of mergeSpecialistChunksRRF for
+// callers outside the supervisor (the agent-team orchestrator merges its
+// specialists' chunk lists with the same rank fusion). k <= 0 falls back
+// to supervisorRRFK.
+func MergeChunksRRF(k int, lists ...[]vector.SearchChunk) []vector.SearchChunk {
+	return mergeSpecialistChunksRRF(k, lists...)
+}

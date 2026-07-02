@@ -2,6 +2,7 @@ import { Plus, Trash2, CheckCircle2, Settings, Save, X, RefreshCw, AlertCircle }
 import { motion, AnimatePresence } from 'framer-motion';
 import { useReducedMotion, getMotionProps } from '../../hooks/useReducedMotion';
 import { useTheme } from '../../contexts/ThemeContext';
+import { parseDimensionsInput, formatDimensionsValue } from '../../utils/embeddingDimensions';
 import type { ChatModelOption } from '../../AdminUI';
 
 interface AIModel {
@@ -261,15 +262,16 @@ export default function AdminConfigsTab({
                                                 <input
                                                     aria-label={`Dimensions for embedding model ${idx + 1}`}
                                                     type="number"
+                                                    min={0}
                                                     style={{ width: '100px' }}
-                                                    value={model.dimensions || 1536}
+                                                    value={formatDimensionsValue(model.dimensions)}
                                                     onChange={e => {
                                                         const models = [...(configFormData.embedding_models || [])];
-                                                        models[idx] = { ...models[idx], dimensions: parseInt(e.target.value) || 1536 };
+                                                        models[idx] = { ...models[idx], dimensions: parseDimensionsInput(e.target.value) };
                                                         setConfigFormData({ ...configFormData, embedding_models: models });
                                                     }}
-                                                    placeholder="Dim."
-                                                    title={t('vectorDimensions')}
+                                                    placeholder="auto"
+                                                    title={t('vectorDimensionsHelp')}
                                                 />
                                                 {(configFormData.embedding_models || []).length > 1 && (
                                                     <button
@@ -290,7 +292,7 @@ export default function AdminConfigsTab({
                                         <button
                                             type="button"
                                             onClick={() => {
-                                                const models = [...(configFormData.embedding_models || []), { name: '', isReasoning: false, isEmbedding: true, isRerank: false, isTts: false, isStt: false, dimensions: 1536 }];
+                                                const models = [...(configFormData.embedding_models || []), { name: '', isReasoning: false, isEmbedding: true, isRerank: false, isTts: false, isStt: false, dimensions: 0 }];
                                                 setConfigFormData({ ...configFormData, embedding_models: models });
                                             }}
                                             className="secondary-button"

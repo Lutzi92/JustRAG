@@ -69,6 +69,8 @@ type chatDBRow struct {
 	UserID    string    `db:"user_id"`
 	Title     string    `db:"title"`
 	Type      string    `db:"type"`
+	TeamID    *string   `db:"team_id"`
+	AgentID   *string   `db:"agent_id"`
 	CreatedAt time.Time `db:"created_at"`
 	UpdatedAt time.Time `db:"updated_at"`
 }
@@ -153,7 +155,7 @@ func isJSONNull(raw json.RawMessage) bool {
 // GetChats returns all chats for the given kbID and userID, ordered by updated_at DESC.
 func (s *PGStore) GetChats(ctx context.Context, kbID, userID string) ([]ChatRow, error) {
 	const sql = `
-		SELECT id, kb_id, user_id, title, type, created_at, updated_at
+		SELECT id, kb_id, user_id, title, type, team_id, agent_id, created_at, updated_at
 		FROM chats
 		WHERE kb_id = $1 AND user_id = $2
 		ORDER BY updated_at DESC`
@@ -172,7 +174,7 @@ func (s *PGStore) GetChats(ctx context.Context, kbID, userID string) ([]ChatRow,
 // GetChatByID returns the chat with the given ID, or nil if not found.
 func (s *PGStore) GetChatByID(ctx context.Context, chatID string) (*ChatRow, error) {
 	const sql = `
-		SELECT id, kb_id, user_id, title, type, created_at, updated_at
+		SELECT id, kb_id, user_id, title, type, team_id, agent_id, created_at, updated_at
 		FROM chats WHERE id = $1`
 
 	row, err := pgxutil.QueryOne[chatDBRow](ctx, s.pool, sql, chatID)
@@ -191,7 +193,7 @@ func (s *PGStore) CreateChat(ctx context.Context, kbID, userID, title string) (*
 	const sql = `
 		INSERT INTO chats (kb_id, user_id, title)
 		VALUES ($1, $2, $3)
-		RETURNING id, kb_id, user_id, title, type, created_at, updated_at`
+		RETURNING id, kb_id, user_id, title, type, team_id, agent_id, created_at, updated_at`
 
 	row, err := pgxutil.QueryOne[chatDBRow](ctx, s.pool, sql, kbID, userID, title)
 	if err != nil {
@@ -209,6 +211,18 @@ func (s *PGStore) DeleteChat(ctx context.Context, chatID string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM chats WHERE id = $1`, chatID)
 	if err != nil {
 		return fmt.Errorf("DeleteChat: %w", err)
+	}
+	return nil
+}
+
+// UpdateChatAgentSelection persists the sticky per-chat team/agent pick.
+// NULLs clear it (picker back to Standard).
+func (s *PGStore) UpdateChatAgentSelection(ctx context.Context, chatID string, teamID, agentID *string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE chats SET team_id = $2, agent_id = $3, updated_at = now() WHERE id = $1`,
+		chatID, teamID, agentID)
+	if err != nil {
+		return fmt.Errorf("UpdateChatAgentSelection: %w", err)
 	}
 	return nil
 }
@@ -489,7 +503,7 @@ func (s *PGStore) CreateResearchSession(ctx context.Context, kbID, userID, goal,
 	const sql = `
 		INSERT INTO chats (kb_id, user_id, title, type)
 		VALUES ($1, $2, $3, $4)
-		RETURNING id, kb_id, user_id, title, type, created_at, updated_at`
+		RETURNING id, kb_id, user_id, title, type, team_id, agent_id, created_at, updated_at`
 
 	row, err := pgxutil.QueryOne[chatDBRow](ctx, s.pool, sql, kbID, userID, goal, sessionType)
 	if err != nil {

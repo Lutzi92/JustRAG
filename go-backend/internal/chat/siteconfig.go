@@ -1492,3 +1492,16 @@ func ChatRecencyListingMaxResults(ctx context.Context, reader SiteConfigReader) 
 func ChatRecencyListingNameMatchEnabled(ctx context.Context, reader SiteConfigReader) bool {
 	return readBool(ctx, reader, "chat_recency_listing_name_match_enabled", true)
 }
+
+// AgentsAllowPrivilegedTools gates whether user-created agents may select
+// privileged tools (mcp.PrivilegedTools). Default false — deny-by-default
+// for the dangerous tier.
+func AgentsAllowPrivilegedTools(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "agents_allow_privileged_tools", false)
+}
+
+// AgentTeamRouterModel resolves the team router's fast-tier model
+// (per-task key → model_tier_fast → KB chat model).
+func AgentTeamRouterModel(ctx context.Context, reader SiteConfigReader) string {
+	return ResolveFastTierModel(ctx, reader, "agent_team_router_model")
+}

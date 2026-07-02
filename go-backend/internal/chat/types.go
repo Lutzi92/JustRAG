@@ -113,6 +113,8 @@ type ChatRow struct {
 	UserID    string    `json:"userId" db:"user_id"`
 	Title     string    `json:"title" db:"title"`
 	Type      string    `json:"type" db:"type"`
+	TeamID    *string   `json:"teamId" db:"team_id"`
+	AgentID   *string   `json:"agentId" db:"agent_id"`
 	CreatedAt time.Time `json:"createdAt" db:"created_at"`
 	UpdatedAt time.Time `json:"updatedAt" db:"updated_at"`
 }
@@ -180,4 +182,5 @@ type Store interface {
 	UpdateMessageContent(ctx context.Context, messageID string, content string) error
 	UpdateMessageTraceID(ctx context.Context, messageID string, traceID string) error
 	GetKBSystemPrompt(ctx context.Context, kbID string) (*string, error)
+	UpdateChatAgentSelection(ctx context.Context, chatID string, teamID, agentID *string) error
 }

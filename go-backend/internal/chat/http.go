@@ -10,6 +10,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/chatattach"
@@ -73,6 +74,19 @@ type Handler struct {
 	// from parser.DefaultFactoryWith(nil) when unset so UploadAttachment
 	// always has a working factory without extra wiring.
 	parserFactory *parser.Factory
+	// teamLoader loads user-created agent-team/agent selections at chat
+	// time. Optional — when nil, TeamID/AgentID on the request are
+	// ignored (feature not wired).
+	teamLoader TeamLoader
+}
+
+// TeamLoader loads user-created agent-team selections at chat time,
+// verifying attachment to the requesting KB and enabled state. Satisfied by
+// *agentteams.Store. Optional — when nil, TeamID/AgentID on the request are
+// ignored (feature not wired).
+type TeamLoader interface {
+	LoadTeamForChat(ctx context.Context, teamID, kbID string) (*agentteams.TeamForChat, error)
+	LoadAgentForChat(ctx context.Context, agentID, kbID string) (*agentteams.AgentRecord, error)
 }
 
 // RaptorDescendantsResolver is the narrow interface
@@ -146,6 +160,14 @@ func WithAsynqClient(c *asynq.Client) HandlerOption {
 func WithDecisionRecorder(r DecisionRecorder) HandlerOption {
 	return func(h *Handler) {
 		h.decisionRecorder = r
+	}
+}
+
+// WithTeamLoader attaches the agent-teams store so explicit team/agent
+// selections on the chat request resolve. Optional.
+func WithTeamLoader(l TeamLoader) HandlerOption {
+	return func(h *Handler) {
+		h.teamLoader = l
 	}
 }
 

@@ -18,7 +18,8 @@ type baseReader interface {
 // single round-trip while seeing per-KB values.
 type KBOverlayReader struct {
 	base      baseReader
-	overrides map[string]*string // only registry keys are consulted
+	overrides map[string]*string // only member(key) keys are consulted
+	member    func(string) bool  // IsPerKB (KB overlay) or IsPerAgent (agent overlay)
 }
 
 // Compile-time guard: the overlay must satisfy BatchReader so the vector
@@ -33,13 +34,24 @@ func NewKBOverlay(base baseReader, overrides map[string]*string) *KBOverlayReade
 	if overrides == nil {
 		overrides = map[string]*string{}
 	}
-	return &KBOverlayReader{base: base, overrides: overrides}
+	return &KBOverlayReader{base: base, overrides: overrides, member: IsPerKB}
+}
+
+// NewAgentOverlay builds an overlay whose membership check is the per-agent
+// registry surface (IsPerAgent). Used as a third layer: agent overrides →
+// (KB-overlaid or global) base. Non-member keys always resolve from base, so
+// a malicious agent config can never influence operational/security keys.
+func NewAgentOverlay(base baseReader, overrides map[string]*string) *KBOverlayReader {
+	if overrides == nil {
+		overrides = map[string]*string{}
+	}
+	return &KBOverlayReader{base: base, overrides: overrides, member: IsPerAgent}
 }
 
 // GetSiteConfigValue returns the per-KB override for registry keys when set,
 // else the global value.
 func (r *KBOverlayReader) GetSiteConfigValue(ctx context.Context, key string) (*string, error) {
-	if IsPerKB(key) {
+	if r.member(key) {
 		if v, ok := r.overrides[key]; ok {
 			return v, nil
 		}
@@ -69,7 +81,7 @@ func (r *KBOverlayReader) GetSiteConfigValues(ctx context.Context, keys []string
 		}
 	}
 	for _, k := range keys {
-		if IsPerKB(k) {
+		if r.member(k) {
 			if v, ok := r.overrides[k]; ok {
 				out[k] = v
 			}

@@ -270,41 +270,41 @@ func (s *PGStore) CreateAIConfig(ctx context.Context, input CreateAIConfigInput)
 
 // collectModelInserts fans the per-category input slices into a single
 // flat list ready for batchInsertModels. Empty/whitespace names are
-// dropped, embedding dims default to 1536 when unset.
+// dropped. Embedding dims persist verbatim with negatives clamped to 0:
+// 0 means "auto" (model-native size; the resolver omits the `dimensions`
+// request parameter), a positive value requests MRL truncation. Coercing
+// unset to a concrete number here would silently activate truncation.
 func collectModelInserts(input CreateAIConfigInput) []aiModelInsert {
 	var out []aiModelInsert
 	for _, m := range input.ChatModels {
 		if name := strings.TrimSpace(m.Name); name != "" {
-			out = append(out, aiModelInsert{name: name, isReasoning: m.IsReasoning, dims: 1536})
+			out = append(out, aiModelInsert{name: name, isReasoning: m.IsReasoning, dims: 0})
 		}
 	}
 	for _, m := range input.ReasoningModels {
 		if name := strings.TrimSpace(m.Name); name != "" {
-			out = append(out, aiModelInsert{name: name, isReasoning: true, dims: 1536})
+			out = append(out, aiModelInsert{name: name, isReasoning: true, dims: 0})
 		}
 	}
 	for _, m := range input.EmbeddingModels {
 		if name := strings.TrimSpace(m.Name); name != "" {
-			dims := m.Dimensions
-			if dims <= 0 {
-				dims = 1536
-			}
+			dims := max(m.Dimensions, 0)
 			out = append(out, aiModelInsert{name: name, isEmbedding: true, dims: dims})
 		}
 	}
 	for _, m := range input.RerankModels {
 		if name := strings.TrimSpace(m.Name); name != "" {
-			out = append(out, aiModelInsert{name: name, isRerank: true, dims: 1536})
+			out = append(out, aiModelInsert{name: name, isRerank: true, dims: 0})
 		}
 	}
 	for _, m := range input.TtsModels {
 		if name := strings.TrimSpace(m.Name); name != "" {
-			out = append(out, aiModelInsert{name: name, isTts: true, dims: 1536})
+			out = append(out, aiModelInsert{name: name, isTts: true, dims: 0})
 		}
 	}
 	for _, m := range input.SttModels {
 		if name := strings.TrimSpace(m.Name); name != "" {
-			out = append(out, aiModelInsert{name: name, isStt: true, dims: 1536})
+			out = append(out, aiModelInsert{name: name, isStt: true, dims: 0})
 		}
 	}
 	return out
@@ -386,7 +386,7 @@ func (s *PGStore) UpdateAIConfig(ctx context.Context, id string, input UpdateAIC
 			rows := make([]aiModelInsert, 0, len(input.ChatModels))
 			for _, m := range input.ChatModels {
 				if name := strings.TrimSpace(m.Name); name != "" {
-					rows = append(rows, aiModelInsert{name: name, isReasoning: m.IsReasoning, dims: 1536})
+					rows = append(rows, aiModelInsert{name: name, isReasoning: m.IsReasoning, dims: 0})
 				}
 			}
 			if err := replaceModels(categoryChat, rows); err != nil {
@@ -403,7 +403,7 @@ func (s *PGStore) UpdateAIConfig(ctx context.Context, id string, input UpdateAIC
 			rows := make([]aiModelInsert, 0, len(input.ReasoningModels))
 			for _, m := range input.ReasoningModels {
 				if name := strings.TrimSpace(m.Name); name != "" {
-					rows = append(rows, aiModelInsert{name: name, isReasoning: true, dims: 1536})
+					rows = append(rows, aiModelInsert{name: name, isReasoning: true, dims: 0})
 				}
 			}
 			if err := replaceModels(categoryReasoning, rows); err != nil {
@@ -417,11 +417,9 @@ func (s *PGStore) UpdateAIConfig(ctx context.Context, id string, input UpdateAIC
 				if name == "" {
 					continue
 				}
-				dims := m.Dimensions
-				if dims <= 0 {
-					dims = 1536
-				}
-				rows = append(rows, aiModelInsert{name: name, isEmbedding: true, dims: dims})
+				// 0 = auto (see collectModelInserts); persist verbatim,
+				// clamp negatives.
+				rows = append(rows, aiModelInsert{name: name, isEmbedding: true, dims: max(m.Dimensions, 0)})
 			}
 			if err := replaceModels(categoryEmbedding, rows); err != nil {
 				return fmt.Errorf("UpdateAIConfig replace embedding models: %w", err)
@@ -431,7 +429,7 @@ func (s *PGStore) UpdateAIConfig(ctx context.Context, id string, input UpdateAIC
 			rows := make([]aiModelInsert, 0, len(input.RerankModels))
 			for _, m := range input.RerankModels {
 				if name := strings.TrimSpace(m.Name); name != "" {
-					rows = append(rows, aiModelInsert{name: name, isRerank: true, dims: 1536})
+					rows = append(rows, aiModelInsert{name: name, isRerank: true, dims: 0})
 				}
 			}
 			if err := replaceModels(categoryRerank, rows); err != nil {
@@ -442,7 +440,7 @@ func (s *PGStore) UpdateAIConfig(ctx context.Context, id string, input UpdateAIC
 			rows := make([]aiModelInsert, 0, len(input.TtsModels))
 			for _, m := range input.TtsModels {
 				if name := strings.TrimSpace(m.Name); name != "" {
-					rows = append(rows, aiModelInsert{name: name, isTts: true, dims: 1536})
+					rows = append(rows, aiModelInsert{name: name, isTts: true, dims: 0})
 				}
 			}
 			if err := replaceModels(categoryTts, rows); err != nil {
@@ -453,7 +451,7 @@ func (s *PGStore) UpdateAIConfig(ctx context.Context, id string, input UpdateAIC
 			rows := make([]aiModelInsert, 0, len(input.SttModels))
 			for _, m := range input.SttModels {
 				if name := strings.TrimSpace(m.Name); name != "" {
-					rows = append(rows, aiModelInsert{name: name, isStt: true, dims: 1536})
+					rows = append(rows, aiModelInsert{name: name, isStt: true, dims: 0})
 				}
 			}
 			if err := replaceModels(categoryStt, rows); err != nil {
