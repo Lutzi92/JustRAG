@@ -1,7 +1,7 @@
 import { lazy, Suspense, useMemo } from 'react';
 import {
   BookOpen, Settings, Sun, Moon, User, LogOut, Copy, Check, Plus,
-  Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, Loader2
+  Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, Loader2, Bot
 } from 'lucide-react';
 import type { KnowledgeBase, SafeAIConfig } from '../types';
 import { API_BASE_URL } from '../api';
@@ -23,6 +23,7 @@ interface HomeViewProps {
   onLogout: () => void;
   onViewProfile: () => void;
   onViewAdmin: () => void;
+  onViewAgents: () => void;
   onCreateKB: () => void;
   onSelectKB: (kb: KnowledgeBase) => void;
   onDeleteKB: (id: string, e: React.MouseEvent) => void;
@@ -114,7 +115,7 @@ export function HomeView(props: HomeViewProps) {
 
   const {
     kbs, globalKbs, currentKb, availableConfigs,
-    copySuccess, onCopyUserId, onLogout, onViewProfile, onViewAdmin,
+    copySuccess, onCopyUserId, onLogout, onViewProfile, onViewAdmin, onViewAgents,
     onCreateKB, onSelectKB, onDeleteKB, onCreateGlobalKB, onDeleteGlobalKB,
     onOpenGlobalKbSettings, onOpenShare, onUpdateKBSettings,
     showShareModal, setShowShareModal, sharingKb, shareUserId, setShareUserId,
@@ -161,6 +162,15 @@ export function HomeView(props: HomeViewProps) {
           aria-label={t('profile')}
         >
           <User size={20} aria-hidden="true" />
+        </button>
+
+        <button
+          onClick={onViewAgents}
+          className="home-view__icon-button"
+          title={t('myAgents')}
+          aria-label={t('myAgents')}
+        >
+          <Bot size={20} aria-hidden="true" />
         </button>
 
         <button

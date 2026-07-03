@@ -47,6 +47,7 @@ import { viewportHeight } from './utils/viewport';
 // Lazy Loaded Components
 const AdminUI = lazy(() => import('./AdminUI'));
 const Profile = lazy(() => import('./Profile'));
+const AgentsView = lazy(() => import('./components/agents/AgentsView'));
 
 const LoadingFallback = () => (
   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', width: '100%' }}>
@@ -135,6 +136,7 @@ function AuthenticatedAppInner() {
   const chat = useChat({
     currentKb, files: fileMgmt.files, enhance: kbSettings.enhance,
     reasoningEnabled: kbSettings.reasoningEnabled, reasoningLevel: kbSettings.reasoningLevel,
+    agentSelection: kbSettings.agentSelection, setAgentSelection: kbSettings.setAgentSelection,
     onResearchLoaded: () => setKbView('research'),
     onAcademicResearchLoaded: () => setKbView('academic_research'),
   });
@@ -283,6 +285,21 @@ function AuthenticatedAppInner() {
     return <LegalPage page={view} onBack={viewState.handleGoHome} />;
   }
 
+  if (view === 'agents') {
+    return (
+      <div className="app-container" data-theme={theme}>
+        <div style={{ display: 'flex', height: viewportHeight('100dvh', '100vh'), width: '100%', overflow: 'auto' }}>
+          <Suspense fallback={<LoadingFallback />}>
+            <AgentsView
+              onBack={viewState.handleGoHome}
+              availableModels={[...new Set(kbSettings.availableConfigs.flatMap(c => c.chat_models))]}
+            />
+          </Suspense>
+        </div>
+      </div>
+    );
+  }
+
   if (view === 'home') {
     return (
       <motion.div
@@ -302,6 +319,7 @@ function AuthenticatedAppInner() {
           onLogout={onLogout}
           onViewProfile={() => setView('profile')}
           onViewAdmin={() => setView('admin')}
+          onViewAgents={() => setView('agents')}
           onCreateKB={kbMgmt.handleCreateKB}
           onSelectKB={kbMgmt.handleSelectKB}
           onDeleteKB={kbMgmt.handleDeleteKB}
@@ -369,6 +387,8 @@ function AuthenticatedAppInner() {
     academicResearchRunning: kbSettings.academicResearchRunning,
     setResearchRunning: kbSettings.setResearchRunning,
     setAcademicResearchRunning: kbSettings.setAcademicResearchRunning,
+    agentSelection: kbSettings.agentSelection,
+    setAgentSelection: kbSettings.setAgentSelection,
   };
 
   const dataValue: KbDataContextValue = {

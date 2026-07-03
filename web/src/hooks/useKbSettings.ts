@@ -5,6 +5,14 @@ import { API_BASE_URL } from '../api';
 import { useTheme } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
 
+// Per-chat-session sticky agent/team selection for the chat send path.
+// `teamId`/`agentId` are mutually exclusive; an empty object means Standard
+// (no agent/team) and omits both fields from the chat POST body.
+export interface AgentSelection {
+  teamId?: string;
+  agentId?: string;
+}
+
 export function useKbSettings() {
   const { t } = useTheme();
   const toast = useToast();
@@ -17,6 +25,7 @@ export function useKbSettings() {
   const [reasoningLevel, setReasoningLevel] = useState<'low' | 'medium' | 'high'>('low');
   const [researchRunning, setResearchRunning] = useState(false);
   const [academicResearchRunning, setAcademicResearchRunning] = useState(false);
+  const [agentSelection, setAgentSelection] = useState<AgentSelection>({});
 
   const fetchAvailableConfigs = useCallback(async () => {
     try {
@@ -37,6 +46,7 @@ export function useKbSettings() {
     reasoningLevel, setReasoningLevel,
     researchRunning, setResearchRunning,
     academicResearchRunning, setAcademicResearchRunning,
+    agentSelection, setAgentSelection,
     fetchAvailableConfigs,
   };
 }

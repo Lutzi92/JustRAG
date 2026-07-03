@@ -6,6 +6,7 @@ import {
   addMessageToTree, updateMessageInTree, remapMessageId, nearestPersistedAncestorId,
 } from '../utils/messageTree';
 import { parseSseStream } from '../utils/sseParser';
+import type { AgentSelection } from './useKbSettings';
 
 interface UseChatStreamParams {
   currentKb: KnowledgeBase | null;
@@ -13,6 +14,7 @@ interface UseChatStreamParams {
   enhance: 'rewrite' | 'expand' | 'spell' | null;
   reasoningEnabled: boolean;
   reasoningLevel: 'low' | 'medium' | 'high';
+  agentSelection: AgentSelection;
   language: string;
   // Tree state setters from useMessageTree
   setMessageTree: React.Dispatch<React.SetStateAction<Map<string, Message>>>;
@@ -37,7 +39,7 @@ interface UseChatStreamParams {
  */
 export function useChatStream({
   currentKb, files, enhance,
-  reasoningEnabled, reasoningLevel, language,
+  reasoningEnabled, reasoningLevel, agentSelection, language,
   setMessageTree, messageTreeRef, setActiveLeafId,
   activeChatIdRef, setActiveChatId, setChats,
   fetchChats, fetchChatsTimerRef,
@@ -112,6 +114,10 @@ export function useChatStream({
           reasoningLevel: reasoningLevel,
           language,
           selectedFileIds: selectedFiles.map(f => f.id),
+          // Sticky agent/team selection for this chat session (Standard omits
+          // both). Sent with every chat POST when set.
+          ...(agentSelection?.teamId ? { teamId: agentSelection.teamId } : {}),
+          ...(agentSelection?.agentId ? { agentId: agentSelection.agentId } : {}),
           // In-chat document comparison: when an attachment is present the
           // backend injects it; non-empty `comparisonModes` makes the turn a
           // comparison (otherwise it's a normal follow-up over the attachment).
@@ -324,7 +330,7 @@ export function useChatStream({
         setLoading(false);
       }
     }
-  }, [currentKb, loading, files, enhance, reasoningEnabled, reasoningLevel, language, fetchChats, t, activeChatIdRef, fetchChatsTimerRef, messageTreeRef, setActiveChatId, setActiveLeafId, setChats, setMessageTree]);
+  }, [currentKb, loading, files, enhance, reasoningEnabled, reasoningLevel, agentSelection, language, fetchChats, t, activeChatIdRef, fetchChatsTimerRef, messageTreeRef, setActiveChatId, setActiveLeafId, setChats, setMessageTree]);
 
   const cancelStream = useCallback(() => {
     chatAbortRef.current?.abort();

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import type { KnowledgeBase, SafeAIConfig } from '../types';
 import { useTheme } from '../contexts/ThemeContext';
+import KbAgentsSection from './agents/KbAgentsSection';
 
 interface SettingsModalProps {
     show: boolean;
@@ -68,6 +69,8 @@ const SettingsModalContent: React.FC<Omit<SettingsModalProps, 'show'>> = ({
                             {systemPrompt.length} / 4000
                         </div>
                     </div>
+
+                    {currentKb && <KbAgentsSection kbId={currentKb.id} />}
 
                     <div className="input-group">
                         <label htmlFor="ai-config" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', display: 'block' }}>{t('aiProviderConfig')}</label>

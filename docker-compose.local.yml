@@ -137,7 +137,7 @@ services:
       - rag-db-data-v18:/var/lib/postgresql
 
   vectordb:
-    image: pgvector/pgvector:0.8.2-pg18
+    image: pgvector/pgvector:0.8.4-pg18
     restart: unless-stopped
     shm_size: 2g
     ports:

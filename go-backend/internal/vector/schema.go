@@ -170,12 +170,11 @@ func EnsureChunkTable(ctx context.Context, exec ChunkTableExec, dimensions int) 
 	// embedding sizes in one table. The current schema gives each dimension
 	// its own table (document_chunks_<dim>), so the legacy 1536 table should
 	// be dimensioned again — otherwise the HNSW index below fails with
-	// "column does not have dimensions". Idempotent: a no-op when the column
-	// already has vector(<dim>), instant on an empty fresh-bootstrap table.
-	embDimSQL := fmt.Sprintf(
-		`ALTER TABLE "%s" ALTER COLUMN "embedding" SET DATA TYPE vector(%d)`,
-		tableName, dimensions)
-	if err := tx.Exec(ctx, embDimSQL); err != nil {
+	// "column does not have dimensions". The ALTER is guarded behind a
+	// catalog type check (see conditionalRedimEmbeddingSQL): a bare ALTER is
+	// NOT a no-op when the type already matches and rewrote the whole table
+	// (incl. HNSW rebuild, under ACCESS EXCLUSIVE) on every worker startup.
+	if err := tx.Exec(ctx, conditionalRedimEmbeddingSQL(tableName, dimensions)); err != nil {
 		return fmt.Errorf("set embedding dimensions on %s: %w", tableName, err)
 	}
 

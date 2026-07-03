@@ -285,6 +285,8 @@ export interface ChatEntry {
     type?: 'chat' | 'research' | 'academic_research';
     createdAt: string;
     updatedAt: string;
+    teamId?: string | null;
+    agentId?: string | null;
 }
 
 export interface FlashcardItem {

@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo } from 'react';
 import { type MobileTab } from '../components/MobileTabBar';
 import { useSwipeGesture } from './useSwipeGesture';
 
-type ViewType = 'home' | 'kb' | 'admin' | 'profile' | 'global-kb-settings' | 'privacy' | 'accessibility';
+type ViewType = 'home' | 'kb' | 'admin' | 'profile' | 'global-kb-settings' | 'privacy' | 'accessibility' | 'agents';
 type KbViewType = 'chat' | 'dashboard' | 'research' | 'academic_research' | 'studio' | 'mindmap';
 
 interface UseViewStateParams {

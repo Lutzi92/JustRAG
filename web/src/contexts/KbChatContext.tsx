@@ -1,5 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import type { useChat } from '../hooks/useChat';
+import type { AgentSelection } from '../hooks/useKbSettings';
 
 export interface KbChatContextValue {
   chat: ReturnType<typeof useChat>;
@@ -15,6 +16,8 @@ export interface KbChatContextValue {
   academicResearchRunning: boolean;
   setResearchRunning: (val: boolean) => void;
   setAcademicResearchRunning: (val: boolean) => void;
+  agentSelection: AgentSelection;
+  setAgentSelection: (val: AgentSelection) => void;
 }
 
 const KbChatContext = createContext<KbChatContextValue | null>(null);

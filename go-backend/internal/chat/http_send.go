@@ -269,12 +269,16 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// Explicit user-created team/agent selection: beats every flag-driven
 	// orchestrator (but not the comparison attachment), runs regardless of
 	// query classification — the team router is the triage. Enhance passes
-	// stay retrieval-transform turns and bypass it.
+	// stay retrieval-transform turns and bypass it. Resolution itself runs
+	// unconditionally (even on Enhance turns) so persistChatSelection always
+	// reflects the pick's *current* validity — a load failure or a
+	// since-deleted team no longer gets persisted as if it still worked.
+	resolvedSel, teamSelReason := h.resolveTeamSelection(ctx, body, kbID)
+	h.persistChatSelection(ctx, chatID, resolvedSel)
 	var teamSel *teamSelection
 	if body.Enhance == "" {
-		teamSel = h.resolveTeamSelection(ctx, body, kbID)
+		teamSel = resolvedSel
 	}
-	h.persistChatSelection(ctx, chatID, body)
 
 	// Follow-up over a prior upload: when an attachment rides along but this is
 	// NOT a fresh comparison run (no modes), inject a capped block of the
@@ -294,7 +298,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// the comparison orchestrator) regardless of complexity classification.
 	isComplex := cls.UseHyDE && cls.UseMultiQuery
 	if (isComplex || runCompare || teamSel != nil) && streamMode {
-		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, dateLine, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, bridgeChunks, answerHistory, teamSel); handled {
+		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, dateLine, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, bridgeChunks, answerHistory, teamSel, teamSelReason); handled {
 			return
 		}
 		// Deep chat failed — fall through to standard path.
@@ -415,6 +419,7 @@ func (h *Handler) tryDeepChat(
 	bridgeChunks map[string]int,
 	answerHistory []ai.ChatHistoryEntry,
 	teamSel *teamSelection,
+	teamSelReason string,
 ) bool {
 	ctx, span := observability.Tracer().Start(ctx, "chat.deep_chat")
 	defer span.End()
@@ -450,6 +455,21 @@ func (h *Handler) tryDeepChat(
 	var progressEvents []map[string]any
 	collectEmit := func(data map[string]any) {
 		progressEvents = append(progressEvents, data)
+	}
+
+	// Surface a silent team-selection degradation: the user explicitly picked
+	// a team/agent but resolveTeamSelection couldn't load it (deleted,
+	// disabled, empty team) and fell back to nil. Emitted here — rather than
+	// in resolveTeamSelection itself, which runs in SendMessage before the
+	// emit buffer exists — so the UI's reasoning panel shows the downgrade
+	// instead of silently answering off the standard/other-orchestrator path.
+	// Only fires on turns that reach tryDeepChat at all (gate: isComplex ||
+	// runCompare || teamSel != nil); a failed pick on an otherwise-simple,
+	// non-streaming-orchestrator query never enters this function, so no
+	// event is emitted for it — acceptable, since there is no orchestrator
+	// run to attach the event to on that path.
+	if teamSel == nil && teamSelReason != "" {
+		emitTrajectory(collectEmit, TrajectoryEvent{Stage: "decision", Decision: "team_unavailable", Reason: teamSelReason}, nil)
 	}
 
 	// AP-C4 trajectory event for the orchestrator path (mirrors the
@@ -846,7 +866,11 @@ func (h *Handler) tryDeepChat(
 			writeSSE(w, map[string]string{"reasoning": e.Reasoning})
 		}
 	}
-	useAnswerTools := ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
+	// Team synthesis carries user-authored, persona-influenced findings in its
+	// system prompt (a prompt-injection amplifier if handed the full,
+	// unrestricted answer-tool catalog) — answer tools stay off on team turns
+	// until per-team catalog restriction lands (follow-up).
+	useAnswerTools := !willRunTeam && ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
 	if useAnswerTools {
 		answerTrace := func(stage, decision, reason string, details map[string]any) {
 			payload := map[string]any{
@@ -1032,11 +1056,15 @@ type teamSelection struct {
 
 // resolveTeamSelection loads and authorizes the request's team/agent pick.
 // Fail-soft: any load failure (not attached, disabled, deleted, DB error)
-// logs and returns nil so the turn degrades to the standard path instead of
-// erroring the chat.
-func (h *Handler) resolveTeamSelection(ctx context.Context, body sendMessageRequest, kbID string) *teamSelection {
+// logs and returns (nil, reason) so the turn degrades to the standard path
+// instead of erroring the chat. reason is non-empty only when the request
+// explicitly named a team/agent (body.TeamID/AgentID set) and resolution
+// failed — callers use it to surface the degradation instead of silently
+// dropping the pick. The empty (no selection requested) and success cases
+// both return a "" reason.
+func (h *Handler) resolveTeamSelection(ctx context.Context, body sendMessageRequest, kbID string) (*teamSelection, string) {
 	if h.teamLoader == nil {
-		return nil
+		return nil, ""
 	}
 	switch {
 	case body.TeamID != "":
@@ -1044,35 +1072,42 @@ func (h *Handler) resolveTeamSelection(ctx context.Context, body sendMessageRequ
 		if err != nil {
 			logctx.From(ctx).Warn("chat.team_selection.load_failed",
 				"team_id", body.TeamID, "kb_id", kbID, "error", err)
-			return nil
+			return nil, "load_failed"
 		}
 		if len(tfc.Members) == 0 {
 			logctx.From(ctx).Warn("chat.team_selection.empty_team", "team_id", body.TeamID)
-			return nil
+			return nil, "empty_team"
 		}
-		return &teamSelection{team: tfc}
+		return &teamSelection{team: tfc}, ""
 	case body.AgentID != "":
 		a, err := h.teamLoader.LoadAgentForChat(ctx, body.AgentID, kbID)
 		if err != nil {
 			logctx.From(ctx).Warn("chat.agent_selection.load_failed",
 				"agent_id", body.AgentID, "kb_id", kbID, "error", err)
-			return nil
+			return nil, "load_failed"
 		}
-		return &teamSelection{agent: a}
+		return &teamSelection{agent: a}, ""
 	}
-	return nil
+	return nil, ""
 }
 
-// persistChatSelection stores the request's team/agent pick on the chat row
-// so reopening the chat restores it. Always runs (a cleared picker must
-// clear the row). Best-effort.
-func (h *Handler) persistChatSelection(ctx context.Context, chatID string, body sendMessageRequest) {
+// persistChatSelection stores the RESOLVED team/agent pick on the chat row so
+// reopening the chat restores it. Takes the resolved teamSelection (not the
+// raw request body) so a pick that failed to resolve — deleted team,
+// disabled agent, empty team — is persisted as cleared rather than as a
+// stale id the picker would just have to drop on next load. Always runs (a
+// cleared picker, or a resolution failure, must clear the row). Best-effort.
+func (h *Handler) persistChatSelection(ctx context.Context, chatID string, teamSel *teamSelection) {
 	var teamID, agentID *string
-	if body.TeamID != "" {
-		teamID = &body.TeamID
-	}
-	if body.AgentID != "" {
-		agentID = &body.AgentID
+	if teamSel != nil {
+		switch {
+		case teamSel.team != nil:
+			id := teamSel.team.Team.ID
+			teamID = &id
+		case teamSel.agent != nil:
+			id := teamSel.agent.ID
+			agentID = &id
+		}
 	}
 	if err := h.store.UpdateChatAgentSelection(ctx, chatID, teamID, agentID); err != nil {
 		logctx.From(ctx).Warn("chat.selection.persist_failed", "chat_id", chatID, "error", err)

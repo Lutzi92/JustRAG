@@ -61,10 +61,9 @@ func EnsureHyPETable(ctx context.Context, exec ChunkTableExec, dimensions int) e
 	if err := tx.Exec(ctx, createSQL); err != nil {
 		return fmt.Errorf("create table %s: %w", tableName, err)
 	}
-	embDimSQL := fmt.Sprintf(
-		`ALTER TABLE "%s" ALTER COLUMN "embedding" SET DATA TYPE vector(%d)`,
-		tableName, dimensions)
-	if err := tx.Exec(ctx, embDimSQL); err != nil {
+	// Guarded re-dimension: a bare same-type ALTER can rewrite the whole
+	// table on every startup (see conditionalRedimEmbeddingSQL).
+	if err := tx.Exec(ctx, conditionalRedimEmbeddingSQL(tableName, dimensions)); err != nil {
 		return fmt.Errorf("set embedding dimensions on %s: %w", tableName, err)
 	}
 

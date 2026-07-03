@@ -98,6 +98,18 @@ func RunWorker(cfg *config.Config) error {
 	}
 	defer db.Close()
 
+	// Start the health endpoint BEFORE any schema wiring. EnsureVectorTables
+	// can legitimately take minutes (advisory-lock waits behind another
+	// replica's DDL, first-time HNSW builds); when the liveness listener only
+	// came up afterwards, k8s killed pods mid-DDL and the whole fleet
+	// restart-looped (observed 2026-07-03). Liveness = process is up;
+	// readiness (SetReady) still flips only after full wiring below.
+	healthSrv := worker.NewHealthServer(cfg.WorkerHealthPort)
+	healthSrv.Start()
+	// Health server cleanup on any exit path. Registered first (LIFO: runs
+	// last) so the probe endpoint outlives every other teardown.
+	defer healthSrv.Shutdown()
+
 	// Ensure all known vector tables exist with the current schema (adds
 	// missing columns like content_hash via ALTER ... ADD COLUMN IF NOT EXISTS).
 	// Idempotent and cheap; runs on every worker startup so schema drift
@@ -197,10 +209,6 @@ func RunWorker(cfg *config.Config) error {
 		Queues:        cfg.WorkerQueues,
 		Concurrency:   cfg.WorkerConcurrency,
 	})
-
-	// Start health endpoint for K8s probes.
-	healthSrv := worker.NewHealthServer(cfg.WorkerHealthPort)
-	healthSrv.Start()
 
 	// Create Asynq client for enqueuing jobs from handlers and schedulers.
 	asynqPoolSize := cfg.Redis.PoolSize
@@ -466,10 +474,9 @@ func RunWorker(cfg *config.Config) error {
 		}
 	}()
 
-	// Health server cleanup on any exit path.
-	defer healthSrv.Shutdown()
-
-	// Mark worker as ready for K8s readiness probe.
+	// Mark worker as ready for K8s readiness probe. (The health listener
+	// itself starts right after the DB connect, before schema wiring; its
+	// Shutdown defer is registered there.)
 	healthSrv.SetReady(true)
 
 	sigCh, stopSignals := newShutdownSignals()

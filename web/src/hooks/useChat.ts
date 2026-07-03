@@ -11,6 +11,7 @@ import { useMessageTree } from './useMessageTree';
 import { useChatStream } from './useChatStream';
 import { useChatAttachment } from './useChatAttachment';
 import type { ComparisonMode } from '../components/ChatComparisonControls';
+import type { AgentSelection } from './useKbSettings';
 
 interface RawChatMessage {
   id: string;
@@ -32,13 +33,16 @@ interface UseChatParams {
   enhance: 'rewrite' | 'expand' | 'spell' | null;
   reasoningEnabled: boolean;
   reasoningLevel: 'low' | 'medium' | 'high';
+  agentSelection: AgentSelection;
+  setAgentSelection: (val: AgentSelection) => void;
   onResearchLoaded?: () => void;
   onAcademicResearchLoaded?: () => void;
 }
 
 export function useChat({
   currentKb, files, enhance,
-  reasoningEnabled, reasoningLevel, onResearchLoaded, onAcademicResearchLoaded,
+  reasoningEnabled, reasoningLevel, agentSelection, setAgentSelection,
+  onResearchLoaded, onAcademicResearchLoaded,
 }: UseChatParams) {
   const { language, t } = useTheme();
 
@@ -117,7 +121,7 @@ export function useChat({
   // Compose: SSE streaming
   const stream = useChatStream({
     currentKb, files, enhance,
-    reasoningEnabled, reasoningLevel, language,
+    reasoningEnabled, reasoningLevel, agentSelection, language,
     setMessageTree, messageTreeRef, setActiveLeafId,
     activeChatIdRef, activeChatId, setActiveChatId, setChats,
     fetchChats, fetchChatsTimerRef,
@@ -227,6 +231,7 @@ export function useChat({
     }
 
     setActiveChatId(chat.id);
+    setAgentSelection({ teamId: chat.teamId ?? undefined, agentId: chat.agentId ?? undefined });
     chatSwitchingRef.current = true;
     try {
       const res = await axios.get(`${API_BASE_URL}/api/chats/${chat.id}/messages`);
@@ -254,7 +259,7 @@ export function useChat({
     } finally {
       chatSwitchingRef.current = false;
     }
-  }, [onResearchLoaded, onAcademicResearchLoaded, setActiveChatId, setMessageTree, setActiveLeafId, setComparisonMode, setComparisonLeafId, toast, t]);
+  }, [onResearchLoaded, onAcademicResearchLoaded, setActiveChatId, setAgentSelection, setMessageTree, setActiveLeafId, setComparisonMode, setComparisonLeafId, toast, t]);
 
   // Clears the comparison attachment + selected modes (e.g. on new chat or the
   // user pressing the chip's remove button).
@@ -265,6 +270,10 @@ export function useChat({
 
   const handleNewChat = useCallback(() => {
     setActiveChatId(null);
+    // Clear the sticky selection so a fresh chat doesn't inherit the
+    // previous chat's team/agent; ChatView's default-selection effect
+    // re-applies the KB's isDefault team/agent once options are loaded.
+    setAgentSelection({});
     setMessageTree(new Map());
     setActiveLeafId(null);
     setComparisonMode(false);
@@ -274,7 +283,7 @@ export function useChat({
     setLoadedResearchSession(null);
     setLoadedAcademicSession(null);
     clearComparison();
-  }, [setActiveChatId, setMessageTree, setActiveLeafId, setComparisonMode, setComparisonLeafId, clearComparison]);
+  }, [setActiveChatId, setAgentSelection, setMessageTree, setActiveLeafId, setComparisonMode, setComparisonLeafId, clearComparison]);
 
   const handleDeleteChat = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
