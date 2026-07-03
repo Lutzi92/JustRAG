@@ -1538,6 +1538,8 @@ export const translations = {
     evalGoldenSetHash: { de: 'Hash', en: 'Hash' },
     evalGoldenSet: { de: 'Golden-Set', en: 'Golden set' },
     evalPickGoldenSet: { de: 'Golden-Set auswählen…', en: 'Pick a golden set…' },
+    evalTeamLabel: { de: 'Agenten-Team', en: 'Agent team' },
+    evalTeamStandard: { de: 'Standard (kein Team)', en: 'Standard (no team)' },
     evalQuestions: { de: 'Fragen', en: 'questions' },
     evalQuestionCount: { de: 'Fragen', en: 'Questions' },
     evalGoldenSetUploaded: { de: 'Golden-Set hochgeladen.', en: 'Golden set uploaded.' },

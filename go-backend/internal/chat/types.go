@@ -148,6 +148,8 @@ type MessageRow struct {
 	Verification      *MessageVerification `json:"verification" db:"verification"`
 	TraceID           *string              `json:"traceId,omitempty" db:"trace_id"`
 	StructuredTable   *StructuredTable     `json:"structured_table,omitempty" db:"structured_table"`
+	TeamID            *string              `json:"teamId,omitempty" db:"team_id"`
+	AgentID           *string              `json:"agentId,omitempty" db:"agent_id"`
 	CreatedAt         time.Time            `json:"createdAt" db:"created_at"`
 }
 
@@ -166,6 +168,10 @@ type AddMessageParams struct {
 	Reasoning       *string
 	ParentMessageID *string
 	StructuredTable *StructuredTable
+	// TeamID / AgentID attribute an AI message to the user-created team or
+	// agent that produced it (nil on user messages and non-team turns).
+	TeamID  *string
+	AgentID *string
 }
 
 // Store is the interface for chat-related database operations.

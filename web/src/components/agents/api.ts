@@ -43,6 +43,11 @@ export interface AgentConfigField {
   enum?: string[];
 }
 
+export interface AgentRegistry {
+  fields: AgentConfigField[];
+  tools: string[];
+}
+
 export interface KbAgentOption {
   id: string;
   name: string;
@@ -95,7 +100,7 @@ export const deleteTeam = async (id: string) => {
 };
 
 export const fetchAgentRegistry = () =>
-  authFetch(`${base}/agents/registry`).then(r => json<AgentConfigField[]>(r, 'agent registry'));
+  authFetch(`${base}/agents/registry`).then(r => json<AgentRegistry>(r, 'agent registry'));
 export const fetchKbAgents = (kbId: string) =>
   authFetch(`${base}/kb/${kbId}/agents`).then(r => json<KbAgents>(r, 'kb agents'));
 

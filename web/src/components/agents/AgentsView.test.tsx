@@ -21,7 +21,7 @@ vi.mock('./api', () => ({
       createdAt: '', updatedAt: '' },
   ]),
   listTeams: vi.fn().mockResolvedValue([]),
-  fetchAgentRegistry: vi.fn().mockResolvedValue([]),
+  fetchAgentRegistry: vi.fn().mockResolvedValue({ fields: [], tools: ['kb_search'] }),
   deleteAgent: vi.fn(),
   deleteTeam: vi.fn(),
   createAgent: vi.fn(),

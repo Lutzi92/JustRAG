@@ -564,6 +564,7 @@ func registerAdminEvalRoutes(rc *routeCtx) {
 		rc.infra.asynqClient,
 		goldenSetStore,
 		genJobStore,
+		rc.agentTeamsStore,
 	).WithKBOverrides(rc.kbConfigStore)
 
 	rc.mux.Handle("POST /api/admin/eval/runs", rc.adminChain(h.CreateRun))
@@ -1258,7 +1259,7 @@ type decisionRecorderAdapter struct {
 	store *adminagentmetrics.PgStore
 }
 
-func (a *decisionRecorderAdapter) Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []chat.ToolCallRecord) {
+func (a *decisionRecorderAdapter) Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []chat.ToolCallRecord, teamID, agentID *string) {
 	if a.store == nil {
 		return
 	}
@@ -1270,7 +1271,7 @@ func (a *decisionRecorderAdapter) Record(ctx context.Context, kbID, mode, outcom
 			Status:     c.Status,
 		}
 	}
-	a.store.Record(ctx, kbID, mode, outcome, hops, rounds, latencyMs, entries)
+	a.store.Record(ctx, kbID, mode, outcome, hops, rounds, latencyMs, entries, teamID, agentID)
 }
 
 // kbRouterCandidateAdapter implements chat.KBRouterCandidateLister by

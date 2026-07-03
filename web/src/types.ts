@@ -155,6 +155,14 @@ export interface Message {
     isDeepSearch?: boolean;
     verification?: MessageVerification | null;
     traceId?: string | null;
+    // Attribution: the user-created team/agent that answered this turn (if
+    // any). Populated from the backend's camelCase `teamId`/`agentId` on AI
+    // message rows (omitted when nil) and stamped client-side from the
+    // current agentSelection while streaming. Drives the small chip in the
+    // AI-message chrome; a lookup miss (team/agent later deleted) renders
+    // nothing rather than an empty label.
+    teamId?: string | null;
+    agentId?: string | null;
     // Streaming trajectory: one entry per orchestrator decision point
     // (plan/iterate/hop/decision/answer). Populated by useChatStream from
     // the `agentTrajectory` SSE events. Undefined when no events arrived

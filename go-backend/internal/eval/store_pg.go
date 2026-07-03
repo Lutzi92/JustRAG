@@ -36,6 +36,13 @@ type Run struct {
 	Report         json.RawMessage `json:"report,omitempty"`
 	ErrorMessage   string          `json:"error_message,omitempty"`
 	Label          string          `json:"label,omitempty"`
+	// TeamID is the agent_teams.id this run dispatched through, or nil for
+	// a standard (orchestrator-dispatch) run. Stored as *string (not
+	// *uuid.UUID) because the eval-dispatch surface (TeamLoaderForEval,
+	// NewTeamDispatchAdapter, chat.TeamParams) threads team/kb ids as
+	// plain strings throughout — matching that convention avoids a
+	// round-trip UUID<->string conversion at every call site.
+	TeamID *string `db:"team_id" json:"team_id,omitempty"`
 }
 
 // ListOpts controls filtering and pagination for List.
@@ -81,6 +88,7 @@ type evalRunRow struct {
 	TopK           int        `db:"top_k"`
 	ErrorMessage   *string    `db:"error_message"`
 	Label          *string    `db:"label"`
+	TeamID         *string    `db:"team_id"`
 }
 
 // toRun converts an evalRunRow to a Run domain object.
@@ -98,6 +106,7 @@ func toRun(r evalRunRow) Run {
 		ConfigSnapshot: json.RawMessage(r.ConfigSnapshot),
 		JudgeEnabled:   r.JudgeEnabled,
 		TopK:           r.TopK,
+		TeamID:         r.TeamID,
 	}
 	if r.ErrorMessage != nil {
 		run.ErrorMessage = *r.ErrorMessage
@@ -117,8 +126,8 @@ func (s *Store) Insert(ctx context.Context, r Run) (uuid.UUID, error) {
 	const q = `
 		INSERT INTO eval_runs
 		  (status, triggered_by, kb_id, golden_set_id, fixture_hash,
-		   config_snapshot, judge_enabled, top_k, label)
-		VALUES ('queued', $1, $2, $3, $4, $5, $6, $7, $8)
+		   config_snapshot, judge_enabled, top_k, label, team_id)
+		VALUES ('queued', $1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id`
 
 	var id uuid.UUID
@@ -131,6 +140,7 @@ func (s *Store) Insert(ctx context.Context, r Run) (uuid.UUID, error) {
 		r.JudgeEnabled,
 		r.TopK,
 		nullableString(r.Label),
+		r.TeamID,
 	).Scan(&id)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("eval insert run: %w", err)
@@ -213,7 +223,7 @@ func (s *Store) Get(ctx context.Context, id uuid.UUID) (*Run, error) {
 	const q = `
 		SELECT id, created_at, started_at, finished_at, status, triggered_by,
 		       kb_id, golden_set_id, fixture_hash, config_snapshot,
-		       judge_enabled, top_k, report, error_message, label
+		       judge_enabled, top_k, report, error_message, label, team_id
 		FROM eval_runs
 		WHERE id = $1`
 
@@ -228,12 +238,12 @@ func (s *Store) Get(ctx context.Context, id uuid.UUID) (*Run, error) {
 	var configSnapshot, report []byte
 	var judgeEnabled bool
 	var topK int
-	var errorMessage, label *string
+	var errorMessage, label, teamID *string
 
 	err := s.pool.QueryRow(ctx, q, id).Scan(
 		&id2, &createdAt, &startedAt, &finishedAt, &status, &triggeredBy,
 		&kbID, &goldenSetID, &fixtureHash, &configSnapshot,
-		&judgeEnabled, &topK, &report, &errorMessage, &label,
+		&judgeEnabled, &topK, &report, &errorMessage, &label, &teamID,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -256,6 +266,7 @@ func (s *Store) Get(ctx context.Context, id uuid.UUID) (*Run, error) {
 		JudgeEnabled:   judgeEnabled,
 		TopK:           topK,
 		Report:         json.RawMessage(report),
+		TeamID:         teamID,
 	}
 	if errorMessage != nil {
 		run.ErrorMessage = *errorMessage
@@ -311,7 +322,7 @@ func (s *Store) List(ctx context.Context, opts ListOpts) ([]Run, int, error) {
 	listSQL := fmt.Sprintf(`
 		SELECT id, created_at, started_at, finished_at, status, triggered_by,
 		       kb_id, golden_set_id, fixture_hash, config_snapshot,
-		       judge_enabled, top_k, error_message, label,
+		       judge_enabled, top_k, error_message, label, team_id,
 		       COUNT(*) OVER ()::int AS total_count
 		FROM eval_runs
 		%s
@@ -336,7 +347,7 @@ func (s *Store) List(ctx context.Context, opts ListOpts) ([]Run, int, error) {
 		if err := rows.Scan(
 			&row.ID, &row.CreatedAt, &row.StartedAt, &row.FinishedAt, &row.Status, &row.TriggeredBy,
 			&row.KBID, &row.GoldenSetID, &row.FixtureHash, &row.ConfigSnapshot,
-			&row.JudgeEnabled, &row.TopK, &row.ErrorMessage, &row.Label,
+			&row.JudgeEnabled, &row.TopK, &row.ErrorMessage, &row.Label, &row.TeamID,
 			&rowTotal,
 		); err != nil {
 			return nil, 0, fmt.Errorf("eval list runs scan: %w", err)

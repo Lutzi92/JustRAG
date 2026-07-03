@@ -97,6 +97,8 @@ type messageDBRow struct {
 	Verification      json.RawMessage `db:"verification"`
 	TraceID           *string         `db:"trace_id"`
 	StructuredTable   json.RawMessage `db:"structured_table"`
+	TeamID            *string         `db:"team_id"`
+	AgentID           *string         `db:"agent_id"`
 	CreatedAt         time.Time       `db:"created_at"`
 }
 
@@ -118,6 +120,8 @@ func toMessageRow(r messageDBRow) (MessageRow, error) {
 		FeedbackComment:   r.FeedbackComment,
 		FeedbackUpdatedAt: r.FeedbackUpdatedAt,
 		TraceID:           r.TraceID,
+		TeamID:            r.TeamID,
+		AgentID:           r.AgentID,
 		CreatedAt:         r.CreatedAt,
 	}
 	if len(r.Sources) > 0 && !isJSONNull(r.Sources) {
@@ -232,7 +236,7 @@ func (s *PGStore) GetChatMessages(ctx context.Context, chatID string) ([]Message
 	const sql = `
 		SELECT id, chat_id, parent_message_id, role, content, sources,
 		       is_enhanced, enhanced_query, reasoning, feedback, feedback_comment, feedback_updated_at,
-		       verification, trace_id, structured_table, created_at
+		       verification, trace_id, structured_table, team_id, agent_id, created_at
 		FROM messages
 		WHERE chat_id = $1
 		ORDER BY created_at ASC`
@@ -259,13 +263,13 @@ func (s *PGStore) GetMessageAncestors(ctx context.Context, messageID, chatID str
 		WITH RECURSIVE message_tree AS (
 			SELECT id, chat_id, parent_message_id, role, content, sources,
 			       is_enhanced, enhanced_query, reasoning, feedback, feedback_comment, feedback_updated_at,
-			       verification, trace_id, structured_table, created_at
+			       verification, trace_id, structured_table, team_id, agent_id, created_at
 			FROM messages
 			WHERE id = $1 AND chat_id = $2
 			UNION ALL
 			SELECT p.id, p.chat_id, p.parent_message_id, p.role, p.content, p.sources,
 			       p.is_enhanced, p.enhanced_query, p.reasoning, p.feedback, p.feedback_comment, p.feedback_updated_at,
-			       p.verification, p.trace_id, p.structured_table, p.created_at
+			       p.verification, p.trace_id, p.structured_table, p.team_id, p.agent_id, p.created_at
 			FROM messages p
 			INNER JOIN message_tree mt ON mt.parent_message_id = p.id
 		)
@@ -307,18 +311,18 @@ func (s *PGStore) AddMessage(ctx context.Context, p AddMessageParams) (*MessageR
 	}
 
 	const insertSQL = `
-		INSERT INTO messages (chat_id, role, content, sources, is_enhanced, enhanced_query, reasoning, parent_message_id, structured_table)
-		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9::jsonb)
+		INSERT INTO messages (chat_id, role, content, sources, is_enhanced, enhanced_query, reasoning, parent_message_id, structured_table, team_id, agent_id)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9::jsonb, $10, $11)
 		RETURNING id, chat_id, parent_message_id, role, content, sources,
 		          is_enhanced, enhanced_query, reasoning, feedback, feedback_comment, feedback_updated_at,
-		          verification, trace_id, structured_table, created_at`
+		          verification, trace_id, structured_table, team_id, agent_id, created_at`
 	const updateChatSQL = `UPDATE chats SET updated_at = NOW() WHERE id = $1`
 
 	var row *messageDBRow
 	err := pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
 		row, err = pgxutil.QueryOne[messageDBRow](ctx, tx, insertSQL,
-			p.ChatID, p.Role, p.Content, sourcesJSON, p.IsEnhanced, p.EnhancedQuery, p.Reasoning, p.ParentMessageID, structuredTableJSON)
+			p.ChatID, p.Role, p.Content, sourcesJSON, p.IsEnhanced, p.EnhancedQuery, p.Reasoning, p.ParentMessageID, structuredTableJSON, p.TeamID, p.AgentID)
 		if err != nil {
 			return fmt.Errorf("AddMessage insert: %w", err)
 		}

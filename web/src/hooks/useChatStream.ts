@@ -257,6 +257,13 @@ export function useChatStream({
             // to prevent an intermediate render where activeLeafId points to a non-existent node
             setMessageTree(prev => remapMessageId(prev, prevAiTempId, event.aiMessageId as string));
             setActiveLeafId(event.aiMessageId as string);
+            // Stamp attribution from the CURRENT selection so the chip renders
+            // immediately, without waiting for a chat reload to pick up the
+            // backend-persisted teamId/agentId columns.
+            setMessageTree(prev => updateMessageInTree(prev, event.aiMessageId as string, {
+              teamId: agentSelection?.teamId ?? null,
+              agentId: agentSelection?.agentId ?? null,
+            }));
           }
 
           if (event.error) {

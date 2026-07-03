@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/justrag/go-backend/internal/auth"
@@ -249,10 +250,32 @@ func (h *Handler) DeleteAgent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// GetRegistry handles GET /api/agents/registry — the per-agent config field
-// registry that drives the frontend's advanced-retrieval form.
+// registryResponse is the agent-form bootstrap payload: the per-agent config
+// field registry plus the tool names a user agent may currently select
+// (registry catalog minus privileged tools unless the admin flag is on —
+// same AvailableTools closure that validates saves, so the form can never
+// drift from what the backend accepts).
+type registryResponse struct {
+	Fields []siteconfig.KBConfigField `json:"fields"`
+	Tools  []string                   `json:"tools"`
+}
+
+// GetRegistry handles GET /api/agents/registry.
 func (h *Handler) GetRegistry(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteJSONCtx(r.Context(), w, http.StatusOK, siteconfig.AgentFields())
+	allowed, err := h.deps.AvailableTools(r.Context())
+	if err != nil {
+		httputil.WriteInternalErrorCtx(r.Context(), w, err)
+		return
+	}
+	tools := make([]string, 0, len(allowed))
+	for name := range allowed {
+		tools = append(tools, name)
+	}
+	sort.Strings(tools)
+	httputil.WriteJSONCtx(r.Context(), w, http.StatusOK, registryResponse{
+		Fields: siteconfig.AgentFields(),
+		Tools:  tools,
+	})
 }
 
 // teamUpsertRequest is the parsed body for team create/update.

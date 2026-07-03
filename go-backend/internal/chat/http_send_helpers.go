@@ -705,7 +705,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	if mode == "" {
 		mode = "crag"
 	}
-	h.recordAgentDecision(ctx, p.kbID, mode, stdOutcome, 0, 0, time.Since(p.chatStartTime).Milliseconds())
+	h.recordAgentDecision(ctx, p.kbID, mode, stdOutcome, 0, 0, time.Since(p.chatStartTime).Milliseconds(), nil, nil)
 
 	writeSSEDone(w)
 	sseFinished = true

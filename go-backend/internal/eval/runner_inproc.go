@@ -49,6 +49,12 @@ type RunDeps struct {
 	// a KB system prompt — eval still works, but the LLM context drifts
 	// slightly from production where the prompt is always present.
 	KbSystemPrompt func(ctx context.Context, kbID string) string
+	// AgentTeams loads a team for eval dispatch (Task 6's
+	// TeamLoaderForEval, satisfied by *agentteams.Store). May be nil when
+	// the deployment never wires team eval runs — RunInProcessFromRecord
+	// then hard-errors on any run with r.TeamID set rather than silently
+	// falling back to standard dispatch.
+	AgentTeams TeamLoaderForEval
 }
 
 // applyRunKBOverride sets every question's KbID to runKB in place.
@@ -110,19 +116,40 @@ func RunInProcessFromRecord(ctx context.Context, r Run, deps RunDeps) (json.RawM
 		vector.WithSiteConfigReader(siteReader),
 	)
 
-	// 4. Build the orchestrator-dispatch adapter so the eval mirrors
-	//    production dispatch (Supervisor / Plan-Execute / Agentic /
-	//    standard fallback). EvalFlags are zero: no --enhance, no
-	//    --hyde, no --multi-query, no --enumeration override. CRAG and
-	//    other pipeline knobs come from the frozen site-config snapshot,
-	//    and orchestrator selection follows the snapshot's gate values.
-	adapter := NewOrchestratorDispatchAdapter(
-		deps.AIResolver,
-		svc,
-		siteReader,
-		deps.KbSystemPrompt,
-		EvalFlags{}, // all zero — KB config governs
-	)
+	// 4. Build the dispatch adapter. A run with TeamID set dispatches every
+	//    question through the fixed agent team (TeamDispatchAdapter) instead
+	//    of orchestrator selection — team runs are selection-driven from the
+	//    UI, not query-type-driven. Otherwise, mirror production dispatch
+	//    (Supervisor / Plan-Execute / Agentic / standard fallback). EvalFlags
+	//    are zero: no --enhance, no --hyde, no --multi-query, no
+	//    --enumeration override. CRAG and other pipeline knobs come from the
+	//    frozen site-config snapshot, and orchestrator selection follows the
+	//    snapshot's gate values.
+	//    Both adapters satisfy chatContextProvider (Search +
+	//    ChatContextForQuestion + ContentsForQuestion), so judge mode
+	//    composes identically for team and orchestrator dispatch.
+	var adapter chatContextProvider
+	if r.TeamID != nil && *r.TeamID != "" {
+		if deps.AgentTeams == nil {
+			return nil, fmt.Errorf("run %s specifies team_id=%s but no AgentTeams loader is wired", r.ID, *r.TeamID)
+		}
+		adapter = NewTeamDispatchAdapter(
+			deps.AIResolver,
+			svc,
+			siteReader,
+			deps.AgentTeams,
+			*r.TeamID,
+			deps.KbSystemPrompt,
+		)
+	} else {
+		adapter = NewOrchestratorDispatchAdapter(
+			deps.AIResolver,
+			svc,
+			siteReader,
+			deps.KbSystemPrompt,
+			EvalFlags{}, // all zero — KB config governs
+		)
+	}
 
 	// 5. Run retrieval eval (concurrency=1 for the worker path).
 	topK := r.TopK
@@ -142,9 +169,10 @@ func RunInProcessFromRecord(ctx context.Context, r Run, deps RunDeps) (json.RawM
 	}
 
 	// 6. Judge path — mirrors cmd/eval/main.go's judge loop.
-	//    The production-adapter path (ChatContextForQuestion) is used so the
-	//    LLM answer is generated from the exact system prompt and context text
-	//    that the chat handler would produce (production parity).
+	//    The adapter's ChatContextForQuestion is used so the LLM answer is
+	//    generated from the exact system prompt and context text that the
+	//    chat handler (or RunTeamChat, for team runs) would produce
+	//    (production parity).
 	rep, err := runEvalWithProductionJudge(ctx, adapter, questions, topK, deps.AIResolver)
 	if err != nil {
 		return nil, fmt.Errorf("run eval with judge: %w", err)

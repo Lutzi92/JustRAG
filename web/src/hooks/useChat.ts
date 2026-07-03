@@ -25,6 +25,8 @@ interface RawChatMessage {
   verification?: MessageVerification | null;
   traceId?: string | null;
   structured_table?: StructuredTable | null;
+  teamId?: string | null;
+  agentId?: string | null;
 }
 
 interface UseChatParams {
@@ -247,6 +249,8 @@ export function useChat({
         verification: m.verification ?? null,
         traceId: m.traceId ?? null,
         structured_table: m.structured_table ?? null,
+        teamId: m.teamId ?? null,
+        agentId: m.agentId ?? null,
       }));
       const newTree = buildMessageMap(rawMessages);
       setMessageTree(newTree);

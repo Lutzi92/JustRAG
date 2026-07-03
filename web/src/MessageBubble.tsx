@@ -1,6 +1,6 @@
 import { memo, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { FileText, ChevronDown, Check, ArrowRight, Network } from 'lucide-react';
+import { FileText, ChevronDown, Check, ArrowRight, Network, Users, Bot } from 'lucide-react';
 import type { Message, BranchInfo, MessageVerification, MessageSource } from './types';
 import { flaggedClaimsFor } from './utils/verification';
 import { useReducedMotion, getMotionProps } from './hooks/useReducedMotion';
@@ -34,6 +34,11 @@ interface MessageBubbleProps {
     animationDelay?: number;
     kbId?: string;
     questionText?: string;
+    // Resolves an AI message's teamId/agentId to a display name for the
+    // attribution chip. Returns undefined on a lookup miss (e.g. the team or
+    // agent was later deleted) — the chip then renders nothing rather than
+    // an empty label.
+    resolveAttribution?: (message: Message) => string | undefined;
 }
 
 interface ConfidenceProps {
@@ -154,7 +159,7 @@ function ConfidenceDetails({ verification, t }: ConfidenceProps) {
     );
 }
 
-function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showFollowUps, branchInfo, onSwitchBranch, onEdit, onFork, onCompare, onRegenerate, onFeedback, isEditing, onEditCancel, onPreviewSource, onViewGraph, animationDelay, kbId, questionText }: MessageBubbleProps) {
+function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showFollowUps, branchInfo, onSwitchBranch, onEdit, onFork, onCompare, onRegenerate, onFeedback, isEditing, onEditCancel, onPreviewSource, onViewGraph, animationDelay, kbId, questionText, resolveAttribution }: MessageBubbleProps) {
     const { t } = useTheme();
     const isThinking = Boolean(isStreaming && message.reasoning && !message.content);
     const isMobile = useIsMobileContext();
@@ -254,6 +259,12 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
         }));
     }, [message.sources, message.content]);
 
+    // Attribution chip name — undefined on a lookup miss (team/agent deleted
+    // after answering), in which case the chip renders nothing.
+    const attributionName = message.role === 'ai' && (message.teamId || message.agentId)
+        ? resolveAttribution?.(message)
+        : undefined;
+
     // If editing this message inline, show editor instead
     if (isEditing && message.role === 'user' && onEdit && onEditCancel && message.id) {
         return (
@@ -346,6 +357,12 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
             {message.role === 'ai' && !isStreaming && !message.isEnhanced && message.id && (
                 <>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', minWidth: 0, marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)' }}>
+                        {attributionName && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                                {message.teamId ? <Users size={12} aria-hidden="true" /> : <Bot size={12} aria-hidden="true" />}
+                                {attributionName}
+                            </span>
+                        )}
                         {message.verification != null && hasFactcheckOutput(message.verification) && (
                             <ConfidenceChip
                                 verification={message.verification}

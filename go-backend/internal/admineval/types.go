@@ -15,6 +15,11 @@ type CreateRunRequest struct {
 	JudgeEnabled *bool      `json:"judge_enabled,omitempty"`
 	TopK         *int       `json:"top_k,omitempty"`
 	Label        string     `json:"label,omitempty"`
+	// TeamID dispatches the eval run through a user-created agent team
+	// instead of the standard orchestrator-dispatch adapter. Teams are
+	// KB-scoped, so TeamID requires an explicit KBID on the same request
+	// (see CreateRun validation) — it cannot rely on eval_default_kb_id.
+	TeamID *uuid.UUID `json:"team_id,omitempty"`
 }
 
 // CreateRunResponse is the 201 body returned by POST /api/admin/eval/runs.

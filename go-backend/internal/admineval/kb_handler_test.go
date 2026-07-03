@@ -83,7 +83,7 @@ func reqAuth(method, target, id string, body string) *http.Request {
 func TestCreateRunForKB_InFlightGuard(t *testing.T) {
 	kb := uuid.New()
 	gs := uuid.New()
-	h := NewHandler(&fakeRunStore{active: true}, fakeKB{}, fakeCfg{}, nil, &fakeGSStore{get: &eval.GoldenSet{ID: gs, KBID: kb}}, nil)
+	h := NewHandler(&fakeRunStore{active: true}, fakeKB{}, fakeCfg{}, nil, &fakeGSStore{get: &eval.GoldenSet{ID: gs, KBID: kb}}, nil, nil)
 	w := httptest.NewRecorder()
 	h.CreateRunForKB(w, reqAuth(http.MethodPost, "/api/kb/"+kb.String()+"/eval/runs", kb.String(), `{"golden_set_id":"`+gs.String()+`"}`))
 	if w.Code != http.StatusConflict {
@@ -97,7 +97,7 @@ func TestCreateRunForKB_CrossKBGoldenSetRejected(t *testing.T) {
 	otherKB := uuid.New()
 	gs := uuid.New()
 	rs := &fakeRunStore{}
-	h := NewHandler(rs, fakeKB{}, fakeCfg{}, nil, &fakeGSStore{get: &eval.GoldenSet{ID: gs, KBID: otherKB}}, nil)
+	h := NewHandler(rs, fakeKB{}, fakeCfg{}, nil, &fakeGSStore{get: &eval.GoldenSet{ID: gs, KBID: otherKB}}, nil, nil)
 	w := httptest.NewRecorder()
 	h.CreateRunForKB(w, reqAuth(http.MethodPost, "/api/kb/"+kb.String()+"/eval/runs", kb.String(), `{"golden_set_id":"`+gs.String()+`"}`))
 	if w.Code != http.StatusBadRequest && w.Code != http.StatusNotFound {
@@ -113,7 +113,7 @@ func TestGetRunForKB_CrossKBRejected(t *testing.T) {
 	kb := uuid.New()
 	otherKB := uuid.New()
 	run := &eval.Run{ID: uuid.New(), KBID: otherKB}
-	h := NewHandler(&fakeRunStore{got: run}, fakeKB{}, fakeCfg{}, nil, &fakeGSStore{}, nil)
+	h := NewHandler(&fakeRunStore{got: run}, fakeKB{}, fakeCfg{}, nil, &fakeGSStore{}, nil, nil)
 	r := httptest.NewRequest(http.MethodGet, "/api/kb/"+kb.String()+"/eval/runs/"+run.ID.String(), nil)
 	r.SetPathValue("id", kb.String())
 	r.SetPathValue("runId", run.ID.String())
@@ -127,7 +127,7 @@ func TestGetRunForKB_CrossKBRejected(t *testing.T) {
 // ListGoldenSetsForKB returns only the path KB's sets.
 func TestListGoldenSetsForKB(t *testing.T) {
 	kb := uuid.New()
-	h := NewHandler(&fakeRunStore{}, fakeKB{}, fakeCfg{}, nil, &fakeGSStore{}, nil)
+	h := NewHandler(&fakeRunStore{}, fakeKB{}, fakeCfg{}, nil, &fakeGSStore{}, nil, nil)
 	w := httptest.NewRecorder()
 	h.ListGoldenSetsForKB(w, req(http.MethodGet, "/api/kb/"+kb.String()+"/eval/golden-sets", kb.String(), ""))
 	if w.Code != http.StatusOK {

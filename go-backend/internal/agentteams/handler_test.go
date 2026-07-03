@@ -210,3 +210,25 @@ func TestCreateTeamRejectsForeignMembers(t *testing.T) {
 		t.Fatalf("rejected team must not reach the store, got %d teams", len(fs.teams))
 	}
 }
+
+func TestGetRegistryServesFieldsAndTools(t *testing.T) {
+	h := testHandler(newFakeStore())
+	w := doJSON(t, h.GetRegistry, "GET", "/api/agents/registry", "u1", nil, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("registry: %d", w.Code)
+	}
+	var resp struct {
+		Fields []map[string]any `json:"fields"`
+		Tools  []string         `json:"tools"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Fields) == 0 {
+		t.Fatal("fields missing")
+	}
+	// testHandler's AvailableTools returns kb_search + calculator.
+	if len(resp.Tools) != 2 || resp.Tools[0] != "calculator" || resp.Tools[1] != "kb_search" {
+		t.Fatalf("tools must be the AvailableTools set, sorted: %v", resp.Tools)
+	}
+}

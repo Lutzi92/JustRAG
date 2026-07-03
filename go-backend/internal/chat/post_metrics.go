@@ -17,7 +17,7 @@ import (
 // turn start by the chat handler) and forwards it to the recorder so
 // agent_decisions.tool_calls captures which tools the orchestrator
 // actually dispatched.
-func (h *Handler) recordAgentDecision(ctx context.Context, kbID, mode, outcome string, hops, rounds int, latencyMs int64) {
+func (h *Handler) recordAgentDecision(ctx context.Context, kbID, mode, outcome string, hops, rounds int, latencyMs int64, teamID, agentID *string) {
 	if h.decisionRecorder == nil {
 		return
 	}
@@ -36,7 +36,7 @@ func (h *Handler) recordAgentDecision(ctx context.Context, kbID, mode, outcome s
 		// span in the distributed trace.
 		bgCtx, cancel := detachedContext(ctx, 5*time.Second)
 		defer cancel()
-		h.decisionRecorder.Record(bgCtx, kbID, mode, outcome, hops, rounds, int(latencyMs), toolCalls)
+		h.decisionRecorder.Record(bgCtx, kbID, mode, outcome, hops, rounds, int(latencyMs), toolCalls, teamID, agentID)
 	})
 }
 

@@ -128,5 +128,5 @@ func TestPgStore_Record_BadKbIDDropped(t *testing.T) {
 	// path is fire-and-forget. Use a nil pool — Record short-circuits on
 	// the parse error before reaching any DB call.
 	s := &PgStore{pool: nil}
-	s.Record(context.Background(), "garbage", "agentic", "max_hops_reached", 3, 0, 1500, nil)
+	s.Record(context.Background(), "garbage", "agentic", "max_hops_reached", 3, 0, 1500, nil, nil, nil)
 }

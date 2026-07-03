@@ -97,6 +97,8 @@ type DecisionRow struct {
 	Rounds    int
 	LatencyMs int
 	ToolCalls []ToolCallEntry
+	TeamID    *string
+	AgentID   *string
 }
 
 // ToolCallEntry mirrors chat.ToolCallRecord on the persistence side.
@@ -140,7 +142,7 @@ var _ Store = (*PgStore)(nil)
 // AP-B4: toolCalls is the per-turn dispatch sequence; nil/empty means
 // the turn didn't go through the MCP dispatcher (legacy paths or
 // non-tool-aware orchestrators). Persists as a JSONB array via Insert.
-func (s *PgStore) Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []ToolCallEntry) {
+func (s *PgStore) Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []ToolCallEntry, teamID, agentID *string) {
 	id, err := uuid.Parse(strings.TrimSpace(kbID))
 	if err != nil {
 		logctx.From(ctx).Warn("agent_decisions.record: bad kb_id", "kb_id", kbID, "error", err)
@@ -154,6 +156,8 @@ func (s *PgStore) Record(ctx context.Context, kbID, mode, outcome string, hops, 
 		Rounds:    rounds,
 		LatencyMs: latencyMs,
 		ToolCalls: toolCalls,
+		TeamID:    teamID,
+		AgentID:   agentID,
 	}); err != nil {
 		logctx.From(ctx).Warn("agent_decisions.record: insert failed", "error", err)
 	}
@@ -179,10 +183,10 @@ func (s *PgStore) Insert(ctx context.Context, r DecisionRow) error {
 		return fmt.Errorf("agent_decisions: marshal tool_calls: %w", err)
 	}
 	const q = `
-        INSERT INTO agent_decisions (kb_id, mode, outcome, hops, rounds, latency_ms, tool_calls)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+        INSERT INTO agent_decisions (kb_id, mode, outcome, hops, rounds, latency_ms, tool_calls, team_id, agent_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
     `
-	_, err = s.pool.Exec(ctx, q, r.KbID, r.Mode, r.Outcome, r.Hops, r.Rounds, r.LatencyMs, payload)
+	_, err = s.pool.Exec(ctx, q, r.KbID, r.Mode, r.Outcome, r.Hops, r.Rounds, r.LatencyMs, payload, r.TeamID, r.AgentID)
 	return err
 }
 

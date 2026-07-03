@@ -7,6 +7,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useReducedMotion, getMotionProps } from '../../hooks/useReducedMotion';
 import { getApiErrorMessage } from '../../utils/apiError';
+import { fetchKbAgents, type KbAgentOption } from '../agents/api';
 
 // Types mirror the backend DTOs (internal/admineval/types.go).
 interface AggregateSummary {
@@ -78,6 +79,8 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
     const [judgeEnabled, setJudgeEnabled] = useState(true);
     const [topK, setTopK] = useState(10);
     const [kickOffLoading, setKickOffLoading] = useState(false);
+    const [selectedTeamId, setSelectedTeamId] = useState('');
+    const [kbTeams, setKbTeams] = useState<KbAgentOption[]>([]);
 
     // State: golden sets
     const [goldenSets, setGoldenSets] = useState<GoldenSet[]>([]);
@@ -126,6 +129,20 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
     useEffect(() => {
         fetchGoldenSets();
     }, [fetchGoldenSets]);
+
+    // Team select: only meaningful once a KB is in play (path-scoped kbId,
+    // or an explicit kb_id typed into the admin-scope form).
+    useEffect(() => {
+        // Clear on every KB change (including formKbId edits) so switching
+        // KB-A -> KB-B never resubmits KB-A's team id against KB-B; the
+        // backend already 400s that mismatch, this just avoids the
+        // confusing error by not offering a stale selection in the first
+        // place.
+        setSelectedTeamId('');
+        const effectiveKb = kbId || formKbId;
+        if (!effectiveKb) { setKbTeams([]); return; }
+        fetchKbAgents(effectiveKb).then(o => setKbTeams(o.teams)).catch(() => setKbTeams([]));
+    }, [kbId, formKbId]);
 
     // Fetch generation jobs
     const fetchGenJobs = useCallback(async () => {
@@ -274,6 +291,7 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
             };
             if (!kbId && formKbId) body.kb_id = formKbId;
             if (selectedGoldenSetId) body.golden_set_id = selectedGoldenSetId;
+            if (selectedTeamId) body.team_id = selectedTeamId;
             await axios.post(`${API_BASE_URL}${basePath}/runs`, body);
             toast.success(t('evalKickedOff'));
             setLabel('');
@@ -542,6 +560,23 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
                         ))}
                     </select>
                 </div>
+                {/* Team selector — only shown once a KB is in play (its teams may be empty) */}
+                {kbTeams.length > 0 && (
+                <div className="input-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <label htmlFor="eval-team-id" style={{ fontSize: '0.9rem', opacity: 0.8 }}>{t('evalTeamLabel')}</label>
+                    <select
+                        id="eval-team-id"
+                        value={selectedTeamId}
+                        onChange={e => setSelectedTeamId(e.target.value)}
+                        style={{ padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                    >
+                        <option value="">{t('evalTeamStandard')}</option>
+                        {kbTeams.map(tm => (
+                            <option key={tm.id} value={tm.id}>{tm.name}</option>
+                        ))}
+                    </select>
+                </div>
+                )}
                 {/* Top-k + judge + submit row */}
                 <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
                     <div className="input-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100px' }}>

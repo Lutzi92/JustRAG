@@ -506,36 +506,30 @@ func (h *Handler) tryDeepChat(
 	supervisorEnabled := ChatSupervisorEnabled(ctx, h.siteConfigReader)
 	driftEnabled := ChatDriftEnabled(ctx, h.siteConfigReader)
 
-	// Corpus-table comparison: checked first so it can take top priority over
-	// all orchestrators. The two-stage gate (keyword classifier + optional LLM
-	// confirm) keeps false-positive rate low; corpusChunks being non-nil is the
-	// infrastructure-availability guard.
-	corpusTableEnabled := ChatCorpusTableEnabled(ctx, h.siteConfigReader)
-	willRunCorpusTable := corpusTableEnabled &&
-		h.corpusChunks != nil &&
-		body.Enhance == "" &&
-		IsCorpusComparisonQuery(searchQuery, lang) &&
-		(!ChatCorpusTableRouterLLMEnabled(ctx, h.siteConfigReader) ||
-			ai.ConfirmCorpusComparison(ctx, h.aiResolver, searchQuery, kbID, lang, ChatCorpusTableModel(ctx, h.siteConfigReader)))
-
 	// In-chat document comparison takes top priority over every orchestrator
 	// (including corpus-table) — an explicit attachment + modes is an
 	// unambiguous user intent, so it should never be hijacked by a query
 	// classifier. attachmentStore being non-nil is the infrastructure guard.
 	runCompare := h.attachmentStore != nil &&
 		willRunComparison(CompareEnabled(ctx, h.siteConfigReader), body.AttachmentID, body.ComparisonModes)
-	if runCompare {
-		willRunCorpusTable = false
-	}
 
 	// Explicit user-created team/agent selection takes priority over every
 	// flag-driven orchestrator (but not the comparison attachment) — the
 	// team router is the triage, so it also supersedes the corpus-table
 	// heuristic classifier.
 	willRunTeam := !runCompare && teamSel != nil && body.Enhance == ""
-	if willRunTeam {
-		willRunCorpusTable = false
-	}
+
+	// Corpus-table comparison: two-stage gate (keyword classifier + optional
+	// LLM confirm). Both explicit-intent gates above short-circuit it so the
+	// classifier — and especially the optional confirm LLM call — never runs
+	// on comparison or team turns.
+	corpusTableEnabled := ChatCorpusTableEnabled(ctx, h.siteConfigReader)
+	willRunCorpusTable := !runCompare && !willRunTeam && corpusTableEnabled &&
+		h.corpusChunks != nil &&
+		body.Enhance == "" &&
+		IsCorpusComparisonQuery(searchQuery, lang) &&
+		(!ChatCorpusTableRouterLLMEnabled(ctx, h.siteConfigReader) ||
+			ai.ConfirmCorpusComparison(ctx, h.aiResolver, searchQuery, kbID, lang, ChatCorpusTableModel(ctx, h.siteConfigReader)))
 
 	// Full iterative DRIFT takes priority over the other orchestrators, but
 	// only for global-synthesis queries (its primer is wasted on narrow
@@ -968,6 +962,8 @@ func (h *Handler) tryDeepChat(
 		fullReasoning := reasoningBuf.String()
 		reasoningPtr = &fullReasoning
 	}
+	// Derive team/agent attribution for AI message (reused for recordAgentDecision below).
+	decTeamID, decAgentID := attributionIDs(willRunTeam, teamSel)
 	aiMsg, err := h.store.AddMessage(ctx, AddMessageParams{
 		ChatID:          chatID,
 		Role:            "ai",
@@ -976,6 +972,8 @@ func (h *Handler) tryDeepChat(
 		Reasoning:       reasoningPtr,
 		ParentMessageID: &userMsg.ID,
 		StructuredTable: chatCtx.StructuredTable,
+		TeamID:          decTeamID,
+		AgentID:         decAgentID,
 	})
 	if err != nil {
 		writeSSE(w, map[string]string{"error": "failed to save AI message"})
@@ -1037,7 +1035,7 @@ func (h *Handler) tryDeepChat(
 	} else {
 		hops = 0
 	}
-	h.recordAgentDecision(ctx, kbID, mode, outcome, hops, rounds, time.Since(deepChatStart).Milliseconds())
+	h.recordAgentDecision(ctx, kbID, mode, outcome, hops, rounds, time.Since(deepChatStart).Milliseconds(), decTeamID, decAgentID)
 
 	writeSSEDone(w)
 	sseFinished = true
@@ -1052,6 +1050,28 @@ func (h *Handler) tryDeepChat(
 type teamSelection struct {
 	team  *agentteams.TeamForChat
 	agent *agentteams.AgentRecord
+}
+
+// attributionIDs derives the team/agent ids to attribute an AI message (and
+// its agent_decisions row) to. willRunTeam must be true — i.e. the team
+// actually answered this turn — or both returns are nil, even when teamSel
+// is non-nil: a resolved-but-unused pick (comparison turns win over team
+// selection, or Enhance forces the standard path) must not be written to
+// messages.team_id / agent_decisions.team_id, per the DecisionRecorder
+// contract ("nil otherwise").
+func attributionIDs(willRunTeam bool, teamSel *teamSelection) (teamID, agentID *string) {
+	if !willRunTeam || teamSel == nil {
+		return nil, nil
+	}
+	switch {
+	case teamSel.team != nil:
+		id := teamSel.team.Team.ID
+		teamID = &id
+	case teamSel.agent != nil:
+		id := teamSel.agent.ID
+		agentID = &id
+	}
+	return teamID, agentID
 }
 
 // resolveTeamSelection loads and authorizes the request's team/agent pick.

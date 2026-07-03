@@ -188,10 +188,11 @@ func (h *Handler) DeleteGoldenSetForKB(w http.ResponseWriter, r *http.Request) {
 
 // kbCreateRunRequest is the KB-scoped run body (no kb_id — it comes from path).
 type kbCreateRunRequest struct {
-	GoldenSetID  uuid.UUID `json:"golden_set_id"`
-	JudgeEnabled bool      `json:"judge_enabled"`
-	TopK         int       `json:"top_k"`
-	Label        string    `json:"label"`
+	GoldenSetID  uuid.UUID  `json:"golden_set_id"`
+	JudgeEnabled bool       `json:"judge_enabled"`
+	TopK         int        `json:"top_k"`
+	Label        string     `json:"label"`
+	TeamID       *uuid.UUID `json:"team_id,omitempty"`
 }
 
 // CreateRunForKB → POST /api/kb/{id}/eval/runs
@@ -225,6 +226,19 @@ func (h *Handler) CreateRunForKB(w http.ResponseWriter, r *http.Request) {
 	// Golden set must belong to this KB.
 	gs := h.getOwnedGoldenSet(w, r, kbID, kreq.GoldenSetID)
 	if gs == nil {
+		return
+	}
+
+	// team_id (if given) must be attached + enabled for this KB. Unlike the
+	// global CreateRun, there is no "team_id requires kb_id" case here —
+	// kbID always comes from the path.
+	if bad, terr := h.validateTeamID(ctx, kreq.TeamID, kbID); terr != nil {
+		if bad {
+			httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, terr.Error())
+			return
+		}
+		logctx.From(ctx).Error("eval.kb.create_run.team_lookup", "error", terr, "team_id", kreq.TeamID)
+		httputil.WriteInternalErrorCtx(ctx, w, terr)
 		return
 	}
 
@@ -275,6 +289,7 @@ func (h *Handler) CreateRunForKB(w http.ResponseWriter, r *http.Request) {
 		TopK:           kreq.TopK,
 		Label:          kreq.Label,
 		TriggeredBy:    triggeredBy,
+		TeamID:         teamIDString(kreq.TeamID),
 	})
 	if err != nil {
 		httputil.WriteInternalErrorCtx(ctx, w, err)

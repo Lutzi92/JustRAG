@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/justrag/go-backend/internal/admineval"
+	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/canonicalize"
 	"github.com/justrag/go-backend/internal/chat"
@@ -361,6 +362,7 @@ func RunWorker(cfg *config.Config) error {
 			}
 			return ""
 		},
+		AgentTeams: agentteams.NewStore(db.Main),
 	}
 	evalWorker := admineval.NewWorker(db.Main, evalStore, func(ctx context.Context, r eval.Run) (json.RawMessage, error) {
 		return eval.RunInProcessFromRecord(ctx, r, evalDeps)

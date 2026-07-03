@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/chat"
 	"github.com/justrag/go-backend/internal/config"
@@ -56,7 +57,17 @@ func main() {
 	nodeKindFilter := flag.String("node-kind", "", `Phase F (RAPTOR) ablation: restrict retrieval to a single node_kind. "leaf" reproduces pre-RAPTOR behaviour; "summary" runs against summaries only; "" (default) lets both compete in one pool — production parity. Eval-only — the chat handler never sets this.`)
 	depthBucketsMinChunks := flag.Int("depth-buckets-min-chunks", 4, `Min totalChunks required for a chunk to count toward the depth-bucket aggregate. Suppresses noise from short files where bucketing has no useful signal. Pass 1 to disable filtering. Only effective with --depth-buckets.`)
 	orchestratorDispatch := flag.Bool("orchestrator-dispatch", true, `With --production-context: route each question through the same orchestrator predicate production uses (Supervisor / Plan-Execute / Plan-Execute-DAG / Agentic / standard fallback) and record per-question 'agent' + per-orchestrator aggregates in the report. Default true. Set to false to reproduce pre-2026-05 retrieval-only behaviour for byte-stable diffs against historical eval runs. Ignored when --production-context is unset.`)
+	teamID := flag.String("team-id", "", "Dispatch every question through this user-created agent team (requires --production-context; team must be attached + enabled on the golden set's KB)")
 	flag.Parse()
+
+	if *teamID != "" && !*productionContext {
+		slog.Error("--team-id requires --production-context")
+		os.Exit(2)
+	}
+	if *teamID != "" && *trajectoryMode {
+		slog.Error("team-id is not supported with --trajectory")
+		os.Exit(2)
+	}
 
 	var forceEnumeration *bool
 	switch *enumerationOverride {
@@ -172,16 +183,27 @@ func main() {
 			StepBack:                *stepBack,
 			ForceEnumerationPrepass: forceEnumeration,
 		}
-		if *orchestratorDispatch {
-			// KB-system-prompt accessor — same closure shape as the trajectory
-			// runner uses below — so the dispatched orchestrators see the
-			// prompt production wires in via tryDeepChat.
-			getKbSystemPrompt := func(ctx context.Context, kbID string) string {
-				if sp, err := chatStore.GetKBSystemPrompt(ctx, kbID); err == nil && sp != nil {
-					return *sp
-				}
-				return ""
+		// KB-system-prompt accessor - same closure shape as the trajectory
+		// runner uses below - so the dispatched orchestrators/team see the
+		// prompt production wires in via tryDeepChat.
+		getKbSystemPrompt := func(ctx context.Context, kbID string) string {
+			if sp, err := chatStore.GetKBSystemPrompt(ctx, kbID); err == nil && sp != nil {
+				return *sp
 			}
+			return ""
+		}
+		if *teamID != "" {
+			teamStore := agentteams.NewStore(db.Main)
+			adapter = eval.NewTeamDispatchAdapter(
+				aiResolver,
+				searchService,
+				siteReader,
+				teamStore,
+				*teamID,
+				getKbSystemPrompt,
+			)
+			slog.Info("eval: team-dispatch mode on", "team_id", *teamID)
+		} else if *orchestratorDispatch {
 			adapter = eval.NewOrchestratorDispatchAdapter(
 				aiResolver,
 				searchService,

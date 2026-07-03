@@ -5,16 +5,11 @@ import {
   listAgents, listTeams, fetchAgentRegistry,
   createAgent, updateAgent, deleteAgent,
   createTeam, updateTeam, deleteTeam,
-  type AgentRecord, type TeamRecord, type AgentConfigField,
-  type AgentUpsert, type TeamUpsert,
+  type AgentRecord, type TeamRecord,
+  type AgentRegistry, type AgentUpsert, type TeamUpsert,
 } from './api';
 import AgentForm from './AgentForm';
 import TeamForm from './TeamForm';
-
-const NON_PRIVILEGED_TOOLS = [
-  'kb_search', 'keyword_search', 'count_mentions', 'chunk_read',
-  'document_outline', 'recent_documents', 'calculator', 'graph_search',
-];
 
 interface Props {
   onBack: () => void;
@@ -26,7 +21,7 @@ export default function AgentsView({ onBack, availableModels = [] }: Props) {
   const [tab, setTab] = useState<'agents' | 'teams'>('agents');
   const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [teams, setTeams] = useState<TeamRecord[]>([]);
-  const [registry, setRegistry] = useState<AgentConfigField[]>([]);
+  const [registry, setRegistry] = useState<AgentRegistry>({ fields: [], tools: [] });
   const [editingAgent, setEditingAgent] = useState<AgentRecord | 'new' | null>(null);
   const [editingTeam, setEditingTeam] = useState<TeamRecord | 'new' | null>(null);
 
@@ -37,7 +32,7 @@ export default function AgentsView({ onBack, availableModels = [] }: Props) {
 
   useEffect(() => {
     reload();
-    fetchAgentRegistry().then(setRegistry).catch(() => setRegistry([]));
+    fetchAgentRegistry().then(setRegistry).catch(() => setRegistry({ fields: [], tools: [] }));
   }, [reload]);
 
   const saveAgent = async (a: AgentUpsert) => {
@@ -92,8 +87,8 @@ export default function AgentsView({ onBack, availableModels = [] }: Props) {
           {editingAgent ? (
             <AgentForm
               initial={editingAgent === 'new' ? undefined : editingAgent}
-              registry={registry}
-              availableTools={NON_PRIVILEGED_TOOLS}
+              registry={registry.fields}
+              availableTools={registry.tools}
               availableModels={availableModels}
               onSave={saveAgent}
               onCancel={() => setEditingAgent(null)}

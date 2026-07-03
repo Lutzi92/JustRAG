@@ -114,9 +114,11 @@ type DecisionRecorder interface {
 	// Record persists one chat-decision row. toolCalls is the AP-B4
 	// per-turn tool-dispatch sequence captured by ToolCallRecorder;
 	// nil/empty signals "no MCP calls this turn" and lands as an
-	// empty JSONB array on disk. Implementations are fire-and-forget
-	// — failures should log and drop, never propagate.
-	Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []ToolCallRecord)
+	// empty JSONB array on disk. teamID / agentID carry the
+	// user-created team/agent selection for mode="team" rows (nil
+	// otherwise). Implementations are fire-and-forget — failures
+	// should log and drop, never propagate.
+	Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []ToolCallRecord, teamID, agentID *string)
 }
 
 // TabularCatalogChecker reports whether a KB has materialized tabular sheets.
