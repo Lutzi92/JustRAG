@@ -61,12 +61,12 @@ const SettingsModalContent: React.FC<Omit<SettingsModalProps, 'show'>> = ({
                                 }
                             }}
                             placeholder={t('systemPromptPlaceholder')}
-                            maxLength={4000}
+                            maxLength={8000}
                             rows={4}
                             style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', resize: 'vertical', fontFamily: 'inherit' }}
                         />
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textAlign: 'right', marginTop: '0.25rem' }}>
-                            {systemPrompt.length} / 4000
+                            {systemPrompt.length} / 8000
                         </div>
                     </div>
 

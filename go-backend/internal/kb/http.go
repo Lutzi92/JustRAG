@@ -186,8 +186,8 @@ func (h *Handler) CreateKnowledgeBase(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "description must not exceed 2000 characters")
 		return
 	}
-	if body.SystemPrompt != nil && utf8.RuneCountInString(*body.SystemPrompt) > 4000 {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "systemPrompt must not exceed 4000 characters")
+	if body.SystemPrompt != nil && utf8.RuneCountInString(*body.SystemPrompt) > 8000 {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "systemPrompt must not exceed 8000 characters")
 		return
 	}
 
