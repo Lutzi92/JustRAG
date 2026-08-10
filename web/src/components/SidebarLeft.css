@@ -370,7 +370,7 @@
   border-radius: 6px;
   cursor: pointer;
   font-size: 0.8rem;
-  color: #fff;
+  color: var(--accent-on-primary);
   background: var(--accent-primary);
 }
 

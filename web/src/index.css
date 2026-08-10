@@ -14,7 +14,11 @@
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
-@import "@ki4jlu/design-system/tokens.css";
+/* Vendored rather than installed — the package is in a private KI4JLU registry
+ * that CI and the Docker build cannot authenticate against. Tier 1 needs only
+ * this file. See the header of the vendored file for the re-sync procedure and
+ * for how to switch back to `@import "@ki4jlu/design-system/tokens.css"`. */
+@import "./styles/jlu-design-system-tokens.css";
 
 *,
 *::before,
@@ -26,8 +30,11 @@
  * Token bridge — JustRAG's semantic names, JLU Design System values.
  *
  * Every JustRAG variable name is preserved so no component markup changes.
- * Only the VALUES now resolve to design-system tokens, which means a version
- * bump of @ki4jlu/design-system repaints the app with no code change here.
+ * Only the VALUES now resolve to design-system tokens, so a new design-system
+ * release repaints the app without touching this block. NOTE: while the tokens
+ * are VENDORED (see the import above), picking up a release means re-copying
+ * that file — it is not automatic. It becomes automatic once the package is
+ * installable from a registry.
  *
  * Deliberate exceptions (governance §"Color exceptions in consuming apps"):
  *   --modal-overlay-bg     scrim; the DS has no scrim token.
@@ -54,8 +61,14 @@
    * --color-primary-rgb token, or migrate the ~20 `rgba(var(--accent-primary-rgb), α)`
    * call sites to `color-mix(in srgb, var(--color-primary) α, transparent)`. */
   --accent-primary-rgb: 0, 86, 179;
-  --accent-primary-translucent: color-mix(in srgb, var(--color-primary) 8%, transparent);
-  --accent-secondary: var(--color-surface-tint);
+  --accent-primary-translucent: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+  /* Text/icon color for the 12 filled controls that sit ON --accent-primary
+   * (.btn--primary, .send-button, .message-user, …). It has to flip per theme:
+   * --accent-primary is a DARK blue on light and a LIGHT blue on dark, so a
+   * hardcoded white here fails WCAG on dark. See the dark block below. */
+  --accent-on-primary: var(--color-on-primary);
+  /* Hover state of those filled controls (was a hand-picked lighter blue). */
+  --accent-secondary: var(--color-primary-hover);
   --text-primary: var(--color-on-surface);
   --text-secondary: var(--color-on-surface-variant);
   --border-color: var(--color-outline-variant);
@@ -89,8 +102,8 @@
   --text-sm: 400 12.5px/1.5 var(--font-sans);
   --text-caption: small-caps 600 11px/1.4 var(--font-sans);
   --text-heading: var(--color-on-surface);
-  --msg-user-bg: var(--color-primary);
-  --msg-user-text: var(--color-on-primary);
+  --msg-user-bg: var(--accent-primary);
+  --msg-user-text: var(--accent-on-primary);
   --msg-ai-bg: var(--color-surface-container);
   --msg-ai-text: var(--color-on-surface);
   --msg-enhanced-bg: var(--color-surface-container);
@@ -123,54 +136,41 @@
   --suspect-border: var(--color-warning);
 }
 
+/* ---------------------------------------------------------------------------
+ * Dark theme. This block used to carry 46 hand-maintained overrides; the design
+ * system's own [data-theme="dark"] block now supplies all of them (surfaces,
+ * text, borders, status, chat, tags, code). Only what the DS genuinely does not
+ * cover is left here.
+ *
+ * JustRAG already sets data-theme on <html> (hooks/useThemeAndLanguage.ts:22),
+ * which is exactly the selector the DS keys on — no theming plumbing changed.
+ * ------------------------------------------------------------------------- */
 [data-theme='dark'] {
   color-scheme: dark;
-  --bg-primary: #121820;
-  --bg-hover: #1e2d3d;
-  --bg-secondary: #1a2332;
-  --sidebar-bg: #0d1219;
-  --accent-primary: #5a9bd5;
-  --accent-primary-rgb: 90, 155, 213;
-  --accent-primary-translucent: rgba(90, 155, 213, 0.12);
-  --accent-secondary: #7cb3e0;
-  --text-primary: #e8eaed;
-  --text-secondary: #9aa0a6;
-  --border-color: #2a3442;
+
+  /* The DS deliberately does NOT lighten --color-primary in dark mode. M3's
+   * token for "the primary accent as it appears ON a dark surface" is
+   * --color-inverse-primary (blue-200), so that is the correct mapping for
+   * accent text, borders and decorative fills here. */
+  --accent-primary: var(--color-inverse-primary);
+  /* TODO(ds): mirrors --color-inverse-primary (#adc6ff) — same triplet caveat
+   * as the light block. */
+  --accent-primary-rgb: 173, 198, 255;
+  /* Because --accent-primary is now a LIGHT blue on dark, filled controls need
+   * DARK text on top. White here would be ~1.5:1. Note the app shipped
+   * white-on-#5a9bd5 (~2.6:1) before this change — a pre-existing AA failure
+   * this mapping fixes. */
+  --accent-on-primary: var(--color-on-primary-fixed);
+  /* Hover goes lighter on dark, matching the DS interaction-state direction. */
+  --accent-secondary: var(--color-primary-active);
+
+  /* Kept local: the DS ships 3 elevation rungs (card / card-hover / overlay)
+   * and does not adapt them for dark mode. JustRAG needs 4 and strengthens
+   * them on dark. Candidate for a DS contribution. */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, .30), 0 1px 3px 1px rgba(0, 0, 0, .15);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, .40), 0 2px 4px -1px rgba(0, 0, 0, .25);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, .45), 0 4px 6px -2px rgba(0, 0, 0, .30);
   --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, .50), 0 10px 10px -5px rgba(0, 0, 0, .30);
-  --msg-user-bg: #1a3050;
-  --msg-user-text: #cce0f5;
-  --msg-ai-bg: #1e2838;
-  --msg-ai-text: var(--text-primary);
-  --msg-enhanced-bg: #1e2838;
-  --msg-enhanced-text: #9aa0a6;
-  --msg-enhanced-border: #2a3442;
-  --source-card-hover-bg: #1e2838;
-  --source-card-active-bg: #1a3050;
-  --tag-bg: #1a3050;
-  --tag-text: var(--accent-primary);
-  --input-bg: #1e2838;
-  --header-icon-bg: #2a3442;
-  --error-text: #f87171;
-  --error: var(--error-text);
-  --error-bg: #3b1515;
-  --success-text: #6dd590;
-  --success-bg: #1a3020;
-  --warning-bg: #4a3a1a;
-  --warning-text: #f5b971;
-  /* ≥ 4.5:1 on #4a3a1a (improvement #1) */
-  --placeholder-text: #8a8a8a;
-  --code-bg: #0d1219;
-  --code-text: #e8eaed;
-  --badge-success-bg: #1a3020;
-  --badge-success-foreground: #6dd590;
-  --suspect-text: #fbbf24;
-  --suspect-bg: #3b2a0a;
-  --suspect-border: #fbbf24;
-  --text-heading: var(--text-primary);
-  /* headings track primary text on dark (improvement #4) */
 }
 
 /* Themed scrollbars */
@@ -424,7 +424,7 @@ button.source-card {
 .message-user {
   align-self: flex-end;
   background-color: var(--accent-primary);
-  color: white;
+  color: var(--accent-on-primary);
   padding: 0.75rem 1.25rem;
   border-radius: var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl);
   max-width: 85%;
@@ -628,7 +628,7 @@ button.source-card {
 
 .source-tag-link:hover {
   background: var(--accent-primary);
-  color: #ffffff;
+  color: var(--accent-on-primary);
 }
 
 /* Per-answer "Wissensgraph" affordance: same accent-pill family as
@@ -653,7 +653,7 @@ button.source-card {
 
 .graph-pill:hover {
   background: var(--accent-primary);
-  color: #ffffff;
+  color: var(--accent-on-primary);
 }
 
 .source-ref {
@@ -672,7 +672,7 @@ button.source-card {
 .source-ref:hover {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
-  color: #ffffff;
+  color: var(--accent-on-primary);
   text-decoration: none;
 }
 
@@ -833,7 +833,7 @@ button.source-card {
 
 .send-button {
   background: var(--accent-primary);
-  color: white;
+  color: var(--accent-on-primary);
   border: none;
   width: 40px;
   height: 40px;
@@ -892,7 +892,7 @@ button.source-card {
 /* Upload Progress Sync */
 .upload-btn {
   background: var(--accent-primary);
-  color: white;
+  color: var(--accent-on-primary);
   border: none;
   padding: 0.5rem 1rem;
   border-radius: var(--radius-md);
@@ -1126,7 +1126,7 @@ button.source-card {
   width: 100%;
   padding: 0.75rem;
   background: var(--accent-primary);
-  color: #ffffff;
+  color: var(--accent-on-primary);
   border: none;
   border-radius: var(--radius-md);
   font-weight: 500;
@@ -1188,7 +1188,7 @@ button.source-card {
 /* Primary — accent fill; one per view */
 .btn--primary {
   background: var(--accent-primary);
-  color: #ffffff;
+  color: var(--accent-on-primary);
 }
 
 .btn--primary:hover:not(:disabled) {
@@ -1449,7 +1449,7 @@ button.source-card {
 .text-input-submit {
   border: none;
   background: var(--accent-primary);
-  color: white;
+  color: var(--accent-on-primary);
 }
 
 .text-input-submit:hover {
@@ -1674,7 +1674,7 @@ button.source-card {
 
 .research-mode-start-btn {
   background: var(--accent-primary);
-  color: white;
+  color: var(--accent-on-primary);
   border: none;
 }
 

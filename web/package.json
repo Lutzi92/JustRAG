@@ -20,7 +20,6 @@
     "last 2 ChromeAndroid versions"
   ],
   "dependencies": {
-    "@ki4jlu/design-system": "file:../../JLU-Design-System",
     "@xyflow/react": "^12.11.1",
     "axios": "^1.18.1",
     "dagre": "^0.8.5",
