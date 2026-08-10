@@ -3,8 +3,8 @@
 package gitrepo
 
 import (
+	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -14,6 +14,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/logctx"
 )
 
 // Handler holds the dependencies for the Git repo source HTTP endpoints.
@@ -158,7 +159,7 @@ func (h *Handler) CreateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.enqueueSync(src.ID)
+	h.enqueueSync(ctx, src.ID)
 	httputil.WriteJSONCtx(ctx, w, http.StatusCreated, toDTO(*src))
 }
 
@@ -278,7 +279,7 @@ func (h *Handler) TriggerSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.enqueueSync(sourceID)
+	h.enqueueSync(ctx, sourceID)
 	httputil.WriteJSONCtx(ctx, w, http.StatusAccepted, map[string]string{"message": "Sync triggered"})
 }
 
@@ -286,13 +287,13 @@ func (h *Handler) TriggerSync(w http.ResponseWriter, r *http.Request) {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-func (h *Handler) enqueueSync(sourceID string) {
+func (h *Handler) enqueueSync(ctx context.Context, sourceID string) {
 	if h.asynqClient == nil {
 		return
 	}
 	payload, err := json.Marshal(jobs.GitRepoSyncPayload{SourceID: sourceID})
 	if err != nil {
-		slog.Error("failed to marshal git repo sync payload", "sourceId", sourceID, "error", err)
+		logctx.From(ctx).Error("failed to marshal git repo sync payload", "sourceId", sourceID, "error", err)
 		return
 	}
 	if _, err := h.asynqClient.Enqueue(
@@ -301,6 +302,6 @@ func (h *Handler) enqueueSync(sourceID string) {
 		asynq.MaxRetry(3),
 		asynq.Timeout(jobs.TimeoutFor(jobs.TypeGitRepoSync)),
 	); err != nil {
-		slog.Error("failed to enqueue git repo sync", "sourceId", sourceID, "error", err)
+		logctx.From(ctx).Error("failed to enqueue git repo sync", "sourceId", sourceID, "error", err)
 	}
 }

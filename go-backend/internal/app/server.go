@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/pprof"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -179,49 +177,7 @@ func RunServer(cfg *config.Config, version string) error {
 	// Start pprof server only when explicitly enabled via PPROF_ENABLED=true.
 	// Binds to localhost only to prevent exposure on container/pod networks.
 	// Access: go tool pprof http://localhost:6060/debug/pprof/heap
-	var pprofServer *http.Server
-	if cfg.Pprof.Enabled {
-		// Mutex/block profile sampling rates are operator-configurable via
-		// PPROF_MUTEX_PROFILE_FRACTION / PPROF_BLOCK_PROFILE_RATE; both
-		// default to 0 (off) so /debug/pprof/mutex and /debug/pprof/block
-		// return empty profiles on an always-on pprof endpoint with no
-		// runtime overhead. Operators bump them for targeted sessions —
-		// typical values are 5 (1-in-5 contentions) and 1000 (blocks ≥ 1µs);
-		// higher rates add measurable overhead under heavy contention.
-		if cfg.Pprof.MutexProfileFraction > 0 {
-			runtime.SetMutexProfileFraction(cfg.Pprof.MutexProfileFraction)
-		}
-		if cfg.Pprof.BlockProfileRate > 0 {
-			runtime.SetBlockProfileRate(cfg.Pprof.BlockProfileRate)
-		}
-
-		pprofAddr := cfg.Pprof.Addr
-		pprofMux := http.NewServeMux()
-		pprofMux.HandleFunc("GET /debug/pprof/", pprofIndex)
-		pprofMux.HandleFunc("GET /debug/pprof/cmdline", pprofCmdline)
-		pprofMux.HandleFunc("GET /debug/pprof/profile", pprofProfile)
-		pprofMux.HandleFunc("GET /debug/pprof/symbol", pprofSymbol)
-		pprofMux.HandleFunc("GET /debug/pprof/trace", pprofTrace)
-		// Index serves /debug/pprof/heap, /goroutine, /mutex, /block via
-		// the catch-all "GET /debug/pprof/" route above. No extra HandleFunc
-		// needed for them — pprof.Index dispatches by basename.
-		pprofServer = &http.Server{
-			Addr:    pprofAddr,
-			Handler: pprofMux,
-			// Bound how long a slow client may take to send request headers
-			// so a wedged debug session can't pin a goroutine indefinitely.
-			// /debug/pprof/profile is the only long-lived endpoint and it
-			// streams response bytes (driven by ?seconds=), so the header
-			// deadline is independent of profile duration.
-			ReadHeaderTimeout: 10 * time.Second,
-		}
-		safego.Go(func() {
-			slog.Info("pprof server listening", "addr", pprofAddr)
-			if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				slog.Warn("pprof server error", "error", err)
-			}
-		})
-	}
+	pprofServer := startPprofServer(cfg.Pprof)
 
 	sigCh, stopSignals := newShutdownSignals()
 	defer stopSignals()
@@ -271,12 +227,3 @@ func RunServer(cfg *config.Config, version string) error {
 	slog.Info("server stopped gracefully")
 	return nil
 }
-
-// pprof handler wrappers — expose net/http/pprof on the internal debug port.
-var (
-	pprofIndex   = pprof.Index
-	pprofCmdline = pprof.Cmdline
-	pprofProfile = pprof.Profile
-	pprofSymbol  = pprof.Symbol
-	pprofTrace   = pprof.Trace
-)

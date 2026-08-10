@@ -205,6 +205,67 @@ func TestListModels_Returns200(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Keep-alive connection reuse
+// ---------------------------------------------------------------------------
+
+// net/http only returns a connection to the idle pool when the response body
+// has been read to EOF. doJSON must therefore drain what it didn't consume —
+// a result-less call (ListModels) reads nothing at all, and json.Decoder
+// leaves trailing bytes behind. Without the drain every provider call pays a
+// fresh TCP+TLS handshake, on the hottest path in the app.
+func TestDoJSON_ReusesKeepAliveConnection(t *testing.T) {
+	cases := []struct {
+		name string
+		call func(*ai.Client) error
+		body string
+	}{
+		{
+			name: "result-less call leaves the whole body unread",
+			call: func(c *ai.Client) error { return c.ListModels(context.Background()) },
+			body: `{"data":[]}`,
+		},
+		{
+			name: "decoded call leaves trailing bytes unread",
+			call: func(c *ai.Client) error {
+				_, err := c.Embedding(context.Background(), &ai.EmbeddingRequest{
+					Model: "m", Input: []string{"hi"},
+				})
+				return err
+			},
+			// Trailing newline + padding after the JSON value: json.Decoder
+			// stops at the closing brace and never consumes these.
+			body: `{"data":[{"index":0,"embedding":[0.5]}]}` + "\n\n   \n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var remoteAddrs []string
+			srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+				remoteAddrs = append(remoteAddrs, r.RemoteAddr)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(tc.body))
+			})
+
+			client := ai.NewClient(srv.URL, "key")
+			for i := range 2 {
+				if err := tc.call(client); err != nil {
+					t.Fatalf("call %d: unexpected error: %v", i, err)
+				}
+			}
+
+			if len(remoteAddrs) != 2 {
+				t.Fatalf("expected 2 requests, got %d", len(remoteAddrs))
+			}
+			if remoteAddrs[0] != remoteAddrs[1] {
+				t.Errorf("keep-alive connection not reused: %s then %s (body was not drained to EOF)",
+					remoteAddrs[0], remoteAddrs[1])
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // APIError tests
 // ---------------------------------------------------------------------------
 

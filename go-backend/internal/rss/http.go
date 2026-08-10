@@ -4,7 +4,6 @@ package rss
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/logctx"
 )
 
 // ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ func (h *Handler) CreateRSSFeed(w http.ResponseWriter, r *http.Request) {
 			asynq.Timeout(jobs.TimeoutFor(jobs.TypeRSSPoll)),
 		); enqErr != nil {
 			// Non-fatal: the scheduled poll will eventually pick it up.
-			slog.Error("failed to enqueue initial RSS poll", "feedId", feed.ID, "error", enqErr)
+			logctx.From(ctx).Error("failed to enqueue initial RSS poll", "feedId", feed.ID, "error", enqErr)
 		}
 	}
 

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1682,29 +1680,19 @@ func (s *SearchService) fetchChunksByIDs(ctx context.Context, tableName, kbID st
 	if !validVectorTable.MatchString(tableName) {
 		return nil, fmt.Errorf("fetch chunks by ids: invalid table name %q", tableName)
 	}
-	// Build $3,$4,… placeholder list. args[0]=kbID, args[1..]=ids.
-	args := make([]any, 0, 1+len(ids))
-	args = append(args, kbID)
-	var ph strings.Builder
-	ph.Grow(len(ids) * 6)
-	for i, id := range ids {
-		args = append(args, id)
-		if i > 0 {
-			ph.WriteByte(',')
-		}
-		ph.WriteByte('$')
-		ph.WriteString(strconv.Itoa(i + 2))
-		ph.WriteString("::uuid")
-	}
+	// One array parameter rather than a generated $2,$3,… list: the SQL text
+	// is then identical for every call regardless of len(ids), so the prepared
+	// statement cache holds one entry instead of one per distinct length.
+	// Same shape as parents.go / dedup_hash.go / hype.go.
 	sql := fmt.Sprintf(`
 		SELECT id::text, content, COALESCE(contextual_prefix, ''), metadata::text, file_id::text, 0::float8 AS score,
 		       COALESCE(parent_chunk_id::text, ''),
 		       COALESCE(node_kind, 'leaf'),
 		       COALESCE(tree_level, 0)
 		FROM "%s"
-		WHERE kb_id = $1::uuid AND id IN (%s)
-	`, tableName, ph.String())
-	rows, err := s.vectorDB.Query(ctx, sql, args...)
+		WHERE kb_id = $1::uuid AND id = ANY($2::uuid[])
+	`, tableName)
+	rows, err := s.vectorDB.Query(ctx, sql, kbID, ids)
 	if err != nil {
 		return nil, fmt.Errorf("fetch chunks by ids: %w", err)
 	}
@@ -1751,26 +1739,13 @@ func (s *SearchService) FetchChunksByIndices(ctx context.Context, tableName, kbI
 	if !validVectorTable.MatchString(tableName) {
 		return nil, fmt.Errorf("fetch neighbors: invalid table name %q", tableName)
 	}
-	// tableName is now whitelist-validated. Placeholders and the int indices
-	// assembled below are fmt-safe because args carries the user data (kbID,
-	// fileID) positionally.
+	// tableName is whitelist-validated above; the user data (kbID, fileID,
+	// indices) is carried positionally.
 	//
-	// Placeholder list goes through a single strings.Builder + strconv.Itoa
-	// rather than per-index fmt.Sprintf("$%d") — at neighbour fetches of
-	// depth 5 in both directions we'd otherwise pay 10 short-string allocs
-	// per call on an already-fast path.
-	args := make([]any, 0, 2+len(indices))
-	args = append(args, kbID, fileID)
-	var ph strings.Builder
-	ph.Grow(len(indices) * 5) // "$NN," per entry
-	for i, idx := range indices {
-		args = append(args, idx)
-		if i > 0 {
-			ph.WriteByte(',')
-		}
-		ph.WriteByte('$')
-		ph.WriteString(strconv.Itoa(i + 3))
-	}
+	// The index list is one int[] parameter rather than a generated
+	// $3,$4,… list: neighbour expansion fires with a different depth per
+	// call, and a per-length SQL string means a per-length prepared-statement
+	// cache entry. Also drops the per-call placeholder assembly.
 	sql := fmt.Sprintf(`
 		SELECT id::text, content, COALESCE(contextual_prefix, ''), metadata::text, file_id::text, 0::float8 AS score,
 		       COALESCE(parent_chunk_id::text, ''),
@@ -1778,9 +1753,9 @@ func (s *SearchService) FetchChunksByIndices(ctx context.Context, tableName, kbI
 		       COALESCE(tree_level, 0)
 		FROM "%s"
 		WHERE kb_id = $1::uuid AND file_id = $2::uuid
-		  AND (metadata::jsonb->>'chunkIndex')::int IN (%s)
-	`, tableName, ph.String())
-	rows, err := s.vectorDB.Query(ctx, sql, args...)
+		  AND (metadata::jsonb->>'chunkIndex')::int = ANY($3::int[])
+	`, tableName)
+	rows, err := s.vectorDB.Query(ctx, sql, kbID, fileID, indices)
 	if err != nil {
 		return nil, fmt.Errorf("fetch neighbors: %w", err)
 	}

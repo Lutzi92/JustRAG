@@ -53,6 +53,15 @@ type CodeExecConfig struct {
 	CPUs        float64       // CPU limit; 1.0 default
 	StdoutBytes int           // output cap per stream; 64 KB default
 	Runtime     string        // "runsc" by default; "" passes no --runtime flag (insecure, for local dev only)
+
+	// AllowUnsandboxed permits running with an empty Runtime, i.e. under plain
+	// runc with no gVisor boundary. Default false so a blank Runtime fails
+	// closed instead of silently degrading the sandbox: the other flags
+	// (--network=none, --read-only, --cap-drop=ALL) harden the container but do
+	// not contain a kernel exploit, which is the threat gVisor is here for.
+	// Local dev without runsc installed must set this explicitly — the field
+	// name is deliberately greppable in a security audit.
+	AllowUnsandboxed bool
 }
 
 // DefaultCodeExecConfig matches the plan: 10s wall, 256 MB memory,
@@ -156,6 +165,16 @@ func codeExecHandler(cfg CodeExecConfig, runner CodeExecRunner, enabled func(ctx
 	return func(ctx context.Context, raw json.RawMessage) (mcp.ToolResult, error) {
 		if !enabled(ctx) {
 			return mcp.ToolResult{}, fmt.Errorf("code_exec: disabled (site_config chat_code_exec_enabled=false)")
+		}
+		// Fail closed when no container runtime is configured. An empty Runtime
+		// passes no --runtime flag, so docker falls back to runc and the snippet
+		// executes without the gVisor boundary the tool's threat model assumes.
+		// Refusing beats warning: the operator opted into code_exec, not into
+		// running LLM-authored Python on the host kernel.
+		if cfg.Runtime == "" && !cfg.AllowUnsandboxed {
+			return mcp.ToolResult{}, fmt.Errorf(
+				"code_exec: no sandbox runtime configured (CodeExecConfig.Runtime is empty); " +
+					"set Runtime=\"runsc\" or opt out explicitly with AllowUnsandboxed")
 		}
 		// The security recipe says the operator MUST digest-pin the sandbox
 		// image before enabling code_exec, but nothing enforces it — surface

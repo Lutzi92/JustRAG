@@ -89,9 +89,9 @@ func queryMentionsNewMarker(query string) bool {
 // Explicit-window extraction: "in den letzten 5 Tagen" / "last 10 days"
 // override the configured default window (chat_recency_listing_window_days).
 var (
-	reWindowDE = regexp.MustCompile(`(?i)\b(?:letzten?|vergangenen?)\s+(\d{1,3})\s+(tagen?|wochen?|monaten?)\b`)
-	reWindowEN = regexp.MustCompile(`(?i)\b(?:last|past)\s+(\d{1,3})\s+(days?|weeks?|months?)\b`)
-	reToday    = regexp.MustCompile(`(?i)\b(?:heute|today)\b`)
+	reWindowDE  = regexp.MustCompile(`(?i)\b(?:letzten?|vergangenen?)\s+(\d{1,3})\s+(tagen?|wochen?|monaten?)\b`)
+	reWindowEN  = regexp.MustCompile(`(?i)\b(?:last|past)\s+(\d{1,3})\s+(days?|weeks?|months?)\b`)
+	reToday     = regexp.MustCompile(`(?i)\b(?:heute|today)\b`)
 	reYesterday = regexp.MustCompile(`(?i)\b(?:gestern|yesterday)\b`)
 )
 

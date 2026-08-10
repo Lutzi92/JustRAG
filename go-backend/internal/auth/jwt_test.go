@@ -1,6 +1,8 @@
 package auth_test
 
 import (
+	"encoding/base64"
+	"strconv"
 	"testing"
 	"time"
 
@@ -116,6 +118,73 @@ func TestParseToken_MissingRequiredClaims(t *testing.T) {
 				t.Fatalf("expected DecodeTokenUnverified error for %s", tc.name)
 			}
 		})
+	}
+}
+
+// A token with no `exp` claim must be rejected outright. Every token this
+// service issues sets exp (authhandler.signToken), so this is a hard guard
+// against a future issuance path that forgets it: without WithExpirationRequired
+// the jwt library treats a missing exp as "never expires".
+func TestParseToken_MissingExpirationRejected(t *testing.T) {
+	t.Parallel()
+	secret := "test-secret-that-is-at-least-32-characters-long"
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"id":   "u1",
+		"role": "user",
+		"jti":  "j1",
+		"iat":  time.Now().Unix(),
+	})
+	s, err := token.SignedString([]byte(secret))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	if _, err := auth.ParseToken(s, secret); err == nil {
+		t.Fatal("expected error for token without exp claim")
+	}
+}
+
+// alg=none must be refused before the keyfunc ever runs. The keyfunc already
+// rejects non-HMAC methods; WithValidMethods makes the rejection structural so
+// it survives a future keyfunc refactor.
+func TestParseToken_RejectsNoneAlgorithm(t *testing.T) {
+	t.Parallel()
+	secret := "test-secret-that-is-at-least-32-characters-long"
+
+	claims := jwt.MapClaims{
+		"id":   "u1",
+		"role": "admin",
+		"jti":  "j1",
+		"exp":  time.Now().Add(time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
+	s, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	if _, err := auth.ParseToken(s, secret); err == nil {
+		t.Fatal("expected error for alg=none token")
+	}
+}
+
+// A token signed with an asymmetric method must not be verifiable by handing
+// the HMAC secret to the RSA verifier (classic algorithm-confusion shape).
+func TestParseToken_RejectsNonHMACAlgorithm(t *testing.T) {
+	t.Parallel()
+	secret := "test-secret-that-is-at-least-32-characters-long"
+
+	// Hand-craft an RS256 header over otherwise-valid claims. The signature is
+	// garbage on purpose: parsing must fail on the algorithm, not the signature.
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	body := base64.RawURLEncoding.EncodeToString([]byte(
+		`{"id":"u1","role":"admin","jti":"j1","exp":` +
+			strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10) + `}`))
+	forged := header + "." + body + "." + base64.RawURLEncoding.EncodeToString([]byte("sig"))
+
+	if _, err := auth.ParseToken(forged, secret); err == nil {
+		t.Fatal("expected error for RS256 token")
 	}
 }
 

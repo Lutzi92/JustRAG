@@ -4,7 +4,6 @@ package research
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/sserelay"
 	"github.com/justrag/go-backend/internal/vector"
 )
@@ -227,10 +227,10 @@ func (h *Handler) runSimpleResearch(
 			findings = evt.Findings
 		case "error":
 			agentErr = evt.Message
-			slog.Error("research agent error", "kbId", kbID, "goal", body.Goal, "error", evt.Message)
+			logctx.From(ctx).Error("research agent error", "kbId", kbID, "goal", body.Goal, "error", evt.Message)
 		case "cancelled":
 			agentErr = "research was cancelled"
-			slog.Info("research cancelled", "kbId", kbID, "goal", body.Goal)
+			logctx.From(ctx).Info("research cancelled", "kbId", kbID, "goal", body.Goal)
 		}
 	}
 
@@ -246,9 +246,9 @@ func (h *Handler) runSimpleResearch(
 	// Persist the result (best-effort — report is still returned on failure).
 	session, dbErr := h.store.CreateResearchSession(ctx, kbID, userID, body.Goal, "research")
 	if dbErr != nil {
-		slog.Error("failed to create research session", "error", dbErr, "kbId", kbID)
+		logctx.From(ctx).Error("failed to create research session", "error", dbErr, "kbId", kbID)
 	} else if saveErr := h.store.SaveResearchResults(ctx, session.ID, body.Goal, report, findings); saveErr != nil {
-		slog.Error("failed to save research results", "error", saveErr, "sessionId", session.ID, "kbId", kbID)
+		logctx.From(ctx).Error("failed to save research results", "error", saveErr, "sessionId", session.ID, "kbId", kbID)
 	}
 
 	resp := map[string]any{

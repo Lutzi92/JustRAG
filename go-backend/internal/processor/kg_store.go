@@ -55,48 +55,80 @@ func (s *kgStore) persistKGExtraction(ctx context.Context, kbID, fileID, chunkID
 		// Upsert entities and remember (canonical_name → id) for the
 		// edge phase. ON CONFLICT keeps the existing id; aliases get
 		// merged via array_cat + dedupe.
+		//
+		// Queued into one pgx.Batch and read back positionally rather than a
+		// QueryRow per entity: an extraction routinely yields tens of
+		// entities, and each one previously cost a full round-trip inside the
+		// transaction (plus a second for its file link). Both phases are now
+		// one round-trip each, matching the edge phase below.
 		idByName := make(map[string]kgEntityID, len(ext.Entities))
-		for _, e := range ext.Entities {
-			var id kgEntityID
-			var inserted bool
-			// xmax=0 in the RETURNING reveals whether ON CONFLICT
-			// took the insert or the update branch — see
-			// https://stackoverflow.com/a/39204667. Used to count
-			// "create" vs "dedupe" outcomes for the metric.
-			if err := tx.QueryRow(ctx, `
-				INSERT INTO kg_entities (kb_id, canonical_name, type, aliases)
-				VALUES ($1::uuid, $2, $3, COALESCE($4::text[], '{}'))
-				ON CONFLICT (kb_id, canonical_name, type)
-				DO UPDATE SET
-					aliases = (
-						SELECT ARRAY(
-							SELECT DISTINCT unnest(kg_entities.aliases || EXCLUDED.aliases)
-						)
-					),
-					updated_at = NOW()
-				RETURNING id, (xmax = 0) AS inserted
-			`, kbID, e.Name, e.Type, e.Aliases).Scan(&id, &inserted); err != nil {
-				return fmt.Errorf("kg_store: upsert entity %q: %w", e.Name, err)
+		if len(ext.Entities) > 0 {
+			entBatch := &pgx.Batch{}
+			for _, e := range ext.Entities {
+				// xmax=0 in the RETURNING reveals whether ON CONFLICT
+				// took the insert or the update branch — see
+				// https://stackoverflow.com/a/39204667. Used to count
+				// "create" vs "dedupe" outcomes for the metric.
+				entBatch.Queue(`
+					INSERT INTO kg_entities (kb_id, canonical_name, type, aliases)
+					VALUES ($1::uuid, $2, $3, COALESCE($4::text[], '{}'))
+					ON CONFLICT (kb_id, canonical_name, type)
+					DO UPDATE SET
+						aliases = (
+							SELECT ARRAY(
+								SELECT DISTINCT unnest(kg_entities.aliases || EXCLUDED.aliases)
+							)
+						),
+						updated_at = NOW()
+					RETURNING id, (xmax = 0) AS inserted
+				`, kbID, e.Name, e.Type, e.Aliases)
 			}
-			idByName[e.Name] = id
-			if inserted {
-				created++
-				observability.RecordKGDisambiguation("create")
-			} else {
-				deduped++
-				observability.RecordKGDisambiguation("dedupe")
+			// Results come back in queue order, so ext.Entities[i] pairs with
+			// the i-th QueryRow. Closed explicitly (not deferred) because the
+			// link batch below reuses the same connection — an open
+			// BatchResults would leave the tx busy.
+			entRes := tx.SendBatch(ctx, entBatch)
+			ids := make([]kgEntityID, len(ext.Entities))
+			for i, e := range ext.Entities {
+				var inserted bool
+				if err := entRes.QueryRow().Scan(&ids[i], &inserted); err != nil {
+					entRes.Close()
+					return fmt.Errorf("kg_store: upsert entity %q: %w", e.Name, err)
+				}
+				idByName[e.Name] = ids[i]
+				if inserted {
+					created++
+					observability.RecordKGDisambiguation("create")
+				} else {
+					deduped++
+					observability.RecordKGDisambiguation("dedupe")
+				}
+			}
+			if err := entRes.Close(); err != nil {
+				return fmt.Errorf("kg_store: upsert entities: %w", err)
 			}
 
-			// Record this file's contribution to the (deduped) entity so a
+			// Record each file's contribution to the (deduped) entity so a
 			// later file-delete can GC it once its last contributing file is
 			// gone. fileID is always set on the ingestion path; guard anyway.
 			if fileID != "" {
-				if _, ferr := tx.Exec(ctx, `
-					INSERT INTO kg_entity_files (entity_id, kb_id, file_id)
-					VALUES ($1, $2::uuid, $3::uuid)
-					ON CONFLICT (entity_id, file_id) DO NOTHING
-				`, id, kbID, fileID); ferr != nil {
-					return fmt.Errorf("kg_store: link entity %q to file: %w", e.Name, ferr)
+				linkBatch := &pgx.Batch{}
+				for _, id := range ids {
+					linkBatch.Queue(`
+						INSERT INTO kg_entity_files (entity_id, kb_id, file_id)
+						VALUES ($1, $2::uuid, $3::uuid)
+						ON CONFLICT (entity_id, file_id) DO NOTHING
+					`, id, kbID, fileID)
+				}
+				linkRes := tx.SendBatch(ctx, linkBatch)
+				for _, e := range ext.Entities {
+					if _, ferr := linkRes.Exec(); ferr != nil {
+						linkRes.Close()
+						return fmt.Errorf("kg_store: link entity %q to file: %w", e.Name, ferr)
+					}
+				}
+				if err := linkRes.Close(); err != nil {
+					return fmt.Errorf("kg_store: link entities to file: %w", err)
 				}
 			}
 		}

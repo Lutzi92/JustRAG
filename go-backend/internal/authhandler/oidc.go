@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/justrag/go-backend/internal/adminproviders"
 	"github.com/justrag/go-backend/internal/auth"
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/users"
 )
 
@@ -215,7 +215,7 @@ func (h *Handler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	row, err := oStore.GetActiveOIDCProvider(r.Context())
 	if err != nil {
-		slog.Error("oidc login: provider lookup", "err", err)
+		logctx.From(r.Context()).Error("oidc login: provider lookup", "err", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -226,7 +226,7 @@ func (h *Handler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 
 	cached, err := globalOIDCCache.load(r.Context(), *row)
 	if err != nil {
-		slog.Error("oidc login: provider init", "err", err, "providerID", row.ID)
+		logctx.From(r.Context()).Error("oidc login: provider init", "err", err, "providerID", row.ID)
 		http.Error(w, "OIDC provider misconfigured", http.StatusInternalServerError)
 		return
 	}
@@ -297,7 +297,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	cached, err := globalOIDCCache.load(ctx, *row)
 	if err != nil {
-		slog.Error("oidc callback: provider init", "err", err, "providerID", row.ID)
+		logctx.From(ctx).Error("oidc callback: provider init", "err", err, "providerID", row.ID)
 		oidcErrRedirect(w, r, "provider_init_failed")
 		return
 	}
@@ -310,7 +310,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		oauth2.SetAuthURLParam("code_verifier", verifierCookie.Value),
 	)
 	if err != nil {
-		slog.Warn("oidc callback: code exchange failed", "err", err)
+		logctx.From(ctx).Warn("oidc callback: code exchange failed", "err", err)
 		oidcErrRedirect(w, r, "code_exchange_failed")
 		return
 	}
@@ -322,7 +322,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	idToken, err := cached.verifier.Verify(ctx, rawIDToken)
 	if err != nil {
-		slog.Warn("oidc callback: id_token verify failed", "err", err)
+		logctx.From(ctx).Warn("oidc callback: id_token verify failed", "err", err)
 		oidcErrRedirect(w, r, "id_token_invalid")
 		return
 	}
@@ -337,12 +337,12 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if claims.Email == "" {
-		slog.Warn("oidc callback: email claim missing", "sub", claims.Sub)
+		logctx.From(ctx).Warn("oidc callback: email claim missing", "sub", claims.Sub)
 		oidcErrRedirect(w, r, "email_missing")
 		return
 	}
 	if !claims.EmailVerified {
-		slog.Warn("oidc callback: email_verified false; refusing to provision",
+		logctx.From(ctx).Warn("oidc callback: email_verified false; refusing to provision",
 			"sub", claims.Sub, "email", claims.Email)
 		oidcErrRedirect(w, r, "email_unverified")
 		return
@@ -350,7 +350,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	user, err := resolveOIDCUser(ctx, oStore, claims)
 	if err != nil {
-		slog.Warn("oidc callback: user resolution failed",
+		logctx.From(ctx).Warn("oidc callback: user resolution failed",
 			"err", err, "sub", claims.Sub, "email", claims.Email)
 		oidcErrRedirect(w, r, "user_resolution_failed")
 		return
@@ -359,7 +359,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// Promote any bulk invites parked for this username into real shares.
 	// Best-effort: a failure here must not block login.
 	if err := oStore.ApplyPendingInvites(ctx, user.ID, user.Username); err != nil {
-		slog.Warn("oidc callback: applying pending invites failed",
+		logctx.From(ctx).Warn("oidc callback: applying pending invites failed",
 			"err", err, "user_id", user.ID, "username", user.Username)
 	}
 
@@ -400,7 +400,7 @@ func (h *Handler) OIDCLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	row, err := oStore.GetActiveOIDCProvider(r.Context())
 	if err != nil {
-		slog.Error("oidc logout: provider lookup", "err", err)
+		logctx.From(r.Context()).Error("oidc logout: provider lookup", "err", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -411,7 +411,7 @@ func (h *Handler) OIDCLogout(w http.ResponseWriter, r *http.Request) {
 
 	cached, err := globalOIDCCache.load(r.Context(), *row)
 	if err != nil {
-		slog.Error("oidc logout: provider init", "err", err, "providerID", row.ID)
+		logctx.From(r.Context()).Error("oidc logout: provider init", "err", err, "providerID", row.ID)
 		http.Error(w, "OIDC provider misconfigured", http.StatusInternalServerError)
 		return
 	}
@@ -436,7 +436,7 @@ func (h *Handler) OIDCLogout(w http.ResponseWriter, r *http.Request) {
 
 	u, err := url.Parse(meta.EndSessionEndpoint)
 	if err != nil {
-		slog.Error("oidc logout: invalid end_session_endpoint", "err", err, "url", meta.EndSessionEndpoint)
+		logctx.From(r.Context()).Error("oidc logout: invalid end_session_endpoint", "err", err, "url", meta.EndSessionEndpoint)
 		http.Redirect(w, r, postLogout, http.StatusFound)
 		return
 	}
@@ -513,7 +513,7 @@ func (h *Handler) OIDCBackchannelLogout(w http.ResponseWriter, r *http.Request) 
 	}
 	row, err := oStore.GetActiveOIDCProvider(r.Context())
 	if err != nil {
-		slog.Error("oidc backchannel logout: provider lookup", "err", err)
+		logctx.From(r.Context()).Error("oidc backchannel logout: provider lookup", "err", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -523,7 +523,7 @@ func (h *Handler) OIDCBackchannelLogout(w http.ResponseWriter, r *http.Request) 
 	}
 	cached, err := globalOIDCCache.load(r.Context(), *row)
 	if err != nil {
-		slog.Error("oidc backchannel logout: provider init", "err", err, "providerID", row.ID)
+		logctx.From(r.Context()).Error("oidc backchannel logout: provider init", "err", err, "providerID", row.ID)
 		http.Error(w, "OIDC provider misconfigured", http.StatusInternalServerError)
 		return
 	}
@@ -534,7 +534,7 @@ func (h *Handler) OIDCBackchannelLogout(w http.ResponseWriter, r *http.Request) 
 	// our job below, and for a logout token the nonce must be absent.
 	idToken, err := cached.verifier.Verify(r.Context(), rawToken)
 	if err != nil {
-		slog.Warn("oidc backchannel logout: token verify failed", "err", err)
+		logctx.From(r.Context()).Warn("oidc backchannel logout: token verify failed", "err", err)
 		backchannelLogoutError(w, http.StatusBadRequest, "invalid logout_token")
 		return
 	}
@@ -544,7 +544,7 @@ func (h *Handler) OIDCBackchannelLogout(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := validateLogoutClaims(claims); err != nil {
-		slog.Warn("oidc backchannel logout: claim validation failed", "err", err)
+		logctx.From(r.Context()).Warn("oidc backchannel logout: claim validation failed", "err", err)
 		backchannelLogoutError(w, http.StatusBadRequest, "invalid logout_token")
 		return
 	}
@@ -559,13 +559,13 @@ func (h *Handler) OIDCBackchannelLogout(w http.ResponseWriter, r *http.Request) 
 		// don't embed the OP session id), so there is nothing we can act on.
 		// Still 200 per spec — the token was valid, we simply hold no matching
 		// session. Logged so this is not a silent no-op during debugging.
-		slog.Warn("oidc backchannel logout: token has no sub (sid-only); nothing revoked", "sid", claims.Sid)
+		logctx.From(r.Context()).Warn("oidc backchannel logout: token has no sub (sid-only); nothing revoked", "sid", claims.Sid)
 	case h.blacklist == nil:
-		slog.Error("oidc backchannel logout: blacklist not configured; cannot revoke", "sub", claims.Sub)
+		logctx.From(r.Context()).Error("oidc backchannel logout: blacklist not configured; cannot revoke", "sub", claims.Sub)
 	default:
 		user, err := oStore.GetUserByExternalID(r.Context(), claims.Sub)
 		if err != nil {
-			slog.Error("oidc backchannel logout: user lookup", "err", err)
+			logctx.From(r.Context()).Error("oidc backchannel logout: user lookup", "err", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -575,10 +575,10 @@ func (h *Handler) OIDCBackchannelLogout(w http.ResponseWriter, r *http.Request) 
 			// or this sub belongs to a different deployment. 200 per spec, but
 			// logged because this is the common "logged out elsewhere yet still
 			// logged in here" cause.
-			slog.Warn("oidc backchannel logout: no JustRAG user for sub; nothing revoked", "sub", claims.Sub, "sid", claims.Sid)
+			logctx.From(r.Context()).Warn("oidc backchannel logout: no JustRAG user for sub; nothing revoked", "sub", claims.Sub, "sid", claims.Sid)
 		} else {
 			h.blacklist.InvalidateUserTokens(r.Context(), user.ID)
-			slog.Info("oidc backchannel logout: revoked user tokens", "userId", user.ID, "sub", claims.Sub)
+			logctx.From(r.Context()).Info("oidc backchannel logout: revoked user tokens", "userId", user.ID, "sub", claims.Sub)
 		}
 	}
 

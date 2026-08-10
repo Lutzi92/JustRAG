@@ -34,11 +34,10 @@ type ServerConfig struct {
 func NewServer(cfg ServerConfig) *asynq.Server {
 	concurrency := cfg.Concurrency
 	if concurrency <= 0 {
-		// Default to 2× GOMAXPROCS for I/O-bound ingestion tasks (LLM
-		// API calls, DB inserts). On a single-core dev box this collapses
-		// to the historical floor of 8 so behaviour doesn't regress;
-		// on a 32-core ingestion host this lets the worker pool actually
-		// saturate the connection pool and provider rate limits.
+		// Fallback for callers that don't go through internal/config (tests,
+		// embedders). The production path resolves the same 2×GOMAXPROCS rule
+		// in config.Load so the REDIS_POOL_SIZE coherence check can see the
+		// effective number — keep the two in sync.
 		concurrency = max(runtime.GOMAXPROCS(0)*2, 8)
 	}
 	poolSize := cfg.RedisPoolSize

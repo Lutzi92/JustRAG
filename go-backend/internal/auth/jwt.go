@@ -21,7 +21,18 @@ func ParseToken(tokenStr, secret string) (*Claims, error) {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return []byte(secret), nil
-	})
+	},
+		// Defense in depth. The keyfunc above already rejects non-HMAC methods,
+		// but WithValidMethods enforces it structurally (before the keyfunc runs)
+		// so the guard survives a future keyfunc refactor. HS256 is the only
+		// method this service ever issues (authhandler.signToken).
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		// Without this, a token carrying no `exp` claim validates as
+		// never-expiring. Every token we issue sets exp, so this changes no
+		// current behaviour — it hard-guards against a future issuance path
+		// that forgets it, which would otherwise mint immortal credentials.
+		jwt.WithExpirationRequired(),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}

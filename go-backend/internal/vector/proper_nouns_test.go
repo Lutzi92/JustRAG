@@ -102,6 +102,33 @@ func TestExtractProperNounPhrases(t *testing.T) {
 	}
 }
 
+// Guards the rune-boundary behaviour of isProperNounToken, which runs per
+// token per query and therefore decodes only the first rune rather than
+// materialising a []rune.
+func TestIsProperNounToken(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"", false},
+		{"A", false},          // single rune — too short
+		{"Ä", false},          // single multi-byte rune — also too short
+		{"Ab", true},          // two ASCII runes
+		{"Äh", true},          // leading multi-byte uppercase
+		{"Öl", true},          // German two-rune word
+		{"ab", false},         // lowercase leader
+		{"äh", false},         // lowercase multi-byte leader
+		{"Digital-PPM", true}, // hyphen inside is allowed
+		{"123", false},        // digit leader is not uppercase
+		{"\xff\xfe", false},   // invalid UTF-8 must not panic or qualify
+	}
+	for _, tc := range cases {
+		if got := isProperNounToken(tc.in); got != tc.want {
+			t.Errorf("isProperNounToken(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestIsEntityAskingQuery(t *testing.T) {
 	cases := []struct {
 		name string

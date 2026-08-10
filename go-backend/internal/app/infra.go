@@ -155,11 +155,23 @@ func setupServerInfra(ctx context.Context, cfg *config.Config) (*serverInfra, fu
 	var sqlToolDB *pgxpool.Pool
 	if cfg.SQLToolReadOnlyURL != "" {
 		pool, err := database.ConnectReadOnly(ctx, cfg.SQLToolReadOnlyURL)
-		if err != nil {
+		switch {
+		case err != nil:
 			slog.Warn("sql_query read-only pool unavailable; sql_query tool will be disabled", "error", err)
-		} else {
-			sqlToolDB = pool
-			slog.Info("connected sql_query read-only pool")
+		default:
+			// The regex/keyword validator in the sql_query tool is only a second
+			// line of defence — the database role is the real boundary, and
+			// nothing verified the operator actually configured a least-privilege
+			// one. Probe it at startup and fail closed (tool disabled) rather than
+			// handing a writable or superuser pool to LLM-authored SQL.
+			if verr := database.VerifyReadOnly(ctx, pool); verr != nil {
+				slog.Error("sql_query read-only pool failed its least-privilege probe; sql_query tool will be disabled",
+					"error", verr)
+				pool.Close()
+			} else {
+				sqlToolDB = pool
+				slog.Info("connected sql_query read-only pool (least-privilege probe passed)")
+			}
 		}
 	}
 

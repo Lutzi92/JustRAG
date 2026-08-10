@@ -71,6 +71,16 @@ func ClusterByKMeans(points []ClusterInput, k int, seed int64) ([]Cluster, error
 	centroids := initKMeansPlusPlus(points, k, rng)
 
 	assignments := make([]int, len(points))
+	// Hoisted out of the Lloyd loop below: at k×dim float64s these are the
+	// largest allocations in the routine (a 4096-dim embedding set with k=8
+	// is ~256 KiB per iteration), and up to 30 iterations run. Zeroed per
+	// iteration instead — same cost as a fresh make, no GC pressure.
+	sums := make([][]float64, k)
+	for i := range sums {
+		sums[i] = make([]float64, dim)
+	}
+	counts := make([]int, k)
+
 	const maxIter = 30
 	for iter := 0; iter < maxIter; iter++ {
 		changed := false
@@ -82,10 +92,9 @@ func ClusterByKMeans(points []ClusterInput, k int, seed int64) ([]Cluster, error
 			}
 		}
 
-		sums := make([][]float64, k)
-		counts := make([]int, k)
+		clear(counts)
 		for i := range sums {
-			sums[i] = make([]float64, dim)
+			clear(sums[i])
 		}
 		for i, p := range points {
 			a := assignments[i]

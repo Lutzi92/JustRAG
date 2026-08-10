@@ -212,6 +212,23 @@ type indexedChunk struct {
 	Page int // 0 = no page info
 }
 
+// estimateChunkCount predicts how many chunks splitter.Split will produce for
+// textLen bytes, purely to size the destination slice. Tokens are approximated
+// at ~4 bytes each (the splitter's own working assumption); the advance per
+// chunk is ChunkSize minus the overlap it re-emits. Deliberately an
+// approximation: too low just costs one growth, too high a little slack.
+func estimateChunkCount(textLen int, cfg splitter.Config) int {
+	const bytesPerToken = 4
+	advance := cfg.ChunkSize - cfg.ChunkOverlap
+	if advance < 1 {
+		advance = cfg.ChunkSize
+	}
+	if advance < 1 {
+		return 1
+	}
+	return max(textLen/(advance*bytesPerToken)+1, 1)
+}
+
 const terminalStatusTimeout = 5 * time.Second
 
 // NewProcessor creates a Processor with all required dependencies. An optional
@@ -859,9 +876,19 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// When the parser provides per-page text (e.g. PDF), split each page
 	// independently so every chunk reliably knows which page it belongs
 	// to. Otherwise split the full text as a single document.
+	// Preallocate from the total text length: a file yields roughly
+	// len(text)/(ChunkSize-ChunkOverlap) chunks, and a large PDF produces
+	// hundreds to thousands. Growing from zero re-copies the backing array
+	// ~log2(n) times for no reason — the flatten block right below already
+	// sizes exactly.
 	var ichunks []indexedChunk
 
 	if len(result.Pages) > 0 {
+		totalLen := 0
+		for _, pg := range result.Pages {
+			totalLen += len(pg.Text)
+		}
+		ichunks = make([]indexedChunk, 0, estimateChunkCount(totalLen, cfg))
 		for _, pg := range result.Pages {
 			pageChunks := splitter.Split(pg.Text, cfg)
 			for _, c := range pageChunks {
@@ -869,6 +896,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			}
 		}
 	} else {
+		ichunks = make([]indexedChunk, 0, estimateChunkCount(len(result.Text), cfg))
 		for _, c := range splitter.Split(result.Text, cfg) {
 			ichunks = append(ichunks, indexedChunk{Text: c, Page: 0})
 		}

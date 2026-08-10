@@ -113,7 +113,7 @@ func TestParseProxyHostPort(t *testing.T) {
 		{"HTTP://Proxy.Example:8080", "proxy.example:8080"},
 		{"http://10.60.3.254", "10.60.3.254:80"},   // default http port synthesized
 		{"https://10.60.3.254", "10.60.3.254:443"}, // default https port synthesized
-		{":3128", ""},                              // malformed: no host
+		{":3128", ""}, // malformed: no host
 		{"", ""},
 	}
 	for _, tc := range cases {

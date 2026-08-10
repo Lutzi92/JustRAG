@@ -1,26 +1,64 @@
+/* ---------------------------------------------------------------------------
+ * JLU Design System (@ki4jlu/design-system) — Tier 1 integration (tokens only).
+ *
+ * Tailwind 4 is imported WITHOUT Preflight on purpose: Preflight is an
+ * opinionated reset that would restyle every raw <button>/<h*>/<ul> across the
+ * 124 existing components at once. We only need Tailwind's engine to compile
+ * the design system's `@theme` block into CSS variables.
+ *
+ * Cascade note: Tailwind's and the design system's tokens land in `@layer
+ * theme`; the JustRAG `:root` block below is UNLAYERED, so it always wins on
+ * name collisions (--radius-lg, --radius-xl, --radius-full, --text-sm). That
+ * is deliberate — JustRAG's own ladders stay authoritative for JustRAG's CSS.
+ * ------------------------------------------------------------------------- */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "@ki4jlu/design-system/tokens.css";
+
 *,
 *::before,
 *::after {
   box-sizing: border-box;
 }
 
+/* ---------------------------------------------------------------------------
+ * Token bridge — JustRAG's semantic names, JLU Design System values.
+ *
+ * Every JustRAG variable name is preserved so no component markup changes.
+ * Only the VALUES now resolve to design-system tokens, which means a version
+ * bump of @ki4jlu/design-system repaints the app with no code change here.
+ *
+ * Deliberate exceptions (governance §"Color exceptions in consuming apps"):
+ *   --modal-overlay-bg     scrim; the DS has no scrim token.
+ *   --accent-primary-rgb   ~20 call sites do `rgba(var(--…-rgb), α)`, which
+ *                          needs an R,G,B triplet. DS tokens are hex, so this
+ *                          is mirrored by hand. See TODO below.
+ *   --shadow-*             kept local: the DS ships 3 elevation rungs and does
+ *                          not adapt them for dark mode; JustRAG needs 4 and
+ *                          strengthens them on dark. Raise with DS owner.
+ *   --font-sans/--text-*   typography intentionally NOT switched in Tier 1.
+ * ------------------------------------------------------------------------- */
 :root {
   color-scheme: light;
-  --bg-primary: #f2f2f2;
-  --bg-hover: #eaf7ff;
+  --bg-primary: var(--color-surface);
+  --bg-hover: var(--color-surface-container-high);
 
   /* Modal Styles */
   --modal-overlay-bg: rgba(0, 0, 0, 0.5);
 
-  --bg-secondary: #ffffff;
-  --sidebar-bg: #edf3f9;
-  --accent-primary: #165a97;
-  --accent-primary-rgb: 22, 90, 151;
-  --accent-primary-translucent: rgba(22, 90, 151, 0.08);
-  --accent-secondary: #1d6db3;
-  --text-primary: #000000;
-  --text-secondary: #444444;
-  --border-color: #cccccc;
+  --bg-secondary: var(--color-surface-container-lowest);
+  --sidebar-bg: var(--color-surface-container-low);
+  --accent-primary: var(--color-primary);
+  /* TODO(ds): mirrors --color-primary (#0056b3). Either ask the DS for a
+   * --color-primary-rgb token, or migrate the ~20 `rgba(var(--accent-primary-rgb), α)`
+   * call sites to `color-mix(in srgb, var(--color-primary) α, transparent)`. */
+  --accent-primary-rgb: 0, 86, 179;
+  --accent-primary-translucent: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  --accent-secondary: var(--color-surface-tint);
+  --text-primary: var(--color-on-surface);
+  --text-secondary: var(--color-on-surface-variant);
+  --border-color: var(--color-outline-variant);
   /* Shadow ladder (improvement #3) — four rungs, every inline shadow maps to one */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.08),
     0 1px 3px 1px rgba(0, 0, 0, 0.05);
@@ -50,38 +88,39 @@
   --text-body: 400 14px/1.6 var(--font-sans);
   --text-sm: 400 12.5px/1.5 var(--font-sans);
   --text-caption: small-caps 600 11px/1.4 var(--font-sans);
-  --text-heading: #444444;
-  --msg-user-bg: var(--accent-primary);
-  --msg-user-text: #ffffff;
-  --msg-ai-bg: #f2f2f2;
-  --msg-ai-text: var(--text-primary);
-  --msg-enhanced-bg: #f2f2f2;
-  --msg-enhanced-text: #444444;
-  --msg-enhanced-border: #cccccc;
-  --source-card-hover-bg: #ffffff;
-  --source-card-active-bg: #eaf7ff;
-  --tag-bg: #eaf7ff;
-  --tag-text: #165a97;
-  --input-bg: var(--bg-secondary);
-  --header-icon-bg: #eaf7ff;
-  --error-text: #c0392b;
+  --text-heading: var(--color-on-surface);
+  --msg-user-bg: var(--color-primary);
+  --msg-user-text: var(--color-on-primary);
+  --msg-ai-bg: var(--color-surface-container);
+  --msg-ai-text: var(--color-on-surface);
+  --msg-enhanced-bg: var(--color-surface-container);
+  --msg-enhanced-text: var(--color-on-surface-variant);
+  --msg-enhanced-border: var(--color-outline-variant);
+  --source-card-hover-bg: var(--color-surface-container-lowest);
+  --source-card-active-bg: var(--color-secondary-container);
+  --tag-bg: var(--color-secondary-container);
+  --tag-text: var(--color-on-secondary-container);
+  --input-bg: var(--color-surface-container-lowest);
+  --header-icon-bg: var(--color-surface-container-high);
+  --error-text: var(--color-error);
   --error: var(--error-text);
   /* alias: fixes var(--error, …) typo call sites (improvement #1) */
-  --error-bg: #fdecea;
-  --success-text: #207d3e;
-  /* darkened -> WCAG AA on white (was 4.08:1) */
-  --success-bg: #e5f0cf;
-  --warning-bg: #ffce7b;
-  --warning-text: #8a4b09;
-  /* ≥ 4.5:1 on #ffce7b (improvement #1) */
-  --placeholder-text: #767676;
-  --code-bg: #2b2b2b;
-  --code-text: #f2f2f2;
-  --badge-success-bg: #e6f4ea;
-  --badge-success-foreground: #1e7e34;
-  --suspect-text: #b45309;
-  --suspect-bg: #fef3c7;
-  --suspect-border: #b45309;
+  --error-bg: var(--color-error-container);
+  --success-text: var(--color-success);
+  --success-bg: var(--color-success-container);
+  --warning-bg: var(--color-warning-container);
+  /* on-warning-container: the DS already picked amber-900 for AA on the container */
+  --warning-text: var(--color-on-warning-container);
+  --placeholder-text: var(--color-outline);
+  /* code-surface is theme-INVARIANT by DS design — a code viewer stays dark in
+   * both themes (see tokens.css). This drops JustRAG's per-theme code colors. */
+  --code-bg: var(--color-code-surface);
+  --code-text: var(--color-on-code-surface);
+  --badge-success-bg: var(--color-success-container);
+  --badge-success-foreground: var(--color-on-success-container);
+  --suspect-text: var(--color-warning);
+  --suspect-bg: var(--color-warning-container);
+  --suspect-border: var(--color-warning);
 }
 
 [data-theme='dark'] {

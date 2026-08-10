@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -102,14 +101,14 @@ var sseBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 // Long-running orchestrators should check ctx.Done() between iterations to
 // stop work when the client has gone away; this log is observability, not
 // flow control.
-func writeSSE(w http.ResponseWriter, data any) {
+func writeSSE(ctx context.Context, w http.ResponseWriter, data any) {
 	// json.Marshal reuses an internal encodeState pool, so it avoids the
 	// per-frame json.Encoder struct allocation a fresh NewEncoder incurs on
 	// long streams (chat responses emit hundreds of frames). It HTML-escapes
 	// identically and returns no trailing newline, so nothing to trim.
 	payload, err := json.Marshal(data)
 	if err != nil {
-		slog.Error("chat: writeSSE marshal failed", "error", err, "type", fmt.Sprintf("%T", data))
+		logctx.From(ctx).Error("chat: writeSSE marshal failed", "error", err, "type", fmt.Sprintf("%T", data))
 		return
 	}
 	// Assemble the whole frame in a pooled buffer and emit it in one Write
@@ -125,7 +124,7 @@ func writeSSE(w http.ResponseWriter, data any) {
 	// block this goroutine (see httputil.SSEWriteTimeout).
 	httputil.RearmSSEWriteDeadline(w)
 	if _, werr := w.Write(buf.Bytes()); werr != nil {
-		slog.Debug("chat: writeSSE write failed (likely client disconnect)", "error", werr)
+		logctx.From(ctx).Debug("chat: writeSSE write failed (likely client disconnect)", "error", werr)
 		return
 	}
 	if f, ok := w.(http.Flusher); ok {
@@ -135,10 +134,10 @@ func writeSSE(w http.ResponseWriter, data any) {
 
 // writeSSEDone writes the SSE stream terminator and flushes. Write errors
 // are observed at debug level — see writeSSE for the rationale.
-func writeSSEDone(w http.ResponseWriter) {
+func writeSSEDone(ctx context.Context, w http.ResponseWriter) {
 	httputil.RearmSSEWriteDeadline(w)
 	if _, werr := fmt.Fprint(w, "data: [DONE]\n\n"); werr != nil {
-		slog.Debug("chat: writeSSEDone write failed (likely client disconnect)", "error", werr)
+		logctx.From(ctx).Debug("chat: writeSSEDone write failed (likely client disconnect)", "error", werr)
 		return
 	}
 	if f, ok := w.(http.Flusher); ok {
@@ -826,17 +825,17 @@ func (h *Handler) tryDeepChat(
 	sseFinished := false
 	defer func() {
 		if !sseFinished {
-			writeSSEDone(w)
+			writeSSEDone(ctx, w)
 		}
 	}()
 
 	// Replay buffered progress events.
 	for _, evt := range progressEvents {
-		writeSSE(w, evt)
+		writeSSE(ctx, w, evt)
 	}
 
 	// Send initial metadata.
-	writeSSE(w, map[string]any{
+	writeSSE(ctx, w, map[string]any{
 		"sources":       chatCtx.Sources,
 		"enhancedQuery": enhancedQuery,
 		"chatId":        chatID,
@@ -853,11 +852,11 @@ func (h *Handler) tryDeepChat(
 	streamEmit := func(e ai.StreamEvent) {
 		if e.Content != "" {
 			responseBuf.WriteString(e.Content)
-			writeSSE(w, map[string]string{"content": e.Content})
+			writeSSE(ctx, w, map[string]string{"content": e.Content})
 		}
 		if e.Reasoning != "" {
 			reasoningBuf.WriteString(e.Reasoning)
-			writeSSE(w, map[string]string{"reasoning": e.Reasoning})
+			writeSSE(ctx, w, map[string]string{"reasoning": e.Reasoning})
 		}
 	}
 	// Team synthesis carries user-authored, persona-influenced findings in its
@@ -875,7 +874,7 @@ func (h *Handler) tryDeepChat(
 			for k, v := range details {
 				payload[k] = v
 			}
-			writeSSE(w, payload)
+			writeSSE(ctx, w, payload)
 		}
 		mcpDisp, _ := h.toolDispatcher.(*MCPDispatcher)
 		var catalog []ai.ChatTool
@@ -896,16 +895,16 @@ func (h *Handler) tryDeepChat(
 			Temperature:     ChatAnswerTemperature(ctx, h.siteConfigReader),
 		}, streamEmit, answerTrace)
 		if err != nil {
-			writeSSE(w, map[string]string{"error": "failed to run AI stream"})
-			writeSSEDone(w)
+			writeSSE(ctx, w, map[string]string{"error": "failed to run AI stream"})
+			writeSSEDone(ctx, w)
 			sseFinished = true
 			return true
 		}
 	} else {
 		events, sErr := ai.StreamCompletionWithHistory(ctx, h.aiResolver, answerHistory, body.Message, chatCtx.SystemPrompt, kbID, reasoningLevel, ChatAnswerTemperature(ctx, h.siteConfigReader))
 		if sErr != nil {
-			writeSSE(w, map[string]string{"error": "failed to start AI stream"})
-			writeSSEDone(w)
+			writeSSE(ctx, w, map[string]string{"error": "failed to start AI stream"})
+			writeSSEDone(ctx, w)
 			sseFinished = true
 			return true
 		}
@@ -922,8 +921,8 @@ func (h *Handler) tryDeepChat(
 			// buffered content is truncated. Surface the error and bail
 			// instead of persisting it as a complete AI message.
 			logctx.From(ctx).Error("chat.send: AI stream aborted mid-answer", "error", streamErr, "chat_id", chatID, "kb_id", kbID)
-			writeSSE(w, map[string]string{"error": "AI stream interrupted"})
-			writeSSEDone(w)
+			writeSSE(ctx, w, map[string]string{"error": "AI stream interrupted"})
+			writeSSEDone(ctx, w)
 			sseFinished = true
 			return true
 		}
@@ -976,28 +975,28 @@ func (h *Handler) tryDeepChat(
 		AgentID:         decAgentID,
 	})
 	if err != nil {
-		writeSSE(w, map[string]string{"error": "failed to save AI message"})
-		writeSSEDone(w)
+		writeSSE(ctx, w, map[string]string{"error": "failed to save AI message"})
+		writeSSEDone(ctx, w)
 		sseFinished = true
 		return true
 	}
 
 	// Send AI message ID.
-	writeSSE(w, map[string]string{"aiMessageId": aiMsg.ID})
+	writeSSE(ctx, w, map[string]string{"aiMessageId": aiMsg.ID})
 	if chatCtx.StructuredTable != nil {
-		writeSSE(w, map[string]any{"structuredTable": chatCtx.StructuredTable})
+		writeSSE(ctx, w, map[string]any{"structuredTable": chatCtx.StructuredTable})
 	}
 
 	// Follow-ups + factcheck in parallel (no data dependency).
 	// AP-A2: emit callback so refine_start/refine_complete trajectory
 	// events stream live; the painted streaming UI mutates in place.
-	emit := func(p map[string]any) { writeSSE(w, p) }
+	emit := func(p map[string]any) { writeSSE(ctx, w, p) }
 	followUps, verification, _ := h.runPostResponseTasks(ctx, body.Message, fullResponse, chatCtx.Context, kbID, lang, aiMsg.ID, chatCtx.Sources, emit)
 	if len(followUps) > 0 {
-		writeSSE(w, map[string]any{"followUpQuestions": followUps})
+		writeSSE(ctx, w, map[string]any{"followUpQuestions": followUps})
 	}
 	if verification != nil {
-		writeSSE(w, map[string]any{"verification": verification})
+		writeSSE(ctx, w, map[string]any{"verification": verification})
 	}
 
 	if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsValid() {
@@ -1037,7 +1036,7 @@ func (h *Handler) tryDeepChat(
 	}
 	h.recordAgentDecision(ctx, kbID, mode, outcome, hops, rounds, time.Since(deepChatStart).Milliseconds(), decTeamID, decAgentID)
 
-	writeSSEDone(w)
+	writeSSEDone(ctx, w)
 	sseFinished = true
 	return true
 }

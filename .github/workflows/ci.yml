@@ -63,8 +63,13 @@ jobs:
           install-mode: goinstall
           working-directory: go-backend
       - name: govulncheck
+        # Pinned like every other tool in this workflow (golangci-lint v2.1.6,
+        # the Go toolchain via go.mod). @latest would let an upstream release
+        # change CI's pass/fail behaviour without a commit here; bump this line
+        # deliberately. The vulnerability DATABASE is still fetched fresh on
+        # every run, so pinning the binary does not staleness-freeze findings.
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           govulncheck ./...
       - name: test (race)
         run: go test -race -count=1 ./...

@@ -203,7 +203,7 @@ func TestSendMessage_HandlerSignature(t *testing.T) {
 
 func TestWriteSSE_Format(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeSSE(w, map[string]string{"content": "hello"})
+	writeSSE(context.Background(), w, map[string]string{"content": "hello"})
 
 	got := w.Body.String()
 	// Must start with "data: " and end with "\n\n"
@@ -232,7 +232,7 @@ func TestWriteSSE_Format(t *testing.T) {
 
 func TestWriteSSEDone_Terminator(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeSSEDone(w)
+	writeSSEDone(context.Background(), w)
 
 	got := w.Body.String()
 	const want = "data: [DONE]\n\n"

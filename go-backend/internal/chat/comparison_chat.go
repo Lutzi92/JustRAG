@@ -13,6 +13,7 @@ import (
 	"github.com/justrag/go-backend/internal/chatattach"
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/prompts"
+	"github.com/justrag/go-backend/internal/safego"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -121,6 +122,9 @@ func runComparisonEngine(ctx context.Context, p ComparisonChatParams, search sea
 	var wg sync.WaitGroup
 	var findings []Finding
 	sourceByID := map[string]vector.SearchChunk{}
+	// One error slot per section for the panic recovery below. Written only by
+	// the owning goroutine (Go 1.22+ per-iteration loop vars), read after Wait.
+	sectionErrs := make([]error, len(sections))
 
 launch:
 	for i := range sections {
@@ -138,6 +142,15 @@ launch:
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// Registered last so it runs FIRST on unwind, stopping the panic
+			// before it escapes the goroutine. A section worker calls out to
+			// search, an LLM endpoint and json.Unmarshal — a shape surprise
+			// from any of them would otherwise take the whole process down,
+			// contradicting the fail-open contract the per-section error
+			// handling below already implements. Every shared-state mutation
+			// under `mu` uses defer-unlock so an unwinding section can't leave
+			// the mutex held.
+			defer safego.RecoverError(&sectionErrs[i])
 
 			sectionText := sections[i]
 			peers, err := search(ctx, p.KbID, sectionText, p.PeersPerSection, vector.SearchOptions{})
@@ -161,38 +174,58 @@ launch:
 					logctx.From(ctx).Warn("comparison: bad findings json", "section", i, "mode", mode, "error", jerr)
 					continue
 				}
-				mu.Lock()
-				for _, f := range payload.Findings {
-					cited := f.CitedFileIDs
-					if len(cited) == 0 {
-						cited = peerFileIDs
+				// Lock released via defer inside a closure, not a plain
+				// Unlock: the recovery below means a panic in here unwinds
+				// instead of ending the process, and a mutex left locked would
+				// hang every other section on Lock and wedge wg.Wait forever.
+				func() {
+					mu.Lock()
+					defer mu.Unlock()
+					for _, f := range payload.Findings {
+						cited := f.CitedFileIDs
+						if len(cited) == 0 {
+							cited = peerFileIDs
+						}
+						findings = append(findings, Finding{
+							Mode: mode, Severity: f.Severity, SectionIdx: i,
+							UploadQuote: f.UploadQuote, Issue: f.Issue,
+							CitedFileIDs: cited, CitedQuote: f.CitedQuote,
+						})
+						localFindings++
 					}
-					findings = append(findings, Finding{
-						Mode: mode, Severity: f.Severity, SectionIdx: i,
-						UploadQuote: f.UploadQuote, Issue: f.Issue,
-						CitedFileIDs: cited, CitedQuote: f.CitedQuote,
-					})
-					localFindings++
-				}
-				mu.Unlock()
+				}()
 			}
 
-			mu.Lock()
-			for _, c := range peers.Chunks {
-				if c.ID != "" {
-					sourceByID[c.ID] = c
+			// Same defer-unlock rationale as above — and it matters more here,
+			// because emit is a caller-supplied sink (the SSE relay) whose
+			// panics this goroutine does not control.
+			func() {
+				mu.Lock()
+				defer mu.Unlock()
+				for _, c := range peers.Chunks {
+					if c.ID != "" {
+						sourceByID[c.ID] = c
+					}
 				}
-			}
-			// emit under the mutex: it's a shared sink (the SSE relay / test
-			// collector) and the engine fans out over sections, so concurrent
-			// emit calls would race an unsynchronized callback.
-			emitTrajectory(emit, TrajectoryEvent{
-				Stage: "compare_section", Step: i + 1, Findings: localFindings,
-			}, nil)
-			mu.Unlock()
+				// emit under the mutex: it's a shared sink (the SSE relay / test
+				// collector) and the engine fans out over sections, so concurrent
+				// emit calls would race an unsynchronized callback.
+				emitTrajectory(emit, TrajectoryEvent{
+					Stage: "compare_section", Step: i + 1, Findings: localFindings,
+				}, nil)
+			}()
 		}()
 	}
 	wg.Wait()
+
+	// Surface recovered panics: fail-open means the turn still answers with
+	// whatever the healthy sections produced, but a crashed section must not
+	// vanish silently.
+	for i, serr := range sectionErrs {
+		if serr != nil {
+			logctx.From(ctx).Error("comparison: section worker panicked", "section", i, "error", serr)
+		}
+	}
 
 	sort.SliceStable(findings, func(a, b int) bool {
 		return severityRank(findings[a].Severity) < severityRank(findings[b].Severity)

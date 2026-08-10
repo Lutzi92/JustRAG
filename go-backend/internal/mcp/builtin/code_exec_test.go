@@ -44,6 +44,53 @@ func TestCodeExec_DisabledByDefault(t *testing.T) {
 	}
 }
 
+// TestCodeExec_EmptyRuntimeFailsClosed: an empty Runtime means docker gets no
+// --runtime flag, i.e. the snippet runs under runc with no gVisor boundary.
+// That must refuse rather than silently execute unsandboxed. Production wiring
+// uses DefaultCodeExecConfig (Runtime="runsc"), so this only bites a
+// deliberately-cleared config.
+func TestCodeExec_EmptyRuntimeFailsClosed(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultCodeExecConfig()
+	cfg.Runtime = ""
+	runner := &fakeCodeRunner{stdout: "should not run"}
+	tool := NewCodeExec(cfg, runner, func(context.Context) bool { return true })
+
+	_, err := tool.Handler.Invoke(context.Background(), json.RawMessage(`{"code":"print(1)"}`))
+	if err == nil {
+		t.Fatal("expected refusal when Runtime is empty")
+	}
+	if !strings.Contains(err.Error(), "sandbox") {
+		t.Errorf("error should mention the sandbox: %v", err)
+	}
+	if runner.gotDir != "" {
+		t.Error("runner was called with no sandbox runtime configured")
+	}
+}
+
+// TestCodeExec_EmptyRuntimeWithExplicitOptOut: local dev without gVisor
+// installed stays possible, but only via an explicit, greppable opt-out —
+// never by leaving a field blank.
+func TestCodeExec_EmptyRuntimeWithExplicitOptOut(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultCodeExecConfig()
+	cfg.Runtime = ""
+	cfg.AllowUnsandboxed = true
+	runner := &fakeCodeRunner{stdout: "ran"}
+	tool := NewCodeExec(cfg, runner, func(context.Context) bool { return true })
+
+	res, err := tool.Handler.Invoke(context.Background(), json.RawMessage(`{"code":"print(1)"}`))
+	if err != nil {
+		t.Fatalf("expected opt-out to allow execution: %v", err)
+	}
+	if runner.gotDir == "" {
+		t.Error("runner should have been called under the explicit opt-out")
+	}
+	if !strings.Contains(res.Text, "ran") {
+		t.Errorf("stdout not propagated: %+v", res)
+	}
+}
+
 // TestCodeExec_RequiresCode: empty code rejects before the runner.
 func TestCodeExec_RequiresCode(t *testing.T) {
 	t.Parallel()

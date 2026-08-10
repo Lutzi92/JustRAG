@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -22,6 +21,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/storage"
 )
 
@@ -316,7 +316,7 @@ func (h *Handler) AddTextSource(w http.ResponseWriter, r *http.Request) {
 			asynq.MaxRetry(3),
 			asynq.Timeout(jobs.TimeoutFor(jobs.TypeFileProcessing)),
 		); enqErr != nil {
-			slog.Error("failed to enqueue text processing job", "error", enqErr)
+			logctx.From(r.Context()).Error("failed to enqueue text processing job", "error", enqErr)
 			// Compensating cleanup: the file row + blob would otherwise be an
 			// unprocessable orphan (no job will ever run). Delete so a client
 			// retry is clean.
@@ -358,7 +358,7 @@ func (h *Handler) fetchContentForIngest(ctx context.Context, req fetchURLRequest
 		// One-line audit of what the fetcher returned so operators can
 		// tell "short preview" (thin markdown from a blocked page) apart
 		// from "fetch failed" (upstream error) in the logs.
-		slog.Info("fetch-url: fetcher result",
+		logctx.From(ctx).Info("fetch-url: fetcher result",
 			"url", req.URL,
 			"tier", res.Tier,
 			"status", res.StatusCode,
@@ -471,7 +471,7 @@ func (h *Handler) FetchURL(w http.ResponseWriter, r *http.Request) {
 	if req.PreviewOnly {
 		preview, err := fetchPreview(r.Context(), req.URL, req.Title)
 		if err != nil {
-			slog.Error("fetch-url: preview failed", "url", req.URL, "kbID", kbID, "err", err)
+			logctx.From(r.Context()).Error("fetch-url: preview failed", "url", req.URL, "kbID", kbID, "err", err)
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadGateway, "Failed to fetch URL")
 			return
 		}
@@ -486,7 +486,7 @@ func (h *Handler) FetchURL(w http.ResponseWriter, r *http.Request) {
 	// 5. Full ingest — uses the shared Fetcher (SSRF-safe, browser fallback).
 	fetched, err := h.fetchContentForIngest(r.Context(), req)
 	if err != nil {
-		slog.Error("fetch-url: fetcher failed",
+		logctx.From(r.Context()).Error("fetch-url: fetcher failed",
 			"url", req.URL,
 			"previewOnly", req.PreviewOnly,
 			"kbID", kbID,
@@ -552,7 +552,7 @@ func (h *Handler) FetchURL(w http.ResponseWriter, r *http.Request) {
 			asynq.MaxRetry(3),
 			asynq.Timeout(jobs.TimeoutFor(jobs.TypeURLProcessing)),
 		); enqErr != nil {
-			slog.Error("failed to enqueue URL processing job", "error", enqErr)
+			logctx.From(r.Context()).Error("failed to enqueue URL processing job", "error", enqErr)
 			// Compensating cleanup: the file row + blob would otherwise be an
 			// unprocessable orphan (no job will ever run). Delete so a client
 			// retry is clean.
@@ -692,7 +692,7 @@ func (h *Handler) AddSources(w http.ResponseWriter, r *http.Request) {
 				asynq.MaxRetry(3),
 				asynq.Timeout(jobs.TimeoutFor(jobs.TypeFileProcessing)),
 			); enqErr != nil {
-				slog.Error("failed to enqueue add-sources processing job", "fileId", fileRecord.ID, "error", enqErr)
+				logctx.From(r.Context()).Error("failed to enqueue add-sources processing job", "fileId", fileRecord.ID, "error", enqErr)
 				// Compensating cleanup: the file row + blob would otherwise be an
 				// unprocessable orphan (no job will ever run). Delete so a client
 				// retry is clean.

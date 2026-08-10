@@ -752,6 +752,22 @@ func (c *Client) ListModels(ctx context.Context) error {
 // buffer that has been reset and reused by another goroutine.
 var doJSONBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 
+// maxDrainBytes caps how much of an unread response body drainAndClose will
+// consume to win back the connection. Past this point the read costs more
+// than the TCP+TLS handshake it saves, so we let net/http drop the connection.
+const maxDrainBytes = 64 << 10
+
+// drainAndClose consumes whatever the caller left unread before closing.
+// net/http only returns a connection to the idle pool once its body has been
+// read to EOF: a result-less doJSON never touches the body, and json.Decoder
+// stops at the closing brace of the JSON value, so any trailing bytes a
+// provider appends would otherwise cost a fresh TCP+TLS handshake on the next
+// call — on the embedding/rerank/completion hot path.
+func drainAndClose(body io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, maxDrainBytes))
+	_ = body.Close()
+}
+
 // doJSON performs a JSON HTTP request and decodes the response into result.
 // If body is nil a request without a body is sent (suitable for GET).
 // If result is nil the response body is discarded after status checking.
@@ -796,7 +812,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body any, resu
 	if err != nil {
 		return fmt.Errorf("ai: do request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Error path: read body fully for the error message.

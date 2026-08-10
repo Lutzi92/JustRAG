@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/pptx"
 	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/vector"
@@ -345,7 +345,7 @@ func (h *Handler) GeneratePresentation(w http.ResponseWriter, r *http.Request) {
 
 	var pd presentationData
 	if err := json.Unmarshal([]byte(raw), &pd); err != nil {
-		slog.Warn("failed to parse presentation JSON, saving markdown fallback", "error", err)
+		logctx.From(ctx).Warn("failed to parse presentation JSON, saving markdown fallback", "error", err)
 		// Save as markdown fallback
 		contentVal := map[string]any{"markdown": raw}
 		title := fmt.Sprintf("Presentation: %s", req.Topic)
@@ -391,7 +391,7 @@ func (h *Handler) GeneratePresentation(w http.ResponseWriter, r *http.Request) {
 	filePath := filepath.Join("data", safeUser, kbID, "generated", fileName)
 
 	if err := pres.WriteToFile(filePath); err != nil {
-		slog.Error("failed to write PPTX file", "error", err, "path", filePath)
+		logctx.From(r.Context()).Error("failed to write PPTX file", "error", err, "path", filePath)
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to generate PPTX file")
 		return
 	}
@@ -478,12 +478,12 @@ func (h *Handler) GeneratePodcast(w http.ResponseWriter, r *http.Request) {
 	task := asynq.NewTask(jobs.TypeContentGeneration, payloadBytes)
 	info, err := h.asynq.Enqueue(task, asynq.Queue(jobs.QueueHeavy), asynq.Timeout(jobs.TimeoutFor(jobs.TypeContentGeneration)))
 	if err != nil {
-		slog.Error("failed to enqueue podcast job", "error", err)
+		logctx.From(r.Context()).Error("failed to enqueue podcast job", "error", err)
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to enqueue podcast generation")
 		return
 	}
 
-	slog.Info("podcast job enqueued", "jobId", info.ID, "kbId", kbID)
+	logctx.From(r.Context()).Info("podcast job enqueued", "jobId", info.ID, "kbId", kbID)
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusAccepted, map[string]string{"jobId": info.ID})
 }
 

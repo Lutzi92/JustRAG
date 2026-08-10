@@ -3,7 +3,6 @@ package files
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 
 	"github.com/hibiken/asynq"
@@ -12,6 +11,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/logctx"
 )
 
 // enqueueRetry builds the re-embedding payload for an errored file and
@@ -109,7 +109,7 @@ func (h *Handler) Retry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.enqueueRetry(file); err != nil {
-		slog.Error("retry: enqueue failed", "fileId", fileID, "error", err)
+		logctx.From(r.Context()).Error("retry: enqueue failed", "fileId", fileID, "error", err)
 		// Revert so the file doesn't sit in 'pending' forever; the queue
 		// stage tells the user (and us) the failure happened pre-worker.
 		_ = h.store.MarkFileError(r.Context(), fileID, "queue", "Could not be queued for processing")
@@ -133,7 +133,7 @@ func (h *Handler) RetryFailed(w http.ResponseWriter, r *http.Request) {
 
 	errFiles, err := h.store.ListErrorFiles(r.Context(), kbID)
 	if err != nil {
-		slog.Error("retry-failed: list error files failed", "kbId", kbID, "error", err)
+		logctx.From(r.Context()).Error("retry-failed: list error files failed", "kbId", kbID, "error", err)
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "Internal Server Error")
 		return
 	}
@@ -145,14 +145,14 @@ func (h *Handler) RetryFailed(w http.ResponseWriter, r *http.Request) {
 		}
 		reset, err := h.store.ResetFileForRetry(r.Context(), f.ID)
 		if err != nil {
-			slog.Warn("retry-failed: reset failed", "fileId", f.ID, "error", err)
+			logctx.From(r.Context()).Warn("retry-failed: reset failed", "fileId", f.ID, "error", err)
 			continue
 		}
 		if !reset {
 			continue // lost the race to a concurrent retry — fine
 		}
 		if err := h.enqueueRetry(f); err != nil {
-			slog.Error("retry-failed: enqueue failed", "fileId", f.ID, "error", err)
+			logctx.From(r.Context()).Error("retry-failed: enqueue failed", "fileId", f.ID, "error", err)
 			_ = h.store.MarkFileError(r.Context(), f.ID, "queue", "Could not be queued for processing")
 			continue
 		}

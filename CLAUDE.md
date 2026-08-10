@@ -35,7 +35,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 
 **Runtime-only knob (env, no site_config):** `AI_MAX_CONCURRENT_REQUESTS` (default unset = unbounded) caps simultaneous in-flight **unary** model-provider requests per endpoint (chat completion / embedding / rerank / models — the `ai.doJSON` path; streaming answers are deliberately exempt to avoid starving the unary calls answer-time tools depend on). Per-op fan-out caps (`ingest_enrich_concurrency`, `kg_extraction_concurrency`, multi-query, rerank, RAPTOR) bound each site locally but not their *product*; under an ingest burst that product can saturate the vLLM/embedding backend into timeouts. Set this to the backend's safe concurrent-request ceiling to turn saturation into backpressure. Deadlock-free by construction (each call holds ≤1 slot, released before any other acquire). `internal/ai/concurrency.go`.
 
-**Migrations** (in `go-backend/migrations/main/`, sequential, idempotent):
+**Migrations** (in `go-backend/migrations/main/`, sequential, idempotent — conventions in `go-backend/migrations/README.md`, incl. the `NO TRANSACTION` + `CREATE INDEX CONCURRENTLY` rule for indexes on already-large tables):
 
 | # | Adds |
 |---|---|

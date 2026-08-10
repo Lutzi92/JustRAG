@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/logctx"
 )
 
 // ---------------------------------------------------------------------------
@@ -343,7 +343,7 @@ func (h *Handler) CreateSource(w http.ResponseWriter, r *http.Request) {
 				asynq.MaxRetry(3),
 				asynq.Timeout(jobs.TimeoutFor(jobs.TypeConfluenceSync)),
 			); enqErr != nil {
-				slog.Error("failed to enqueue initial confluence sync", "sourceId", source.ID, "error", enqErr)
+				logctx.From(ctx).Error("failed to enqueue initial confluence sync", "sourceId", source.ID, "error", enqErr)
 			}
 		}
 	}
@@ -515,7 +515,7 @@ func (h *Handler) TriggerSync(w http.ResponseWriter, r *http.Request) {
 				asynq.MaxRetry(3),
 				asynq.Timeout(jobs.TimeoutFor(jobs.TypeConfluenceSync)),
 			); enqErr != nil {
-				slog.Error("failed to enqueue confluence sync", "sourceId", sourceID, "error", enqErr)
+				logctx.From(ctx).Error("failed to enqueue confluence sync", "sourceId", sourceID, "error", enqErr)
 				httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to trigger sync")
 				return
 			}
@@ -575,7 +575,7 @@ func (h *Handler) markConnectionAuthFailure(ctx context.Context, userID string, 
 		Status:       &status,
 		ErrorMessage: &msg,
 	}); err != nil {
-		slog.Warn("failed to mark confluence connection as error after auth failure",
+		logctx.From(ctx).Warn("failed to mark confluence connection as error after auth failure",
 			"connectionId", conn.ID, "error", err)
 	}
 }

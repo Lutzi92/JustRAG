@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -108,7 +109,7 @@ type Config struct {
 
 	// Worker settings
 	WorkerQueues      []string // WORKER_QUEUES — if set, only process these queues
-	WorkerConcurrency int      // WORKER_CONCURRENCY — total goroutines (default 8)
+	WorkerConcurrency int      // WORKER_CONCURRENCY — total goroutines (default: max(2×GOMAXPROCS, 8))
 	WorkerMaintenance bool     // WORKER_MAINTENANCE — run maintenance tasks (default true)
 	WorkerHealthPort  int      // WORKER_HEALTH_PORT — health endpoint port (default 8081)
 
@@ -383,7 +384,19 @@ func Load() (*Config, error) {
 			}
 		}
 	}
-	cfg.WorkerConcurrency = mustInt("WORKER_CONCURRENCY", 8)
+	// Unset means "auto": 2× GOMAXPROCS for I/O-bound ingestion tasks (LLM API
+	// calls, DB inserts), floored at the historical 8 so a single-core dev box
+	// doesn't regress. Resolved HERE rather than in worker.NewServer so the
+	// Redis.PoolSize coherence check below sees the number the worker will
+	// actually run with — a fixed default of 8 made the auto-scaling branch in
+	// worker.NewServer dead code and pinned a 32-core host to 8 goroutines.
+	// An explicit WORKER_CONCURRENCY still wins, including invalid values,
+	// which stay a hard config error rather than silently becoming auto.
+	if os.Getenv("WORKER_CONCURRENCY") == "" {
+		cfg.WorkerConcurrency = max(runtime.GOMAXPROCS(0)*2, 8)
+	} else {
+		cfg.WorkerConcurrency = mustInt("WORKER_CONCURRENCY", 8)
+	}
 	if cfg.WorkerConcurrency < 1 {
 		errs = append(errs, fmt.Sprintf("WORKER_CONCURRENCY=%d must be at least 1", cfg.WorkerConcurrency))
 	} else if cfg.Redis.PoolSize < cfg.WorkerConcurrency*2 {

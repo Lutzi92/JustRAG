@@ -476,6 +476,19 @@ func RunWorker(cfg *config.Config) error {
 		}
 	}()
 
+	// Start pprof server only when explicitly enabled via PPROF_ENABLED=true.
+	// Binds to localhost only to prevent exposure on container/pod networks.
+	// The worker carries the compute-heavy work (chunking, embedding batching,
+	// RAPTOR/community build, PageRank), so this is the process to capture a
+	// `default.pgo` CPU profile from:
+	//   curl "http://127.0.0.1:6060/debug/pprof/profile?seconds=30" -o default.pgo
+	pprofServer := startPprofServer(cfg.Pprof)
+	defer func() {
+		if pprofServer != nil {
+			pprofServer.Close()
+		}
+	}()
+
 	// Mark worker as ready for K8s readiness probe. (The health listener
 	// itself starts right after the DB connect, before schema wiring; its
 	// Shutdown defer is registered there.)
@@ -508,6 +521,9 @@ func RunWorker(cfg *config.Config) error {
 		case sig := <-sigCh:
 			slog.Info("received shutdown signal", "signal", sig)
 			healthSrv.SetReady(false)
+			if pprofServer != nil {
+				pprofServer.Close()
+			}
 			srv.Shutdown()
 			cancel()
 		case <-ctx.Done():

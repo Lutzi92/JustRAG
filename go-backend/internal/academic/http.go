@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,6 +24,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/sserelay"
 	"github.com/justrag/go-backend/internal/storage"
 )
@@ -393,7 +393,7 @@ func (h *Handler) downloadAndStorePaper(
 	if isJustFindURL(paper.PdfURL) && h.fetcher != nil {
 		extracted, err := extractPDFFromJustFind(ctx, h.fetcher, paper.PdfURL)
 		if err != nil {
-			slog.Warn("JustFind extraction failed, trying direct URL", "error", err)
+			logctx.From(ctx).Warn("JustFind extraction failed, trying direct URL", "error", err)
 		} else {
 			actualURL = extracted
 		}

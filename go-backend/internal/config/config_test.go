@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/justrag/go-backend/internal/config"
@@ -169,6 +170,35 @@ func TestVectorDBFallsBackToMainDB(t *testing.T) {
 	}
 	if cfg.VectorDB.User != "mainuser" {
 		t.Errorf("expected VectorDB.User to fall back to main DB user, got %s", cfg.VectorDB.User)
+	}
+}
+
+func TestWorkerConcurrencyDefaultsToTwiceGOMAXPROCS(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret-that-is-at-least-32-characters-long")
+	t.Setenv("WORKER_CONCURRENCY", "")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := max(runtime.GOMAXPROCS(0)*2, 8)
+	if cfg.WorkerConcurrency != want {
+		t.Errorf("expected WorkerConcurrency=%d (2×GOMAXPROCS, floor 8), got %d", want, cfg.WorkerConcurrency)
+	}
+}
+
+func TestWorkerConcurrencyExplicitOverride(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret-that-is-at-least-32-characters-long")
+	t.Setenv("WORKER_CONCURRENCY", "3")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.WorkerConcurrency != 3 {
+		t.Errorf("expected explicit WORKER_CONCURRENCY=3 to win, got %d", cfg.WorkerConcurrency)
 	}
 }
 

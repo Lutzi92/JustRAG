@@ -520,11 +520,11 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	sseFinished := false
 	defer func() {
 		if !sseFinished {
-			writeSSEDone(w)
+			writeSSEDone(ctx, w)
 		}
 	}()
 
-	writeSSE(w, map[string]any{
+	writeSSE(ctx, w, map[string]any{
 		"sources":       sources,
 		"enhancedQuery": enhancedQuery,
 		"chatId":        p.chatID,
@@ -535,7 +535,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	// PrepareChatContext (CRAG branch decisions, etc.) so the
 	// frontend's reasoning panel sees them in order.
 	for _, evt := range p.bufferedTrajectory {
-		writeSSE(w, evt)
+		writeSSE(ctx, w, evt)
 	}
 
 	// Stream AI completion. Mirror the tryDeepChat branch's conditional
@@ -547,11 +547,11 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	streamEmit := func(e ai.StreamEvent) {
 		if e.Content != "" {
 			responseBuf.WriteString(e.Content)
-			writeSSE(w, map[string]string{"content": e.Content})
+			writeSSE(ctx, w, map[string]string{"content": e.Content})
 		}
 		if e.Reasoning != "" {
 			reasoningBuf.WriteString(e.Reasoning)
-			writeSSE(w, map[string]string{"reasoning": e.Reasoning})
+			writeSSE(ctx, w, map[string]string{"reasoning": e.Reasoning})
 		}
 	}
 	useAnswerTools := ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
@@ -565,7 +565,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			for k, v := range details {
 				payload[k] = v
 			}
-			writeSSE(w, payload)
+			writeSSE(ctx, w, payload)
 		}
 		mcpDisp, _ := h.toolDispatcher.(*MCPDispatcher)
 		var catalog []ai.ChatTool
@@ -587,8 +587,8 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		}, streamEmit, answerTrace)
 		if err != nil {
 			logctx.From(ctx).Error("chat.send: run answer-tools", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
-			writeSSE(w, map[string]string{"error": "failed to run AI stream"})
-			writeSSEDone(w)
+			writeSSE(ctx, w, map[string]string{"error": "failed to run AI stream"})
+			writeSSEDone(ctx, w)
 			sseFinished = true
 			return
 		}
@@ -596,8 +596,8 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		events, err := ai.StreamCompletionWithHistory(ctx, h.aiResolver, p.history, p.userMessage, systemPrompt, p.kbID, p.reasoningLevel, ChatAnswerTemperature(ctx, h.siteConfigReader))
 		if err != nil {
 			logctx.From(ctx).Error("chat.send: start AI stream", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
-			writeSSE(w, map[string]string{"error": "failed to start AI stream"})
-			writeSSEDone(w)
+			writeSSE(ctx, w, map[string]string{"error": "failed to start AI stream"})
+			writeSSEDone(ctx, w)
 			sseFinished = true
 			return
 		}
@@ -614,8 +614,8 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			// buffered content is truncated. Surface the error and bail
 			// instead of persisting it as a complete AI message.
 			logctx.From(ctx).Error("chat.send: AI stream aborted mid-answer", "error", streamErr, "chat_id", p.chatID, "kb_id", p.kbID)
-			writeSSE(w, map[string]string{"error": "AI stream interrupted"})
-			writeSSEDone(w)
+			writeSSE(ctx, w, map[string]string{"error": "AI stream interrupted"})
+			writeSSEDone(ctx, w)
 			sseFinished = true
 			return
 		}
@@ -662,13 +662,13 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	})
 	if err != nil {
 		logctx.From(ctx).Error("chat.send: save AI message (stream)", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
-		writeSSE(w, map[string]string{"error": "failed to save AI message"})
-		writeSSEDone(w)
+		writeSSE(ctx, w, map[string]string{"error": "failed to save AI message"})
+		writeSSEDone(ctx, w)
 		sseFinished = true
 		return
 	}
 
-	writeSSE(w, map[string]string{"aiMessageId": aiMsg.ID})
+	writeSSE(ctx, w, map[string]string{"aiMessageId": aiMsg.ID})
 
 	// Follow-ups + factcheck have no data dependency on each other; run
 	// them concurrently so the user sees verification as soon as the
@@ -677,13 +677,13 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	// streams the diff via the emit callback below, so the frontend
 	// mutates the painted answer in place. The full refined text
 	// is still persisted to DB by runPostResponseTasks.
-	emit := func(pl map[string]any) { writeSSE(w, pl) }
+	emit := func(pl map[string]any) { writeSSE(ctx, w, pl) }
 	followUps, verification, _ := h.runPostResponseTasks(ctx, p.userMessage, fullResponse, p.chatCtx.Context, p.kbID, p.lang, aiMsg.ID, p.chatCtx.Sources, emit)
 	if len(followUps) > 0 {
-		writeSSE(w, map[string]any{"followUpQuestions": followUps})
+		writeSSE(ctx, w, map[string]any{"followUpQuestions": followUps})
 	}
 	if verification != nil {
-		writeSSE(w, map[string]any{"verification": verification})
+		writeSSE(ctx, w, map[string]any{"verification": verification})
 	}
 
 	if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsValid() {
@@ -707,7 +707,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	}
 	h.recordAgentDecision(ctx, p.kbID, mode, stdOutcome, 0, 0, time.Since(p.chatStartTime).Milliseconds(), nil, nil)
 
-	writeSSEDone(w)
+	writeSSEDone(ctx, w)
 	sseFinished = true
 }
 

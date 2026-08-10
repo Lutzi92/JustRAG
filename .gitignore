@@ -62,6 +62,16 @@ go-backend/server
 go-backend/migrate
 go-backend/eval
 
+# Same binaries when built in place (`cd go-backend && go build ./cmd/eval`
+# drops the binary next to main.go). NOT a wildcard: cmd/server/default.pgo is
+# meant to be committed for -pgo=auto.
+go-backend/cmd/eval/eval
+go-backend/cmd/eval-gen/eval-gen
+go-backend/cmd/eval-genset/eval-genset
+go-backend/cmd/server/server
+go-backend/cmd/worker/worker
+go-backend/cmd/migrate/migrate
+
 # Eval golden data — JLU-internal, not privacy-cleared for public commit.
 # See eval/golden/README.md §Sampling methodology #7 for the privacy escape hatch.
 /eval/golden/production-dryrun.jsonl

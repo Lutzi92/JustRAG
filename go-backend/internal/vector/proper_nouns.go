@@ -3,6 +3,7 @@ package vector
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // interrogativeStopwords are sentence-leading German + English question words
@@ -102,11 +103,15 @@ func trimTokenPunct(s string) (clean string, breakAfter bool) {
 // allowed ("Digital-PPM" qualifies as a single title-cased token; whether
 // it forms a phrase depends on its neighbours).
 func isProperNounToken(s string) bool {
-	runes := []rune(s)
-	if len(runes) < 2 {
+	// Decode just the leading rune instead of materialising a []rune: this
+	// runs per token per query, and only the first rune and a "≥ 2 runes"
+	// length test are needed. size == 0 means empty input; size >= len(s)
+	// means the whole string was that one rune.
+	r, size := utf8.DecodeRuneInString(s)
+	if size == 0 || size >= len(s) {
 		return false
 	}
-	return unicode.IsUpper(runes[0])
+	return unicode.IsUpper(r)
 }
 
 // entityQueryPrefixes are first-token German + English interrogatives that

@@ -12,13 +12,13 @@ import (
 )
 
 type fakeStore struct {
-	graph         kg.GraphOverview
-	max           int
-	err           error
-	scoped        kg.ScopedGraph
-	scopeErr      error
-	entityDetail  kg.EntityDetail
-	entityErr     error
+	graph        kg.GraphOverview
+	max          int
+	err          error
+	scoped       kg.ScopedGraph
+	scopeErr     error
+	entityDetail kg.EntityDetail
+	entityErr    error
 }
 
 func (f *fakeStore) GraphOverview(_ context.Context, _ string, maxNodes int) (kg.GraphOverview, error) {

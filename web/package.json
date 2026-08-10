@@ -20,6 +20,7 @@
     "last 2 ChromeAndroid versions"
   ],
   "dependencies": {
+    "@ki4jlu/design-system": "file:../../JLU-Design-System",
     "@xyflow/react": "^12.11.1",
     "axios": "^1.18.1",
     "dagre": "^0.8.5",
@@ -40,6 +41,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -57,6 +59,7 @@
     "jsdom": "^29.1.1",
     "sharp": "^0.35.2",
     "svgo": "^4.0.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "6.0.3",
     "typescript-eslint": "^8.62.0",
     "vite": "8.1.0",

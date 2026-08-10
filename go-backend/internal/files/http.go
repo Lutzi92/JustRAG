@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime"
 	"net/http"
 	"path/filepath"
@@ -20,6 +19,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/storage"
 )
@@ -152,7 +152,7 @@ func (h *Handler) invalidateQueryCache(ctx context.Context, kbID, reason string)
 		return
 	}
 	if err := h.queryCache.InvalidateQueryCache(ctx, kbID); err != nil {
-		slog.Warn("query_cache: invalidate failed",
+		logctx.From(ctx).Warn("query_cache: invalidate failed",
 			"kb_id", kbID, "reason", reason, "error", err)
 	}
 }
@@ -465,7 +465,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	// argument only controls the in-memory buffering threshold, not the total size).
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(32 << 20); err != nil { // 32 MB in-memory threshold
-		slog.Warn("upload: parse multipart form failed", "error", err)
+		logctx.From(r.Context()).Warn("upload: parse multipart form failed", "error", err)
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "File too large or invalid multipart form")
 		return
 	}
@@ -521,12 +521,12 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	// 4b. Enforce per-KB file count and total size limits.
 	limits, err := h.store.GetKBFileLimits(r.Context(), kbID)
 	if err != nil {
-		slog.Error("upload: failed to check KB limits", "kbId", kbID, "error", err)
+		logctx.From(r.Context()).Error("upload: failed to check KB limits", "kbId", kbID, "error", err)
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "Failed to check KB limits")
 		return
 	}
 	if limits == nil {
-		slog.Error("upload: GetKBFileLimits returned nil", "kbId", kbID)
+		logctx.From(r.Context()).Error("upload: GetKBFileLimits returned nil", "kbId", kbID)
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "Failed to check KB limits")
 		return
 	}
@@ -558,7 +558,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	// 7. Store file to storage.
 	if err := h.storage.StoreFileFromReader(r.Context(), storagePath, uploadedFile, mimeType); err != nil {
-		slog.Error("upload: store file failed",
+		logctx.From(r.Context()).Error("upload: store file failed",
 			"kbId", kbID, "storagePath", storagePath, "size", header.Size, "error", err)
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "Failed to store file")
 		return
@@ -575,7 +575,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		StoragePath: storagePath,
 	})
 	if err != nil {
-		slog.Error("upload: create file record failed",
+		logctx.From(r.Context()).Error("upload: create file record failed",
 			"kbId", kbID, "storagePath", storagePath, "error", err)
 		// Best-effort cleanup of stored file.
 		_ = h.storage.DeleteFile(r.Context(), storagePath)
@@ -602,7 +602,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 			asynq.MaxRetry(3),
 			asynq.Timeout(jobs.TimeoutFor(jobs.TypeFileProcessing)),
 		); enqErr != nil {
-			slog.Error("failed to enqueue file processing job", "fileId", fileRecord.ID, "error", enqErr)
+			logctx.From(r.Context()).Error("failed to enqueue file processing job", "fileId", fileRecord.ID, "error", enqErr)
 			// Clean up the orphaned file and DB record so retries don't create duplicates.
 			_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
 			_ = h.storage.DeleteFile(r.Context(), storagePath)

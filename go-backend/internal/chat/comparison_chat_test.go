@@ -107,6 +107,72 @@ func TestRunComparisonEnginePartialFailure(t *testing.T) {
 	}
 }
 
+// A panic inside one section worker must not take the process down: the
+// engine is fail-open by design (see TestRunComparisonEnginePartialFailure),
+// and every other fan-out site in the package recovers. Without recovery a
+// nil-deref in search or the LLM path crashes the whole server.
+func TestRunComparisonEngineSurvivesSectionPanic(t *testing.T) {
+	params := ComparisonChatParams{
+		KbID: "kb1", Language: "en", Modes: []string{"contradiction"},
+		Sections: []string{"boom", "ok"}, MaxSections: 60, Concurrency: 2, PeersPerSection: 5,
+	}
+	search := func(ctx context.Context, kbID, q string, n int, o vector.SearchOptions) (*vector.SearchResult, error) {
+		if q == "boom" {
+			panic("simulated nil-deref in peer search")
+		}
+		return &vector.SearchResult{}, nil
+	}
+	structured := func(ctx context.Context, p, s, k, m string, sp *ai.StructuredSpec) (string, error) {
+		return `{"findings":[{"severity":"low","uploadQuote":"x","issue":"y","citedFileIds":[],"citedQuote":""}]}`, nil
+	}
+
+	res, err := runComparisonEngine(context.Background(), params, search, structured, func(map[string]any) {})
+	if err != nil {
+		t.Fatalf("engine should not hard-fail on a section panic: %v", err)
+	}
+	if len(res.Findings) != 1 {
+		t.Fatalf("expected the healthy section's finding to survive, got %d", len(res.Findings))
+	}
+}
+
+// A panic raised while the shared-state mutex is held must not leave it
+// locked: every remaining section would block on Lock and wg.Wait would never
+// return. emit is a caller-supplied sink (the SSE relay), so it is the most
+// realistic place for that to happen.
+func TestRunComparisonEngineSurvivesEmitPanic(t *testing.T) {
+	params := ComparisonChatParams{
+		KbID: "kb1", Language: "en", Modes: []string{"contradiction"},
+		Sections: []string{"s0", "s1", "s2"}, MaxSections: 60, Concurrency: 1, PeersPerSection: 5,
+	}
+	search := func(ctx context.Context, kbID, q string, n int, o vector.SearchOptions) (*vector.SearchResult, error) {
+		return &vector.SearchResult{}, nil
+	}
+	structured := func(ctx context.Context, p, s, k, m string, sp *ai.StructuredSpec) (string, error) {
+		return `{"findings":[{"severity":"low","uploadQuote":"x","issue":"y","citedFileIds":[],"citedQuote":""}]}`, nil
+	}
+	emitted := 0
+	emit := func(map[string]any) {
+		emitted++
+		if emitted == 1 {
+			panic("simulated panic in the SSE sink, under the mutex")
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := runComparisonEngine(context.Background(), params, search, structured, emit); err != nil {
+			t.Errorf("engine should not hard-fail: %v", err)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine deadlocked: a panic under the mutex left it locked")
+	}
+}
+
 func TestRunComparisonEngineBackfillsCitedFiles(t *testing.T) {
 	params := ComparisonChatParams{
 		KbID: "kb1", Language: "en", Modes: []string{"contradiction"},
