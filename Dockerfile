@@ -9,7 +9,7 @@
 # For the legacy Node.js backend, see Dockerfile.legacy.
 
 # ── Stage 1: Build the React frontend ────────────────────────────────────────
-FROM node:20-alpine AS frontend
+FROM node:24-alpine AS frontend
 WORKDIR /app
 
 # Copy workspace manifests first for layer caching
@@ -55,7 +55,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /migrate ./cmd/migrate/
 
 # ── Stage 3: Runtime image ───────────────────────────────────────────────────
-FROM alpine:3.20
+FROM alpine:3.24
 RUN apk --no-cache add \
     ca-certificates curl \
     poppler-utils \

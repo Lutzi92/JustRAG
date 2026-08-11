@@ -12,7 +12,11 @@
 
 services:
   nginx:
-    image: nginx:1.29.5-alpine
+    # Stable branch. 1.29.x was mainline and stopped receiving fixes when the
+    # 1.30 stable branch forked (Apr 2026); staying on it stranded 16 CVEs,
+    # incl. two heap overflows in ngx_http_rewrite_module (CVE-2026-42945,
+    # CVE-2026-9256) that this config's `set` + regex-capture location reaches.
+    image: nginx:1.30.4-alpine
     restart: unless-stopped
     ports:
       - "3001:80"
@@ -107,7 +111,14 @@ services:
     # For migration from 16, use scripts/migrate_db_16_to_18.sh
     # pgvector image (superset of postgres:18) — required since main
     # migrations 0044/0045 add VECTOR columns to kg_entities/user_memory.
-    image: pgvector/pgvector:0.8.2-pg18
+    # The unsuffixed tag currently resolves to the Debian bookworm build
+    # (glibc 2.36). pgvector also publishes a -trixie variant (glibc 2.41);
+    # switching to it — or this tag silently repointing there in a future
+    # release — bumps the libc collation version on an existing volume.
+    # Postgres will then warn about a collation mismatch and the text btree
+    # indexes need REINDEX DATABASE + ALTER DATABASE ... REFRESH COLLATION
+    # VERSION. Pin -bookworm explicitly if that surprise is unacceptable.
+    image: pgvector/pgvector:0.8.6-pg18
     restart: unless-stopped
     ports:
       - "${WORKER_BIND_IP:-127.0.0.1}:5432:5432"
@@ -136,7 +147,7 @@ services:
       - rag-db-data-v18:/var/lib/postgresql
 
   vectordb:
-    image: pgvector/pgvector:0.8.2-pg18
+    image: pgvector/pgvector:0.8.6-pg18
     restart: unless-stopped
     shm_size: 2g
     ports:

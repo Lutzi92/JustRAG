@@ -97,7 +97,8 @@ services:
       - rag-justfind-profile-worker:/app/data/justfind-profile
 
   nginx:
-    image: nginx:1.29.5-alpine
+    # Stable branch — see the CVE note in docker-compose.yml.
+    image: nginx:1.30.4-alpine
     restart: unless-stopped
     ports:
       - "3001:80"
@@ -108,7 +109,7 @@ services:
         condition: service_healthy
 
   db:
-    image: pgvector/pgvector:0.8.4-pg18
+    image: pgvector/pgvector:0.8.6-pg18
     restart: unless-stopped
     ports:
       - "${WORKER_BIND_IP:-127.0.0.1}:5432:5432"
@@ -137,7 +138,7 @@ services:
       - rag-db-data-v18:/var/lib/postgresql
 
   vectordb:
-    image: pgvector/pgvector:0.8.4-pg18
+    image: pgvector/pgvector:0.8.6-pg18
     restart: unless-stopped
     shm_size: 2g
     ports:

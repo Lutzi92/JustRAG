@@ -16,8 +16,10 @@ jobs:
       # cascade/vector/kg/tabular/processor tests. Hosts two databases (justrag +
       # justrag_vector, created in the migrate step below) because cmd/migrate
       # deliberately skips the vector migration tree on single-DB setups.
+      # Pinned to the same pgvector build and Postgres major as the compose
+      # files so CI cannot pass against a different engine than production.
       postgres:
-        image: pgvector/pgvector:pg17
+        image: pgvector/pgvector:0.8.6-pg18
         env:
           POSTGRES_USER: justrag
           POSTGRES_PASSWORD: justrag

@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w -X main.version=
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" -o /worker ./cmd/worker/
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" -o /migrate ./cmd/migrate/
 
-FROM alpine:3.20
+FROM alpine:3.24
 RUN apk --no-cache add ca-certificates curl poppler-utils
 WORKDIR /app
 COPY --from=builder /server  /app/server
