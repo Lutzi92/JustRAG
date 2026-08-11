@@ -34,6 +34,10 @@ type Store interface {
 	GetUserByUsername(ctx context.Context, username string) (*users.UserRow, error)
 	CreateUser(ctx context.Context, data users.UserCreate) (*users.UserRow, error)
 	GetActiveAuthProviders(ctx context.Context) ([]adminproviders.AuthProviderRow, error)
+
+	// ApplyPendingInvites promotes bulk/single invites parked for this username
+	// into real KB shares. Implemented by PGStore; see store_pg.go.
+	ApplyPendingInvites(ctx context.Context, userID, username string) error
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +315,14 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (h *Handler) respondWithToken(ctx context.Context, w http.ResponseWriter, user *users.UserRow) {
+	// Promote any invites parked for this username into real KB shares. This is
+	// the shared success path for local-password and LDAP login (OIDC has its
+	// own call in oidc.go). Best-effort: a failure must never block the login.
+	if err := h.store.ApplyPendingInvites(ctx, user.ID, user.Username); err != nil {
+		logctx.From(ctx).Warn("auth.pending_invites_failed",
+			"err", err, "user_id", user.ID, "username", user.Username)
+	}
+
 	tokenStr, err := h.signToken(user.ID, user.Username, user.Role)
 	if err != nil {
 		logctx.From(ctx).Error("auth.login_token_error", "user_id", user.ID, "error", err.Error())

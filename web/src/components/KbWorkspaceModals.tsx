@@ -33,6 +33,8 @@ export function KbWorkspaceModals() {
           setSharePermission={sharing.setSharePermission}
           onLookupUser={sharing.lookupUser}
           onConfirmShare={sharing.confirmShare}
+          notFoundUsername={sharing.notFoundUsername}
+          onPendingInvited={sharing.clearNotFound}
         />}
       </Suspense>
 

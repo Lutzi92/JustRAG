@@ -23,12 +23,14 @@ var monitoredQueues = []string{jobs.QueueQuick, jobs.QueueHeavy, jobs.QueueBatch
 
 // KBBase is the per-KB metadata row before stats are merged in.
 type KBBase struct {
-	ID          string  `db:"id"`
-	Name        string  `db:"name"`
-	OwnerName   *string `db:"owner_name"`
-	IsGlobal    bool    `db:"is_global"`
-	IsPublished bool    `db:"is_published"`
-	CreatedAt   string  `db:"created_at"`
+	ID            string  `db:"id"`
+	Name          string  `db:"name"`
+	OwnerName     *string `db:"owner_name"`
+	OwnerID       *string `db:"owner_id"`
+	OwnerUsername *string `db:"owner_username"`
+	IsGlobal      bool    `db:"is_global"`
+	IsPublished   bool    `db:"is_published"`
+	CreatedAt     string  `db:"created_at"`
 }
 
 // FileStats are the per-KB file aggregates.
@@ -59,6 +61,8 @@ type KBRow struct {
 	ID                  string  `json:"id"`
 	Name                string  `json:"name"`
 	OwnerName           *string `json:"ownerName,omitempty"`
+	OwnerID             *string `json:"ownerId,omitempty"`
+	OwnerUsername       *string `json:"ownerUsername,omitempty"`
 	IsGlobal            bool    `json:"isGlobal"`
 	IsPublished         bool    `json:"isPublished"`
 	FileCount           int     `json:"fileCount"`
@@ -121,12 +125,14 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 	rows := make([]KBRow, 0, len(kbs))
 	for _, kb := range kbs {
 		row := KBRow{
-			ID:          kb.ID,
-			Name:        kb.Name,
-			OwnerName:   kb.OwnerName,
-			IsGlobal:    kb.IsGlobal,
-			IsPublished: kb.IsPublished,
-			CreatedAt:   kb.CreatedAt,
+			ID:            kb.ID,
+			Name:          kb.Name,
+			OwnerName:     kb.OwnerName,
+			OwnerID:       kb.OwnerID,
+			OwnerUsername: kb.OwnerUsername,
+			IsGlobal:      kb.IsGlobal,
+			IsPublished:   kb.IsPublished,
+			CreatedAt:     kb.CreatedAt,
 		}
 		if fs, ok := fileStats[kb.ID]; ok {
 			row.FileCount = fs.FileCount

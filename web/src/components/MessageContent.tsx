@@ -56,6 +56,15 @@ interface MessageContentProps {
      * MessageBubble, which owns the onPdfOpen / onPreviewSource dispatch.
      */
     onOpenSource?: (source: MessageSource) => void;
+    /**
+     * Whether the chain-of-thought panel is expanded. Controlled from the chat
+     * view (keyed by message id) rather than left to the native <details> DOM
+     * state: the message list is virtualized, so the node is destroyed when the
+     * message scrolls out of view and would come back collapsed — changing the
+     * item's measured height mid-scroll and jerking the scroll position.
+     */
+    reasoningOpen?: boolean;
+    onToggleReasoning?: () => void;
 }
 
 /**
@@ -318,13 +327,35 @@ function buildMarkdownComponents(language: 'de' | 'en') {
             // Strip the react-markdown AST `node` so it isn't spread onto the DOM element.
             const { node, ...props } = imgProps;
             void node;
-            return <img {...props} alt={props.alt || ''} loading="lazy" style={{ maxWidth: '100%', height: 'auto' }} />;
+            // loading="eager", NOT lazy: the message list is virtualized, so the
+            // DOM already only holds what is near the viewport and lazy buys
+            // nothing. It costs correctness — a lazy image is re-fetched/laid out
+            // from zero height on every remount, so a message that scrolls out
+            // and back comes back a different height and shifts the scroll
+            // position. Eager lets the cached image lay out immediately.
+            return <img {...props} alt={props.alt || ''} loading="eager" style={{ maxWidth: '100%', height: 'auto' }} />;
         },
         code({ inline, className, children, ...props }: React.HTMLAttributes<HTMLElement> & { inline?: boolean; node?: unknown }) {
             const match = /language-(\w+)/.exec(className || '');
+            // Only a ```chart fence resolves to a chart; every other language
+            // falls through ChartRenderer to a plain <pre>. Reserving the chart
+            // box for those would make a 3-line snippet flash 350px tall and
+            // then collapse — the same height churn this reservation exists to
+            // prevent.
+            const isChart = match?.[1] === 'chart';
             return !inline && match ? (
                 <Suspense fallback={
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+                    // Reserves the same box the resolved chart occupies
+                    // (.chart-container: min-height 350 + 1rem margins), so the
+                    // item isn't measured at the spinner's height and then
+                    // jumped when the lazy chunk lands.
+                    <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: 'var(--text-secondary)',
+                        ...(isChart
+                            ? { minHeight: 350, marginTop: '1rem', marginBottom: '1rem' }
+                            : { padding: '2rem' }),
+                    }}>
                         <Loader2 className="animate-spin" size={24} />
                         <span style={{ marginLeft: '8px' }}>{loadingChartLabel}</span>
                     </div>
@@ -344,7 +375,7 @@ function buildMarkdownComponents(language: 'de' | 'en') {
     };
 }
 
-const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectCitations, semanticCitations, trajectory, flaggedClaims, onOpenSource }: MessageContentProps) => {
+const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectCitations, semanticCitations, trajectory, flaggedClaims, onOpenSource, reasoningOpen = false, onToggleReasoning }: MessageContentProps) => {
     const { language, t } = useTheme();
     const reasoningLabel = language === 'en' ? 'Chain of Thought' : 'Gedankengang';
     const markdownComponents = useMemo(() => buildMarkdownComponents(language), [language]);
@@ -434,23 +465,29 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
                 <TrajectoryPanel trajectory={trajectory} language={language} />
             )}
             {reasoning && (
-                <details open={isThinking || undefined} style={{
+                <details open={reasoningOpen || isThinking} style={{
                     marginBottom: '1rem',
                     background: 'var(--tag-bg)',
                     borderRadius: '8px',
                     padding: '0.5rem',
                     border: '1px solid var(--border-color)'
                 }}>
-                    <summary style={{
-                        cursor: 'pointer',
-                        fontSize: '0.8rem',
-                        fontWeight: 600,
-                        color: 'var(--accent-primary)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        listStyle: 'none'
-                    }}>
+                    <summary
+                        // preventDefault suppresses the browser's own toggle so
+                        // `open` above is the single source of truth. Enter/Space
+                        // on a <summary> dispatch a click, so this covers the
+                        // keyboard path too.
+                        onClick={(e) => { e.preventDefault(); onToggleReasoning?.(); }}
+                        style={{
+                            cursor: 'pointer',
+                            fontSize: '0.8rem',
+                            fontWeight: 600,
+                            color: 'var(--accent-primary)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            listStyle: 'none'
+                        }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <Brain
                                 size={16}

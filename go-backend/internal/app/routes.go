@@ -426,9 +426,14 @@ func registerAdminRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/system-health/subsystems", rc.adminChain(systemHealthHandler.GetSubsystems))
 	rc.mux.Handle("POST /api/system-health/ai-check", rc.adminChain(systemHealthHandler.CheckAIHealth))
 
-	kbOverviewSvc := adminkboverview.NewService(adminkboverview.NewStore(rc.infra.db.Main), rc.asynqInspector)
-	kbOverviewHandler := adminkboverview.NewHandler(kbOverviewSvc)
+	kbOverviewStore := adminkboverview.NewStore(rc.infra.db.Main)
+	kbOverviewSvc := adminkboverview.NewService(kbOverviewStore, rc.asynqInspector)
+	kbOverviewHandler := adminkboverview.NewHandlerWithActions(kbOverviewSvc, kbOverviewStore, rc.cascadeDeleter)
 	rc.mux.Handle("GET /api/admin/kb-overview", rc.adminChain(kbOverviewHandler.Overview))
+	// Mutating KB actions are superadmin-only: the KB-Übersicht tab itself is
+	// visible to plain admins, so the chain — not the UI — is the boundary.
+	rc.mux.Handle("DELETE /api/admin/kbs/{id}", rc.superadminChain(kbOverviewHandler.DeleteKB))
+	rc.mux.Handle("PATCH /api/admin/kbs/{id}/owner", rc.superadminChain(kbOverviewHandler.TransferOwner))
 
 	// Audit Logs — superadmin only
 	auditLogsHandler := auditlogs.NewHandler(auditlogs.NewStore(rc.infra.db.Main))

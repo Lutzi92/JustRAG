@@ -24,11 +24,16 @@ interface ShareModalProps {
     setSharePermission: (perm: 'view' | 'edit') => void;
     onLookupUser: () => void;
     onConfirmShare: () => void;
+    /** Username the lookup could not resolve — offer a pending invite for it. */
+    notFoundUsername: string | null;
+    /** Called after a pending invite is created, so the parent can reset its lookup state. */
+    onPendingInvited: () => void;
 }
 
 export const ShareModal: React.FC<ShareModalProps> = ({
     show, onClose, sharingKb, shareUserId, setShareUserId, shareTargetUser,
     shareLoading, sharePermission, setSharePermission, onLookupUser, onConfirmShare,
+    notFoundUsername, onPendingInvited,
 }) => {
     const { t } = useTheme();
     const { token } = useAuth();
@@ -124,6 +129,30 @@ export const ShareModal: React.FC<ShareModalProps> = ({
         }
     };
 
+    const [pendingInviteLoading, setPendingInviteLoading] = useState(false);
+
+    // Invite a username with no account yet. Reuses the bulk endpoint, which
+    // already parks unknown usernames in pending_kb_invites; they are promoted
+    // to a real share on the user's first login.
+    const handleInviteAnyway = async () => {
+        if (!sharingKb || !notFoundUsername) return;
+        setPendingInviteLoading(true);
+        try {
+            await axios.post(`${API_BASE_URL}/api/kb/${sharingKb.id}/share/bulk`, {
+                usernames: [notFoundUsername],
+                permission: sharePermission,
+            });
+            await fetchShares(); // surface the new invite in the pending list below
+            toast.success(t('inviteAnywaySuccess').replace('{username}', notFoundUsername));
+            onPendingInvited();
+        } catch (err: unknown) {
+            console.error('Pending invite failed:', err);
+            toast.error(t('bulkInviteError'));
+        } finally {
+            setPendingInviteLoading(false);
+        }
+    };
+
     if (!show) return null;
 
     return (
@@ -179,6 +208,57 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                     </div>
                     {errors.username && <span className="field-error" role="alert">{errors.username}</span>}
                 </div>
+
+                {notFoundUsername && !shareTargetUser && (
+                    <div
+                        role="status"
+                        style={{
+                            padding: '1rem',
+                            background: 'var(--warning-bg)',
+                            borderRadius: '12px',
+                            marginBottom: '1.5rem',
+                            border: '1px solid var(--warning-text)',
+                        }}
+                    >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                            <Clock size={18} aria-hidden="true" />
+                            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                                {t('noAccountYet').replace('{username}', notFoundUsername)}
+                            </span>
+                        </div>
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '0 0 1rem 0' }}>
+                            {t('pendingInviteHint')}
+                        </p>
+                        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem' }} role="group" aria-label={t('selectPermission')}>
+                            <button
+                                onClick={() => setSharePermission('view')}
+                                className={sharePermission === 'view' ? 'search-button' : 'secondary-button'}
+                                style={{ flex: 1, padding: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                                aria-pressed={sharePermission === 'view'}
+                            >
+                                <Eye size={16} aria-hidden="true" />
+                                {t('viewPermission')}
+                            </button>
+                            <button
+                                onClick={() => setSharePermission('edit')}
+                                className={sharePermission === 'edit' ? 'search-button' : 'secondary-button'}
+                                style={{ flex: 1, padding: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                                aria-pressed={sharePermission === 'edit'}
+                            >
+                                <Edit3 size={16} aria-hidden="true" />
+                                {t('editPermission')}
+                            </button>
+                        </div>
+                        <button
+                            onClick={handleInviteAnyway}
+                            className="search-button"
+                            style={{ width: '100%' }}
+                            disabled={pendingInviteLoading}
+                        >
+                            {pendingInviteLoading ? <Loader2 className="animate-spin" size={18} /> : t('inviteAnyway')}
+                        </button>
+                    </div>
+                )}
 
                 {shareTargetUser && (
                     <motion.div

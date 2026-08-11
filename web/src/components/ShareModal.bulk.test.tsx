@@ -34,6 +34,8 @@ const baseProps = {
   setSharePermission: () => {},
   onLookupUser: () => {},
   onConfirmShare: () => {},
+  notFoundUsername: null,
+  onPendingInvited: () => {},
 };
 
 describe('ShareModal bulk invite', () => {

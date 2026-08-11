@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
-import { RefreshCw, AlertTriangle, Loader2, ChevronDown, Hourglass, Play, XCircle } from 'lucide-react';
+import { RefreshCw, AlertTriangle, Loader2, ChevronDown, Hourglass, Play, XCircle, Trash2, UserCog } from 'lucide-react';
 import { getApiErrorMessage } from './utils/apiError';
 import { API_BASE_URL } from './api';
 import { useTheme } from './contexts/ThemeContext';
+import { useAuth } from './contexts/AuthContext';
+import { KbDeleteDialog } from './components/admin/KbDeleteDialog';
+import { KbTransferOwnerDialog } from './components/admin/KbTransferOwnerDialog';
 
 interface QueueStats {
     waiting: number;
@@ -15,6 +18,8 @@ interface KBRow {
     id: string;
     name: string;
     ownerName?: string;
+    ownerId?: string;
+    ownerUsername?: string;
     isGlobal: boolean;
     isPublished: boolean;
     fileCount: number;
@@ -94,6 +99,12 @@ const QUEUE_NAMES = ['rag-quick', 'rag-heavy', 'rag-batch'];
 
 export default function KBOverviewDashboard() {
     const { t, language } = useTheme();
+    const { user } = useAuth();
+    const canManage = user?.role === 'superadmin';
+    const [deleteTarget, setDeleteTarget] = useState<KBRow | null>(null);
+    const [transferTarget, setTransferTarget] = useState<KBRow | null>(null);
+    const [actionBusy, setActionBusy] = useState(false);
+    const [actionError, setActionError] = useState<string | null>(null);
     const rtf = useMemo(() => new Intl.RelativeTimeFormat(language, { numeric: 'auto' }), [language]);
     const [data, setData] = useState<OverviewResponse | null>(null);
     const [loading, setLoading] = useState(true);
@@ -136,6 +147,36 @@ export default function KBOverviewDashboard() {
             setRefreshing(false);
         }
     }, [t]);
+
+    const confirmDelete = useCallback(async () => {
+        if (!deleteTarget) return;
+        setActionBusy(true);
+        try {
+            await axios.delete(`${API_BASE_URL}/api/admin/kbs/${deleteTarget.id}`);
+            setDeleteTarget(null);
+            setActionError(null);
+            await fetchData();
+        } catch (err: unknown) {
+            setActionError(getApiErrorMessage(err, t('kbDeleteFailed')));
+        } finally {
+            setActionBusy(false);
+        }
+    }, [deleteTarget, fetchData, t]);
+
+    const confirmTransfer = useCallback(async (userId: string) => {
+        if (!transferTarget) return;
+        setActionBusy(true);
+        try {
+            await axios.patch(`${API_BASE_URL}/api/admin/kbs/${transferTarget.id}/owner`, { userId });
+            setTransferTarget(null);
+            setActionError(null);
+            await fetchData();
+        } catch (err: unknown) {
+            setActionError(getApiErrorMessage(err, t('kbTransferFailed')));
+        } finally {
+            setActionBusy(false);
+        }
+    }, [transferTarget, fetchData, t]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -363,6 +404,9 @@ export default function KBOverviewDashboard() {
                                         {c.label}{sortKey === c.key ? (sortAsc ? ' ▲' : ' ▼') : ''}
                                     </th>
                                 ))}
+                                {canManage && (
+                                    <th style={{ ...thStyle, textAlign: 'right', cursor: 'default' }}>{t('colActions')}</th>
+                                )}
                             </tr>
                         </thead>
                         <tbody>
@@ -398,15 +442,64 @@ export default function KBOverviewDashboard() {
                                                 </td>
                                             );
                                         })}
+                                        {canManage && (
+                                            <td style={{ ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                                {!row.isGlobal && (
+                                                    <button
+                                                        type="button"
+                                                        aria-label={t('kbActionTransfer')}
+                                                        title={t('kbActionTransfer')}
+                                                        onClick={() => { setActionError(null); setTransferTarget(row); }}
+                                                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '0.25rem' }}
+                                                    >
+                                                        <UserCog size={16} aria-hidden="true" />
+                                                    </button>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    aria-label={t('kbActionDelete')}
+                                                    title={t('kbActionDelete')}
+                                                    onClick={() => { setActionError(null); setDeleteTarget(row); }}
+                                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--error-text)', padding: '0.25rem' }}
+                                                >
+                                                    <Trash2 size={16} aria-hidden="true" />
+                                                </button>
+                                            </td>
+                                        )}
                                     </tr>
                                 );
                             })}
                             {sortedRows.length === 0 && (
-                                <tr><td style={tdStyle} colSpan={columns.length}>{t('kbNoKnowledgeBases')}</td></tr>
+                                <tr><td style={tdStyle} colSpan={columns.length + (canManage ? 1 : 0)}>{t('kbNoKnowledgeBases')}</td></tr>
                             )}
                         </tbody>
                     </table>
                 </div>
+            )}
+
+            {deleteTarget && (
+                <KbDeleteDialog
+                    kbName={deleteTarget.name}
+                    isGlobal={deleteTarget.isGlobal}
+                    fileCount={deleteTarget.fileCount}
+                    sizeLabel={formatBytes(deleteTarget.totalSizeBytes)}
+                    chatCount={deleteTarget.chatCount}
+                    busy={actionBusy}
+                    error={actionError}
+                    onCancel={() => { setDeleteTarget(null); setActionError(null); }}
+                    onConfirm={confirmDelete}
+                />
+            )}
+            {transferTarget && (
+                <KbTransferOwnerDialog
+                    kbName={transferTarget.name}
+                    currentOwnerId={transferTarget.ownerId ?? null}
+                    currentOwnerName={transferTarget.ownerName ?? null}
+                    busy={actionBusy}
+                    error={actionError}
+                    onCancel={() => { setTransferTarget(null); setActionError(null); }}
+                    onConfirm={confirmTransfer}
+                />
             )}
         </section>
     );

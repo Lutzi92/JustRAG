@@ -9,6 +9,7 @@ import { MessageActions } from './components/MessageActions';
 import { InlineMessageEditor } from './components/InlineMessageEditor';
 import MessageContent from './components/MessageContent';
 import { ComparisonFindings } from './components/ComparisonFindings';
+import type { MessageSection } from './hooks/useMessageSections';
 import { useIsMobileContext } from './contexts/MobileContext';
 import { useTheme } from './contexts/ThemeContext';
 import { HAPTIC_PATTERNS, triggerHaptic } from './utils/haptics';
@@ -34,6 +35,14 @@ interface MessageBubbleProps {
     animationDelay?: number;
     kbId?: string;
     questionText?: string;
+    // Expand state for the height-changing answer sections. Owned by the chat
+    // view rather than this component: the list is virtualized, so local state
+    // here would reset on remount and change the item's measured height mid
+    // scroll. See useMessageSections.
+    reasoningOpen?: boolean;
+    sourcesOpen?: boolean;
+    confidenceOpen?: boolean;
+    onToggleSection?: (messageId: string, section: MessageSection) => void;
     // Resolves an AI message's teamId/agentId to a display name for the
     // attribution chip. Returns undefined on a lookup miss (e.g. the team or
     // agent was later deleted) — the chip then renders nothing rather than
@@ -159,7 +168,7 @@ function ConfidenceDetails({ verification, t }: ConfidenceProps) {
     );
 }
 
-function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showFollowUps, branchInfo, onSwitchBranch, onEdit, onFork, onCompare, onRegenerate, onFeedback, isEditing, onEditCancel, onPreviewSource, onViewGraph, animationDelay, kbId, questionText, resolveAttribution }: MessageBubbleProps) {
+function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showFollowUps, branchInfo, onSwitchBranch, onEdit, onFork, onCompare, onRegenerate, onFeedback, isEditing, onEditCancel, onPreviewSource, onViewGraph, animationDelay, kbId, questionText, resolveAttribution, reasoningOpen = false, sourcesOpen = false, confidenceOpen = false, onToggleSection }: MessageBubbleProps) {
     const { t } = useTheme();
     const isThinking = Boolean(isStreaming && message.reasoning && !message.content);
     const isMobile = useIsMobileContext();
@@ -167,9 +176,13 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
     const [isHovered, setIsHovered] = useState(false);
     const [isFocused, setIsFocused] = useState(false);
     const [tapped, setTapped] = useState(false);
-    // §8 answer-footer expandable sections.
-    const [confOpen, setConfOpen] = useState(false);
-    const [sourcesExpanded, setSourcesExpanded] = useState(false);
+    // §8 answer-footer expandable sections — state lives in the chat view, keyed
+    // by message id, so it survives virtualization remounts (see the props).
+    const confOpen = confidenceOpen;
+    const sourcesExpanded = sourcesOpen;
+    const toggleSection = useCallback((section: MessageSection) => {
+        if (message.id) onToggleSection?.(message.id, section);
+    }, [message.id, onToggleSection]);
     const bubbleRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
 
@@ -322,6 +335,8 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                         trajectory={message.trajectory}
                         flaggedClaims={flaggedClaimsFor(message.verification)}
                         onOpenSource={handleOpenSource}
+                        reasoningOpen={reasoningOpen}
+                        onToggleReasoning={() => toggleSection('reasoning')}
                     />
                 </div>
             ) : (
@@ -347,13 +362,13 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                                 verification={message.verification}
                                 t={t}
                                 open={confOpen}
-                                onToggle={() => setConfOpen(o => !o)}
+                                onToggle={() => toggleSection('confidence')}
                             />
                         )}
                         {sourceGroups.length > 0 && (
                             <button
                                 type="button"
-                                onClick={(e) => { e.stopPropagation(); setSourcesExpanded(s => !s); }}
+                                onClick={(e) => { e.stopPropagation(); toggleSection('sources'); }}
                                 aria-expanded={sourcesExpanded}
                                 style={{
                                     display: 'inline-flex', alignItems: 'center', gap: '4px',

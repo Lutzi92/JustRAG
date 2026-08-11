@@ -43,6 +43,8 @@ interface HomeViewProps {
   setSharePermission: (v: 'view' | 'edit') => void;
   onLookupUser: () => void;
   onConfirmShare: () => void;
+  notFoundUsername: string | null;
+  onPendingInvited: () => void;
   showSettings: boolean;
   setShowSettings: (v: boolean) => void;
 }
@@ -120,7 +122,7 @@ export function HomeView(props: HomeViewProps) {
     onOpenGlobalKbSettings, onOpenShare, onUpdateKBSettings,
     showShareModal, setShowShareModal, sharingKb, shareUserId, setShareUserId,
     shareTargetUser, shareLoading, sharePermission, setSharePermission,
-    onLookupUser, onConfirmShare,
+    onLookupUser, onConfirmShare, notFoundUsername, onPendingInvited,
     showSettings, setShowSettings,
   } = props;
 
@@ -428,6 +430,8 @@ export function HomeView(props: HomeViewProps) {
           setSharePermission={setSharePermission}
           onLookupUser={onLookupUser}
           onConfirmShare={onConfirmShare}
+          notFoundUsername={notFoundUsername}
+          onPendingInvited={onPendingInvited}
         />}
       </Suspense>
 

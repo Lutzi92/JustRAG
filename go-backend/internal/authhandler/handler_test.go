@@ -32,6 +32,17 @@ var (
 type mockStore struct {
 	user      *users.UserRow
 	providers []adminproviders.AuthProviderRow
+
+	// Records ApplyPendingInvites calls so tests can assert promotion fired.
+	appliedInviteUserID   string
+	appliedInviteUsername string
+	applyInvitesErr       error
+}
+
+func (m *mockStore) ApplyPendingInvites(_ context.Context, userID, username string) error {
+	m.appliedInviteUserID = userID
+	m.appliedInviteUsername = username
+	return m.applyInvitesErr
 }
 
 func (m *mockStore) GetUserByUsername(_ context.Context, _ string) (*users.UserRow, error) {
@@ -381,5 +392,103 @@ func TestRefresh(t *testing.T) {
 	}
 	if newClaims["username"] != "alice" {
 		t.Errorf("expected username alice in refreshed token, got %v", newClaims["username"])
+	}
+}
+
+// Login through the local-password path must promote any pending KB invites.
+// respondWithToken is shared with the LDAP success path, so this covers both.
+func TestLogin_AppliesPendingInvites(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("correct-password"), bcrypt.MinCost)
+
+	store := &mockStore{
+		user: &users.UserRow{
+			ID:           "user-123",
+			Username:     "alice",
+			PasswordHash: string(hash),
+			Role:         "user",
+		},
+	}
+	h := newHandler(store)
+
+	body := `{"username":"alice","password":"correct-password"}`
+	req := makeRequest(http.MethodPost, "/api/auth/login", body, "")
+	rr := httptest.NewRecorder()
+	h.Login(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if store.appliedInviteUserID != "user-123" {
+		t.Errorf("expected ApplyPendingInvites user id user-123, got %q", store.appliedInviteUserID)
+	}
+	if store.appliedInviteUsername != "alice" {
+		t.Errorf("expected ApplyPendingInvites username alice, got %q", store.appliedInviteUsername)
+	}
+}
+
+// Wrong password must not trigger invite promotion. respondWithToken only
+// runs after successful authentication; a failed login is not "success" and
+// must leave any pending invites untouched.
+func TestLogin_WrongPassword_DoesNotApplyPendingInvites(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("correct-password"), bcrypt.MinCost)
+
+	store := &mockStore{
+		user: &users.UserRow{
+			ID:           "user-123",
+			Username:     "alice",
+			PasswordHash: string(hash),
+			Role:         "user",
+		},
+		providers: []adminproviders.AuthProviderRow{}, // no LDAP providers
+	}
+	h := newHandler(store)
+
+	body := `{"username":"alice","password":"wrong-password"}`
+	req := makeRequest(http.MethodPost, "/api/auth/login", body, "")
+	rr := httptest.NewRecorder()
+	h.Login(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if store.appliedInviteUsername != "" {
+		t.Errorf("expected ApplyPendingInvites NOT to fire on failed login, got username %q", store.appliedInviteUsername)
+	}
+	if store.appliedInviteUserID != "" {
+		t.Errorf("expected ApplyPendingInvites NOT to fire on failed login, got user id %q", store.appliedInviteUserID)
+	}
+}
+
+// Invite promotion is best-effort: a failure must not block the login.
+func TestLogin_PendingInviteFailureDoesNotBlockLogin(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte("correct-password"), bcrypt.MinCost)
+
+	store := &mockStore{
+		user: &users.UserRow{
+			ID:           "user-123",
+			Username:     "alice",
+			PasswordHash: string(hash),
+			Role:         "user",
+		},
+		applyInvitesErr: fmt.Errorf("database unavailable"),
+	}
+	h := newHandler(store)
+
+	body := `{"username":"alice","password":"correct-password"}`
+	req := makeRequest(http.MethodPost, "/api/auth/login", body, "")
+	rr := httptest.NewRecorder()
+	h.Login(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 despite invite failure, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Token == "" {
+		t.Fatal("expected a token despite invite failure")
 	}
 }

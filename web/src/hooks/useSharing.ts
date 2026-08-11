@@ -21,6 +21,7 @@ export function useSharing({ username }: UseSharingParams) {
   const [shareLoading, setShareLoading] = useState(false);
   const [sharePermission, setSharePermission] = useState<'view' | 'edit'>('view');
   const [copySuccess, setCopySuccess] = useState(false);
+  const [notFoundUsername, setNotFoundUsername] = useState<string | null>(null);
 
   const handleOpenShare = useCallback((kb: KnowledgeBase, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -29,6 +30,7 @@ export function useSharing({ username }: UseSharingParams) {
     setShareUserId('');
     setShareTargetUser(null);
     setSharePermission('view');
+    setNotFoundUsername(null);
   }, []);
 
   const lookupUser = useCallback(async () => {
@@ -37,13 +39,26 @@ export function useSharing({ username }: UseSharingParams) {
     try {
       const res = await axios.get(`${API_BASE_URL}/api/users/${shareUserId}`);
       setShareTargetUser(res.data);
-    } catch {
+      setNotFoundUsername(null);
+    } catch (err: unknown) {
       setShareTargetUser(null);
-      toast.warning(t('userNotFound'));
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        // No toast here — ShareModal renders an inline "invite anyway" block
+        // for this username, so a toast would announce the same outcome twice.
+        setNotFoundUsername(shareUserId.trim().toLowerCase());
+      } else {
+        // A genuine failure (500, timeout, offline) is NOT "no account yet" —
+        // treating it as such would let the owner park an invite for a
+        // username that may well exist, which reclassifies as a real share
+        // the moment the network recovers. Surface the error and leave the
+        // lookup state untouched.
+        setNotFoundUsername(null);
+        toast.error(getApiErrorMessage(err, t('shareError')));
+      }
     } finally {
       setShareLoading(false);
     }
-  }, [shareUserId, t, toast]);
+  }, [shareUserId, toast, t]);
 
   const confirmShare = useCallback(async () => {
     if (!sharingKb || !shareTargetUser) return;
@@ -76,12 +91,26 @@ export function useSharing({ username }: UseSharingParams) {
     }
   }, [username, toast, t]);
 
+  const clearNotFound = useCallback(() => setNotFoundUsername(null), []);
+
+  // Editing the input after a 404 must drop the stale notFoundUsername, or
+  // the "Invite anyway" block stays live for whatever was typed before the
+  // edit (e.g. typing "alicia" over a not-found "alice" without re-clicking
+  // Search would park a pending invite for "alice"). Wrapped here — rather
+  // than threading a 5th prop through ShareModal — so every caller of
+  // setShareUserId gets the fix for free.
+  const setShareUserIdAndClearNotFound = useCallback((id: string) => {
+    setShareUserId(id);
+    setNotFoundUsername(null);
+  }, []);
+
   return {
     showShareModal, setShowShareModal,
-    sharingKb, shareUserId, setShareUserId,
+    sharingKb, shareUserId, setShareUserId: setShareUserIdAndClearNotFound,
     shareTargetUser, shareLoading,
     sharePermission, setSharePermission,
     copySuccess,
     handleOpenShare, lookupUser, confirmShare, copyUserId,
+    notFoundUsername, clearNotFound,
   };
 }

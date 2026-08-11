@@ -339,6 +339,8 @@ function AuthenticatedAppInner() {
           setSharePermission={sharing.setSharePermission}
           onLookupUser={sharing.lookupUser}
           onConfirmShare={sharing.confirmShare}
+          notFoundUsername={sharing.notFoundUsername}
+          onPendingInvited={sharing.clearNotFound}
           showSettings={kbSettings.showSettings}
           setShowSettings={kbSettings.setShowSettings}
         />

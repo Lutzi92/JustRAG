@@ -140,3 +140,34 @@ func TestOverview_MessageStatsErrorPropagates(t *testing.T) {
 		t.Fatal("expected error when MessageStatsByKB fails")
 	}
 }
+
+func TestOverview_SurfacesOwnerIdentity(t *testing.T) {
+	store := &fakeStore{
+		kbs: []KBBase{{
+			ID:            "kb-1",
+			Name:          "Alpha",
+			OwnerName:     strptr("Ada Lovelace"),
+			OwnerID:       strptr("user-1"),
+			OwnerUsername: strptr("ada"),
+			CreatedAt:     "2026-01-01T00:00:00Z",
+		}},
+		fileMap: map[string]FileStats{},
+		msgMap:  map[string]MessageStats{},
+	}
+	svc := NewService(store, nil)
+
+	resp, err := svc.Overview(context.Background())
+	if err != nil {
+		t.Fatalf("Overview: %v", err)
+	}
+	if len(resp.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(resp.Rows))
+	}
+	row := resp.Rows[0]
+	if row.OwnerID == nil || *row.OwnerID != "user-1" {
+		t.Errorf("OwnerID = %v, want user-1", row.OwnerID)
+	}
+	if row.OwnerUsername == nil || *row.OwnerUsername != "ada" {
+		t.Errorf("OwnerUsername = %v, want ada", row.OwnerUsername)
+	}
+}
