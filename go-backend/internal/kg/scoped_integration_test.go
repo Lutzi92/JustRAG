@@ -31,9 +31,19 @@ func TestScopedGraphForMessage_UnionAndSources(t *testing.T) {
 	y := mkEnt("Y", []string{"Y"})
 	q := mkEnt("Quux", []string{"Quux"})
 
-	// chats.user_id is NOT NULL with no default; supply a random uuid.
+	// chats.user_id is NOT NULL *and* carries a FK to users
+	// (chats_user_id_users_id_fk, since migration 0000), so a bare
+	// gen_random_uuid() fails the constraint — the row needs a real user.
+	// Username is randomised so repeated runs can't collide on users_username_unique.
+	var owner string
+	if err := pool.QueryRow(ctx, `INSERT INTO users (username, password_hash)
+		VALUES ('kg-scoped-test-' || gen_random_uuid()::text, 'x') RETURNING id::text`).Scan(&owner); err != nil {
+		t.Fatalf("user: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1::uuid`, owner) })
+
 	var chat, userMsg, aiMsg string
-	if err := pool.QueryRow(ctx, `INSERT INTO chats (kb_id, user_id, title) VALUES ($1::uuid, gen_random_uuid(), 't') RETURNING id::text`, kb).Scan(&chat); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO chats (kb_id, user_id, title) VALUES ($1::uuid, $2::uuid, 't') RETURNING id::text`, kb, owner).Scan(&chat); err != nil {
 		t.Fatalf("chat: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO messages (chat_id, role, content) VALUES ($1::uuid,'user','tell me about Quux') RETURNING id::text`, chat).Scan(&userMsg); err != nil {

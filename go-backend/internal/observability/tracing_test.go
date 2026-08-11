@@ -58,7 +58,7 @@ func TestStartGenerationSpan_TagsObservationType(t *testing.T) {
 
 	attrs := map[string]string{}
 	for _, kv := range got.Attributes {
-		attrs[string(kv.Key)] = kv.Value.Emit()
+		attrs[string(kv.Key)] = kv.Value.String()
 	}
 	for k, want := range map[string]string{
 		"langfuse.observation.type": "generation",
@@ -97,7 +97,7 @@ func TestStartGenerationSpan_EmptySystemBecomesUnknown(t *testing.T) {
 
 	for _, kv := range rec.GetSpans()[0].Attributes {
 		if string(kv.Key) == "gen_ai.system" {
-			if kv.Value.Emit() != "unknown" {
+			if kv.Value.String() != "unknown" {
 				t.Errorf("expected unknown, got %v", kv.Value)
 			}
 			return

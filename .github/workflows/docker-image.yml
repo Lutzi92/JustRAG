@@ -52,6 +52,14 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamps the commit into the server binary via -ldflags (see the
+          # BUILD_VERSION ARG in the Dockerfile), which is what GET /version
+          # reports. The frontend polls that endpoint to notice a deployment;
+          # without this the ARG keeps its "unknown" default, /version returns
+          # the same string for every release, and update detection can never
+          # fire. Matches the `type=sha` image tag above.
+          build-args: |
+            BUILD_VERSION=${{ github.sha }}
           # Attach SBOM + minimal provenance attestations to the pushed image
           # (inspectable via `docker buildx imagetools inspect <ref> --format
           # '{{ json .SBOM }}'`).

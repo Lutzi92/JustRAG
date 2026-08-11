@@ -47,18 +47,27 @@ jobs:
       JWT_SECRET: ci-only-Jwt-secret-0123456789-abcdef
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v5
+      # v6 is the first node24 release; v5 runs on the deprecated node20.
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go-backend/go.mod
           cache-dependency-path: go-backend/go.sum
       - name: go vet
         run: go vet ./...
       - name: golangci-lint
-        # action v7 is the first to support golangci-lint v2 (config schema
-        # version "2" in go-backend/.golangci.yml).
-        uses: golangci/golangci-lint-action@v7
+        # action v9 runs on node24 (v7/v8 are node20, which GitHub deprecated
+        # on the runners) and requires golangci-lint >= v2.1.0 — satisfied by
+        # the v2 config schema in go-backend/.golangci.yml.
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.1.6
+          # Must stay recent enough for the Go toolchain in go.mod: the linter
+          # version pins honnef.co/go/tools, and a staticcheck that predates
+          # the toolchain's Go release mis-analyses the stdlib. v2.1.6
+          # (staticcheck v0.6.1, Go <=1.24) could not see that testing.T.Fatal
+          # terminates under Go 1.26 and emitted bogus SA5011 "possible nil
+          # pointer dereference" on every `if x == nil { t.Fatal() }` guard.
+          # Bump this together with the go.mod toolchain line.
+          version: v2.12.2
           # The prebuilt binary may be compiled with a Go toolchain that
           # refuses go.mod targets newer than it; goinstall builds it with the
           # toolchain from setup-go instead (matches local `go install` setups).
@@ -90,7 +99,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      # Action v5 is the first node24 release (v4 runs on the deprecated
+      # node20). `node-version` below is the runtime the frontend is BUILT
+      # with and is independent of the action's own runtime.
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
           cache: npm

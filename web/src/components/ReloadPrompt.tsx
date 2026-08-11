@@ -1,11 +1,21 @@
+import { useEffect, useRef, useState } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { RefreshCw, X } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
+import {
+    isBannerVisible,
+    shouldApplyAutomatically,
+    SNOOZE_MS,
+} from '../utils/updatePolicy';
 
 // Re-check for a waiting service worker on this cadence. Matches the
 // useVersionCheck poll interval so a freshly deployed bundle surfaces a
 // prompt within ~a minute even on a long-lived tab.
 const UPDATE_CHECK_INTERVAL = 60_000;
+
+// How often to re-evaluate the snooze window and the deferral deadline.
+// Neither is time-critical to the second, so this stays cheap.
+const POLICY_TICK_INTERVAL = 30_000;
 
 /**
  * ReloadPrompt renders a non-blocking banner when a new build's service
@@ -16,11 +26,15 @@ const UPDATE_CHECK_INTERVAL = 60_000;
  *
  * Mounted once near the app root (see App.tsx) so it covers both the login
  * screen and the authenticated app. Renders nothing until an update waits.
+ *
+ * Dismissing SNOOZES the banner rather than cancelling the update — see
+ * utils/updatePolicy.ts for why, and for the deadline that eventually applies
+ * a long-ignored update on a hidden tab.
  */
 export function ReloadPrompt() {
     const { language } = useTheme();
     const {
-        needRefresh: [needRefresh, setNeedRefresh],
+        needRefresh: [needRefresh],
         updateServiceWorker,
     } = useRegisterSW({
         onRegisteredSW(_swUrl, registration) {
@@ -32,10 +46,55 @@ export function ReloadPrompt() {
         },
     });
 
-    if (!needRefresh) return null;
+    const [snoozedUntil, setSnoozedUntil] = useState<number | null>(null);
+    const [now, setNow] = useState(() => Date.now());
+
+    // When the waiting worker was first seen — the clock the deferral deadline
+    // runs against. A ref because changing it must not itself re-render.
+    const pendingSince = useRef<number | null>(null);
+
+    // updateServiceWorker is not guaranteed to be referentially stable, and it
+    // must not be a dependency of the auto-apply effect (that would re-run the
+    // effect on every render and risk repeat invocations).
+    const updateRef = useRef(updateServiceWorker);
+    useEffect(() => {
+        updateRef.current = updateServiceWorker;
+    }, [updateServiceWorker]);
+
+    useEffect(() => {
+        if (needRefresh && pendingSince.current === null) {
+            pendingSince.current = Date.now();
+        }
+    }, [needRefresh]);
+
+    // Re-evaluate on a timer and whenever the tab is shown or hidden — the
+    // latter is what makes the deadline actionable, since auto-apply only
+    // fires while hidden.
+    useEffect(() => {
+        if (!needRefresh) return;
+        const tick = () => setNow(Date.now());
+        const timer = setInterval(tick, POLICY_TICK_INTERVAL);
+        document.addEventListener('visibilitychange', tick);
+        return () => {
+            clearInterval(timer);
+            document.removeEventListener('visibilitychange', tick);
+        };
+    }, [needRefresh]);
+
+    const applied = useRef(false);
+    useEffect(() => {
+        if (!needRefresh || applied.current) return;
+        if (shouldApplyAutomatically(pendingSince.current, now, document.hidden)) {
+            applied.current = true;
+            updateRef.current(true);
+        }
+    }, [needRefresh, now]);
+
+    if (!isBannerVisible(needRefresh, snoozedUntil, now)) return null;
 
     const t = language === 'en'
-        ? { msg: 'A new version is available.', reload: 'Reload', dismiss: 'Dismiss' }
+        // "Later", not "Dismiss": the banner genuinely does come back now.
+        ? { msg: 'A new version is available.', reload: 'Reload', dismiss: 'Later' }
         : { msg: 'Eine neue Version ist verfügbar.', reload: 'Neu laden', dismiss: 'Später' };
 
     return (
@@ -82,7 +141,7 @@ export function ReloadPrompt() {
                 {t.reload}
             </button>
             <button
-                onClick={() => setNeedRefresh(false)}
+                onClick={() => setSnoozedUntil(Date.now() + SNOOZE_MS)}
                 aria-label={t.dismiss}
                 title={t.dismiss}
                 style={{

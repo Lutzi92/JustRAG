@@ -22,8 +22,12 @@ func TestMergeEntities_RepointsDropsSelfLoopsUnionsAliasesIdempotent(t *testing.
 
 	mk := func(name string, aliases []string) int64 {
 		var id int64
+		// COALESCE mirrors the production writer (processor/kg_store.go): a nil
+		// slice encodes as NULL, and kg_entities.aliases is NOT NULL DEFAULT
+		// '{}'. Without this, mk(name, nil) — "entity with no aliases" —
+		// violates the constraint instead of exercising the empty-alias case.
 		if err := pool.QueryRow(ctx, `INSERT INTO kg_entities (kb_id, canonical_name, type, aliases)
-			VALUES ($1::uuid,$2,'org',$3) RETURNING id`, kb, name, aliases).Scan(&id); err != nil {
+			VALUES ($1::uuid,$2,'org',COALESCE($3::text[],'{}')) RETURNING id`, kb, name, aliases).Scan(&id); err != nil {
 			t.Fatalf("entity %s: %v", name, err)
 		}
 		return id

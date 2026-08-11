@@ -12,12 +12,13 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <meta name="renderer" content="webkit" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <!-- Design-system type families: Inter (body/UI), Manrope (headings),
-       JetBrains Mono (code/labels). Weights match the --type-* ladder in
-       index.css: 400/500 body, 600 headings, 700 display. -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+       JetBrains Mono (code/labels). Self-hosted: the @font-face sheet is
+       imported from src/index.css and Vite fingerprints the woff2 files into
+       /assets, which is served immutable. They are deliberately NOT loaded
+       from a third-party CDN — the default CSP has no font-src and only
+       allows 'self' for stylesheets, so a CDN <link> is blocked outright.
+       See web/src/assets/fonts/fonts.css. -->
   <title>JustRAG</title>
 </head>
 

@@ -504,6 +504,78 @@ func (s *SearchService) InvalidateQueryCache(ctx context.Context, kbID string) e
 //  11. Score filtering (min threshold + score-drop) when no reranker is used.
 //  12. Deduplication (Jaccard similarity).
 //  13. Trim to limit and return.
+//
+// probeQueryCache consults the QueryCache before the embed/search pipeline
+// runs. The shape hash binds the cached result to the SearchOptions + resolved
+// limit, so two queries with the same text but different filters / query types
+// / top_n stay isolated.
+//
+// The query embedding doubles as the cache lookup vector AND, on miss, is
+// returned alongside the shape hash so the store side at the end of Search can
+// reuse both — the main pipeline re-encodes via ai.EncodeQuery (which hits
+// s.embeddingCache), so that second call is essentially free. The embedding is
+// cached at the EmbeddingCache layer regardless.
+//
+// Returns a non-nil result only on a usable hit; every other path (cache
+// disabled, embed failure, lookup miss, undeserializable payload) returns nil
+// and lets the caller fall through to the full pipeline.
+func (s *SearchService) probeQueryCache(
+	ctx context.Context,
+	kbID, query string,
+	limit int,
+	opts SearchOptions,
+	siteCfg KBVectorConfig,
+	qcCfg queryCacheConfig,
+) (*SearchResult, []float64, []byte) {
+	if s.queryCache == nil || !qcCfg.enabled {
+		return nil, nil, nil
+	}
+	emb, err := ai.EncodeQuery(ctx, s.aiResolver, query, siteCfg.QueryInstruction, kbID, s.embeddingCache)
+	if err != nil || len(emb) == 0 {
+		return nil, nil, nil
+	}
+
+	// The embedder identity must be part of the shape: a same-dim embedder
+	// swap keeps the same cache table, but cosine matches against query
+	// embeddings from the old model are meaningless. EncodeQuery just
+	// resolved this config, so Resolve here is a warm cache read.
+	embeddingModel := ""
+	if aiCfg, cfgErr := s.aiResolver.Resolve(ctx, kbID); cfgErr == nil {
+		embeddingModel = aiCfg.EmbeddingModel
+	}
+	hash := shapeHash(opts, limit, embeddingModel)
+
+	// Per-query-type threshold: lookups can hit a looser threshold because
+	// paraphrases of "what is X" reliably refer to the same answer;
+	// complex_reasoning needs a tighter threshold because slight rephrasings
+	// can flip the correct answer. Unknown / unset query types inherit the
+	// base threshold.
+	threshold := qcCfg.effectiveThreshold(opts.QueryType)
+	rj, hit, dist, lookupErr := s.queryCache.Lookup(ctx, kbID, hash, emb, threshold)
+	if lookupErr != nil || !hit {
+		observability.RecordQueryCacheMiss()
+		logctx.From(ctx).Debug("rag.query_cache.miss", "kb_id", kbID, "nearest_distance", dist)
+		return nil, emb, hash
+	}
+
+	var cachedResult SearchResult
+	if uerr := json.Unmarshal(rj, &cachedResult); uerr != nil {
+		logctx.From(ctx).Warn("query_cache: result_json deserialize failed; treating as miss")
+		return nil, emb, hash
+	}
+	tier := "semantic"
+	if dist < 0.001 {
+		tier = "exact"
+	}
+	observability.RecordQueryCacheHit(tier)
+	logctx.From(ctx).Info("rag.query_cache.hit",
+		"kb_id", kbID,
+		"tier", tier,
+		"cosine_distance", dist,
+	)
+	return &cachedResult, emb, hash
+}
+
 func (s *SearchService) Search(ctx context.Context, kbID, query string, limit int, opts SearchOptions) (*SearchResult, error) {
 	ctx, span := observability.Tracer().Start(ctx, "rag.search")
 	defer span.End()
@@ -578,58 +650,10 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	// ------------------------------------------------------------------
 	// 0. Semantic query cache lookup (Feature 3 — see query_cache.go)
 	// ------------------------------------------------------------------
-	// Consult the QueryCache before running the embed/search pipeline. The
-	// shape hash binds the cached result to the SearchOptions + resolved
-	// limit, so two queries with the same text but different filters /
-	// query types / top_n stay isolated. The query embedding doubles as the
-	// cache lookup vector AND, on miss, will be reused by the main pipeline
-	// — but the existing pipeline code re-encodes via ai.EncodeQuery (which
-	// hits s.embeddingCache), so the second call is essentially free. The
-	// embedding is cached at the EmbeddingCache layer regardless.
 	qcCfg := loadQueryCacheConfig(ctx, s.siteConfig)
-	var qcEmbedding []float64
-	var qcHash []byte
-	if s.queryCache != nil && qcCfg.enabled {
-		emb, err := ai.EncodeQuery(ctx, s.aiResolver, query, siteCfg.QueryInstruction, kbID, s.embeddingCache)
-		if err == nil && len(emb) > 0 {
-			qcEmbedding = emb
-			// The embedder identity must be part of the shape: a same-dim
-			// embedder swap keeps the same cache table, but cosine matches
-			// against query embeddings from the old model are meaningless.
-			// EncodeQuery just resolved this config, so Resolve here is a
-			// warm cache read.
-			embeddingModel := ""
-			if aiCfg, cfgErr := s.aiResolver.Resolve(ctx, kbID); cfgErr == nil {
-				embeddingModel = aiCfg.EmbeddingModel
-			}
-			qcHash = shapeHash(opts, limit, embeddingModel)
-			// Per-query-type threshold: lookups can hit a looser threshold
-			// because paraphrases of "what is X" reliably refer to the same
-			// answer; complex_reasoning needs a tighter threshold because
-			// slight rephrasings can flip the correct answer. Unknown /
-			// unset query types inherit the base threshold.
-			threshold := qcCfg.effectiveThreshold(opts.QueryType)
-			if rj, hit, dist, lookupErr := s.queryCache.Lookup(ctx, kbID, qcHash, emb, threshold); lookupErr == nil && hit {
-				var cachedResult SearchResult
-				if uerr := json.Unmarshal(rj, &cachedResult); uerr == nil {
-					tier := "semantic"
-					if dist < 0.001 {
-						tier = "exact"
-					}
-					observability.RecordQueryCacheHit(tier)
-					logctx.From(ctx).Info("rag.query_cache.hit",
-						"kb_id", kbID,
-						"tier", tier,
-						"cosine_distance", dist,
-					)
-					return &cachedResult, nil
-				}
-				logctx.From(ctx).Warn("query_cache: result_json deserialize failed; treating as miss")
-			} else {
-				observability.RecordQueryCacheMiss()
-				logctx.From(ctx).Debug("rag.query_cache.miss", "kb_id", kbID, "nearest_distance", dist)
-			}
-		}
+	cached, qcEmbedding, qcHash := s.probeQueryCache(ctx, kbID, query, limit, opts, siteCfg, qcCfg)
+	if cached != nil {
+		return cached, nil
 	}
 
 	// ------------------------------------------------------------------

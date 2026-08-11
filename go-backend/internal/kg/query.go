@@ -46,8 +46,12 @@ type Edge struct {
 	Direction string // "out" | "in"
 	Rel       string
 	Other     Entity
-	Evidence  string
-	ChunkID   string
+	// Evidence and ChunkID are "" when the underlying nullable columns are
+	// NULL — both are COALESCEd in the subgraph query. kg_edges.evidence is
+	// nullable even though the ingestion writer always supplies a (possibly
+	// empty) string, so the read path must not assume non-NULL.
+	Evidence string
+	ChunkID  string
 }
 
 // Subgraph is the AP-C3 graph_search return shape. Entities is the
@@ -234,7 +238,7 @@ func (s *PgStore) LookupSubgraph(ctx context.Context, kbID string, entityID int6
 		       e.rel,
 		       se.id, se.canonical_name, se.type, se.aliases, rs.depth,
 		       de.id, de.canonical_name, de.type, de.aliases, rd.depth,
-		       e.evidence,
+		       COALESCE(e.evidence, ''),
 		       COALESCE(e.chunk_id::text, '')
 		  FROM kg_edges e
 		  JOIN reach rs ON rs.entity_id = e.src_entity_id
@@ -302,9 +306,10 @@ func (s *PgStore) LookupSubgraph(ctx context.Context, kbID string, entityID int6
 // entities is almost certainly an enumeration in disguise, which
 // the existing enumeration pre-pass handles better.
 //
-// The query uses `aliases && $tokens::text[]` which the GIN index
-// on aliases serves directly. Cost: typically <1ms even on a
-// 100k-entity KB.
+// Matching is case-insensitive on both sides (see the predicate note in the
+// body). That means it can NOT use kg_entities_aliases_gin, so the cost scales
+// with the KB's entity count rather than being an index probe; it runs once per
+// chat turn on the graph-routing path.
 func (s *PgStore) MatchAliasesInTokens(ctx context.Context, kbID string, tokens []string) ([]Entity, error) {
 	if s == nil || s.pool == nil {
 		return nil, errors.New("kg: no DB pool configured")
@@ -342,6 +347,18 @@ func (s *PgStore) MatchAliasesInTokens(ctx context.Context, kbID string, tokens 
 	// against each subquery *row* — each row being a text[], not
 	// a text, which is why it fails with "operator does not exist:
 	// text = text[]".
+	//
+	// The WHERE filter is an EXISTS + LOWER(a) rather than the array-overlap
+	// `e.aliases && l.tokens`: `&&` compares elements EXACTLY, so raw
+	// case-preserving aliases never overlapped the lowercased token array —
+	// "Quux"/"PPM-Team" (i.e. most named entities) could not match at all,
+	// contradicting both the case-insensitive intent above and the LOWER()
+	// used by the overlap ranking. The tradeoff is that this predicate cannot
+	// use kg_entities_aliases_gin (migration 0044), which only serves `&&`;
+	// the plan falls back to kg_entities_kb_idx plus a per-row alias filter.
+	// That is one query per chat turn, so it was judged an acceptable cost for
+	// correctness — if it ever shows up in profiles, the fix is a stored
+	// lowercase mirror column (aliases_lower text[]) with its own GIN index.
 	rows, err := s.pool.Query(ctx, `
 		WITH lowered AS (
 		    SELECT array_agg(LOWER(t)) AS tokens FROM unnest($2::text[]) t
@@ -352,7 +369,9 @@ func (s *PgStore) MatchAliasesInTokens(ctx context.Context, kbID string, tokens 
 		       )) AS overlap
 		  FROM kg_entities e CROSS JOIN lowered l
 		 WHERE e.kb_id = $1::uuid
-		   AND e.aliases && l.tokens
+		   AND EXISTS (
+		       SELECT 1 FROM unnest(e.aliases) a WHERE LOWER(a) = ANY(l.tokens)
+		   )
 		 ORDER BY overlap DESC, e.id
 		 LIMIT 10
 	`, kbID, cleaned)

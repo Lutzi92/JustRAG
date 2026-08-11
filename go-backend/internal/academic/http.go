@@ -358,8 +358,9 @@ func (h *Handler) AddPapers(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusOK, result)
 }
 
-// validateURL checks that a URL is safe to fetch (SSRF protection).
-func validateURL(rawURL string) error {
+// validateURL checks that a URL is safe to fetch (SSRF protection). The
+// resolver call takes ctx so a hung DNS server cannot outlive the request.
+func validateURL(ctx context.Context, rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid URL")
@@ -367,11 +368,12 @@ func validateURL(rawURL string) error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("only http/https allowed")
 	}
-	ips, err := net.LookupIP(u.Hostname())
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, u.Hostname())
 	if err != nil {
 		return fmt.Errorf("DNS lookup failed: %w", err)
 	}
-	for _, ip := range ips {
+	for _, addr := range addrs {
+		ip := addr.IP
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 			return fmt.Errorf("private/loopback IP not allowed")
 		}
@@ -400,7 +402,7 @@ func (h *Handler) downloadAndStorePaper(
 	}
 
 	// SSRF validation: only allow http/https, block private/loopback IPs.
-	if err := validateURL(actualURL); err != nil {
+	if err := validateURL(ctx, actualURL); err != nil {
 		return fmt.Errorf("SSRF check: %w", err)
 	}
 

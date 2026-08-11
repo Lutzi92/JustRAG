@@ -1181,22 +1181,37 @@ func setupStaticServing(mux *http.ServeMux, staticDir string) {
 		// Try to serve a real file from the dist directory.
 		filePath := filepath.Join(staticDir, path)
 		if _, err := os.Stat(filePath); err == nil {
-			// File exists — set appropriate cache headers.
-			switch {
-			case strings.HasSuffix(path, ".html"):
-				w.Header().Set("Cache-Control", "no-cache")
-			case isServiceWorkerAsset(path):
-				// vite-plugin-pwa emits the service-worker bootstrap files at
-				// the dist root WITHOUT a content hash. Serving them immutable
-				// pins the SW script in the browser (and any intermediary
-				// proxy) for a year, so a new deployment is never discovered
-				// and every PWA client stays frozen on the bundle it first
-				// cached. Force revalidation so update detection works.
-				w.Header().Set("Cache-Control", "no-cache")
-			default:
+			// `immutable` promises the bytes at a URL will never change. That
+			// holds for exactly one thing Vite emits: the content-hashed
+			// bundles under /assets, whose filename changes whenever their
+			// content does. Everything else in dist keeps a stable name across
+			// deploys and is overwritten in place — the favicon, the
+			// apple-touch icon, the onboarding screenshots, the PWA bootstrap
+			// files, and (because os.Stat succeeds on the dist DIRECTORY) the
+			// app shell served for "/". Pinning any of those strands clients
+			// on last year's copy with no revalidation request to correct it.
+			//
+			// So: allowlist the hashed path, revalidate everything else. A file
+			// added to web/public/ later then defaults to correct behaviour
+			// instead of being silently frozen for a year.
+			if isImmutableAsset(path) {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
 			}
 			fs.ServeHTTP(w, r)
+			return
+		}
+
+		// A miss under /assets/ is not a client-side route — it is a stale app
+		// shell asking for a bundle this deploy no longer ships. Falling
+		// through to the catch-all would answer a script request with
+		// index.html under a 200, so the browser reports a module/MIME parse
+		// error instead of a missing file, and any retry logic sees success.
+		// Answer honestly; the frontend's preload-error handler reloads to
+		// pick up the current shell.
+		if isImmutableAsset(path) {
+			http.NotFound(w, r)
 			return
 		}
 
@@ -1206,18 +1221,19 @@ func setupStaticServing(mux *http.ServeMux, staticDir string) {
 	})
 }
 
-// isServiceWorkerAsset reports whether path is one of the non-hashed PWA
-// bootstrap files vite-plugin-pwa emits at the dist root. These gate update
-// discovery for every PWA client, so they must never be served immutable.
-// Content-hashed precache chunks (workbox-<hash>.js) stay immutable — only
-// the stable entry points need revalidation.
-func isServiceWorkerAsset(path string) bool {
-	switch path {
-	case "/sw.js", "/registerSW.js", "/manifest.webmanifest":
-		return true
-	default:
-		return false
-	}
+// isImmutableAsset reports whether path may be served with a one-year
+// immutable cache lifetime.
+//
+// Only Vite's content-hashed build output qualifies. Vite writes it to
+// /assets with the content hash in the filename (app-BVbTMSpP.js), so a
+// changed file is a changed URL and the old entry is never consulted again.
+//
+// Everything outside /assets keeps a stable name across deploys — files copied
+// verbatim from web/public/, the PWA bootstrap files (sw.js, registerSW.js,
+// manifest.webmanifest) that gate update discovery for installed clients, and
+// index.html itself. Those are overwritten in place, so they must revalidate.
+func isImmutableAsset(path string) bool {
+	return strings.HasPrefix(path, "/assets/")
 }
 
 // decisionRecorderAdapter implements chat.DecisionRecorder by forwarding
