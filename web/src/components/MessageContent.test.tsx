@@ -269,6 +269,32 @@ describe('MessageContent citation source popover', () => {
         expect(onOpenSource).toHaveBeenCalledWith(expect.objectContaining({ fileId: 'f2', fileName: 'anhang.pdf' }));
     });
 
+    it('dismisses the popover when the document is opened', () => {
+        // The document viewer opens on top of the answer; leaving the popover
+        // up parks it over the newly opened document.
+        const onOpenSource = vi.fn();
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={onOpenSource} />);
+
+        fireEvent.click(firstPill(container));
+        fireEvent.click(screen.getByRole('button', { name: /openInDocument/i }));
+
+        expect(onOpenSource).toHaveBeenCalledTimes(1);
+        expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('leaves focus alone when the document is opened', () => {
+        // Dismissal normally hands focus back to the pill (for Escape), but the
+        // document viewer is taking focus here — pulling it back would yank the
+        // user out of the dialog that just opened.
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        const pill = firstPill(container);
+
+        fireEvent.click(pill);
+        fireEvent.click(screen.getByRole('button', { name: /openInDocument/i }));
+
+        expect(document.activeElement).not.toBe(pill);
+    });
+
     it('closes the popover when the same pill is clicked again', () => {
         const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
         const pill = firstPill(container);

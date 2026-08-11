@@ -391,6 +391,10 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
         if (activateCitation(e.target)) e.stopPropagation();
     }, [activateCitation]);
 
+    // Cleared for the one dismissal that hands control to another surface (the
+    // document viewer), which focuses itself — see openSourceAndDismiss.
+    const restoreFocusOnCloseRef = useRef(true);
+
     // Reflect the open state on the trigger, and hand focus back to it when the
     // popover is dismissed from the keyboard. Focus is only restored when it
     // would otherwise be lost inside the closing popover — returning it after an
@@ -402,11 +406,25 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
         trigger.setAttribute('aria-expanded', 'true');
         return () => {
             trigger.removeAttribute('aria-expanded');
+            const restore = restoreFocusOnCloseRef.current;
+            restoreFocusOnCloseRef.current = true;
+            if (!restore) return;
             if (document.activeElement === document.body || !document.body.contains(document.activeElement)) {
                 trigger.focus?.();
             }
         };
     }, [openCitation]);
+
+    // Opening the document dismisses the popover: the viewer opens on top of the
+    // answer, and a popover left standing sits over the document the user just
+    // asked for.
+    const openSourceAndDismiss = useCallback((source: MessageSource) => {
+        // The viewer takes focus itself; pulling it back to the pill would drop
+        // the user out of the dialog that just opened.
+        restoreFocusOnCloseRef.current = false;
+        setOpenCitation(null);
+        onOpenSource?.(source);
+    }, [onOpenSource]);
 
     const openSource = openCitation != null ? sources?.[openCitation - 1] : undefined;
 
@@ -500,7 +518,9 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
                     <CitationPreview
                         source={openSource}
                         t={t}
-                        onOpenSource={onOpenSource}
+                        // Keep the prop optional-aware: CitationPreview renders the
+                        // open link only when a handler exists.
+                        onOpenSource={onOpenSource ? openSourceAndDismiss : undefined}
                     />
                 )}
             </AnchoredPopover>

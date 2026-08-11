@@ -89,24 +89,49 @@ Captioning also extends per-document convert latency, so raise
 Docling returns the document as one markdown blob; page numbers exist **only**
 as provenance inside the `json_content` DoclingDocument (`prov[].page_no`).
 JustRAG therefore requests `to_formats=md` **and** `to_formats=json` on every
-convert, walks `body.children` in reading order, and locates each item's text
-back in the markdown to build `ParseResult.PageSpans` (offset → page). Chunk
-page metadata is then derived from each chunk's offset, so a chunk crossing a
-page break is cited as a range (`S. 3–4`).
+convert, walks `body.children` in reading order, and rebuilds **per-page text
+from the items themselves** — headings, lists and code by label, tables
+re-rendered from the cell grid (`table_cells` row/column offsets), furniture
+(`content_layer: furniture` — running headers, footers, page numbers) dropped
+exactly as docling drops it from its own markdown. Each page is then chunked
+independently, so a chunk's page is exact, never inferred. This is the same
+shape the `pdftotext` path has always produced.
 
-When a document has no usable provenance (unpaginated formats, or an item's
-text cannot be matched back into the markdown), chunks carry **no** page
-metadata and the UI simply omits the page label. That is deliberate: an absent
-page reads as unknown, whereas a fabricated one silently misleads.
+When a document carries no page provenance at all (unpaginated formats, or a
+sidecar that returned no `json_content`), the markdown blob is ingested with
+**no** page metadata and the UI omits the page label. That is deliberate: an
+absent page reads as unknown, a fabricated one silently misleads.
 
-**Gotcha (fixed 2026-08-11):** the client previously looked for a
-`document.pages[]` array that docling-serve has never emitted, and fell back to
-labelling the whole document page 1 — so every Docling-parsed PDF cited "S. 1"
-regardless of where the quote came from. Deployments running Docling before
-this fix must **re-ingest their PDFs**; the wrong page numbers are baked into
-existing chunk metadata at ingest time. The unit-test mocks asserted the
-invented shape, so CI stayed green; `integration_test.go` (run with
-`DOCLING_TEST_URL=…`) now pins the contract against a live sidecar.
+**Two gotchas, both fixed 2026-08-11 — and both invisible to the unit suite:**
+
+1. The client looked for a `document.pages[]` array that docling-serve has
+   never emitted, then fell back to labelling the whole document page 1. Every
+   Docling-parsed PDF cited "S. 1".
+2. The first fix recovered page boundaries by searching each item's text back
+   inside `md_content`. That cannot work: docling escapes markdown
+   metacharacters (`max_value` → `max\_value`), omits furniture entirely, and
+   re-renders tables, so a large share of items never match — and because the
+   search offset only moves forward, every miss drags later pages' boundaries
+   along with it. The result was confidently wrong page numbers, which is worse
+   than the honest "S. 1" it replaced.
+
+Both shipped green because the mocks asserted a response shape nobody had
+verified against a real sidecar. `integration_test.go` now pins the contract
+against a live instance:
+
+```
+DOCLING_TEST_URL=http://localhost:5001 go test ./internal/parser/docling -run Integration -v
+```
+
+It converts a 10-page fixture built specifically from what broke the anchoring
+(per-page markers, running header/footer, repeated boilerplate, escaped
+characters) and asserts every marker lands on its own page, plus a second
+fixture asserting a real detected table survives re-rendering.
+
+**Page metadata is written at ingest time**, so any deployment that ran Docling
+before this fix must **re-ingest its PDFs**. Note that chunk dedup is
+KB-scoped: re-uploading the same file into the same KB drops every chunk as a
+duplicate and changes nothing. Delete the old file first, or re-ingest the KB.
 
 ## Performance
 

@@ -151,7 +151,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                     maxWidth: '400px',
                     background: 'var(--bg-secondary)',
                     padding: '2.5rem',
-                    borderRadius: 'var(--radius-xl)',
+                    borderRadius: 'var(--shape-xl)',
                     boxShadow: 'var(--shadow-lg)',
                     border: '1px solid var(--border-color)',
                     position: 'relative'
@@ -185,7 +185,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                         display: 'inline-flex',
                         padding: '1rem',
                         background: 'var(--header-icon-bg)',
-                        borderRadius: 'var(--radius-lg)',
+                        borderRadius: 'var(--shape-lg)',
                         color: 'var(--accent-primary)',
                         marginBottom: '1rem',
                         alignItems: 'center',
@@ -205,7 +205,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                             <BookOpen size={100} />
                         )}
                     </div>
-                    <h1 style={{ font: 'var(--text-h1)', color: 'var(--text-heading)', marginBottom: '0.5rem' }}>{t('welcomeBack')}</h1>
+                    <h1 style={{ font: 'var(--type-h1)', color: 'var(--text-heading)', marginBottom: '0.5rem' }}>{t('welcomeBack')}</h1>
                     <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{t('loginSubtitle')}</p>
                 </div>
 
@@ -217,7 +217,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                             padding: '0.75rem 1rem',
                             background: 'var(--error-bg, #fee2e2)',
                             color: 'var(--error-text)',
-                            borderRadius: 'var(--radius-md)',
+                            borderRadius: 'var(--shape-md)',
                             fontSize: '0.875rem',
                             marginBottom: '1.5rem',
                             textAlign: 'center',
@@ -249,7 +249,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                                     padding: '0.75rem 1rem 0.75rem 2.75rem',
                                     background: 'var(--bg-primary)',
                                     border: '1px solid var(--border-color)',
-                                    borderRadius: 'var(--radius-md)',
+                                    borderRadius: 'var(--shape-md)',
                                     color: 'var(--text-primary)',
                                     fontSize: '1rem',
                                     transition: 'border-color 0.2s',
@@ -280,7 +280,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                                     padding: '0.75rem 1rem 0.75rem 2.75rem',
                                     background: 'var(--bg-primary)',
                                     border: '1px solid var(--border-color)',
-                                    borderRadius: 'var(--radius-md)',
+                                    borderRadius: 'var(--shape-md)',
                                     color: 'var(--text-primary)',
                                     fontSize: '1rem',
                                     transition: 'border-color 0.2s',
@@ -301,7 +301,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                             background: 'var(--accent-primary)',
                             color: 'white',
                             border: 'none',
-                            borderRadius: 'var(--radius-md)',
+                            borderRadius: 'var(--shape-md)',
                             fontSize: '1rem',
                             fontWeight: 600,
                             cursor: loading ? 'not-allowed' : 'pointer',
@@ -337,7 +337,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                             background: 'var(--bg-primary)',
                             color: 'var(--text-primary)',
                             border: '1px solid var(--border-color)',
-                            borderRadius: 'var(--radius-md)',
+                            borderRadius: 'var(--shape-md)',
                             fontSize: '1rem',
                             fontWeight: 600,
                             textDecoration: 'none',

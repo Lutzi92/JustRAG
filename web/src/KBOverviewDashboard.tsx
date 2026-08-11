@@ -211,7 +211,7 @@ export default function KBOverviewDashboard() {
     };
     const cardStyle: React.CSSProperties = {
         background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
-        borderRadius: 'var(--radius-lg)', padding: '1rem 1.25rem', minWidth: '160px',
+        borderRadius: 'var(--shape-lg)', padding: '1rem 1.25rem', minWidth: '160px',
     };
     const queueStat: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: '0.3rem' };
 
@@ -221,8 +221,8 @@ export default function KBOverviewDashboard() {
                 return (
                     <>
                         {row.name}
-                        {row.isGlobal && <span style={{ marginLeft: 6, fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: 'var(--radius-sm)', background: 'var(--accent-primary)', color: 'white' }}>{t('globalBadge')}</span>}
-                        {row.isPublished && <span style={{ marginLeft: 6, fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>{t('published')}</span>}
+                        {row.isGlobal && <span style={{ marginLeft: 6, fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: 'var(--shape-sm)', background: 'var(--accent-primary)', color: 'white' }}>{t('globalBadge')}</span>}
+                        {row.isPublished && <span style={{ marginLeft: 6, fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: 'var(--shape-sm)', border: '1px solid var(--border-color)' }}>{t('published')}</span>}
                     </>
                 );
             case 'ownerName':
@@ -266,7 +266,7 @@ export default function KBOverviewDashboard() {
                         aria-label={t('kbSearchPlaceholder')}
                         style={{
                             background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-                            color: 'var(--text-primary)', padding: '0.45rem 0.75rem', borderRadius: 'var(--radius-md)',
+                            color: 'var(--text-primary)', padding: '0.45rem 0.75rem', borderRadius: 'var(--shape-md)',
                             fontSize: '0.9rem', minWidth: '180px',
                         }}
                     />
@@ -279,7 +279,7 @@ export default function KBOverviewDashboard() {
                             aria-label={t('columnsToggle')}
                             style={{
                                 background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-                                color: 'var(--text-primary)', padding: '0.45rem 0.75rem', borderRadius: 'var(--radius-md)',
+                                color: 'var(--text-primary)', padding: '0.45rem 0.75rem', borderRadius: 'var(--shape-md)',
                                 display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer', fontSize: '0.9rem',
                             }}
                         >
@@ -291,7 +291,7 @@ export default function KBOverviewDashboard() {
                                 style={{
                                     position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 10,
                                     background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
-                                    borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-md)', padding: '0.5rem',
+                                    borderRadius: 'var(--shape-md)', boxShadow: 'var(--shadow-md)', padding: '0.5rem',
                                     minWidth: '180px', display: 'flex', flexDirection: 'column', gap: '0.25rem',
                                 }}
                             >
@@ -316,7 +316,7 @@ export default function KBOverviewDashboard() {
                         onClick={fetchData}
                         disabled={refreshing}
                         className="search-button"
-                        style={{ background: 'var(--accent-primary)', color: 'white', border: 'none', padding: '0.5rem 1rem', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: refreshing ? 'default' : 'pointer' }}
+                        style={{ background: 'var(--accent-primary)', color: 'white', border: 'none', padding: '0.5rem 1rem', borderRadius: 'var(--shape-md)', display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: refreshing ? 'default' : 'pointer' }}
                     >
                         {refreshing ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />} {t('refresh')}
                     </button>

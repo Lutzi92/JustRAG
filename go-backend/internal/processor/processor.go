@@ -213,18 +213,13 @@ type indexedChunk struct {
 }
 
 // buildIndexedChunks splits a parse result into chunks and attributes each one
-// to its source page(s).
+// to its source page.
 //
-// Two page-attribution shapes come out of the parsers:
-//   - Pages (pdftotext, OCR): pre-split per-page text. Each page is split
-//     independently, so a chunk belongs to exactly one page and never straddles
-//     a page break.
-//   - PageSpans (Docling): one continuous document plus page start offsets. The
-//     text is split as a whole and each chunk's pages are resolved from where it
-//     landed, so a chunk crossing a break carries both pages.
-//
-// With neither, chunks carry no page metadata — the parser genuinely does not
-// know, and a guessed page number is worse than none.
+// When the parser supplies per-page text (pdftotext, OCR, Docling), each page
+// is split independently so a chunk belongs to exactly one page and never
+// straddles a page break. Without page text, chunks carry no page metadata —
+// the parser genuinely does not know, and a guessed page number is worse than
+// none.
 //
 // Capacity is preallocated from the total text length (a file yields roughly
 // len(text)/(ChunkSize-ChunkOverlap) chunks, and a large PDF produces hundreds
@@ -246,13 +241,8 @@ func buildIndexedChunks(result *parser.ParseResult, cfg splitter.Config) []index
 	}
 
 	ichunks := make([]indexedChunk, 0, estimateChunkCount(len(result.Text), cfg))
-	pageSearchOffset := 0
 	for _, c := range splitter.Split(result.Text, cfg) {
-		var pages []int
-		if len(result.PageSpans) > 0 {
-			pages, pageSearchOffset = parser.PagesForChunk(result.PageSpans, result.Text, c, pageSearchOffset)
-		}
-		ichunks = append(ichunks, indexedChunk{Text: c, Pages: pages})
+		ichunks = append(ichunks, indexedChunk{Text: c})
 	}
 	return ichunks
 }

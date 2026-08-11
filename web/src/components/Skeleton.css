@@ -46,7 +46,7 @@
 }
 
 .skeleton--card {
-  border-radius: var(--radius-md);
+  border-radius: var(--shape-md);
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
   padding: 1rem;

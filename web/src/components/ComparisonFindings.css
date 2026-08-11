@@ -20,7 +20,7 @@
 
 .comparison-finding {
     padding: 8px 12px;
-    border-radius: var(--radius-md);
+    border-radius: var(--shape-md);
     border: 1px solid var(--border-color);
     border-left-width: 3px;
     background: var(--bg-secondary);
@@ -41,7 +41,7 @@
 .comparison-finding .sev-badge {
     display: inline-block;
     padding: 1px 8px;
-    border-radius: var(--radius-full);
+    border-radius: var(--shape-full);
     font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;

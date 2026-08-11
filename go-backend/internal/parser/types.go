@@ -20,16 +20,7 @@ type ParseResult struct {
 	// When non-empty, the processor splits each page independently so
 	// chunks reliably know which page they belong to. When empty, the
 	// processor splits the full Text as a single unpaginated document.
-	Pages []PageText
-	// PageSpans maps byte offsets in Text to the page they originate from,
-	// for parsers that produce one continuous document (e.g. Docling
-	// markdown) but still know where each page starts. Sorted ascending by
-	// Start, first entry starting at 0. Only consulted when Pages is empty;
-	// the processor then splits Text as a whole and derives each chunk's
-	// page numbers from its offset. Empty when the parser has no page
-	// information at all — chunks then carry no page metadata, which is
-	// deliberately better than a fabricated page 1.
-	PageSpans  []PageSpan
+	Pages      []PageText
 	IsMarkdown bool // true when Text/Pages content is markdown (headings, lists, etc.)
 }
 
@@ -37,14 +28,6 @@ type ParseResult struct {
 type PageText struct {
 	PageNumber int // 1-based
 	Text       string
-}
-
-// PageSpan marks the byte offset in ParseResult.Text at which a page's
-// content begins. The span runs until the next PageSpan.Start (or the end of
-// the text for the last entry).
-type PageSpan struct {
-	Start int // byte offset into ParseResult.Text
-	Page  int // 1-based page number
 }
 
 // Parser is the interface implemented by all format-specific parsers.

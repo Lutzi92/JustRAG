@@ -114,7 +114,7 @@ function ConfidenceChip({ verification, t, open, onToggle }: ConfidenceProps & {
             aria-expanded={open}
             style={{
                 display: 'inline-flex', alignItems: 'center', gap: '4px',
-                padding: '2px 10px', borderRadius: 'var(--radius-full)',
+                padding: '2px 10px', borderRadius: 'var(--shape-full)',
                 fontSize: '0.75rem', fontWeight: 500,
                 backgroundColor: c.bg, color: c.color,
                 border: 'none', cursor: 'pointer', userSelect: 'none', fontFamily: 'inherit',
@@ -140,10 +140,10 @@ function ConfidenceDetails({ verification, t }: ConfidenceProps) {
         <div style={{
             marginTop: '0.5rem', padding: '0.75rem',
             background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
-            borderRadius: 'var(--radius-md)', maxWidth: '420px',
+            borderRadius: 'var(--shape-md)', maxWidth: '420px',
         }}>
-            <div style={{ height: 6, borderRadius: 'var(--radius-full)', background: 'var(--border-color)', overflow: 'hidden', marginBottom: '0.6rem' }}>
-                <div style={{ height: '100%', width: `${Math.max(0, Math.min(100, score))}%`, background: c.color, borderRadius: 'var(--radius-full)', transition: 'width 0.3s' }} />
+            <div style={{ height: 6, borderRadius: 'var(--shape-full)', background: 'var(--border-color)', overflow: 'hidden', marginBottom: '0.6rem' }}>
+                <div style={{ height: '100%', width: `${Math.max(0, Math.min(100, score))}%`, background: c.color, borderRadius: 'var(--shape-full)', transition: 'width 0.3s' }} />
             </div>
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                 <span><strong style={{ color: 'var(--text-primary)' }}>{exact}</strong> {t('confidenceExactMatch')}</span>
@@ -272,7 +272,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                 fontSize: '0.9rem',
                 border: `1px dashed var(--msg-enhanced-border)`,
                 alignSelf: 'flex-end',
-                borderRadius: 'var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl)',
+                borderRadius: 'var(--shape-xl) var(--shape-xl) var(--shape-sm) var(--shape-xl)',
                 padding: '0.5rem 1rem'
             } : { position: 'relative' as const }}
             onMouseEnter={isMobile ? undefined : () => setIsHovered(true)}
@@ -357,7 +357,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                                 aria-expanded={sourcesExpanded}
                                 style={{
                                     display: 'inline-flex', alignItems: 'center', gap: '4px',
-                                    padding: '2px 10px', borderRadius: 'var(--radius-full)',
+                                    padding: '2px 10px', borderRadius: 'var(--shape-full)',
                                     fontSize: '0.75rem', fontWeight: 600,
                                     background: 'var(--tag-bg)', color: 'var(--accent-primary)',
                                     border: 'none', cursor: 'pointer', fontFamily: 'inherit',
@@ -410,7 +410,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                                 const pageLabel = g.pages.length ? `S. ${formatPageRanges(g.pages)} · ` : '';
                                 const canOpen = !!g.fileId && (isPdf ? !!onPdfOpen : !!onPreviewSource);
                                 return (
-                                    <div key={`${g.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.6rem 0.75rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+                                    <div key={`${g.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.6rem 0.75rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--shape-md)' }}>
                                         <FileText size={18} aria-hidden="true" style={{ flexShrink: 0, color: 'var(--accent-primary)' }} />
                                         <div style={{ minWidth: 0, flex: 1 }}>
                                             <div style={{ fontWeight: 500, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div>

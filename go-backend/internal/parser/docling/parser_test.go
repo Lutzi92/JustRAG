@@ -55,67 +55,6 @@ func stubPDF(t *testing.T) string {
 	return path
 }
 
-func TestDoclingPDFParser_Parse_MapsPageSpansOntoMarkdown(t *testing.T) {
-	md := "# Title\n\nfirst page body\n\n## Second\n\nsecond page body\n\nthird page body"
-	srv := serveDocling(t, md, []map[string]any{
-		{"text": "Title", "page": 1},
-		{"text": "first page body", "page": 1},
-		{"text": "Second", "page": 2},
-		{"text": "second page body", "page": 2},
-		{"text": "third page body", "page": 3},
-	})
-
-	p := &DoclingPDFParser{Client: NewClient(srv.URL, 10*time.Second)}
-	res, err := p.Parse(context.Background(), parser.ParseContext{
-		FilePath: stubPDF(t), FileName: "test.pdf", MimeType: "application/pdf",
-	})
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if len(res.Pages) != 0 {
-		t.Errorf("expected no pre-split pages, got %d", len(res.Pages))
-	}
-	want := []parser.PageSpan{
-		{Start: 0, Page: 1},
-		{Start: strings.Index(md, "Second"), Page: 2},
-		{Start: strings.Index(md, "third page body"), Page: 3},
-	}
-	if !reflect.DeepEqual(res.PageSpans, want) {
-		t.Fatalf("spans mismatch:\n got %+v\nwant %+v", res.PageSpans, want)
-	}
-	// The regression this guards: content on page 3 must not resolve to page 1.
-	pages, _ := parser.PagesForChunk(res.PageSpans, res.Text, "third page body", 0)
-	if len(pages) != 1 || pages[0] != 3 {
-		t.Errorf("expected page 3 for third-page content, got %v", pages)
-	}
-	if !strings.Contains(res.Text, "Title") || !strings.Contains(res.Text, "second page body") {
-		t.Errorf("text should contain markdown body, got %q", res.Text)
-	}
-}
-
-func TestDoclingPDFParser_Parse_SkipsUnmatchableAnchors(t *testing.T) {
-	// The page-2 heading is escaped in the markdown and cannot be matched;
-	// the next page-2 item must anchor the page instead.
-	md := "one\n\n\\*escaped heading\\*\n\ntwo body"
-	srv := serveDocling(t, md, []map[string]any{
-		{"text": "one", "page": 1},
-		{"text": "*escaped heading*", "page": 2},
-		{"text": "two body", "page": 2},
-	})
-
-	p := &DoclingPDFParser{Client: NewClient(srv.URL, 10*time.Second)}
-	res, err := p.Parse(context.Background(), parser.ParseContext{
-		FilePath: stubPDF(t), FileName: "test.pdf", MimeType: "application/pdf",
-	})
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	want := []parser.PageSpan{{Start: 0, Page: 1}, {Start: strings.Index(md, "two body"), Page: 2}}
-	if !reflect.DeepEqual(res.PageSpans, want) {
-		t.Errorf("spans mismatch:\n got %+v\nwant %+v", res.PageSpans, want)
-	}
-}
-
 func TestDoclingPDFParser_Parse_NoProvenanceYieldsNoPages(t *testing.T) {
 	// Fallback path (option 2): without provenance we report no pages at all
 	// rather than stamping everything as page 1.
@@ -128,11 +67,51 @@ func TestDoclingPDFParser_Parse_NoProvenanceYieldsNoPages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	if len(res.Pages) != 0 || len(res.PageSpans) != 0 {
-		t.Errorf("expected no page info, got Pages=%+v PageSpans=%+v", res.Pages, res.PageSpans)
+	if len(res.Pages) != 0 {
+		t.Errorf("expected no page info, got Pages=%+v", res.Pages)
 	}
 	if !strings.Contains(res.Text, "body") {
 		t.Errorf("content must still be ingested, got %q", res.Text)
+	}
+}
+
+func TestDoclingPDFParser_Parse_BuildsPerPageTextFromProvenance(t *testing.T) {
+	// The regression this guards: page numbers must come from item provenance,
+	// not from locating item text inside the markdown blob. Here the markdown
+	// deliberately disagrees with the items (escaped underscores, furniture
+	// dropped) exactly as docling's real output does.
+	md := "## Kapitel 1\n\nDie Variable heisst max\\_value.\n\n## Kapitel 2\n\nZweite Seite."
+	srv := serveDocling(t, md, []map[string]any{
+		{"text": "Kopfzeile", "page": 1, "label": "page_header", "layer": "furniture"},
+		{"text": "Kapitel 1", "page": 1, "label": "section_header"},
+		{"text": "Die Variable heisst max_value.", "page": 1},
+		{"text": "Seite 1 von 2", "page": 1, "label": "page_footer", "layer": "furniture"},
+		{"text": "Kapitel 2", "page": 2, "label": "section_header"},
+		{"text": "Zweite Seite.", "page": 2},
+	})
+
+	p := &DoclingPDFParser{Client: NewClient(srv.URL, 10*time.Second)}
+	res, err := p.Parse(context.Background(), parser.ParseContext{
+		FilePath: stubPDF(t), FileName: "test.pdf", MimeType: "application/pdf",
+	})
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+
+	want := []parser.PageText{
+		{PageNumber: 1, Text: "## Kapitel 1\n\nDie Variable heisst max_value."},
+		{PageNumber: 2, Text: "## Kapitel 2\n\nZweite Seite."},
+	}
+	if !reflect.DeepEqual(res.Pages, want) {
+		t.Fatalf("pages mismatch:\n got %+v\nwant %+v", res.Pages, want)
+	}
+	// Text must be the concatenation of the pages, since chunk text is taken
+	// from the pages and the section index is built from Text.
+	if res.Text != want[0].Text+"\n\n"+want[1].Text {
+		t.Errorf("Text should be the joined pages, got %q", res.Text)
+	}
+	if strings.Contains(res.Text, "Kopfzeile") || strings.Contains(res.Text, "Seite 1 von 2") {
+		t.Errorf("running header/footer must not be ingested, got %q", res.Text)
 	}
 }
 

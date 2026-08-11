@@ -343,10 +343,10 @@
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-full);
+  border-radius: var(--shape-full);
   background: var(--bg-primary);
   color: var(--text-secondary);
-  font: var(--text-sm);
+  font: var(--type-sm);
   white-space: nowrap;
 }
 

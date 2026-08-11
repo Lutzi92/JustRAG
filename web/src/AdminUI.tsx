@@ -683,7 +683,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     background: none;
                     border: none;
                     border-left: 3px solid transparent;
-                    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+                    border-radius: 0 var(--shape-md) var(--shape-md) 0;
                     cursor: pointer;
                     color: var(--text-secondary);
                     font-size: 0.9rem;
@@ -723,7 +723,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     color: var(--text-primary);
                     cursor: pointer;
                     padding: 0.5rem;
-                    border-radius: var(--radius-full);
+                    border-radius: var(--shape-full);
                     display: flex;
                     align-items: center;
                     justify-content: center;
@@ -750,13 +750,13 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     background: var(--bg-primary);
                     border: 1px solid var(--border-color);
                     padding: 0.8rem;
-                    border-radius: var(--radius-md);
+                    border-radius: var(--shape-md);
                     color: var(--text-primary);
                 }
                 .result-card {
                     background: var(--bg-secondary);
                     border: 1px solid var(--border-color);
-                    border-radius: var(--radius-lg);
+                    border-radius: var(--shape-lg);
                     padding: 1.5rem;
                     margin-bottom: 1rem;
                 }
@@ -769,7 +769,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     font-size: 0.75rem;
                     font-weight: bold;
                     padding: 0.1rem 0.5rem;
-                    border-radius: var(--radius-full);
+                    border-radius: var(--shape-full);
                     text-transform: uppercase;
                 }
                 .icon-button {
@@ -777,7 +777,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     border: 1px solid var(--border-color);
                     color: var(--text-primary);
                     padding: 0.5rem;
-                    border-radius: var(--radius-md);
+                    border-radius: var(--shape-md);
                     cursor: pointer;
                     transition: border-color 0.2s, color 0.2s, background 0.2s;
                 }
@@ -799,7 +799,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     border: 1px solid var(--border-color);
                     color: var(--text-primary);
                     padding: 0.8rem 1.5rem;
-                    border-radius: var(--radius-md);
+                    border-radius: var(--shape-md);
                     cursor: pointer;
                     font-family: inherit;
                     transition: border-color 0.2s, color 0.2s, background 0.2s;

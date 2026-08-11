@@ -48,16 +48,27 @@ func TestClient_Convert_HappyPath(t *testing.T) {
 // doclingJSONContent builds a json_content payload in the shape docling-serve
 // actually returns (DoclingDocument: body children referencing texts/tables,
 // each item carrying prov[].page_no).
+// Each item may set "label" (default "text") and "layer" (default "body") to
+// mirror the DoclingDocument fields that decide rendering and furniture drops.
 func doclingJSONContent(items []map[string]any) map[string]any {
 	children := make([]map[string]any, 0, len(items))
 	texts := make([]map[string]any, 0, len(items))
 	for i, it := range items {
+		label, ok := it["label"].(string)
+		if !ok {
+			label = "text"
+		}
+		layer, ok := it["layer"].(string)
+		if !ok {
+			layer = "body"
+		}
 		children = append(children, map[string]any{"$ref": "#/texts/" + strconv.Itoa(i)})
 		texts = append(texts, map[string]any{
-			"self_ref": "#/texts/" + strconv.Itoa(i),
-			"label":    "paragraph",
-			"text":     it["text"],
-			"prov":     []map[string]any{{"page_no": it["page"], "bbox": map[string]any{}, "charspan": []int{0, 1}}},
+			"self_ref":      "#/texts/" + strconv.Itoa(i),
+			"label":         label,
+			"content_layer": layer,
+			"text":          it["text"],
+			"prov":          []map[string]any{{"page_no": it["page"], "bbox": map[string]any{}, "charspan": []int{0, 1}}},
 		})
 	}
 	return map[string]any{
@@ -93,9 +104,9 @@ func TestClient_Convert_ExtractsPageProvenanceFromJSONContent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := []DocItem{
-		{Text: "intro on one", Page: 1},
-		{Text: "body on two", Page: 2},
-		{Text: "tail on three", Page: 3},
+		{Text: "intro on one", Page: 1, Label: "text"},
+		{Text: "body on two", Page: 2, Label: "text"},
+		{Text: "tail on three", Page: 3, Label: "text"},
 	}
 	if !reflect.DeepEqual(res.Items, want) {
 		t.Errorf("items mismatch:\n got %+v\nwant %+v", res.Items, want)
@@ -119,15 +130,20 @@ func TestClient_Convert_WalksGroupsAndTablesInReadingOrder(t *testing.T) {
 						{"children": []map[string]any{{"$ref": "#/texts/1"}}},
 					},
 					"texts": []map[string]any{
-						{"text": "heading", "prov": []map[string]any{{"page_no": 1}}},
-						{"text": "item", "prov": []map[string]any{{"page_no": 2}}},
+						{"text": "heading", "label": "section_header", "prov": []map[string]any{{"page_no": 1}}},
+						{"text": "item", "label": "list_item", "prov": []map[string]any{{"page_no": 2}}},
 					},
 					"tables": []map[string]any{
 						{
-							"prov": []map[string]any{{"page_no": 3}},
-							"data": map[string]any{"table_cells": []map[string]any{
-								{"text": ""}, {"text": "cell"},
-							}},
+							"label": "table",
+							"prov":  []map[string]any{{"page_no": 3}},
+							"data": map[string]any{
+								"num_rows": 1, "num_cols": 2,
+								"table_cells": []map[string]any{
+									{"text": "links", "start_row_offset_idx": 0, "start_col_offset_idx": 0},
+									{"text": "rechts", "start_row_offset_idx": 0, "start_col_offset_idx": 1},
+								},
+							},
 						},
 					},
 				},
@@ -142,9 +158,12 @@ func TestClient_Convert_WalksGroupsAndTablesInReadingOrder(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := []DocItem{
-		{Text: "heading", Page: 1},
-		{Text: "item", Page: 2},
-		{Text: "cell", Page: 3},
+		{Text: "heading", Page: 1, Label: "section_header"},
+		{Text: "item", Page: 2, Label: "list_item"},
+		{Page: 3, Label: "table", Table: &DocTable{
+			NumRows: 1, NumCols: 2,
+			Cells: []DocTableCell{{Text: "links", Row: 0, Col: 0}, {Text: "rechts", Row: 0, Col: 1}},
+		}},
 	}
 	if !reflect.DeepEqual(res.Items, want) {
 		t.Errorf("items mismatch:\n got %+v\nwant %+v", res.Items, want)

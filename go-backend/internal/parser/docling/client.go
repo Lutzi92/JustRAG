@@ -58,13 +58,40 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 func (c *Client) BaseURL() string { return c.baseURL }
 
 // DocItem is one content element of the converted document, in reading order,
-// together with the source page it was found on. Built from the
-// DoclingDocument in the response's json_content: docling-serve reports page
-// provenance only there (`prov[].page_no`), never as a per-page text array.
-// Callers use these as anchors to map markdown offsets back to pages.
+// with the source page it came from. Built from the DoclingDocument in the
+// response's json_content: docling-serve reports page provenance only there
+// (`prov[].page_no`), never as a per-page text array.
+//
+// These items — not the markdown blob — are the source of truth for per-page
+// text. Recovering page boundaries by searching item text back in md_content
+// cannot work: docling escapes markdown metacharacters (`max_value` becomes
+// `max\_value`), drops furniture entirely, and re-renders tables, so a
+// significant share of items never match, and each miss shifts every later
+// page's boundary.
 type DocItem struct {
-	Text string
-	Page int // 1-based; 0 when the item carries no provenance
+	Page  int    // 1-based; 0 when the item carries no provenance
+	Label string // docling label: "text", "section_header", "list_item", "table", …
+	// Furniture marks running headers/footers and page numbers. Docling keeps
+	// them out of its own markdown; we drop them too, so repeated boilerplate
+	// doesn't land in every page's chunks.
+	Furniture bool
+	Text      string    // content for text-ish items; empty for tables
+	Table     *DocTable // non-nil for table items
+}
+
+// DocTable is a table's cell grid, enough to render it as markdown.
+type DocTable struct {
+	NumRows int
+	NumCols int
+	Cells   []DocTableCell
+}
+
+// DocTableCell is one cell, positioned by its top-left offsets.
+type DocTableCell struct {
+	Text   string
+	Row    int
+	Col    int
+	Header bool // part of the column header row
 }
 
 // ConvertResult is the parsed Docling response.
@@ -185,27 +212,54 @@ func (p doclingProv) page() int {
 }
 
 type doclingText struct {
-	Text string      `json:"text"`
-	Prov doclingProv `json:"prov"`
+	Text         string      `json:"text"`
+	Label        string      `json:"label"`
+	ContentLayer string      `json:"content_layer"`
+	Prov         doclingProv `json:"prov"`
 }
 
+// contentLayerFurniture is docling's marker for page furniture (running
+// headers, footers, page numbers) — content it keeps out of its own markdown.
+const contentLayerFurniture = "furniture"
+
 type doclingTable struct {
-	Prov doclingProv `json:"prov"`
-	Data struct {
+	Label        string      `json:"label"`
+	ContentLayer string      `json:"content_layer"`
+	Prov         doclingProv `json:"prov"`
+	Data         struct {
+		NumRows    int `json:"num_rows"`
+		NumCols    int `json:"num_cols"`
 		TableCells []struct {
-			Text string `json:"text"`
+			Text         string `json:"text"`
+			StartRow     int    `json:"start_row_offset_idx"`
+			StartCol     int    `json:"start_col_offset_idx"`
+			ColumnHeader bool   `json:"column_header"`
 		} `json:"table_cells"`
 	} `json:"data"`
 }
 
-// anchorText returns a cell text usable as a markdown anchor for the table.
-func (t doclingTable) anchorText() string {
+// toDocTable converts the response's cell list into a DocTable. Returns nil
+// when the table carries no cell text at all, so empty detections don't emit
+// an empty markdown table into the page.
+func (t doclingTable) toDocTable() *DocTable {
+	out := &DocTable{NumRows: t.Data.NumRows, NumCols: t.Data.NumCols}
+	any := false
 	for _, c := range t.Data.TableCells {
-		if s := strings.TrimSpace(c.Text); s != "" {
-			return s
+		text := strings.TrimSpace(c.Text)
+		if text != "" {
+			any = true
 		}
+		out.Cells = append(out.Cells, DocTableCell{
+			Text:   text,
+			Row:    c.StartRow,
+			Col:    c.StartCol,
+			Header: c.ColumnHeader,
+		})
 	}
-	return ""
+	if !any {
+		return nil
+	}
+	return out
 }
 
 func parseDoclingResponse(body io.Reader) (*ConvertResult, error) {
@@ -272,14 +326,24 @@ func itemsFromJSONContent(rawJSON json.RawMessage) []DocItem {
 				if idx < len(doc.Texts) {
 					t := doc.Texts[idx]
 					if s := strings.TrimSpace(t.Text); s != "" {
-						items = append(items, DocItem{Text: s, Page: t.Prov.page()})
+						items = append(items, DocItem{
+							Page:      t.Prov.page(),
+							Label:     t.Label,
+							Furniture: t.ContentLayer == contentLayerFurniture,
+							Text:      s,
+						})
 					}
 				}
 			case "tables":
 				if idx < len(doc.Tables) {
 					tbl := doc.Tables[idx]
-					if s := tbl.anchorText(); s != "" {
-						items = append(items, DocItem{Text: s, Page: tbl.Prov.page()})
+					if table := tbl.toDocTable(); table != nil {
+						items = append(items, DocItem{
+							Page:      tbl.Prov.page(),
+							Label:     "table",
+							Furniture: tbl.ContentLayer == contentLayerFurniture,
+							Table:     table,
+						})
 					}
 				}
 			case "groups":

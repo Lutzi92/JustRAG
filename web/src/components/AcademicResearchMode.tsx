@@ -539,7 +539,7 @@ function AcademicResearchMode({
         size: A4;
     }
     body {
-        font-family: Verdana, Helvetica, Arial, sans-serif;
+        font-family: var(--font-sans);
         color: #000;
         line-height: 1.4em;
         font-size: 11pt;
