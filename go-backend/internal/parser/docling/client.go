@@ -57,17 +57,25 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 // BaseURL returns the (trimmed) base URL the client is configured to use.
 func (c *Client) BaseURL() string { return c.baseURL }
 
-// Page is a single page entry produced by Docling.
-type Page struct {
-	Number int    `json:"number"`
-	Text   string `json:"text"`
+// DocItem is one content element of the converted document, in reading order,
+// together with the source page it was found on. Built from the
+// DoclingDocument in the response's json_content: docling-serve reports page
+// provenance only there (`prov[].page_no`), never as a per-page text array.
+// Callers use these as anchors to map markdown offsets back to pages.
+type DocItem struct {
+	Text string
+	Page int // 1-based; 0 when the item carries no provenance
 }
 
 // ConvertResult is the parsed Docling response.
 type ConvertResult struct {
 	Markdown string
 	Text     string
-	Pages    []Page
+	// Items is the document's content in reading order with page provenance.
+	// Empty when Docling returned no json_content (or none of its items carry
+	// provenance, as for formats without pagination) — page numbers are then
+	// simply unknown.
+	Items []DocItem
 }
 
 // Convert uploads a document (PDF, DOCX, PPTX, HTML, image) to Docling Serve
@@ -82,8 +90,15 @@ func (c *Client) Convert(ctx context.Context, fileName string, r io.Reader) (*Co
 	if _, err := io.Copy(fw, r); err != nil {
 		return nil, fmt.Errorf("docling: copy file body: %w", err)
 	}
+	// md carries the content we chunk; json carries the DoclingDocument whose
+	// prov[].page_no is the only place docling-serve reports page numbers.
+	// to_formats is a repeated field, not a comma list.
+	for _, f := range []string{"md", "json"} {
+		if err := mw.WriteField("to_formats", f); err != nil {
+			return nil, fmt.Errorf("docling: write form field to_formats: %w", err)
+		}
+	}
 	fields := map[string]string{
-		"to_formats":           "md",
 		"return_response_type": "json",
 	}
 	if c.Options.PictureDescription {
@@ -142,15 +157,63 @@ func (c *Client) Convert(ctx context.Context, fileName string, r io.Reader) (*Co
 	return parseDoclingResponse(resp.Body)
 }
 
+// doclingJSONDoc is the subset of the DoclingDocument (json_content) we read:
+// the body/group child references that give reading order, plus the text and
+// table items those references point at, each with its page provenance.
+type doclingJSONDoc struct {
+	Body   doclingNode    `json:"body"`
+	Groups []doclingNode  `json:"groups"`
+	Texts  []doclingText  `json:"texts"`
+	Tables []doclingTable `json:"tables"`
+}
+
+type doclingNode struct {
+	Children []struct {
+		Ref string `json:"$ref"`
+	} `json:"children"`
+}
+
+type doclingProv []struct {
+	PageNo int `json:"page_no"`
+}
+
+func (p doclingProv) page() int {
+	if len(p) == 0 {
+		return 0
+	}
+	return p[0].PageNo
+}
+
+type doclingText struct {
+	Text string      `json:"text"`
+	Prov doclingProv `json:"prov"`
+}
+
+type doclingTable struct {
+	Prov doclingProv `json:"prov"`
+	Data struct {
+		TableCells []struct {
+			Text string `json:"text"`
+		} `json:"table_cells"`
+	} `json:"data"`
+}
+
+// anchorText returns a cell text usable as a markdown anchor for the table.
+func (t doclingTable) anchorText() string {
+	for _, c := range t.Data.TableCells {
+		if s := strings.TrimSpace(c.Text); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 func parseDoclingResponse(body io.Reader) (*ConvertResult, error) {
 	var raw struct {
 		Document struct {
-			MdContent   string `json:"md_content"`
-			TextContent string `json:"text_content"`
-			Pages       []struct {
-				Number int    `json:"number"`
-				Text   string `json:"text"`
-			} `json:"pages"`
+			MdContent   string          `json:"md_content"`
+			TextContent string          `json:"text_content"`
+			JSONContent json.RawMessage `json:"json_content"`
 		} `json:"document"`
 		Errors []any `json:"errors"`
 	}
@@ -164,15 +227,92 @@ func parseDoclingResponse(body io.Reader) (*ConvertResult, error) {
 	if res.Markdown == "" && res.Text == "" {
 		return nil, fmt.Errorf("docling: response contained no text")
 	}
-	for _, p := range raw.Document.Pages {
-		res.Pages = append(res.Pages, Page{Number: p.Number, Text: p.Text})
-	}
-	if len(res.Pages) == 0 {
-		text := res.Markdown
-		if text == "" {
-			text = res.Text
-		}
-		res.Pages = []Page{{Number: 1, Text: text}}
-	}
+	res.Items = itemsFromJSONContent(raw.Document.JSONContent)
 	return res, nil
+}
+
+// maxRefDepth bounds group nesting while walking body children, so a
+// malformed (cyclic) document cannot spin the walker.
+const maxRefDepth = 32
+
+// itemsFromJSONContent walks the DoclingDocument body in reading order and
+// returns its text and table items with page provenance. Returns nil when
+// json_content is absent, unparseable, or carries no page numbers at all
+// (e.g. unpaginated formats) — the caller then treats pages as unknown.
+func itemsFromJSONContent(rawJSON json.RawMessage) []DocItem {
+	if len(rawJSON) == 0 {
+		return nil
+	}
+	var doc doclingJSONDoc
+	if err := json.Unmarshal(rawJSON, &doc); err != nil {
+		return nil
+	}
+
+	var items []DocItem
+	seen := make(map[string]bool)
+
+	var walk func(n doclingNode, depth int)
+	walk = func(n doclingNode, depth int) {
+		if depth > maxRefDepth {
+			return
+		}
+		for _, child := range n.Children {
+			ref := child.Ref
+			if seen[ref] {
+				continue
+			}
+			seen[ref] = true
+
+			kind, idx, ok := parseSelfRef(ref)
+			if !ok {
+				continue
+			}
+			switch kind {
+			case "texts":
+				if idx < len(doc.Texts) {
+					t := doc.Texts[idx]
+					if s := strings.TrimSpace(t.Text); s != "" {
+						items = append(items, DocItem{Text: s, Page: t.Prov.page()})
+					}
+				}
+			case "tables":
+				if idx < len(doc.Tables) {
+					tbl := doc.Tables[idx]
+					if s := tbl.anchorText(); s != "" {
+						items = append(items, DocItem{Text: s, Page: tbl.Prov.page()})
+					}
+				}
+			case "groups":
+				if idx < len(doc.Groups) {
+					walk(doc.Groups[idx], depth+1)
+				}
+			}
+		}
+	}
+	walk(doc.Body, 0)
+
+	for _, it := range items {
+		if it.Page > 0 {
+			return items
+		}
+	}
+	return nil
+}
+
+// parseSelfRef splits a DoclingDocument JSON pointer such as "#/texts/3" into
+// its collection name and index.
+func parseSelfRef(ref string) (kind string, idx int, ok bool) {
+	rest, found := strings.CutPrefix(ref, "#/")
+	if !found {
+		return "", 0, false
+	}
+	kind, idxStr, found := strings.Cut(rest, "/")
+	if !found {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(idxStr)
+	if err != nil || n < 0 {
+		return "", 0, false
+	}
+	return kind, n, true
 }

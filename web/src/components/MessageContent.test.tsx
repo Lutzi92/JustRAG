@@ -208,3 +208,142 @@ describe('MessageContent', () => {
         );
     });
 });
+
+describe('MessageContent citation source popover', () => {
+    const sources = [
+        { index: 1, fileName: 'bericht.pdf', fileId: 'f1', content: 'Der zitierte Absatz.', score: 0.9, pages: [7] },
+        { index: 2, fileName: 'anhang.pdf', fileId: 'f2', content: 'Zweite Quelle.', score: 0.8, pages: [2] },
+    ];
+
+    beforeEach(() => {
+        vi.resetAllMocks();
+        // The popover renders localized labels, so `t` must be present here —
+        // unlike the bare `language`-only stub the other suites use.
+        vi.mocked(ThemeContext.useTheme).mockReturnValue({
+            language: 'en',
+            t: (key: string) => key,
+        } as unknown as ReturnType<typeof ThemeContext.useTheme>);
+    });
+
+    const firstPill = (container: HTMLElement) => container.querySelector('sup.source-ref') as HTMLElement;
+
+    it('opens the source popover when a citation pill is clicked', () => {
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        expect(screen.queryByRole('dialog')).toBeNull();
+
+        fireEvent.click(firstPill(container));
+
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toHaveTextContent('bericht.pdf');
+        expect(dialog).toHaveTextContent('S. 7');
+        expect(dialog).toHaveTextContent('Der zitierte Absatz.');
+    });
+
+    it('does not open the popover on hover', () => {
+        // The whole point of the change: hover is no longer a trigger.
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.pointerOver(firstPill(container));
+        expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('does not open the document directly when a pill is clicked', () => {
+        // Previously a pill click jumped straight into the PDF. Now the click
+        // only reveals the popover; opening is an explicit second action.
+        const onOpenSource = vi.fn();
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={onOpenSource} />);
+
+        fireEvent.click(firstPill(container));
+
+        expect(onOpenSource).not.toHaveBeenCalled();
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    it('opens the document from the popover button with the clicked source', () => {
+        const onOpenSource = vi.fn();
+        const { container } = render(<MessageContent content="Claim [2]." sources={sources} onOpenSource={onOpenSource} />);
+
+        fireEvent.click(firstPill(container));
+        fireEvent.click(screen.getByRole('button', { name: /openInDocument/i }));
+
+        expect(onOpenSource).toHaveBeenCalledTimes(1);
+        expect(onOpenSource).toHaveBeenCalledWith(expect.objectContaining({ fileId: 'f2', fileName: 'anhang.pdf' }));
+    });
+
+    it('closes the popover when the same pill is clicked again', () => {
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        const pill = firstPill(container);
+
+        fireEvent.click(pill);
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+        fireEvent.click(pill);
+        expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('switches the popover to another citation when a different pill is clicked', () => {
+        const { container } = render(<MessageContent content="Both [1] and [2]." sources={sources} onOpenSource={vi.fn()} />);
+        const pills = container.querySelectorAll('sup.source-ref');
+
+        fireEvent.click(pills[0]);
+        expect(screen.getByRole('dialog')).toHaveTextContent('bericht.pdf');
+
+        fireEvent.click(pills[1]);
+        expect(screen.getByRole('dialog')).toHaveTextContent('anhang.pdf');
+    });
+
+    it('remounts the popover when switching pills from the keyboard', () => {
+        // A keyboard switch never closes the popover in between, so without a
+        // remount the anchored position would stay parked on the first pill:
+        // useAnchoredPosition measures in a layout effect keyed on `open`, and
+        // the trigger is a mutable ref it cannot observe. jsdom reports zero
+        // rects, so identity of the dialog node is what we can assert.
+        const { container } = render(<MessageContent content="Both [1] and [2]." sources={sources} onOpenSource={vi.fn()} />);
+        const pills = container.querySelectorAll('sup.source-ref');
+
+        fireEvent.keyDown(pills[0], { key: 'Enter' });
+        const first = screen.getByRole('dialog');
+        expect(first).toHaveTextContent('bericht.pdf');
+
+        fireEvent.keyDown(pills[1], { key: 'Enter' });
+        const second = screen.getByRole('dialog');
+        expect(second).toHaveTextContent('anhang.pdf');
+        expect(second).not.toBe(first);
+    });
+
+    it('closes the popover on Escape', () => {
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.click(firstPill(container));
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+        fireEvent.keyDown(document, { key: 'Escape' });
+
+        expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('closes the popover on an outside click', () => {
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.click(firstPill(container));
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+        fireEvent.mouseDown(document.body);
+
+        expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('opens the popover from the keyboard with Enter', () => {
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.keyDown(firstPill(container), { key: 'Enter' });
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    it('exposes citation pills as focusable buttons', () => {
+        // These attributes have to survive rehype-sanitize: the schema matches
+        // HAST property names, so a hyphenated entry would be stripped silently
+        // and the pill would drop out of the tab order.
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        const pill = firstPill(container);
+        expect(pill.getAttribute('role')).toBe('button');
+        expect(pill.getAttribute('tabindex')).toBe('0');
+        expect(pill.getAttribute('aria-haspopup')).toBe('dialog');
+    });
+});

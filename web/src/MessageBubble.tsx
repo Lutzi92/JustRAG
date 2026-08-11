@@ -187,35 +187,11 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
 
     const showActions = isMobile ? tapped : (isHovered || isFocused);
 
-    // Handle clicks on inline citation references [1], [2], etc.
-    const handleCitationClick = useCallback((e: React.MouseEvent | React.KeyboardEvent) => {
-        const target = (e.target as HTMLElement).closest('.source-ref') as HTMLElement | null;
-        if (!target || !message.sources?.length) return;
-
-        const idx = parseInt(target.dataset.sourceIndex || '', 10);
-        if (isNaN(idx) || idx < 1 || idx > message.sources.length) return;
-
-        const source = message.sources[idx - 1];
-        if (!source?.fileId) return;
-
-        e.stopPropagation();
-        const isPdf = source.fileName.toLowerCase().endsWith('.pdf');
-        if (isPdf && onPdfOpen) {
-            onPdfOpen(source.fileId, source.fileName, source.pages?.[0] || 1);
-        } else if (onPreviewSource) {
-            onPreviewSource(source.fileId, source.fileName);
-        }
-    }, [message.sources, onPdfOpen, onPreviewSource]);
-
-    // Keyboard equivalent of the delegated citation click handler. Only acts
-    // when the event originates from a citation ref, so Enter/Space on nested
-    // interactive elements (links, buttons) keeps its default behavior.
-    const handleCitationKeyDown = useCallback((e: React.KeyboardEvent) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        if (!(e.target as HTMLElement).closest('.source-ref')) return;
-        e.preventDefault();
-        handleCitationClick(e);
-    }, [handleCitationClick]);
+    // Citation pills are owned by MessageContent: a click there opens the
+    // source popover, and the document is opened from inside it via
+    // handleOpenSource below. MessageBubble deliberately holds no citation
+    // click/keydown delegation of its own — two handlers on the same click
+    // meant a pill both previewed and navigated.
 
     // openSourceByFile dispatches a citation/source open to the PDF viewer or
     // the text-preview handler, depending on file type.
@@ -330,9 +306,12 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
             )}
 
             {message.role === 'ai' ? (
-                // role+tabIndex (instead of <button>) because the message body
-                // contains nested interactive elements of its own.
-                <div ref={contentRef} role="button" tabIndex={0} onClick={handleCitationClick} onKeyDown={handleCitationKeyDown} style={{ minWidth: 0 }}>
+                // Inert wrapper. It used to be role="button" tabIndex={0} purely to
+                // carry the citation click/keydown delegation, which made screen
+                // readers announce the entire answer as a single button. Citation
+                // pills are individually focusable buttons now, so nothing here
+                // needs button semantics.
+                <div ref={contentRef} style={{ minWidth: 0 }}>
                     <MessageContent
                         content={message.content}
                         reasoning={message.reasoning}

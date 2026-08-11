@@ -84,6 +84,30 @@ Captioning also extends per-document convert latency, so raise
 - Already-ingested files are not retroactively re-parsed. Re-ingest a KB to
   benefit on existing data.
 
+## Page numbers (citations)
+
+Docling returns the document as one markdown blob; page numbers exist **only**
+as provenance inside the `json_content` DoclingDocument (`prov[].page_no`).
+JustRAG therefore requests `to_formats=md` **and** `to_formats=json` on every
+convert, walks `body.children` in reading order, and locates each item's text
+back in the markdown to build `ParseResult.PageSpans` (offset → page). Chunk
+page metadata is then derived from each chunk's offset, so a chunk crossing a
+page break is cited as a range (`S. 3–4`).
+
+When a document has no usable provenance (unpaginated formats, or an item's
+text cannot be matched back into the markdown), chunks carry **no** page
+metadata and the UI simply omits the page label. That is deliberate: an absent
+page reads as unknown, whereas a fabricated one silently misleads.
+
+**Gotcha (fixed 2026-08-11):** the client previously looked for a
+`document.pages[]` array that docling-serve has never emitted, and fell back to
+labelling the whole document page 1 — so every Docling-parsed PDF cited "S. 1"
+regardless of where the quote came from. Deployments running Docling before
+this fix must **re-ingest their PDFs**; the wrong page numbers are baked into
+existing chunk metadata at ingest time. The unit-test mocks asserted the
+invented shape, so CI stayed green; `integration_test.go` (run with
+`DOCLING_TEST_URL=…`) now pins the contract against a live sidecar.
+
 ## Performance
 
 - 1-page PDF: ~2–5 s.

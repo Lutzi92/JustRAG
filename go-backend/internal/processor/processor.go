@@ -208,8 +208,53 @@ type Processor struct {
 
 // indexedChunk pairs a chunk's text with its source page number.
 type indexedChunk struct {
-	Text string
-	Page int // 0 = no page info
+	Text  string
+	Pages []int // nil = no page info; more than one when the chunk crosses a page break
+}
+
+// buildIndexedChunks splits a parse result into chunks and attributes each one
+// to its source page(s).
+//
+// Two page-attribution shapes come out of the parsers:
+//   - Pages (pdftotext, OCR): pre-split per-page text. Each page is split
+//     independently, so a chunk belongs to exactly one page and never straddles
+//     a page break.
+//   - PageSpans (Docling): one continuous document plus page start offsets. The
+//     text is split as a whole and each chunk's pages are resolved from where it
+//     landed, so a chunk crossing a break carries both pages.
+//
+// With neither, chunks carry no page metadata — the parser genuinely does not
+// know, and a guessed page number is worse than none.
+//
+// Capacity is preallocated from the total text length (a file yields roughly
+// len(text)/(ChunkSize-ChunkOverlap) chunks, and a large PDF produces hundreds
+// to thousands); growing from zero would re-copy the backing array ~log2(n)
+// times for no reason.
+func buildIndexedChunks(result *parser.ParseResult, cfg splitter.Config) []indexedChunk {
+	if len(result.Pages) > 0 {
+		totalLen := 0
+		for _, pg := range result.Pages {
+			totalLen += len(pg.Text)
+		}
+		ichunks := make([]indexedChunk, 0, estimateChunkCount(totalLen, cfg))
+		for _, pg := range result.Pages {
+			for _, c := range splitter.Split(pg.Text, cfg) {
+				ichunks = append(ichunks, indexedChunk{Text: c, Pages: []int{pg.PageNumber}})
+			}
+		}
+		return ichunks
+	}
+
+	ichunks := make([]indexedChunk, 0, estimateChunkCount(len(result.Text), cfg))
+	pageSearchOffset := 0
+	for _, c := range splitter.Split(result.Text, cfg) {
+		var pages []int
+		if len(result.PageSpans) > 0 {
+			pages, pageSearchOffset = parser.PagesForChunk(result.PageSpans, result.Text, c, pageSearchOffset)
+		}
+		ichunks = append(ichunks, indexedChunk{Text: c, Pages: pages})
+	}
+	return ichunks
 }
 
 // estimateChunkCount predicts how many chunks splitter.Split will produce for
@@ -872,35 +917,8 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		cfg.ChunkOverlap = chunkOverlap
 	}
 
-	// Step 5: split text into chunks.
-	// When the parser provides per-page text (e.g. PDF), split each page
-	// independently so every chunk reliably knows which page it belongs
-	// to. Otherwise split the full text as a single document.
-	// Preallocate from the total text length: a file yields roughly
-	// len(text)/(ChunkSize-ChunkOverlap) chunks, and a large PDF produces
-	// hundreds to thousands. Growing from zero re-copies the backing array
-	// ~log2(n) times for no reason — the flatten block right below already
-	// sizes exactly.
-	var ichunks []indexedChunk
-
-	if len(result.Pages) > 0 {
-		totalLen := 0
-		for _, pg := range result.Pages {
-			totalLen += len(pg.Text)
-		}
-		ichunks = make([]indexedChunk, 0, estimateChunkCount(totalLen, cfg))
-		for _, pg := range result.Pages {
-			pageChunks := splitter.Split(pg.Text, cfg)
-			for _, c := range pageChunks {
-				ichunks = append(ichunks, indexedChunk{Text: c, Page: pg.PageNumber})
-			}
-		}
-	} else {
-		ichunks = make([]indexedChunk, 0, estimateChunkCount(len(result.Text), cfg))
-		for _, c := range splitter.Split(result.Text, cfg) {
-			ichunks = append(ichunks, indexedChunk{Text: c, Page: 0})
-		}
-	}
+	// Step 5: split text into chunks, carrying page attribution.
+	ichunks := buildIndexedChunks(result, cfg)
 
 	if len(ichunks) == 0 {
 		_ = p.store.UpdateFileStatus(ctx, fileID, "completed")
@@ -1851,8 +1869,8 @@ func (p *Processor) embedAndStore(
 	for i, text := range survivorOriginals {
 		origIdx := dedup.survivorIdx[i]
 		meta := map[string]any{"chunkIndex": startIdx + origIdx}
-		if pg := ichunks[startIdx+origIdx].Page; pg > 0 {
-			meta["pages"] = []int{pg}
+		if pgs := ichunks[startIdx+origIdx].Pages; len(pgs) > 0 {
+			meta["pages"] = pgs
 		}
 		if sectionIndex != nil {
 			sections, nextOff := SectionsForChunk(sectionIndex, fullText, text, *sectionSearchOffset)
@@ -2045,8 +2063,8 @@ func (p *Processor) runLateChunkedIngest(
 	for i, origIdx := range dedup.survivorIdx {
 		text := chunks[origIdx]
 		meta := map[string]any{"chunkIndex": origIdx}
-		if pg := ichunks[origIdx].Page; pg > 0 {
-			meta["pages"] = []int{pg}
+		if pgs := ichunks[origIdx].Pages; len(pgs) > 0 {
+			meta["pages"] = pgs
 		}
 		if sectionIndex != nil {
 			sections, nextOff := SectionsForChunk(sectionIndex, fullText, text, *sectionSearchOffset)

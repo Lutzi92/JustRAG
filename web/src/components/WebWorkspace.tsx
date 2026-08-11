@@ -376,7 +376,7 @@ export const WebWorkspace: React.FC<WebWorkspaceProps> = ({
                 .result-card.active {
                     border-color: var(--accent-primary);
                     background: var(--source-card-active-bg);
-                    box-shadow: 0 2px 8px rgba(var(--accent-primary-rgb), 0.1);
+                    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-primary) 10%, transparent);
                 }
 
                 .result-card-top {
@@ -461,7 +461,7 @@ export const WebWorkspace: React.FC<WebWorkspaceProps> = ({
                 .workspace-add-btn:hover:not(:disabled) {
                     background: var(--accent-secondary);
                     transform: translateY(-1px);
-                    box-shadow: 0 4px 12px rgba(var(--accent-primary-rgb), 0.3);
+                    box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-primary) 30%, transparent);
                 }
 
                 .workspace-add-btn:disabled {

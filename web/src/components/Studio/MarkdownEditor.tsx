@@ -243,7 +243,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
                         aria-label={t('analyzeWithAi')}
                         style={{
                             color: 'var(--accent-primary)',
-                            background: 'rgba(var(--accent-primary-rgb), 0.1)',
+                            background: 'color-mix(in srgb, var(--accent-primary) 10%, transparent)',
                             borderColor: 'var(--accent-primary)'
                         }}
                     >

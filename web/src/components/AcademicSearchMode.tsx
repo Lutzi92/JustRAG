@@ -490,7 +490,7 @@ function AcademicSearchMode({
                                         gap: '10px',
                                         padding: '10px 16px',
                                         borderBottom: '1px solid var(--border-color)',
-                                        background: isSelected ? 'var(--bg-selected, rgba(var(--accent-primary-rgb, 59 130 246) / 0.05))' : undefined,
+                                        background: isSelected ? 'var(--bg-selected, color-mix(in srgb, var(--accent-primary) 5%, transparent))' : undefined,
                                         transition: 'background 0.15s',
                                     }}
                                 >

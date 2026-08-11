@@ -1,5 +1,4 @@
-import { memo, lazy, Suspense, useMemo, useRef, useState, useCallback } from 'react';
-import { createPortal } from 'react-dom';
+import { memo, lazy, Suspense, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -8,7 +7,7 @@ import { Brain, Loader2, FileText, ArrowRight } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import type { MessageSource, TrajectoryEvent, FlaggedClaimStatus } from '../types';
 import { formatPageRanges } from '../utils/citations';
-import { useAnchoredPosition } from '../hooks/useAnchoredPosition';
+import { AnchoredPopover } from './AnchoredPopover';
 import { TrajectoryPanel } from './TrajectoryPanel';
 import { MarkdownTable } from './MarkdownTable';
 
@@ -51,51 +50,34 @@ interface MessageContentProps {
     flaggedClaims?: FlaggedClaimStatus[];
     /**
      * Opens the source behind a citation pill (PDF viewer or text preview).
-     * When provided, hovering an inline [N] pill shows a source-preview popover
-     * (file · page · cited passage snippet · "Im Dokument öffnen →"). Threaded
-     * from MessageBubble, which owns the onPdfOpen / onPreviewSource dispatch.
+     * Clicking an inline [N] pill opens a source-preview popover (file · page ·
+     * cited passage snippet); this callback fires from the popover's
+     * "Im Dokument öffnen →" button, never from the pill itself. Threaded from
+     * MessageBubble, which owns the onPdfOpen / onPreviewSource dispatch.
      */
     onOpenSource?: (source: MessageSource) => void;
 }
 
 /**
- * CitationPreview renders the hover popover for an inline [N] citation pill.
- * It anchors to the hovered <sup> element (a raw DOM node, not a React ref) via
- * the shared §6 positioner and a body-level portal, so it escapes the
- * virtualized list's transforms. Dismissal is hover-based with a short grace
- * period (handled by the parent), distinct from AnchoredPopover's click model.
+ * CitationPreview renders the body of the source popover for an inline [N]
+ * citation pill: file name, page label, the cited passage, and the link that
+ * actually opens the document. Positioning, portalling, outside-click and
+ * Escape dismissal all belong to the AnchoredPopover wrapper around it.
+ *
+ * The popover is click-triggered. It used to open on hover, which left touch
+ * users with no way to preview a source at all — a tap went straight into the
+ * document instead.
  */
-function CitationPreview({ source, triggerRef, t, onOpenSource, onEnter, onLeave }: {
+function CitationPreview({ source, t, onOpenSource }: {
     source: MessageSource;
-    triggerRef: React.RefObject<HTMLElement | null>;
     t: (key: string) => string;
     onOpenSource?: (source: MessageSource) => void;
-    onEnter: () => void;
-    onLeave: () => void;
 }) {
-    const popRef = useRef<HTMLDivElement>(null);
-    const pos = useAnchoredPosition(triggerRef, popRef, true, { placement: 'bottom', align: 'center' });
     const pageLabel = source.pages && source.pages.length > 0 ? `S. ${formatPageRanges(source.pages)}` : '';
     const snippet = source.content && source.content.length > 320 ? `${source.content.slice(0, 320)}…` : source.content;
 
-    return createPortal(
-        <div
-            ref={popRef}
-            role="tooltip"
-            onMouseEnter={onEnter}
-            onMouseLeave={onLeave}
-            style={{
-                ...pos.style,
-                width: 320,
-                background: 'var(--bg-primary)',
-                border: '1px solid var(--border-color)',
-                borderRadius: '8px',
-                boxShadow: 'var(--shadow-md)',
-                zIndex: 4000,
-                padding: '10px 12px',
-                opacity: pos.ready ? 1 : 0,
-            }}
-        >
+    return (
+        <div style={{ padding: '10px 12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', color: 'var(--text-primary)', fontWeight: 600, fontSize: '0.82rem' }}>
                 <FileText size={14} aria-hidden="true" style={{ flexShrink: 0, color: 'var(--accent-primary)' }} />
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{source.fileName}</span>
@@ -121,8 +103,7 @@ function CitationPreview({ source, triggerRef, t, onOpenSource, onEnter, onLeave
                     {t('openInDocument')} <ArrowRight size={13} aria-hidden="true" />
                 </button>
             )}
-        </div>,
-        document.body,
+        </div>
     );
 }
 
@@ -207,6 +188,13 @@ function addCitationRefs(content: string, sources?: MessageSource[], suspect?: M
 // in the marker — see addCitationRefs); empty means no page info, so the label
 // falls back to the bare index. Each distinct file in a marker emits one
 // independently clickable <sup> carrying its own data-source-index.
+// Attributes that make a citation pill a real control: it opens the source
+// popover on click or Enter/Space, so it has to be reachable by keyboard and
+// announced as a button, not as decorative superscript. Kept in one constant
+// because all three pill variants (plain, suspect, semantic) need them, and
+// each name has a matching entry in sanitizeSchema below.
+const CITATION_TRIGGER_ATTRS = 'role="button" tabindex="0" aria-haspopup="dialog"';
+
 function renderCitation(num: number, pages: number[], suspect: Map<number, string> | undefined, semantic: Set<number> | undefined, language: 'de' | 'en'): string {
     const numStr = String(num);
     const label = pages.length ? `S. ${formatPageRanges(pages)}` : numStr;
@@ -220,17 +208,17 @@ function renderCitation(num: number, pages: number[], suspect: Map<number, strin
             : (suspectReason === 'out_of_range'
                 ? `Zitat [${num}] verweist auf eine nicht existierende Quelle.`
                 : `Zitat [${num}] hat keine erkennbare Wortüberlappung mit der zitierten Quelle.`);
-        return `<sup class="source-ref source-ref-suspect" data-source-index="${numStr}" data-suspect="${escapeAttr(suspectReason)}" title="${escapeAttr(title)}">[${label}]<span class="source-ref-warn" aria-hidden="true">⚠</span></sup>`;
+        return `<sup class="source-ref source-ref-suspect" ${CITATION_TRIGGER_ATTRS} data-source-index="${numStr}" data-suspect="${escapeAttr(suspectReason)}" title="${escapeAttr(title)}">[${label}]<span class="source-ref-warn" aria-hidden="true">⚠</span></sup>`;
     }
 
     if (semantic?.has(num)) {
         const title = language === 'en'
             ? `Citation [${num}] verified by semantic similarity (the wording differs from the source but the meaning matches).`
             : `Zitat [${num}] über semantische Ähnlichkeit verifiziert (der Wortlaut weicht von der Quelle ab, die Bedeutung stimmt überein).`;
-        return `<sup class="source-ref source-ref-semantic" data-source-index="${numStr}" title="${escapeAttr(title)}">[${label}]</sup>`;
+        return `<sup class="source-ref source-ref-semantic" ${CITATION_TRIGGER_ATTRS} data-source-index="${numStr}" title="${escapeAttr(title)}">[${label}]</sup>`;
     }
 
-    return `<sup class="source-ref" data-source-index="${numStr}">[${label}]</sup>`;
+    return `<sup class="source-ref" ${CITATION_TRIGGER_ATTRS} data-source-index="${numStr}">[${label}]</sup>`;
 }
 
 // escapeAttr keeps tooltip text safe to inline as an HTML attribute. The
@@ -297,12 +285,16 @@ function addFlaggedClaimHighlights(content: string, flagged?: FlaggedClaimStatus
 // attribute, which breaks citation click-to-open (reads `dataset.sourceIndex`)
 // and the suspect-citation tooltip. See hast-util-sanitize's default schema
 // for precedent (e.g. `section: ['dataFootnotes', ...]`).
+//
+// The same trap applies to the pill's control attributes: `ariaHasPopup` and
+// `tabIndex` must be spelled the HAST way or the pill silently drops out of
+// the tab order and stops announcing itself as a button.
 const sanitizeSchema = {
     ...defaultSchema,
     tagNames: [...(defaultSchema.tagNames || []), 'sup', 'sub', 'details', 'summary', 'mark'],
     attributes: {
         ...defaultSchema.attributes,
-        sup: ['className', 'dataSourceIndex', 'dataSuspect', 'title'],
+        sup: ['className', 'dataSourceIndex', 'dataSuspect', 'title', 'role', 'tabIndex', 'ariaHasPopup', 'ariaExpanded'],
         mark: ['className', 'dataReason', 'title'],
         span: ['className', 'ariaHidden'],
         code: ['className'],
@@ -357,38 +349,66 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
     const reasoningLabel = language === 'en' ? 'Chain of Thought' : 'Gedankengang';
     const markdownComponents = useMemo(() => buildMarkdownComponents(language), [language]);
 
-    // Hover source-preview popover (§8): a delegated mouseover on the answer
-    // body detects an inline [N] pill and anchors a preview to it. The pill is
-    // raw HTML (rehype-raw), so we anchor to the live DOM node via a ref. A
-    // short grace period on mouseout lets the cursor travel into the popover.
-    const [hoveredCitation, setHoveredCitation] = useState<number | null>(null);
+    // Click-triggered source-preview popover (§8): a delegated click on the
+    // answer body detects an inline [N] pill and anchors the preview to it. The
+    // pill is raw HTML (rehype-raw), so the anchor is the live DOM node held in
+    // a ref rather than a React ref on a component.
+    //
+    // Clicking a pill used to open the document immediately, with the preview
+    // reachable only by hovering. The preview is now the click target and the
+    // document opens from inside it — one path instead of two, and the only
+    // path that works on touch.
+    const [openCitation, setOpenCitation] = useState<number | null>(null);
     const citationTriggerRef = useRef<HTMLElement | null>(null);
-    const closeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-    const cancelClose = useCallback(() => {
-        if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = undefined; }
-    }, []);
-    const scheduleClose = useCallback(() => {
-        cancelClose();
-        closeTimerRef.current = setTimeout(() => setHoveredCitation(null), 140);
-    }, [cancelClose]);
+    const closePopover = useCallback(() => setOpenCitation(null), []);
 
-    const handleBodyPointerOver = useCallback((e: React.PointerEvent) => {
-        const sup = (e.target as HTMLElement).closest('.source-ref') as HTMLElement | null;
-        if (!sup || !sources?.length) return;
+    // activateCitation toggles the popover for the pill the event came from.
+    // Returns true when the event hit a pill, so the caller knows whether to
+    // swallow it.
+    const activateCitation = useCallback((target: EventTarget | null) => {
+        const sup = (target as HTMLElement | null)?.closest?.('.source-ref') as HTMLElement | null;
+        if (!sup || !sources?.length) return false;
         const idx = parseInt(sup.dataset.sourceIndex || '', 10);
-        if (Number.isNaN(idx) || idx < 1 || idx > sources.length) return;
-        cancelClose();
+        if (Number.isNaN(idx) || idx < 1 || idx > sources.length) return false;
+
+        // Clicking the open pill closes it; clicking another switches to it.
+        const sameTrigger = citationTriggerRef.current === sup;
         citationTriggerRef.current = sup;
-        setHoveredCitation(idx);
-    }, [sources, cancelClose]);
+        setOpenCitation((prev) => (sameTrigger && prev === idx ? null : idx));
+        return true;
+    }, [sources]);
 
-    const handleBodyPointerOut = useCallback((e: React.PointerEvent) => {
+    const handleBodyClick = useCallback((e: React.MouseEvent) => {
+        if (activateCitation(e.target)) e.stopPropagation();
+    }, [activateCitation]);
+
+    const handleBodyKeyDown = useCallback((e: React.KeyboardEvent) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
         if (!(e.target as HTMLElement).closest('.source-ref')) return;
-        scheduleClose();
-    }, [scheduleClose]);
+        // Space would scroll the page, Enter could submit an enclosing form.
+        e.preventDefault();
+        if (activateCitation(e.target)) e.stopPropagation();
+    }, [activateCitation]);
 
-    const hoveredSource = hoveredCitation != null ? sources?.[hoveredCitation - 1] : undefined;
+    // Reflect the open state on the trigger, and hand focus back to it when the
+    // popover is dismissed from the keyboard. Focus is only restored when it
+    // would otherwise be lost inside the closing popover — returning it after an
+    // outside click would yank the caret away from whatever the user clicked.
+    useEffect(() => {
+        const trigger = citationTriggerRef.current;
+        if (!trigger) return;
+        if (openCitation == null) return;
+        trigger.setAttribute('aria-expanded', 'true');
+        return () => {
+            trigger.removeAttribute('aria-expanded');
+            if (document.activeElement === document.body || !document.body.contains(document.activeElement)) {
+                trigger.focus?.();
+            }
+        };
+    }, [openCitation]);
+
+    const openSource = openCitation != null ? sources?.[openCitation - 1] : undefined;
 
     return (
         <>
@@ -439,7 +459,17 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
                     </div>
                 </details>
             )}
-            <div className="markdown-content" onPointerOver={handleBodyPointerOver} onPointerOut={handleBodyPointerOut}>
+            {/* The handlers here are pure event delegation: citation pills are raw
+                HTML injected by rehype-raw, so no React handler can be attached to
+                them directly. The pills themselves carry the interactive semantics
+                (role="button", tabindex, Enter/Space), and this wrapper is marked
+                presentational so it adds none of its own. */}
+            <div
+                className="markdown-content"
+                role="presentation"
+                onClick={handleBodyClick}
+                onKeyDown={handleBodyKeyDown}
+            >
                 <ReactMarkdown
                     remarkPlugins={REMARK_PLUGINS}
                     rehypePlugins={REHYPE_PLUGINS}
@@ -448,17 +478,32 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
                     {addFlaggedClaimHighlights(addCitationRefs(content, sources, suspectCitations, semanticCitations, language), flaggedClaims, language)}
                 </ReactMarkdown>
             </div>
-            {hoveredSource && (
-                <CitationPreview
-                    key={hoveredCitation ?? undefined}
-                    source={hoveredSource}
-                    triggerRef={citationTriggerRef}
-                    t={t}
-                    onOpenSource={onOpenSource}
-                    onEnter={cancelClose}
-                    onLeave={scheduleClose}
-                />
-            )}
+            {/* Keyed on the citation so switching pills remounts the popover.
+                useAnchoredPosition measures in a layout effect keyed on `open`,
+                and citationTriggerRef is a mutable ref — moving it to another
+                pill would not re-measure on its own. A mouse switch happens to
+                survive (the outside-click handler closes the popover first), but
+                a keyboard switch keeps `open` true and would leave the popover
+                parked at the previously clicked pill. */}
+            <AnchoredPopover
+                key={openCitation ?? 'closed'}
+                open={openSource != null}
+                triggerRef={citationTriggerRef}
+                onClose={closePopover}
+                placement="bottom"
+                align="center"
+                width={320}
+                role="dialog"
+                ariaLabel={openSource?.fileName}
+            >
+                {openSource && (
+                    <CitationPreview
+                        source={openSource}
+                        t={t}
+                        onOpenSource={onOpenSource}
+                    />
+                )}
+            </AnchoredPopover>
         </>
     );
 });

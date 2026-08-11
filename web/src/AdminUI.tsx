@@ -699,7 +699,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                     color: var(--accent-primary);
                     font-weight: 600;
                     border-left-color: var(--accent-primary);
-                    background: rgba(var(--accent-primary-rgb), 0.08);
+                    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
                 }
                 @media (max-width: 768px) {
                     .admin-layout {

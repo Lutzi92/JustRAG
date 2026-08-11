@@ -12,6 +12,13 @@
 FROM node:24-alpine AS frontend
 WORKDIR /app
 
+# git is required to resolve the @ki4jlu/design-system dependency, which is
+# installed straight from its public GitHub repo rather than from a registry
+# (GitHub Packages' npm endpoint demands a token even for public packages).
+# node:*-alpine ships without git, so `npm ci` cannot resolve the git ref.
+# This is a build stage only — it does not reach the runtime image.
+RUN apk add --no-cache git
+
 # Copy workspace manifests first for layer caching
 COPY package.json package-lock.json ./
 COPY web/package.json ./web/

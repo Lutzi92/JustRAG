@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -36,21 +38,129 @@ func TestClient_Convert_HappyPath(t *testing.T) {
 	if !strings.Contains(res.Markdown, "Title") {
 		t.Errorf("expected markdown to contain Title, got %q", res.Markdown)
 	}
-	if len(res.Pages) == 0 {
-		t.Errorf("expected at least one page entry, got 0")
+	// docling-serve returns no page provenance without json_content: pages
+	// are unknown, and must not be fabricated as page 1.
+	if len(res.Items) != 0 {
+		t.Errorf("expected no items without json_content, got %+v", res.Items)
 	}
 }
 
-func TestClient_Convert_PreservesPerPagePages(t *testing.T) {
+// doclingJSONContent builds a json_content payload in the shape docling-serve
+// actually returns (DoclingDocument: body children referencing texts/tables,
+// each item carrying prov[].page_no).
+func doclingJSONContent(items []map[string]any) map[string]any {
+	children := make([]map[string]any, 0, len(items))
+	texts := make([]map[string]any, 0, len(items))
+	for i, it := range items {
+		children = append(children, map[string]any{"$ref": "#/texts/" + strconv.Itoa(i)})
+		texts = append(texts, map[string]any{
+			"self_ref": "#/texts/" + strconv.Itoa(i),
+			"label":    "paragraph",
+			"text":     it["text"],
+			"prov":     []map[string]any{{"page_no": it["page"], "bbox": map[string]any{}, "charspan": []int{0, 1}}},
+		})
+	}
+	return map[string]any{
+		"schema_name": "DoclingDocument",
+		"body":        map[string]any{"self_ref": "#/body", "children": children},
+		"texts":       texts,
+		"pages": map[string]any{
+			"1": map[string]any{"page_no": 1, "size": map[string]any{"width": 612, "height": 792}},
+		},
+	}
+}
+
+func TestClient_Convert_ExtractsPageProvenanceFromJSONContent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"document": map[string]any{
-				"md_content": "# T",
-				"pages": []map[string]any{
-					{"number": 1, "text": "p1"},
-					{"number": 2, "text": "p2"},
+				"md_content": "intro on one\n\nbody on two\n\ntail on three",
+				"json_content": doclingJSONContent([]map[string]any{
+					{"text": "intro on one", "page": 1},
+					{"text": "body on two", "page": 2},
+					{"text": "tail on three", "page": 3},
+				}),
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, 10*time.Second)
+	res, err := c.Convert(context.Background(), "x.pdf", strings.NewReader("x"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []DocItem{
+		{Text: "intro on one", Page: 1},
+		{Text: "body on two", Page: 2},
+		{Text: "tail on three", Page: 3},
+	}
+	if !reflect.DeepEqual(res.Items, want) {
+		t.Errorf("items mismatch:\n got %+v\nwant %+v", res.Items, want)
+	}
+}
+
+func TestClient_Convert_WalksGroupsAndTablesInReadingOrder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"document": map[string]any{
+				"md_content": "heading\n\n- item\n\n| cell |",
+				"json_content": map[string]any{
+					"body": map[string]any{"children": []map[string]any{
+						{"$ref": "#/texts/0"},
+						{"$ref": "#/groups/0"},
+						{"$ref": "#/tables/0"},
+					}},
+					"groups": []map[string]any{
+						{"children": []map[string]any{{"$ref": "#/texts/1"}}},
+					},
+					"texts": []map[string]any{
+						{"text": "heading", "prov": []map[string]any{{"page_no": 1}}},
+						{"text": "item", "prov": []map[string]any{{"page_no": 2}}},
+					},
+					"tables": []map[string]any{
+						{
+							"prov": []map[string]any{{"page_no": 3}},
+							"data": map[string]any{"table_cells": []map[string]any{
+								{"text": ""}, {"text": "cell"},
+							}},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, 10*time.Second)
+	res, err := c.Convert(context.Background(), "x.pdf", strings.NewReader("x"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []DocItem{
+		{Text: "heading", Page: 1},
+		{Text: "item", Page: 2},
+		{Text: "cell", Page: 3},
+	}
+	if !reflect.DeepEqual(res.Items, want) {
+		t.Errorf("items mismatch:\n got %+v\nwant %+v", res.Items, want)
+	}
+}
+
+func TestClient_Convert_IgnoresJSONContentWithoutProvenance(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"document": map[string]any{
+				"md_content": "body",
+				"json_content": map[string]any{
+					"body":  map[string]any{"children": []map[string]any{{"$ref": "#/texts/0"}}},
+					"texts": []map[string]any{{"text": "body"}},
 				},
 			},
 		})
@@ -59,8 +169,30 @@ func TestClient_Convert_PreservesPerPagePages(t *testing.T) {
 
 	c := NewClient(srv.URL, 10*time.Second)
 	res, _ := c.Convert(context.Background(), "x.pdf", strings.NewReader("x"))
-	if len(res.Pages) != 2 || res.Pages[1].Number != 2 || res.Pages[1].Text != "p2" {
-		t.Errorf("unexpected pages: %+v", res.Pages)
+	if len(res.Items) != 0 {
+		t.Errorf("expected no items when no prov carries a page, got %+v", res.Items)
+	}
+}
+
+func TestClient_Convert_RequestsMarkdownAndJSONFormats(t *testing.T) {
+	var gotFormats []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseMultipartForm(1 << 20)
+		gotFormats = r.MultipartForm.Value["to_formats"]
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"document": map[string]any{"md_content": "x"},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, 10*time.Second)
+	if _, err := c.Convert(context.Background(), "x.pdf", strings.NewReader("x")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// json is required: it is the only carrier of page provenance.
+	if !reflect.DeepEqual(gotFormats, []string{"md", "json"}) {
+		t.Errorf("expected to_formats [md json], got %v", gotFormats)
 	}
 }
 

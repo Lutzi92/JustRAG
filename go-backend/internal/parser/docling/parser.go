@@ -31,16 +31,70 @@ func convertAndMap(ctx context.Context, c *Client, pctx parser.ParseContext) (*p
 		primary = res.Text
 	}
 
-	pages := make([]parser.PageText, 0, len(res.Pages))
-	for _, dp := range res.Pages {
-		pages = append(pages, parser.PageText{PageNumber: dp.Number, Text: dp.Text})
-	}
-
 	return &parser.ParseResult{
 		Text:       primary,
-		Pages:      pages,
+		PageSpans:  buildPageSpans(primary, res.Items),
 		IsMarkdown: true,
 	}, nil
+}
+
+// buildPageSpans locates where each page starts inside the converted text.
+//
+// Docling returns the document as one markdown blob plus a DoclingDocument
+// whose items carry page provenance, so page boundaries have to be recovered
+// by finding each item's text back in the markdown. Items are scanned in
+// reading order with a monotonically advancing offset; the first item of each
+// new page that can be located anchors that page's span. Items that cannot be
+// matched (markdown escaping, table rendering) are skipped — the next item on
+// the same page anchors it instead.
+//
+// Returns nil when no page could be anchored, which makes the caller emit no
+// page metadata rather than a fabricated page 1.
+func buildPageSpans(text string, items []DocItem) []parser.PageSpan {
+	if text == "" || len(items) == 0 {
+		return nil
+	}
+
+	var spans []parser.PageSpan
+	searchFrom := 0
+	currentPage := 0
+
+	for _, it := range items {
+		if it.Text == "" {
+			continue
+		}
+		pos := -1
+		if searchFrom < len(text) {
+			if p := strings.Index(text[searchFrom:], it.Text); p >= 0 {
+				pos = searchFrom + p
+			}
+		}
+		if pos < 0 {
+			continue
+		}
+		// Advance past this item's start so repeated boilerplate (headers,
+		// footers) resolves forward through the document.
+		searchFrom = pos + len(it.Text)
+
+		if it.Page <= 0 || it.Page == currentPage {
+			continue
+		}
+		// Keep spans strictly increasing; out-of-order provenance (rare, but
+		// possible with multi-column layouts) must not corrupt the mapping.
+		if len(spans) > 0 && pos <= spans[len(spans)-1].Start {
+			continue
+		}
+		spans = append(spans, parser.PageSpan{Start: pos, Page: it.Page})
+		currentPage = it.Page
+	}
+
+	if len(spans) == 0 {
+		return nil
+	}
+	// Anything before the first anchor (a title, a leading image caption)
+	// belongs to that first page.
+	spans[0].Start = 0
+	return spans
 }
 
 // DoclingPDFParser is a parser.Parser that routes PDFs through a Docling
