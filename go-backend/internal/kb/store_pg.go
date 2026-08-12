@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/pgxutil"
 	"github.com/justrag/go-backend/internal/store"
 )
@@ -253,22 +254,46 @@ func (s *PGStore) ListGlobalKnowledgeBases(ctx context.Context, userID string, i
 	return result, nil
 }
 
-// CreateKnowledgeBase inserts a new knowledge base owned by userID and returns the created row.
+// CreateKnowledgeBase inserts a new knowledge base owned by userID and returns
+// the created row. Writes both the knowledge_bases row and the owner's
+// kb_members row (role='owner') in one transaction — kb_members is the
+// authority kbaccess.EffectiveRole reads (Task 1/4); without this row the
+// creator would have no role on their own KB. The direct user_id write below
+// and the kb_members insert use the same userID value, so they cannot
+// diverge; migration 0064's kb_members_sync_owner_trg trigger re-applies the
+// same value to knowledge_bases.user_id as a (harmless, idempotent) side
+// effect of the kb_members insert.
 func (s *PGStore) CreateKnowledgeBase(ctx context.Context, name string, description *string, userID string, systemPrompt *string) (*KBRow, error) {
-	const sql = `
-		INSERT INTO knowledge_bases (name, description, user_id, system_prompt)
-		VALUES ($1, $2, $3, $4)
-		RETURNING ` + kbSelectColsNoAlias
+	var result *KBRow
+	err := pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		const sql = `
+			INSERT INTO knowledge_bases (name, description, user_id, system_prompt)
+			VALUES ($1, $2, $3, $4)
+			RETURNING ` + kbSelectColsNoAlias
 
-	row, err := pgxutil.QueryOne[kbFullRow](ctx, s.pool, sql, name, description, userID, systemPrompt)
+		row, err := pgxutil.QueryOne[kbFullRow](ctx, tx, sql, name, description, userID, systemPrompt)
+		if err != nil {
+			return err
+		}
+		if row == nil {
+			return fmt.Errorf("CreateKnowledgeBase: no row returned")
+		}
+		r := toKBRow(*row)
+
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1, $2, $3)`,
+			r.ID, userID, kbaccess.RoleOwner,
+		); err != nil {
+			return fmt.Errorf("CreateKnowledgeBase: insert owner kb_members row: %w", err)
+		}
+
+		result = &r
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if row == nil {
-		return nil, fmt.Errorf("CreateKnowledgeBase: no row returned")
-	}
-	r := toKBRow(*row)
-	return &r, nil
+	return result, nil
 }
 
 // ---------------------------------------------------------------------------
