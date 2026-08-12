@@ -1,8 +1,28 @@
 # git-cliff config — renders conventional commits into CHANGELOG.md.
-# The "Upgrade notes" block in each release is HAND-WRITTEN and must be
-# re-added after regenerating; see docs/runbooks/release.md.
+# Generation is INCREMENTAL: `git cliff --unreleased --tag vX.Y.Z --prepend
+# CHANGELOG.md` inserts only the release being cut at the top of the file and
+# leaves every earlier release's section untouched. Each release still needs
+# its own HAND-WRITTEN "Upgrade notes" block added after that command runs
+# (see docs/runbooks/release.md) — but only for the release you just cut, not
+# for history. Do NOT run `git cliff -o CHANGELOG.md` (full regeneration):
+# it overwrites the whole file from git history and destroys every prior
+# release's hand-written Upgrade notes block, which exist nowhere else.
 
 [changelog]
+# INVARIANT: this header must stay BYTE-FOR-BYTE identical to the preamble at
+# the top of CHANGELOG.md. `--prepend` writes `header + new_section`, then
+# appends the existing file's content with the header removed from THAT
+# content via a single find-and-replace (first match only) — the generated
+# output is never stripped, it already contains the header exactly once.
+# So a match yields one preamble with the new release below it. If the two
+# ever diverge (someone reworders the preamble in CHANGELOG.md but not here,
+# or vice versa), the strip on the existing file misses and the file gains a
+# SECOND "# Changelog / All notable changes…" block per release, forever.
+# Verified empirically against git-cliff 2.13.1; see docs/runbooks/release.md.
+# Do NOT "fix" a duplicated preamble by emptying this value and leaving the
+# preamble as static text in CHANGELOG.md — with no header to anchor on,
+# `--prepend` inserts the new release section ABOVE the preamble instead.
+# The only correct fix is to re-sync the two strings.
 header = """
 # Changelog
 
@@ -23,7 +43,7 @@ body = """
 {% endif %}
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group }}
-{% for commit in commits %}- {{ commit.message | upper_first }} ({{ commit.id | truncate(length=7, end="") }})
+{% for commit in commits %}- {% if commit.breaking %}**[BREAKING]** {% endif %}{{ commit.message | upper_first }} ({{ commit.id | truncate(length=7, end="") }})
 {% endfor %}
 {% endfor %}
 """
@@ -38,6 +58,14 @@ protect_breaking_commits = true
 tag_pattern = "v[0-9]*"
 sort_commits = "newest"
 commit_parsers = [
+  # Must be the FIRST match — git-cliff uses the first matching parser, so
+  # this claims every `type!:` / `type(scope)!:` commit (including
+  # `chore!:`, `ci!:`, etc.) before the type-specific rules below can skip
+  # it. Without this, protect_breaking_commits still rescues a breaking
+  # commit from skip=true, but it keeps a null group, and the body
+  # template's group_by(attribute="group") silently drops null-group
+  # commits — the breaking change would vanish from the rendered output.
+  { message = "^[a-z]+(\\(.+\\))?!:", group = "⚠ Breaking Changes" },
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Fixes" },
   { message = "^perf", group = "Performance" },

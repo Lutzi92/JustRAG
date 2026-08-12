@@ -30,6 +30,11 @@ e2e/.auth/
 /docs/runbooks/*
 !/docs/runbooks/hnsw-reindex.md
 !/docs/runbooks/release.md
+# Both are documented in CLAUDE.md and migration-rollback.md is linked from
+# release.md's rollback caveat — the reference an operator reaches under
+# pressure. Untracked they are a dead link for anyone who clones.
+!/docs/runbooks/migration-rollback.md
+!/docs/runbooks/stuck-quick-jobs.md
 .playwright-mcp
 .tmp/
 /example/

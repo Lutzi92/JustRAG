@@ -22,7 +22,12 @@ jobs:
       # exactly how trivy-action v0.28.0 broke this workflow.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          fetch-depth: 0 # needed for git rev-parse in Dockerfile
+          # Required by the `git describe` step below — it needs the full
+          # history AND the tags. Do not "optimize" this to a shallow clone:
+          # `git describe --tags --always` does not fail without tags, it
+          # silently falls back to a bare SHA, so every release would report
+          # a hash from GET /version with no error anywhere in the log.
+          fetch-depth: 0
 
       # `git describe` gives a human-legible build id: exactly `v0.1.0` on a
       # release tag, `v0.1.0-12-gabc1234` on main. Still unique per commit, so
@@ -45,17 +50,35 @@ jobs:
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # `latest` is deliberately absent: a floating tag pinned by every
-          # deployment is exactly how production drifts forward on an
-          # unrelated pod restart. `edge` replaces it for tip-of-main.
+          # DO NOT REMOVE. metadata-action defaults to `latest=auto`, which
+          # generates a `:latest` tag on its own for `type=semver` (also
+          # `type=ref,event=tag`, `type=pep440`, `type=match`). Deleting the
+          # old `type=raw,value=latest` line from `tags:` therefore did NOT
+          # stop `:latest` — it only moved it from every main push to every
+          # release tag. THIS line is what actually suppresses it.
+          # `:latest` is a floating tag pinned by every deployment, i.e.
+          # exactly how production drifts forward on an unrelated pod
+          # restart. `:edge` replaces it for tip-of-main.
+          flavor: |
+            latest=false
           # The `v` prefix keeps image tag == git tag and lets the prune
           # step below exclude releases with an unambiguous `v*`.
+          #
+          # Templating note: `{{...}}` is resolved by metadata-action itself,
+          # `${{...}}` by GitHub Actions before the action ever runs. Both
+          # forms appear below on purpose — do not "unify" them.
           tags: |
             type=sha,prefix=,enable={{is_default_branch}}
             type=raw,value=edge,enable={{is_default_branch}}
             type=semver,pattern=v{{version}}
             type=semver,pattern=v{{major}}.{{minor}}
-            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # `stable` is the default for every unpinned compose deployment
+            # (`${JUSTRAG_VERSION:-stable}`), so a prerelease must never move
+            # it. `startsWith(refs/tags/v)` alone fires for `v0.2.0-rc.1`;
+            # the `-` check excludes SemVer prereleases. (metadata-action's
+            # own `latest=auto` skips prereleases for free — this hand-rolled
+            # expression does not, hence the asymmetry.)
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
 
       # Buildx is required for the SBOM/provenance attestations below — the
       # default docker driver silently ignores them.

@@ -6,7 +6,10 @@ const POLL_INTERVAL = 60_000; // Check every 60 seconds
 /**
  * Polls the server's /version endpoint and triggers a page reload
  * when the build version changes (i.e., after a new deployment).
- * The version is a git commit hash, stable across all replicas of the same release.
+ * The version is `git describe --tags --always` output — `v0.1.0` on a release
+ * build, `v0.1.0-12-gabc1234` on a main build, a bare short SHA before the
+ * first tag. Unique per commit and stable across all replicas of the same
+ * release, which is all this hook needs: it only compares for inequality.
  */
 export function useVersionCheck() {
   const knownVersion = useRef<string | null>(null);
