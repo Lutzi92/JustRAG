@@ -43,8 +43,9 @@ export function useSharing({ username }: UseSharingParams) {
     } catch (err: unknown) {
       setShareTargetUser(null);
       if (axios.isAxiosError(err) && err.response?.status === 404) {
-        // No toast here — ShareModal renders an inline "invite anyway" block
-        // for this username, so a toast would announce the same outcome twice.
+        // No toast here — MembersModal renders an inline "invite anyway"
+        // block for this username, so a toast would announce the same
+        // outcome twice.
         setNotFoundUsername(shareUserId.trim().toLowerCase());
       } else {
         // A genuine failure (500, timeout, offline) is NOT "no account yet" —
@@ -64,9 +65,13 @@ export function useSharing({ username }: UseSharingParams) {
     if (!sharingKb || !shareTargetUser) return;
     setShareLoading(true);
     try {
-      await axios.post(`${API_BASE_URL}/api/kb/${sharingKb.id}/share`, {
-        userId: shareTargetUser.id,
-        permission: sharePermission
+      // Four-role /members surface (Task 9): PUT with { role }, not the
+      // deprecated POST /share with { permission }. sharePermission itself
+      // stays 'view' | 'edit' here — this is the single-user invite flow's
+      // 2-value picker, unrelated to the 3-value role <select> MembersModal
+      // renders per existing member row.
+      await axios.put(`${API_BASE_URL}/api/kb/${sharingKb.id}/members/${shareTargetUser.id}`, {
+        role: sharePermission
       });
       const permissionLabel = sharePermission === 'edit' ? t('editPermission') : t('viewPermission');
       toast.success(`${t('shareSuccess')} ${shareTargetUser.firstName || shareTargetUser.username} (${permissionLabel})`);
@@ -97,7 +102,7 @@ export function useSharing({ username }: UseSharingParams) {
   // the "Invite anyway" block stays live for whatever was typed before the
   // edit (e.g. typing "alicia" over a not-found "alice" without re-clicking
   // Search would park a pending invite for "alice"). Wrapped here — rather
-  // than threading a 5th prop through ShareModal — so every caller of
+  // than threading a 5th prop through MembersModal — so every caller of
   // setShareUserId gets the fix for free.
   const setShareUserIdAndClearNotFound = useCallback((id: string) => {
     setShareUserId(id);

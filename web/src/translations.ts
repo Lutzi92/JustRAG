@@ -303,18 +303,24 @@ export const translations = {
     inviteAnywaySuccess: { de: 'Einladung ausstehend für "{username}"', en: 'Invite pending for "{username}"' },
     bulkInviteSummary: { de: '{shared} sofort geteilt · {pending} ausstehend · {already} bereits berechtigt', en: '{shared} shared now · {pending} pending · {already} already had access' },
     bulkInviteError: { de: 'Sammeleinladung fehlgeschlagen', en: 'Bulk invite failed' },
-    revokeInvite: { de: 'Einladung zurückziehen', en: 'Revoke invite' },
     selectPermission: { de: 'Berechtigung auswählen', en: 'Select permission' },
     viewPermission: { de: 'Ansehen', en: 'View' },
     editPermission: { de: 'Bearbeiten', en: 'Edit' },
     viewPermissionDesc: { de: 'Kann Inhalte ansehen und mit der Knowledge Base chatten', en: 'Can view content and chat with the knowledge base' },
     editPermissionDesc: { de: 'Kann Dateien hochladen, löschen und die Knowledge Base bearbeiten', en: 'Can upload, delete files and edit the knowledge base' },
-    shareKb: { de: 'teilen', en: 'Share' },
     kbTuning: { de: 'RAG-Einstellungen', en: 'RAG settings' },
     enterRecipientUsername: { de: 'Empfänger-Benutzername eingeben', en: 'Enter recipient username' },
     userNotFound: { de: 'Benutzer nicht gefunden', en: 'User not found' },
     confirmShare: { de: 'Teilen bestätigen', en: 'Confirm share' },
-    closeShareModal: { de: 'Teilen-Modal schließen', en: 'Close share modal' },
+    // Members dialog (Task 9 of the four-role KB permission model) — replaces
+    // the two-value ShareModal with a four-role member list + ownership
+    // transfer. kbRoleView/Edit/Admin/Owner above name the roles themselves;
+    // these name the dialog's actions.
+    members: { de: 'Mitglieder', en: 'Members' },
+    selectRole: { de: 'Rolle auswählen', en: 'Select role' },
+    makeOwner: { de: 'Zum Owner machen', en: 'Make owner' },
+    confirmMakeOwner: { de: '"{username}" zum neuen Owner machen? Du wirst dabei zum Admin herabgestuft.', en: 'Make "{username}" the new owner? You will be demoted to admin.' },
+    ownerLabel: { de: 'Owner – Rolle kann nicht geändert werden', en: 'Owner — role cannot be changed' },
 
     // Upload Modal
     dropFilesHere: { de: 'Dateien hier ablegen', en: 'Drop files here' },

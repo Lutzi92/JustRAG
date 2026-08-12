@@ -4,7 +4,7 @@ import { useKbCore } from '../contexts/KbCoreContext';
 import { useKbChat } from '../contexts/KbChatContext';
 import { useKbData } from '../contexts/KbDataContext';
 
-const ShareModal = lazy(() => import('./ShareModal').then(module => ({ default: module.ShareModal })));
+const MembersModal = lazy(() => import('./MembersModal').then(module => ({ default: module.MembersModal })));
 const SettingsModal = lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
 const ChartModal = lazy(() => import('./ChartModal').then(module => ({ default: module.ChartModal })));
 const AbstractGenerationModal = lazy(() => import('./AbstractGenerationModal').then(module => ({ default: module.AbstractGenerationModal })));
@@ -21,7 +21,7 @@ export function KbWorkspaceModals() {
   return (
     <>
       <Suspense fallback={null}>
-        {sharing.showShareModal && <ShareModal
+        {sharing.showShareModal && <MembersModal
           show={sharing.showShareModal}
           onClose={() => sharing.setShowShareModal(false)}
           sharingKb={sharing.sharingKb}
@@ -35,6 +35,7 @@ export function KbWorkspaceModals() {
           onConfirmShare={sharing.confirmShare}
           notFoundUsername={sharing.notFoundUsername}
           onPendingInvited={sharing.clearNotFound}
+          myRole={currentKb?.myRole ?? 'view'}
         />}
       </Suspense>
 

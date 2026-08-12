@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, User, Eye, Edit3, Loader2, Trash2, Clock, Users } from 'lucide-react';
-import type { KnowledgeBase } from '../types';
+import { X, User, Eye, Edit3, Loader2, Trash2, Clock, Users, Crown } from 'lucide-react';
+import type { KnowledgeBase, KbMember, KbRole } from '../types';
 import { motion } from 'framer-motion';
 import axios from 'axios';
 import { API_BASE_URL } from '../api';
@@ -12,7 +12,18 @@ import { useReducedMotion, getMotionProps } from '../hooks/useReducedMotion';
 import { useFormValidation } from '../hooks/useFormValidation';
 import { splitUsernames } from '../utils/splitUsernames';
 
-interface ShareModalProps {
+// PendingInvite mirrors GET /api/kb/{id}/members' `pending` array
+// (kbmembers.PendingInvite: username/role/createdAt). There is currently no
+// endpoint to revoke a pending invite on the /members surface (unlike the
+// deprecated /share/pending/{username} route it replaces), so these render
+// read-only — see the MembersModal report for that gap.
+interface PendingMemberInvite {
+    username: string;
+    role: string;
+    createdAt: string;
+}
+
+interface MembersModalProps {
     show: boolean;
     onClose: () => void;
     sharingKb: KnowledgeBase | null;
@@ -28,12 +39,19 @@ interface ShareModalProps {
     notFoundUsername: string | null;
     /** Called after a pending invite is created, so the parent can reset its lookup state. */
     onPendingInvited: () => void;
+    /** Caller's own role on this KB — gates the ownership-transfer action. */
+    myRole: string;
 }
 
-export const ShareModal: React.FC<ShareModalProps> = ({
+// Assignable roles for the per-member <select>. Never includes 'owner' —
+// ownership moves only via the explicit transfer action, mirroring the
+// backend's kbaccess.Assignable check on PUT /members/{userId}.
+const ASSIGNABLE_ROLES: KbRole[] = ['view', 'edit', 'admin'];
+
+export const MembersModal: React.FC<MembersModalProps> = ({
     show, onClose, sharingKb, shareUserId, setShareUserId, shareTargetUser,
     shareLoading, sharePermission, setSharePermission, onLookupUser, onConfirmShare,
-    notFoundUsername, onPendingInvited,
+    notFoundUsername, onPendingInvited, myRole,
 }) => {
     const { t } = useTheme();
     const { token } = useAuth();
@@ -43,56 +61,81 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     const { errors, validate, clearError } = useFormValidation({
         username: (v) => !v.trim() && t('fieldRequired'),
     });
-    const [sharedUsers, setSharedUsers] = useState<{ id: string; userId: string; username: string; firstName: string; lastName: string; permission: string }[]>([]);
-    const [loadingShares, setLoadingShares] = useState(false);
-    const [pendingInvites, setPendingInvites] = useState<{ username: string; permission: string; createdAt: string }[]>([]);
+    const [members, setMembers] = useState<KbMember[]>([]);
+    const [loadingMembers, setLoadingMembers] = useState(false);
+    const [pendingInvites, setPendingInvites] = useState<PendingMemberInvite[]>([]);
     const [mode, setMode] = useState<'single' | 'bulk'>('single');
     const [bulkText, setBulkText] = useState('');
     const [bulkPermission, setBulkPermission] = useState<'view' | 'edit'>('view');
     const [bulkLoading, setBulkLoading] = useState(false);
     const [bulkSummary, setBulkSummary] = useState<{ shared: string[]; pending: string[]; alreadyHadAccess: string[] } | null>(null);
 
-    const fetchShares = useCallback(async () => {
+    const fetchMembers = useCallback(async () => {
         if (!sharingKb) return;
-        setLoadingShares(true);
+        setLoadingMembers(true);
         try {
             if (!token) return;
 
-            const res = await axios.get(`${API_BASE_URL}/api/kb/${sharingKb.id}/shares`);
-            setSharedUsers(res.data.shares ?? []);
+            const res = await axios.get(`${API_BASE_URL}/api/kb/${sharingKb.id}/members`);
+            setMembers(res.data.members ?? []);
             setPendingInvites(res.data.pending ?? []);
         } catch (err: unknown) {
-            console.error('Failed to fetch shares:', err);
+            console.error('Failed to fetch members:', err);
             toast.error(t('sharesFetchError'));
         } finally {
-            setLoadingShares(false);
+            setLoadingMembers(false);
         }
     }, [sharingKb, token, toast, t]);
 
     useEffect(() => {
         if (show && sharingKb) {
-            fetchShares();
+            fetchMembers();
         }
-    }, [show, sharingKb, fetchShares]);
+    }, [show, sharingKb, fetchMembers]);
 
-    // Parent closes the modal on successful share, so the share list refreshes on re-open.
+    // Parent closes the modal on successful share, so the member list refreshes on re-open.
     const handleConfirmShare = async () => {
         await onConfirmShare();
     };
 
-    const handleRemoveShare = async (userId: string) => {
+    const handleRemoveMember = async (userId: string) => {
         if (!sharingKb) return;
         if (!await showConfirm(t('confirmRemoveShare') || 'Are you sure you want to remove this user?')) return;
 
         if (!token) return;
 
-        const prev = sharedUsers;
-        setSharedUsers(sharedUsers.filter(u => u.userId !== userId));
+        const prev = members;
+        setMembers(members.filter(m => m.userId !== userId));
         try {
-            await axios.delete(`${API_BASE_URL}/api/kb/${sharingKb.id}/share/${userId}`);
+            await axios.delete(`${API_BASE_URL}/api/kb/${sharingKb.id}/members/${userId}`);
         } catch {
-            setSharedUsers(prev);
+            setMembers(prev);
             toast.error(t('removeShareError'));
+        }
+    };
+
+    // Optimistic role change with rollback on failure — mirrors
+    // handleRemoveMember above.
+    const handleRoleChange = async (userId: string, role: string) => {
+        if (!sharingKb) return;
+        const prev = members;
+        setMembers(members.map(m => m.userId === userId ? { ...m, role: role as KbRole } : m));
+        try {
+            await axios.put(`${API_BASE_URL}/api/kb/${sharingKb.id}/members/${userId}`, { role });
+        } catch {
+            setMembers(prev);
+            toast.error(t('roleChangeError'));
+        }
+    };
+
+    const handleMakeOwner = async (userId: string, username: string) => {
+        if (!sharingKb) return;
+        if (!await showConfirm(t('confirmMakeOwner').replace('{username}', username))) return;
+        try {
+            await axios.post(`${API_BASE_URL}/api/kb/${sharingKb.id}/transfer-owner`, { userId });
+            await fetchMembers();
+        } catch {
+            toast.error(t('roleChangeError'));
         }
     };
 
@@ -102,13 +145,13 @@ export const ShareModal: React.FC<ShareModalProps> = ({
         if (usernames.length === 0) return;
         setBulkLoading(true);
         try {
-            const res = await axios.post(`${API_BASE_URL}/api/kb/${sharingKb.id}/share/bulk`, {
+            const res = await axios.post(`${API_BASE_URL}/api/kb/${sharingKb.id}/members/bulk`, {
                 usernames,
-                permission: bulkPermission,
+                role: bulkPermission,
             });
             setBulkSummary(res.data);
             setBulkText('');
-            await fetchShares(); // refresh shares + pending lists
+            await fetchMembers(); // refresh members + pending lists
         } catch (err: unknown) {
             console.error('Bulk invite failed:', err);
             toast.error(t('bulkInviteError'));
@@ -117,32 +160,20 @@ export const ShareModal: React.FC<ShareModalProps> = ({
         }
     };
 
-    const handleRevokePending = async (username: string) => {
-        if (!sharingKb) return;
-        const prev = pendingInvites;
-        setPendingInvites(pendingInvites.filter(p => p.username !== username));
-        try {
-            await axios.delete(`${API_BASE_URL}/api/kb/${sharingKb.id}/share/pending/${encodeURIComponent(username)}`);
-        } catch {
-            setPendingInvites(prev);
-            toast.error(t('removeShareError'));
-        }
-    };
-
     const [pendingInviteLoading, setPendingInviteLoading] = useState(false);
 
     // Invite a username with no account yet. Reuses the bulk endpoint, which
     // already parks unknown usernames in pending_kb_invites; they are promoted
-    // to a real share on the user's first login.
+    // to a real membership on the user's first login.
     const handleInviteAnyway = async () => {
         if (!sharingKb || !notFoundUsername) return;
         setPendingInviteLoading(true);
         try {
-            await axios.post(`${API_BASE_URL}/api/kb/${sharingKb.id}/share/bulk`, {
+            await axios.post(`${API_BASE_URL}/api/kb/${sharingKb.id}/members/bulk`, {
                 usernames: [notFoundUsername],
-                permission: sharePermission,
+                role: sharePermission,
             });
-            await fetchShares(); // surface the new invite in the pending list below
+            await fetchMembers(); // surface the new invite in the pending list below
             toast.success(t('inviteAnywaySuccess').replace('{username}', notFoundUsername));
             onPendingInvited();
         } catch (err: unknown) {
@@ -157,10 +188,10 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
     return (
         <div className="modal-overlay" role="presentation" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-            <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="share-modal-title" style={{ maxWidth: '500px' }}>
+            <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="members-modal-title" style={{ maxWidth: '500px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                    <h3 id="share-modal-title" style={{ margin: 0 }}>"{sharingKb?.name}" {t('shareKb')}</h3>
-                    <button onClick={onClose} className="icon-button" aria-label={t('closeShareModal')}><X size={20} /></button>
+                    <h3 id="members-modal-title" style={{ margin: 0 }}>&quot;{sharingKb?.name}&quot; &middot; {t('members')}</h3>
+                    <button onClick={onClose} className="icon-button" aria-label={t('close')}><X size={20} /></button>
                 </div>
 
                 <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem' }} role="tablist">
@@ -322,7 +353,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                 )}
 
                 {shareTargetUser ? (
-                    <div style={{ display: 'flex', gap: '1rem', marginBottom: sharedUsers.length > 0 ? '2rem' : 0 }}>
+                    <div style={{ display: 'flex', gap: '1rem', marginBottom: members.length > 0 ? '2rem' : 0 }}>
                         <button
                             onClick={handleConfirmShare}
                             className="search-button"
@@ -374,16 +405,16 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                     </div>
                 )}
 
-                {/* Divider if we have shared users */}
-                {sharedUsers.length > 0 && (
+                {/* Member list */}
+                {members.length > 0 && (
                     <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-color)' }}>
                         <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.95rem', color: 'var(--text-secondary)' }}>
-                            Shared with {loadingShares && <Loader2 className="animate-spin" size={14} style={{ display: 'inline', marginLeft: '8px' }} />}
+                            {t('members')} {loadingMembers && <Loader2 className="animate-spin" size={14} style={{ display: 'inline', marginLeft: '8px' }} />}
                         </h4>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '200px', overflowY: 'auto' }}>
-                            {sharedUsers.map(user => (
-                                <div key={user.userId} style={{
+                            {members.map(m => (
+                                <div key={m.userId} data-testid={`member-row-${m.userId}`} style={{
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'space-between',
@@ -404,22 +435,58 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                                         </div>
                                         <div>
                                             <div style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
-                                                {user.firstName} {user.lastName}
+                                                {m.firstName} {m.lastName}
                                             </div>
                                             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                                                @{user.username} • {user.permission === 'edit' ? t('editPermission') : t('viewPermission')}
+                                                @{m.username}
                                             </div>
                                         </div>
                                     </div>
-                                    <button
-                                        onClick={() => handleRemoveShare(user.userId)}
-                                        className="icon-button"
-                                        style={{ color: 'var(--error-color)', padding: '6px' }}
-                                        title={t('removeShare') || "Remove access"}
-                                        aria-label={t('removeShare') || "Remove access"}
-                                    >
-                                        <Trash2 size={16} />
-                                    </button>
+
+                                    {m.role === 'owner' ? (
+                                        <span
+                                            aria-label={t('ownerLabel')}
+                                            title={t('ownerLabel')}
+                                            style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 500 }}
+                                        >
+                                            <Crown size={14} aria-hidden="true" />
+                                            {t('kbRoleOwner')}
+                                        </span>
+                                    ) : (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            {myRole === 'owner' && m.role === 'admin' && (
+                                                <button
+                                                    onClick={() => handleMakeOwner(m.userId, m.username)}
+                                                    className="icon-button"
+                                                    style={{ fontSize: '0.75rem', padding: '4px 8px', width: 'auto' }}
+                                                    title={t('makeOwner')}
+                                                >
+                                                    {t('makeOwner')}
+                                                </button>
+                                            )}
+                                            <select
+                                                aria-label={t('selectRole')}
+                                                value={m.role}
+                                                onChange={e => handleRoleChange(m.userId, e.target.value)}
+                                                style={{ padding: '0.35rem 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                                            >
+                                                {ASSIGNABLE_ROLES.map(role => (
+                                                    <option key={role} value={role}>
+                                                        {role === 'view' ? t('kbRoleView') : role === 'edit' ? t('kbRoleEdit') : t('kbRoleAdmin')}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                onClick={() => handleRemoveMember(m.userId)}
+                                                className="icon-button"
+                                                style={{ color: 'var(--error-color)', padding: '6px' }}
+                                                title={t('removeShare') || 'Remove access'}
+                                                aria-label={t('removeShare') || 'Remove access'}
+                                            >
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -438,12 +505,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                                         <Clock size={14} aria-hidden="true" style={{ color: 'var(--text-secondary)' }} />
                                         <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-                                            @{p.username} • {p.permission === 'edit' ? t('editPermission') : t('viewPermission')}
+                                            @{p.username} &middot; {p.role === 'edit' ? t('editPermission') : p.role === 'admin' ? t('kbRoleAdmin') : t('viewPermission')}
                                         </span>
                                     </div>
-                                    <button onClick={() => handleRevokePending(p.username)} className="icon-button" style={{ color: 'var(--error-color)', padding: '6px' }} title={t('revokeInvite')} aria-label={t('revokeInvite')}>
-                                        <Trash2 size={16} />
-                                    </button>
                                 </div>
                             ))}
                         </div>

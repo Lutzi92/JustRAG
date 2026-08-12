@@ -96,8 +96,8 @@ type FileRow struct {
 
 // UpdateStore is the narrow persistence contract required by UpdateHandler —
 // a KB-level update, file listing, and chunk-config lookup. Kept separate
-// from kb.Store (list/create KBs) and kb.ShareStore (sharing) so each
-// handler's tests can use a minimal fake.
+// from kb.Store (list/create KBs) so each handler's tests can use a minimal
+// fake.
 type UpdateStore interface {
 	// UpdateKnowledgeBase applies non-nil fields from data to the KB identified
 	// by id. Returns nil, nil if the KB does not exist.

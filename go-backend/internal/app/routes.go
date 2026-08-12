@@ -624,14 +624,13 @@ func registerKBRoutes(rc *routeCtx) {
 	kbUpdateHandler := kb.NewUpdateHandler(rc.kbStore, func(kbID string) { rc.aiResolver.Invalidate(kbID) })
 	kbDeleteHandler := kb.NewDeleteHandler(rc.cascadeDeleter)
 
-	// Four-role member management (Task 6 of the KB-role-model plan). The
-	// deprecated /share* endpoints below are repointed at the same
-	// kbmembers.Store, via kb.NewKBMembersShareStore, so a grant made through
-	// either surface is visible to kbaccess (which reads kb_members, not
-	// knowledge_base_shares).
+	// Four-role member management (Task 6 of the KB-role-model plan).
+	// knowledge_base_shares itself is untouched — dropping it is a later,
+	// separate migration — but the /share* HTTP surface that wrote it is
+	// gone as of Task 9; kb_members (via kbMembersStore) is now the only
+	// grant path.
 	kbMembersStore := kbmembers.NewStore(rc.infra.db.Main)
 	kbMembersHandler := kbmembers.NewHandler(kbMembersStore, pendingInviteAdapter{rc.kbStore})
-	kbSharingHandler := kb.NewSharingHandler(kb.NewKBMembersShareStore(rc.kbStore, kbMembersStore))
 
 	// KB listing (auth only)
 	rc.mux.Handle("GET /api/kb", rc.authMw.Authenticate(http.HandlerFunc(kbHandler.ListKnowledgeBases)))
@@ -651,17 +650,11 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("DELETE /api/kb/{id}", rc.kbEditChain(kbDeleteHandler.DeleteKB))
 	rc.mux.Handle("GET /api/kb/{id}/files", rc.kbViewChain(kbUpdateHandler.ListFiles))
 
-	// DEPRECATED: kept only through Task 9, which deletes this file's five
-	// routes once the frontend has moved to /members. See kb.SharingHandler.
-	rc.mux.Handle("GET /api/kb/{id}/shares", rc.kbViewChain(kbSharingHandler.ListShares))
-	rc.mux.Handle("POST /api/kb/{id}/share", rc.kbViewChain(kbSharingHandler.AddShare))
-	rc.mux.Handle("DELETE /api/kb/{id}/share/{userId}", rc.kbViewChain(kbSharingHandler.RemoveShare))
-	rc.mux.Handle("POST /api/kb/{id}/share/bulk", rc.kbViewChain(kbSharingHandler.BulkInvite))
-	rc.mux.Handle("DELETE /api/kb/{id}/share/pending/{username}", rc.kbViewChain(kbSharingHandler.RemovePendingShare))
-
-	// Member management — the successor to /share* above. GET /members sits
-	// on kbAdminChain, not view: on a public KB every authenticated user
-	// resolves to view, and the membership roster is not theirs to read.
+	// Member management — the four-role successor to the deprecated /share*
+	// surface, removed in Task 9 of the four-role KB permission model (see
+	// git history for kb.SharingHandler). GET /members sits on kbAdminChain,
+	// not view: on a public KB every authenticated user resolves to view,
+	// and the membership roster is not theirs to read.
 	rc.mux.Handle("GET /api/kb/{id}/members", rc.kbAdminChain(kbMembersHandler.ListMembers))
 	rc.mux.Handle("PUT /api/kb/{id}/members/{userId}", rc.kbAdminChain(kbMembersHandler.SetMemberRole))
 	rc.mux.Handle("DELETE /api/kb/{id}/members/{userId}", rc.kbAdminChain(kbMembersHandler.RemoveMember))

@@ -383,15 +383,12 @@ func TestTransferOwner_Success(t *testing.T) {
 	}
 }
 
-// The following BulkInvite tests are ported (not moved — see the doc
-// comment on Handler.BulkInvite) from kb/http_sharing_test.go's
-// TestBulkInvite_Categorizes / _SkipsInviter / _TooMany / _BadPermission.
-// kbmembers.Handler.BulkInvite is now the canonical implementation of this
-// loop; kb.SharingHandler.BulkInvite (DEPRECATED) keeps its own copy and its
-// own tests only because its test suite is frozen to a ShareStore-shaped
-// single dependency, and Task 9 deletes both. Without a copy of this
-// coverage here, the moment that deprecated surface goes, every test of
-// this logic would go with it.
+// The following BulkInvite tests were ported (not moved — see the doc
+// comment on Handler.BulkInvite) from the now-deleted kb/http_sharing_test.go's
+// TestBulkInvite_Categorizes / _SkipsInviter / _TooMany / _BadPermission,
+// before Task 9 of the four-role KB permission model removed that deprecated
+// surface (kb.SharingHandler.BulkInvite) entirely. Without this copy, this
+// loop's coverage would have gone with it.
 
 func TestBulkInvite_Categorizes(t *testing.T) {
 	store := &mockStore{roles: map[string]string{"user-bob": kbaccess.RoleView}} // bob already a member

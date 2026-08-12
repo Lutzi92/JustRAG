@@ -17,8 +17,14 @@ import (
 	"github.com/justrag/go-backend/internal/store"
 )
 
-// PGStore is a PostgreSQL-backed implementation of kb.Store, kb.UpdateStore,
-// and kb.ShareStore.
+// PGStore is a PostgreSQL-backed implementation of kb.Store and
+// kb.UpdateStore. It also implements the pending-invite lookups
+// (GetUserIDByUsername, UpsertPendingInvite, ListPendingInvites) that
+// internal/app/routes.go's pendingInviteAdapter promotes to
+// kbmembers.PendingInviteStore for the four-role /members surface — see the
+// "Pending KB invites" section below. The deprecated ShareStore interface
+// (knowledge_base_shares-backed sharing) was removed in Task 9 of the
+// four-role KB permission model; see internal/kbmembers for its successor.
 type PGStore struct {
 	pool *pgxpool.Pool
 }
@@ -32,7 +38,6 @@ func NewStore(pool *pgxpool.Pool) *PGStore {
 var (
 	_ Store       = (*PGStore)(nil)
 	_ UpdateStore = (*PGStore)(nil)
-	_ ShareStore  = (*PGStore)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -490,83 +495,25 @@ func (s *PGStore) ListFiles(ctx context.Context, kbID string, limit, offset int)
 }
 
 // ---------------------------------------------------------------------------
-// kb.ShareStore implementation
+// Pending KB invites — backs kbmembers.PendingInviteStore (via
+// internal/app/routes.go's pendingInviteAdapter) for the four-role /members
+// surface. GetUserIDByUsername, UpsertPendingInvite, and ListPendingInvites
+// are the only three methods that surface still needs; the rest of this
+// package's former ShareStore implementation (ListKBShares, AddKBShare,
+// RemoveKBShare, ShareExists, RemovePendingInvite) was removed in Task 9 of
+// the four-role KB permission model, along with the deprecated /share*
+// HTTP surface that was its only caller. knowledge_base_shares itself is
+// untouched — dropping it is a later, separate migration.
 // ---------------------------------------------------------------------------
 
-// kbShareListRow is an internal struct for scanning knowledge_base_shares joined with users.
-type kbShareListRow struct {
-	ID         string    `db:"id"`
-	UserID     string    `db:"user_id"`
-	Username   string    `db:"username"`
-	Permission string    `db:"permission"`
-	CreatedAt  time.Time `db:"created_at"`
-}
-
-// ListKBShares returns all share entries for the given KB, joined with users for username.
-func (s *PGStore) ListKBShares(ctx context.Context, kbID string) ([]ShareRow, error) {
-	const sql = `
-		SELECT kbs.id, kbs.user_id, u.username, kbs.permission, kbs.created_at
-		FROM knowledge_base_shares kbs
-		INNER JOIN users u ON kbs.user_id = u.id
-		WHERE kbs.kb_id = $1
-		ORDER BY kbs.created_at DESC`
-
-	rows, err := pgxutil.QueryRows[kbShareListRow](ctx, s.pool, sql, kbID)
-	if err != nil {
-		return []ShareRow{}, err
-	}
-
-	result := make([]ShareRow, len(rows))
-	for i, r := range rows {
-		result[i] = ShareRow(r)
-	}
-	return result, nil
-}
-
-// addShareRow is an internal struct for scanning the RETURNING clause of AddKBShare.
-type addShareRow struct {
-	ID         string    `db:"id"`
-	UserID     string    `db:"user_id"`
-	Permission string    `db:"permission"`
-	CreatedAt  time.Time `db:"created_at"`
-}
-
-// AddKBShare upserts a share entry for kbID+userID. If the pair already exists,
-// the permission is updated. Returns the stored row (username is not populated).
-func (s *PGStore) AddKBShare(ctx context.Context, kbID, userID, permission string) (*ShareRow, error) {
-	const sql = `
-		INSERT INTO knowledge_base_shares (kb_id, user_id, permission)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (kb_id, user_id) DO UPDATE SET permission = EXCLUDED.permission
-		RETURNING id, user_id, permission, created_at`
-
-	row, err := pgxutil.QueryOne[addShareRow](ctx, s.pool, sql, kbID, userID, permission)
-	if err != nil {
-		return nil, err
-	}
-	if row == nil {
-		return nil, fmt.Errorf("AddKBShare: no row returned")
-	}
-	return &ShareRow{
-		ID:         row.ID,
-		UserID:     row.UserID,
-		Permission: row.Permission,
-		CreatedAt:  row.CreatedAt,
-	}, nil
-}
-
-// RemoveKBShare deletes the share entry for kbID+userID.
-// Wraps store.ErrNotFound with the (kbID, userID) pair if no row was deleted.
-func (s *PGStore) RemoveKBShare(ctx context.Context, kbID, userID string) error {
-	ct, err := s.pool.Exec(ctx,
-		`DELETE FROM knowledge_base_shares WHERE kb_id = $1 AND user_id = $2`, kbID, userID)
-	if err != nil {
-		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("kb_share kb=%s user=%s: %w", kbID, userID, store.ErrNotFound)
-	}
-	return nil
+// PendingInviteRow is an invite for a username that does not yet exist as a
+// user. ListPendingInvites returns these; internal/app/routes.go's
+// pendingInviteAdapter translates them into kbmembers.PendingInvite for the
+// /members response shape.
+type PendingInviteRow struct {
+	Username   string    `json:"username" db:"username"`
+	Permission string    `json:"permission" db:"permission"`
+	CreatedAt  time.Time `json:"createdAt" db:"created_at"`
 }
 
 // GetUserIDByUsername resolves a username to a user id, case-insensitively.
@@ -584,21 +531,12 @@ func (s *PGStore) GetUserIDByUsername(ctx context.Context, username string) (str
 	return id, true, nil
 }
 
-// ShareExists reports whether a share row already exists for kbID+userID.
-func (s *PGStore) ShareExists(ctx context.Context, kbID, userID string) (bool, error) {
-	var exists bool
-	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM knowledge_base_shares WHERE kb_id = $1 AND user_id = $2)`,
-		kbID, userID).Scan(&exists)
-	return exists, err
-}
-
 // UpsertPendingInvite stores (or updates the role of) a pending invite for
 // a username that does not yet exist as a user. invitedBy may be "" (stored NULL).
 // The column is named pending_kb_invites.role as of migration 0064's Task 7
 // addendum ("permission" renamed so "admin" can be invited too); the
-// permission parameter name is kept here for API/JSON-tag stability on the
-// (deprecated) callers above, it is only the DB column that changed.
+// permission parameter name is kept here for signature stability with
+// kbmembers.PendingInviteStore, it is only the DB column that changed.
 func (s *PGStore) UpsertPendingInvite(ctx context.Context, kbID, username, permission, invitedBy string) error {
 	var by *string
 	if invitedBy != "" {
@@ -614,7 +552,7 @@ func (s *PGStore) UpsertPendingInvite(ctx context.Context, kbID, username, permi
 
 // pendingInviteDBRow scans a pending_kb_invites row. The Permission field's db
 // tag maps it to the "role" column (migration 0064's Task 7 rename) while
-// keeping the Go/JSON name unchanged for the deprecated ShareStore surface.
+// keeping the Go/JSON name unchanged on PendingInviteRow.
 type pendingInviteDBRow struct {
 	Username   string    `db:"username"`
 	Permission string    `db:"role"`
@@ -637,21 +575,6 @@ func (s *PGStore) ListPendingInvites(ctx context.Context, kbID string) ([]Pendin
 		result[i] = PendingInviteRow(r)
 	}
 	return result, nil
-}
-
-// RemovePendingInvite deletes a pending invite by KB + username (case-insensitive).
-// Wraps store.ErrNotFound when no row was deleted.
-func (s *PGStore) RemovePendingInvite(ctx context.Context, kbID, username string) error {
-	ct, err := s.pool.Exec(ctx,
-		`DELETE FROM pending_kb_invites WHERE kb_id = $1 AND LOWER(username) = LOWER($2)`,
-		kbID, username)
-	if err != nil {
-		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("pending_invite kb=%s user=%s: %w", kbID, username, store.ErrNotFound)
-	}
-	return nil
 }
 
 // ---------------------------------------------------------------------------

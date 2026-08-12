@@ -10,7 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { KBCardSkeleton } from './Skeleton';
 import './HomeView.css';
 
-const ShareModal = lazy(() => import('./ShareModal').then(module => ({ default: module.ShareModal })));
+const MembersModal = lazy(() => import('./MembersModal').then(module => ({ default: module.MembersModal })));
 const SettingsModal = lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
 
 interface HomeViewProps {
@@ -427,7 +427,7 @@ export function HomeView(props: HomeViewProps) {
       </main>
 
       <Suspense fallback={<LoadingFallback />}>
-        {showShareModal && <ShareModal
+        {showShareModal && <MembersModal
           show={showShareModal}
           onClose={() => setShowShareModal(false)}
           sharingKb={sharingKb}
@@ -441,6 +441,7 @@ export function HomeView(props: HomeViewProps) {
           onConfirmShare={onConfirmShare}
           notFoundUsername={notFoundUsername}
           onPendingInvited={onPendingInvited}
+          myRole={sharingKb?.myRole ?? 'view'}
         />}
       </Suspense>
 

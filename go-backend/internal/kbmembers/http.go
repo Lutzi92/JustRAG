@@ -29,10 +29,7 @@ import (
 )
 
 // MaxBulkUsernames caps a single bulk-invite request to bound payload + DB
-// work. Mirrors kb.MaxBulkUsernames — the /share/bulk endpoint (DEPRECATED,
-// see internal/kb/http_sharing.go) keeps its own copy of this constant
-// because it is frozen to a pre-existing test suite; both are 500 and must
-// be kept in sync until Task 9 deletes the /share* surface.
+// work.
 const MaxBulkUsernames = 500
 
 // PendingInvite is one row of an unresolved invite for a username that has
@@ -335,15 +332,10 @@ type BulkInviteResult struct {
 // (pending), applied on their first OIDC login
 // (internal/authhandler.ApplyPendingInvites).
 //
-// This used to live on kb.SharingHandler.BulkInvite. POST
-// /api/kb/{id}/share/bulk (DEPRECATED, see internal/kb/http_sharing.go)
-// keeps its own copy of this loop's control flow — not because there are
-// two implementations of the write path (both ultimately call this
-// package's Store, via the kbMembersShareStore adapter wired in
-// routes.go), but because kb.SharingHandler's constructor and its existing
-// test suite are frozen to a ShareStore-shaped single dependency that
-// predates this package and could not be changed without weakening that
-// suite. See the comment on kb.SharingHandler.BulkInvite.
+// This used to also live, duplicated, on the deprecated kb.SharingHandler.
+// BulkInvite (POST /api/kb/{id}/share/bulk), which Task 9 of the four-role
+// KB permission model removed along with the rest of the /share* surface —
+// this is now the only implementation of the loop.
 func (h *Handler) BulkInvite(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

@@ -178,10 +178,9 @@ func insertKBForPending(t *testing.T, pool *pgxpool.Pool, ownerID string) string
 // TestUpsertAndListPendingInvites_UseRoleColumn exercises the real PGStore's
 // UpsertPendingInvite/ListPendingInvites against a live DB. Task 7's
 // migration 0064 addendum renamed pending_kb_invites.permission to .role; a
-// mocked-store unit test (http_sharing_test.go's TestBulkInvite_* /
-// TestListShares) cannot catch a stale column name in the SQL text — it
-// stubs ShareStore out entirely. This test calls the real PGStore so a wrong
-// column reference fails loudly instead of silently.
+// mocked-store unit test cannot catch a stale column name in the SQL text —
+// it stubs the store out entirely. This test calls the real PGStore so a
+// wrong column reference fails loudly instead of silently.
 func TestUpsertAndListPendingInvites_UseRoleColumn(t *testing.T) {
 	pool := testPool(t)
 	store := kb.NewStore(pool)

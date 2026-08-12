@@ -220,6 +220,18 @@ export interface StudioConfig {
 // no kb_members row — an implicit viewer on a published global KB.
 export type KbRole = 'view' | 'edit' | 'admin' | 'owner';
 
+// KbMember is one row of GET /api/kb/{id}/members' `members` array (Task 9,
+// consumed by MembersModal). firstName/lastName mirror the nullable DB
+// columns; role is never absent — every member row has one.
+export interface KbMember {
+    userId: string;
+    username: string;
+    firstName?: string | null;
+    lastName?: string | null;
+    role: KbRole;
+    createdAt: string;
+}
+
 export interface KnowledgeBase {
     id: string;
     name: string;
