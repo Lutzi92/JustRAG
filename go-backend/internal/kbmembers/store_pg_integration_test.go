@@ -9,6 +9,7 @@ package kbmembers_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -16,6 +17,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/kbmembers"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {
@@ -165,5 +169,193 @@ func TestOwnerMirrorTrigger(t *testing.T) {
 	mustQueryRow(t, pool, `SELECT user_id FROM knowledge_bases WHERE id = $1`, kbID).Scan(&mirrored)
 	if mirrored != b {
 		t.Fatalf("mirror got %s, want %s", mirrored, b)
+	}
+}
+
+// insertChat inserts a throwaway chat owned by userID in kbID and returns its id.
+func insertChat(t *testing.T, pool *pgxpool.Pool, kbID, userID string) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO chats (kb_id, user_id, title) VALUES ($1::uuid, $2::uuid, 'fixture chat')
+		RETURNING id::text`, kbID, userID).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert chat: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM chats WHERE id = $1::uuid`, id) //nolint:errcheck
+	})
+	return id
+}
+
+// TestSetRole_RefusesOwner stellt sicher, dass die Owner-Rolle nicht ueber
+// SetRole vergeben werden kann — sie gehoert ausschliesslich dem Transfer.
+func TestSetRole_RefusesOwner(t *testing.T) {
+	pool := testPool(t)
+	store := kbmembers.NewStore(pool)
+
+	owner := insertUser(t, pool, "setrole-owner")
+	target := insertUser(t, pool, "setrole-target")
+	kbID := insertKB(t, pool, owner, false, false)
+
+	err := store.SetRole(context.Background(), kbID, target, kbaccess.RoleOwner, owner)
+	if !errors.Is(err, kbmembers.ErrOwnerImmutable) {
+		t.Fatalf("SetRole(owner) err = %v, want ErrOwnerImmutable", err)
+	}
+
+	var count int
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM kb_members WHERE kb_id = $1 AND user_id = $2`,
+		kbID, target).Scan(&count)
+	if count != 0 {
+		t.Fatalf("target should not have been inserted, got %d rows", count)
+	}
+}
+
+// TestSetRole_RefusesDemotingOwner stellt sicher, dass ein Admin den Owner
+// nicht herabstufen kann.
+func TestSetRole_RefusesDemotingOwner(t *testing.T) {
+	pool := testPool(t)
+	store := kbmembers.NewStore(pool)
+
+	owner := insertUser(t, pool, "demote-owner")
+	admin := insertUser(t, pool, "demote-admin")
+	kbID := insertKB(t, pool, owner, false, false)
+
+	err := store.SetRole(context.Background(), kbID, owner, kbaccess.RoleEdit, admin)
+	if !errors.Is(err, kbmembers.ErrOwnerImmutable) {
+		t.Fatalf("SetRole(demote owner) err = %v, want ErrOwnerImmutable", err)
+	}
+
+	var role string
+	mustQueryRow(t, pool, `SELECT role FROM kb_members WHERE kb_id = $1 AND user_id = $2`,
+		kbID, owner).Scan(&role)
+	if role != kbaccess.RoleOwner {
+		t.Fatalf("owner role got %q, want owner (unchanged)", role)
+	}
+}
+
+// TestRemoveMember_RefusesOwner stellt sicher, dass der Owner nicht entfernbar ist.
+func TestRemoveMember_RefusesOwner(t *testing.T) {
+	pool := testPool(t)
+	store := kbmembers.NewStore(pool)
+
+	owner := insertUser(t, pool, "removemember-owner")
+	kbID := insertKB(t, pool, owner, false, false)
+
+	err := store.RemoveMember(context.Background(), kbID, owner)
+	if !errors.Is(err, kbmembers.ErrOwnerImmutable) {
+		t.Fatalf("RemoveMember(owner) err = %v, want ErrOwnerImmutable", err)
+	}
+
+	var count int
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM kb_members WHERE kb_id = $1 AND user_id = $2`,
+		kbID, owner).Scan(&count)
+	if count != 1 {
+		t.Fatalf("owner row should remain, got %d rows", count)
+	}
+}
+
+// TestTransferOwner_SwapsRolesAndMirror prueft: neuer Owner hat role='owner',
+// alter Owner hat role='admin', knowledge_bases.user_id zeigt auf den neuen.
+func TestTransferOwner_SwapsRolesAndMirror(t *testing.T) {
+	pool := testPool(t)
+	store := kbmembers.NewStore(pool)
+
+	oldOwner := insertUser(t, pool, "transfer-old")
+	newOwner := insertUser(t, pool, "transfer-new")
+	kbID := insertKB(t, pool, oldOwner, false, false)
+	// newOwner is already a member (e.g. an existing editor) before the transfer.
+	mustExec(t, pool, `INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1, $2, 'edit')`, kbID, newOwner)
+
+	if err := store.TransferOwner(context.Background(), kbID, newOwner); err != nil {
+		t.Fatalf("TransferOwner: %v", err)
+	}
+
+	var newRole, oldRole string
+	mustQueryRow(t, pool, `SELECT role FROM kb_members WHERE kb_id = $1 AND user_id = $2`,
+		kbID, newOwner).Scan(&newRole)
+	mustQueryRow(t, pool, `SELECT role FROM kb_members WHERE kb_id = $1 AND user_id = $2`,
+		kbID, oldOwner).Scan(&oldRole)
+	if newRole != kbaccess.RoleOwner {
+		t.Fatalf("new owner role got %q, want owner", newRole)
+	}
+	if oldRole != kbaccess.RoleAdmin {
+		t.Fatalf("old owner role got %q, want admin", oldRole)
+	}
+
+	var mirrored string
+	mustQueryRow(t, pool, `SELECT user_id FROM knowledge_bases WHERE id = $1`, kbID).Scan(&mirrored)
+	if mirrored != newOwner {
+		t.Fatalf("mirror got %s, want %s", mirrored, newOwner)
+	}
+}
+
+// TestLeaveKB_DeletesOwnChatsOnly legt zwei Chats von zwei Nutzern in derselben
+// KB an und prueft, dass Leave nur die des Ausscheidenden loescht.
+func TestLeaveKB_DeletesOwnChatsOnly(t *testing.T) {
+	pool := testPool(t)
+	store := kbmembers.NewStore(pool)
+
+	owner := insertUser(t, pool, "leave-owner")
+	leaver := insertUser(t, pool, "leave-leaver")
+	stayer := insertUser(t, pool, "leave-stayer")
+	kbID := insertKB(t, pool, owner, false, false)
+	mustExec(t, pool, `INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1, $2, 'edit')`, kbID, leaver)
+	mustExec(t, pool, `INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1, $2, 'edit')`, kbID, stayer)
+
+	leaverChat := insertChat(t, pool, kbID, leaver)
+	stayerChat := insertChat(t, pool, kbID, stayer)
+
+	deleted, err := store.LeaveKB(context.Background(), kbID, leaver)
+	if err != nil {
+		t.Fatalf("LeaveKB: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deletedChats = %d, want 1", deleted)
+	}
+
+	var leaverChatCount, stayerChatCount, memberCount int
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM chats WHERE id = $1`, leaverChat).Scan(&leaverChatCount)
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM chats WHERE id = $1`, stayerChat).Scan(&stayerChatCount)
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM kb_members WHERE kb_id = $1 AND user_id = $2`,
+		kbID, leaver).Scan(&memberCount)
+	if leaverChatCount != 0 {
+		t.Fatalf("leaver's chat should be deleted, got %d rows", leaverChatCount)
+	}
+	if stayerChatCount != 1 {
+		t.Fatalf("stayer's chat should survive, got %d rows", stayerChatCount)
+	}
+	if memberCount != 0 {
+		t.Fatalf("leaver's membership should be deleted, got %d rows", memberCount)
+	}
+}
+
+// TestLeaveKB_OwnerRefused stellt sicher, dass der Owner nicht verlassen kann.
+func TestLeaveKB_OwnerRefused(t *testing.T) {
+	pool := testPool(t)
+	store := kbmembers.NewStore(pool)
+
+	owner := insertUser(t, pool, "leave-refused-owner")
+	kbID := insertKB(t, pool, owner, false, false)
+	chatID := insertChat(t, pool, kbID, owner)
+
+	deleted, err := store.LeaveKB(context.Background(), kbID, owner)
+	if !errors.Is(err, kbmembers.ErrOwnerImmutable) {
+		t.Fatalf("LeaveKB(owner) err = %v, want ErrOwnerImmutable", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("deletedChats = %d, want 0", deleted)
+	}
+
+	var chatCount, memberCount int
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM chats WHERE id = $1`, chatID).Scan(&chatCount)
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM kb_members WHERE kb_id = $1 AND user_id = $2`,
+		kbID, owner).Scan(&memberCount)
+	if chatCount != 1 {
+		t.Fatalf("owner's chat should survive, got %d rows", chatCount)
+	}
+	if memberCount != 1 {
+		t.Fatalf("owner's membership should survive, got %d rows", memberCount)
 	}
 }
