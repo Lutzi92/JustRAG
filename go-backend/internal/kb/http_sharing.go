@@ -12,6 +12,7 @@ import (
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/kbmembers"
 	"github.com/justrag/go-backend/internal/store"
 )
 
@@ -46,6 +47,13 @@ type ShareStore interface {
 }
 
 // SharingHandler holds the dependencies for KB sharing endpoints.
+//
+// DEPRECATED: kept only through Task 9 of the four-role KB permission model
+// plan, so the frontend can move to /api/kb/{id}/members in its own commit.
+// The endpoints below already write through to kb_members (see
+// kbMembersShareStore) — knowledge_base_shares is no longer the authority
+// source as of migration 0064, it just isn't dropped until after Phase 2.
+// Task 9 deletes this file, its test file, and its five routes.
 type SharingHandler struct {
 	store ShareStore
 }
@@ -103,23 +111,19 @@ func normalizeUsernames(in []string) []string {
 	return out
 }
 
-// isOwnerOrSuperadmin returns true when the current user is the KB owner or has the superadmin role.
-func isOwnerOrSuperadmin(r *http.Request) bool {
+// isAdminOrAbove reports whether the caller's resolved KB role meets the
+// admin bar. Replaces the old isOwnerOrSuperadmin, which hand-rolled the
+// same resolution kbaccess.EffectiveRole already does — superadmins resolve
+// to RoleOwner there, so no separate system-role branch is needed here.
+func isAdminOrAbove(r *http.Request) bool {
 	access := kbaccess.AccessFromContext(r.Context())
-	user := auth.UserFromContext(r.Context())
-	if user != nil && user.Role == "superadmin" {
-		return true
-	}
-	if access != nil && access.IsOwner {
-		return true
-	}
-	return false
+	return access != nil && kbaccess.AtLeast(access.Role, kbaccess.RoleAdmin)
 }
 
 // ListShares handles GET /api/kb/{id}/shares.
 // Only KB owners and superadmins can see the share list.
 func (h *SharingHandler) ListShares(w http.ResponseWriter, r *http.Request) {
-	if !isOwnerOrSuperadmin(r) {
+	if !isAdminOrAbove(r) {
 		httputil.WriteJSONCtx(r.Context(), w, http.StatusForbidden, map[string]string{"error": "only the KB owner or a superadmin can view shares"})
 		return
 	}
@@ -144,7 +148,7 @@ func (h *SharingHandler) ListShares(w http.ResponseWriter, r *http.Request) {
 // Only KB owners and superadmins may add shares.
 // Returns 201 on success, 400 for invalid input, 403 for insufficient permissions.
 func (h *SharingHandler) AddShare(w http.ResponseWriter, r *http.Request) {
-	if !isOwnerOrSuperadmin(r) {
+	if !isAdminOrAbove(r) {
 		httputil.WriteJSONCtx(r.Context(), w, http.StatusForbidden, map[string]string{"error": "only the KB owner or a superadmin can share this knowledge base"})
 		return
 	}
@@ -159,8 +163,8 @@ func (h *SharingHandler) AddShare(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteJSONCtx(r.Context(), w, http.StatusBadRequest, map[string]string{"error": "userId is required"})
 		return
 	}
-	if body.Permission != "view" && body.Permission != "edit" {
-		httputil.WriteJSONCtx(r.Context(), w, http.StatusBadRequest, map[string]string{"error": "permission must be \"view\" or \"edit\""})
+	if !kbaccess.Assignable(body.Permission) {
+		httputil.WriteJSONCtx(r.Context(), w, http.StatusBadRequest, map[string]string{"error": `permission must be "view", "edit" or "admin"`})
 		return
 	}
 
@@ -178,7 +182,7 @@ func (h *SharingHandler) AddShare(w http.ResponseWriter, r *http.Request) {
 // Only KB owners and superadmins may remove shares.
 // Returns 204 on success, 403 for insufficient permissions, 404 if the share does not exist.
 func (h *SharingHandler) RemoveShare(w http.ResponseWriter, r *http.Request) {
-	if !isOwnerOrSuperadmin(r) {
+	if !isAdminOrAbove(r) {
 		httputil.WriteJSONCtx(r.Context(), w, http.StatusForbidden, map[string]string{"error": "only the KB owner or a superadmin can remove shares"})
 		return
 	}
@@ -199,12 +203,20 @@ func (h *SharingHandler) RemoveShare(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// BulkInvite handles POST /api/kb/{id}/share/bulk. For each pasted username:
-// existing user -> knowledge_base_shares (shared, or alreadyHadAccess if a share
-// already existed); unknown user -> pending_kb_invites (pending), applied on
-// their first OIDC login. Only KB owners and superadmins may bulk-invite.
+// BulkInvite handles POST /api/kb/{id}/share/bulk. DEPRECATED wrapper: the
+// canonical implementation of this loop is kbmembers.Handler.BulkInvite
+// (POST /api/kb/{id}/members/bulk); this copy exists only because
+// SharingHandler's constructor and its test suite are frozen to a
+// ShareStore-shaped single dependency that predates internal/kbmembers.
+// Both ultimately write kb_members through the same Store — see
+// kbMembersShareStore below — so there is one implementation of the SQL,
+// even though the per-username categorization loop is necessarily
+// duplicated here. For each pasted username: existing user -> kb_members
+// (shared, or alreadyHadAccess if they already had a role); unknown user ->
+// pending_kb_invites (pending), applied on their first OIDC login. Only KB
+// admins, owners and superadmins may bulk-invite.
 func (h *SharingHandler) BulkInvite(w http.ResponseWriter, r *http.Request) {
-	if !isOwnerOrSuperadmin(r) {
+	if !isAdminOrAbove(r) {
 		httputil.WriteJSONCtx(r.Context(), w, http.StatusForbidden, map[string]string{"error": "only the KB owner or a superadmin can share this knowledge base"})
 		return
 	}
@@ -214,8 +226,8 @@ func (h *SharingHandler) BulkInvite(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteJSONCtx(r.Context(), w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if body.Permission != "view" && body.Permission != "edit" {
-		httputil.WriteJSONCtx(r.Context(), w, http.StatusBadRequest, map[string]string{"error": "permission must be \"view\" or \"edit\""})
+	if !kbaccess.Assignable(body.Permission) {
+		httputil.WriteJSONCtx(r.Context(), w, http.StatusBadRequest, map[string]string{"error": `permission must be "view", "edit" or "admin"`})
 		return
 	}
 
@@ -277,7 +289,7 @@ func (h *SharingHandler) BulkInvite(w http.ResponseWriter, r *http.Request) {
 // RemovePendingShare handles DELETE /api/kb/{id}/share/pending/{username}.
 // Only KB owners and superadmins may revoke a pending invite.
 func (h *SharingHandler) RemovePendingShare(w http.ResponseWriter, r *http.Request) {
-	if !isOwnerOrSuperadmin(r) {
+	if !isAdminOrAbove(r) {
 		httputil.WriteJSONCtx(r.Context(), w, http.StatusForbidden, map[string]string{"error": "only the KB owner or a superadmin can remove invites"})
 		return
 	}
@@ -295,4 +307,99 @@ func (h *SharingHandler) RemovePendingShare(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// kbMembersShareStore adapts a legacy ShareStore so that its list/add/remove
+// and existence-check operations actually write and read kb_members (via
+// members, a kbmembers.Store) instead of the retired knowledge_base_shares
+// table. Pending-invite bookkeeping (GetUserIDByUsername, UpsertPendingInvite,
+// ListPendingInvites, RemovePendingInvite) is a different table untouched by
+// the four-role migration, so those four methods are simply promoted from the
+// embedded legacy store.
+//
+// This exists so the /share* endpoints above (DEPRECATED, see SharingHandler)
+// keep working as a real grant path — not a silent no-op against a table
+// kbaccess no longer reads — while the frontend still calls them, and so
+// that grant is the single kb_members writer kbmembers.Store already is:
+// no second SQL implementation to reconcile once Task 9 deletes this file.
+type kbMembersShareStore struct {
+	ShareStore
+	members kbmembers.Store
+}
+
+// NewKBMembersShareStore builds a ShareStore whose list/add/remove/exists
+// operations go through members (kb_members), while everything else —
+// pending-invite handling — falls through to legacy unchanged.
+func NewKBMembersShareStore(legacy ShareStore, members kbmembers.Store) ShareStore {
+	return &kbMembersShareStore{ShareStore: legacy, members: members}
+}
+
+// ListKBShares lists non-owner kb_members rows in the ShareRow shape the
+// deprecated /shares response uses. The owner is excluded because
+// knowledge_base_shares never held an owner row either — it was represented
+// solely via knowledge_bases.user_id.
+func (a *kbMembersShareStore) ListKBShares(ctx context.Context, kbID string) ([]ShareRow, error) {
+	members, err := a.members.ListMembers(ctx, kbID)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]ShareRow, 0, len(members))
+	for _, m := range members {
+		if m.Role == kbaccess.RoleOwner {
+			continue
+		}
+		rows = append(rows, ShareRow{
+			UserID:     m.UserID,
+			Username:   m.Username,
+			Permission: m.Role,
+			CreatedAt:  m.CreatedAt,
+		})
+	}
+	return rows, nil
+}
+
+// AddKBShare grants permission on kbID to userID via kb_members.SetRole, then
+// re-reads the row to populate the ShareRow the deprecated handler returns.
+func (a *kbMembersShareStore) AddKBShare(ctx context.Context, kbID, userID, permission string) (*ShareRow, error) {
+	var grantedBy string
+	if u := auth.UserFromContext(ctx); u != nil {
+		grantedBy = u.ID
+	}
+	if err := a.members.SetRole(ctx, kbID, userID, permission, grantedBy); err != nil {
+		return nil, err
+	}
+	members, err := a.members.ListMembers(ctx, kbID)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range members {
+		if m.UserID == userID {
+			return &ShareRow{UserID: m.UserID, Username: m.Username, Permission: m.Role, CreatedAt: m.CreatedAt}, nil
+		}
+	}
+	return &ShareRow{UserID: userID, Permission: permission}, nil
+}
+
+// RemoveKBShare revokes userID's kb_members role for kbID. Translates
+// kbmembers.ErrNotFound to store.ErrNotFound so RemoveShare's existing
+// errors.Is(err, store.ErrNotFound) check keeps mapping to 404.
+func (a *kbMembersShareStore) RemoveKBShare(ctx context.Context, kbID, userID string) error {
+	err := a.members.RemoveMember(ctx, kbID, userID)
+	if errors.Is(err, kbmembers.ErrNotFound) {
+		return fmt.Errorf("kb_share kb=%s user=%s: %w", kbID, userID, store.ErrNotFound)
+	}
+	return err
+}
+
+// ShareExists reports whether userID already has a kb_members role for kbID
+// — the bulk-invite loop's "alreadyHadAccess" check.
+func (a *kbMembersShareStore) ShareExists(ctx context.Context, kbID, userID string) (bool, error) {
+	_, err := a.members.GetRole(ctx, kbID, userID)
+	if errors.Is(err, kbmembers.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }

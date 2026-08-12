@@ -289,7 +289,11 @@ func TestBulkInvite_TooMany(t *testing.T) {
 func TestBulkInvite_BadPermission(t *testing.T) {
 	store := &mockShareStore{knownUsers: map[string]string{}}
 	handler := kb.NewSharingHandler(store)
-	body := `{"usernames":["alice"],"permission":"admin"}`
+	// "admin" is a legitimate permission value now (kbaccess.Assignable
+	// widened the check in Task 6 of the KB-role-model plan), so this fixture
+	// uses "owner" instead — still rejected, since ownership only ever moves
+	// via the explicit transfer endpoint, never through share/bulk.
+	body := `{"usernames":["alice"],"permission":"owner"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/kb/kb-1/share/bulk", bytes.NewBufferString(body))
 	req.SetPathValue("id", "kb-1")
 	req = req.WithContext(ownerContext(req.Context(), "kb-1"))

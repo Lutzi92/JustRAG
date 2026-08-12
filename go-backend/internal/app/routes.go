@@ -52,6 +52,7 @@ import (
 	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/kbconfig"
+	"github.com/justrag/go-backend/internal/kbmembers"
 	"github.com/justrag/go-backend/internal/kg"
 	"github.com/justrag/go-backend/internal/kgevents"
 	"github.com/justrag/go-backend/internal/kggraph"
@@ -598,11 +599,39 @@ func registerAdminEvalRoutes(rc *routeCtx) {
 	rc.mux.Handle("DELETE /api/kb/{id}/eval/runs/{runId}", rc.kbAdminChain(h.DeleteRunForKB))
 }
 
+// pendingInviteAdapter narrows *kb.PGStore down to kbmembers.PendingInviteStore:
+// same pending_kb_invites table, same three underlying methods, just
+// ListPendingInvites needs its return type translated from kb.PendingInviteRow
+// (JSON tag "permission") to kbmembers.PendingInvite (JSON tag "role") for the
+// /members response shape. GetUserIDByUsername and UpsertPendingInvite are
+// promoted unchanged via the embedded *kb.PGStore.
+type pendingInviteAdapter struct{ *kb.PGStore }
+
+func (a pendingInviteAdapter) ListPendingInvites(ctx context.Context, kbID string) ([]kbmembers.PendingInvite, error) {
+	rows, err := a.PGStore.ListPendingInvites(ctx, kbID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]kbmembers.PendingInvite, len(rows))
+	for i, r := range rows {
+		out[i] = kbmembers.PendingInvite{Username: r.Username, Role: r.Permission, CreatedAt: r.CreatedAt}
+	}
+	return out, nil
+}
+
 func registerKBRoutes(rc *routeCtx) {
 	kbHandler := kb.NewHandler(rc.kbStore)
 	kbUpdateHandler := kb.NewUpdateHandler(rc.kbStore, func(kbID string) { rc.aiResolver.Invalidate(kbID) })
-	kbSharingHandler := kb.NewSharingHandler(rc.kbStore)
 	kbDeleteHandler := kb.NewDeleteHandler(rc.cascadeDeleter)
+
+	// Four-role member management (Task 6 of the KB-role-model plan). The
+	// deprecated /share* endpoints below are repointed at the same
+	// kbmembers.Store, via kb.NewKBMembersShareStore, so a grant made through
+	// either surface is visible to kbaccess (which reads kb_members, not
+	// knowledge_base_shares).
+	kbMembersStore := kbmembers.NewStore(rc.infra.db.Main)
+	kbMembersHandler := kbmembers.NewHandler(kbMembersStore, pendingInviteAdapter{rc.kbStore})
+	kbSharingHandler := kb.NewSharingHandler(kb.NewKBMembersShareStore(rc.kbStore, kbMembersStore))
 
 	// KB listing (auth only)
 	rc.mux.Handle("GET /api/kb", rc.authMw.Authenticate(http.HandlerFunc(kbHandler.ListKnowledgeBases)))
@@ -621,11 +650,30 @@ func registerKBRoutes(rc *routeCtx) {
 	// middleware chain any tighter than edit would be redundant.
 	rc.mux.Handle("DELETE /api/kb/{id}", rc.kbEditChain(kbDeleteHandler.DeleteKB))
 	rc.mux.Handle("GET /api/kb/{id}/files", rc.kbViewChain(kbUpdateHandler.ListFiles))
+
+	// DEPRECATED: kept only through Task 9, which deletes this file's five
+	// routes once the frontend has moved to /members. See kb.SharingHandler.
 	rc.mux.Handle("GET /api/kb/{id}/shares", rc.kbViewChain(kbSharingHandler.ListShares))
 	rc.mux.Handle("POST /api/kb/{id}/share", rc.kbViewChain(kbSharingHandler.AddShare))
 	rc.mux.Handle("DELETE /api/kb/{id}/share/{userId}", rc.kbViewChain(kbSharingHandler.RemoveShare))
 	rc.mux.Handle("POST /api/kb/{id}/share/bulk", rc.kbViewChain(kbSharingHandler.BulkInvite))
 	rc.mux.Handle("DELETE /api/kb/{id}/share/pending/{username}", rc.kbViewChain(kbSharingHandler.RemovePendingShare))
+
+	// Member management — the successor to /share* above. GET /members sits
+	// on kbAdminChain, not view: on a public KB every authenticated user
+	// resolves to view, and the membership roster is not theirs to read.
+	rc.mux.Handle("GET /api/kb/{id}/members", rc.kbAdminChain(kbMembersHandler.ListMembers))
+	rc.mux.Handle("PUT /api/kb/{id}/members/{userId}", rc.kbAdminChain(kbMembersHandler.SetMemberRole))
+	rc.mux.Handle("DELETE /api/kb/{id}/members/{userId}", rc.kbAdminChain(kbMembersHandler.RemoveMember))
+	rc.mux.Handle("POST /api/kb/{id}/members/bulk", rc.kbAdminChain(kbMembersHandler.BulkInvite))
+	// transfer-owner and membership sit on kbViewChain, not kbAdminChain:
+	// RequireKBRole has no owner tier to gate on without also excluding
+	// superadmins (they resolve to RoleOwner and must be let through), and
+	// membership/impact + DELETE /membership apply to any member leaving,
+	// admin or not. Each handler enforces its own tighter check.
+	rc.mux.Handle("POST /api/kb/{id}/transfer-owner", rc.kbViewChain(kbMembersHandler.TransferOwner))
+	rc.mux.Handle("DELETE /api/kb/{id}/membership", rc.kbViewChain(kbMembersHandler.LeaveKB))
+	rc.mux.Handle("GET /api/kb/{id}/membership/impact", rc.kbViewChain(kbMembersHandler.MembershipImpact))
 
 	// Analytics
 	analyticsHandler := analytics.NewHandler(analytics.NewStore(rc.infra.db.Main))
