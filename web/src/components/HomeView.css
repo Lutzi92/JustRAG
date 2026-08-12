@@ -289,6 +289,15 @@
   background-color: var(--bg-hover);
 }
 
+.home-view__mini-icon:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.home-view__mini-icon:disabled:hover {
+  background-color: transparent;
+}
+
 .home-view__kb-name {
   margin-top: 1rem;
   margin-block-start: 1rem;

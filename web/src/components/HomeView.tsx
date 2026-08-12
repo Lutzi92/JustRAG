@@ -27,6 +27,7 @@ interface HomeViewProps {
   onCreateKB: () => void;
   onSelectKB: (kb: KnowledgeBase) => void;
   onDeleteKB: (kb: KnowledgeBase, e: React.MouseEvent) => void;
+  removingKb: boolean;
   onCreateGlobalKB: () => void;
   onDeleteGlobalKB: (id: string, e: React.MouseEvent) => void;
   onOpenGlobalKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
@@ -118,7 +119,7 @@ export function HomeView(props: HomeViewProps) {
   const {
     kbs, globalKbs, currentKb, availableConfigs,
     copySuccess, onCopyUserId, onLogout, onViewProfile, onViewAdmin, onViewAgents,
-    onCreateKB, onSelectKB, onDeleteKB, onCreateGlobalKB, onDeleteGlobalKB,
+    onCreateKB, onSelectKB, onDeleteKB, removingKb, onCreateGlobalKB, onDeleteGlobalKB,
     onOpenGlobalKbSettings, onOpenShare, onUpdateKBSettings,
     showShareModal, setShowShareModal, sharingKb, shareUserId, setShareUserId,
     shareTargetUser, shareLoading, sharePermission, setSharePermission,
@@ -375,10 +376,15 @@ export function HomeView(props: HomeViewProps) {
                     delete the KB outright, everyone else only leaves it
                     (removeKb — useKbRemoval — decides which request that
                     means; a missing myRole is treated as an implicit
-                    viewer, never as owner). */}
+                    viewer, never as owner). Disabled while any removal is
+                    in flight (useKbRemoval.removing) so a double-click
+                    can't open a second confirmation or fire a second
+                    request — the hook also guards re-entry itself, this is
+                    just the UI-visible half of that guard. */}
                 <button
                   onClick={(e) => onDeleteKB(kb, e)}
                   className="home-view__mini-icon"
+                  disabled={removingKb}
                   title={kb.myRole === 'owner' ? t('deleteKb') : t('removeFromMyView')}
                   aria-label={kb.myRole === 'owner' ? t('deleteKb') : t('removeFromMyView')}
                 >

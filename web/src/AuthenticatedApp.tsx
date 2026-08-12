@@ -323,6 +323,7 @@ function AuthenticatedAppInner() {
           onCreateKB={kbMgmt.handleCreateKB}
           onSelectKB={kbMgmt.handleSelectKB}
           onDeleteKB={kbMgmt.handleDeleteKB}
+          removingKb={kbMgmt.removingKb}
           onCreateGlobalKB={kbMgmt.handleCreateGlobalKB}
           onDeleteGlobalKB={kbMgmt.handleDeleteGlobalKB}
           onOpenGlobalKbSettings={kbMgmt.handleOpenGlobalKbSettings}

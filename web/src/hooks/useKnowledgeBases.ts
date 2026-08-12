@@ -25,7 +25,7 @@ export function useKnowledgeBases({
   const { t } = useTheme();
   const { showConfirm, showPrompt } = useModalContext();
   const toast = useToast();
-  const { removeKb } = useKbRemoval();
+  const { removeKb, removing: removingKb } = useKbRemoval();
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
   const [globalKbs, setGlobalKbs] = useState<KnowledgeBase[]>([]);
 
@@ -134,7 +134,7 @@ export function useKnowledgeBases({
 
   return {
     kbs, setKbs, globalKbs, setGlobalKbs,
-    fetchKBs, handleCreateKB, handleSelectKB, handleDeleteKB,
+    fetchKBs, handleCreateKB, handleSelectKB, handleDeleteKB, removingKb,
     handleCreateGlobalKB, handleDeleteGlobalKB, handleOpenGlobalKbSettings,
   };
 }
