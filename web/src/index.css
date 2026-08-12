@@ -2320,3 +2320,95 @@ button.source-card {
     padding: 2px 8px; font-size: 0.72rem; cursor: pointer;
 }
 .graph-type-chip[aria-pressed="false"] { opacity: 0.4; }
+
+/* ---------------------------------------------------------------------------
+ * Agent surface (My Agents, agent forms, KB agent attachment).
+ * Added 2026-08-11: no house pattern existed for muted hint text, styled
+ * fieldsets, or a two-way segmented control.
+ * ------------------------------------------------------------------------- */
+
+.form-hint {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin: 0 0 0.35rem;
+}
+
+.form-fieldset {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin: 0 0 0.75rem;
+}
+
+.form-fieldset__legend {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  padding: 0 0.4rem;
+}
+
+.segmented-control {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+}
+
+.segmented-control__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.segmented-control__item:hover:not([aria-pressed='true']) {
+  color: var(--text-primary);
+}
+
+.segmented-control__item[aria-pressed='true'] {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+
+.segmented-control__item:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.agent-active-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+}
+
+.form-hint--error {
+  color: var(--error-text);
+}
+
+/* .btn--icon (line 1243) and .btn--destructive (line 1229) are both single-class
+   selectors (specificity 0-1-0), so source order alone decided and .btn--icon's
+   `background: none; color: var(--text-secondary)` silently won over destructive's
+   error colors. This two-class selector outranks both on specificity. */
+.btn--icon.btn--destructive {
+  color: var(--error-text);
+}
+
+.btn--icon.btn--destructive:hover:not(:disabled) {
+  background: var(--error-bg);
+  color: var(--error-text);
+}

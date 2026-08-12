@@ -1821,6 +1821,31 @@ export const translations = {
     },
 
     // ---------------------------------------------------------------
+    // Agent teams
+    // ---------------------------------------------------------------
+    agentSectionTeams: { de: 'Agenten-Teams', en: 'Agent teams' },
+    agentsAllowPrivilegedTools: { de: 'Privilegierte Tools in Nutzer-Agenten erlauben', en: 'Allow privileged tools in user agents' },
+    agentsAllowPrivilegedToolsHelp: {
+        de: 'Erlaubt code_exec, sql_query und web_search in nutzerdefinierten Agenten. Standard: aus.',
+        en: 'Permits code_exec, sql_query and web_search in user-created agents. Default: off.',
+    },
+    agentTeamRouterModel: { de: 'Team-Router-Modell', en: 'Team router model' },
+    agentTeamRouterModelHelp: {
+        de: 'Modell für den Routing-Aufruf. Leer = model_tier_fast.',
+        en: 'Model for the routing call. Empty = model_tier_fast.',
+    },
+    chatDriftEnabled: { de: 'DRIFT-Orchestrator', en: 'DRIFT orchestrator' },
+    chatDriftEnabledHelp: {
+        de: 'Iterative globale Synthese über KG-Community-Summaries. Benötigt kg_communities_enabled.',
+        en: 'Iterative global synthesis over KG community summaries. Requires kg_communities_enabled.',
+    },
+    chatCommunitySearchEnabled: { de: 'Community-Suche', en: 'Community search' },
+    chatCommunitySearchEnabledHelp: {
+        de: 'Fügt KG-Community-Summaries dem Antwortpool für globale Synthesefragen hinzu.',
+        en: 'Adds KG community summaries to the answer pool for global-synthesis questions.',
+    },
+
+    // ---------------------------------------------------------------
     // Date-aware chat
     // ---------------------------------------------------------------
     agentSectionDateAware: { de: 'Datumsbewusster Chat', en: 'Date-aware chat' },
@@ -1913,6 +1938,11 @@ export const translations = {
     editTeam: { de: 'Team bearbeiten', en: 'Edit team' },
     deleteAgentConfirm: { de: 'Diesen Agenten löschen? Er wird aus allen Teams und Knowledge Bases entfernt.', en: 'Delete this agent? It will be removed from all teams and knowledge bases.' },
     deleteTeamConfirm: { de: 'Dieses Team löschen?', en: 'Delete this team?' },
+    deleteAgentTitle: { de: 'Agent löschen?', en: 'Delete agent?' },
+    deleteTeamTitle: { de: 'Team löschen?', en: 'Delete team?' },
+    deleteAgentUsedByTeams: { de: 'Wird von {count} Team(s) verwendet und dort entfernt.', en: 'Used by {count} team(s) — it will be removed from them.' },
+    deleteAttributionNote: { de: 'Bereits gegebene Antworten verlieren ihre Zuordnung.', en: 'Past answers will lose their attribution.' },
+    deleteFailed: { de: 'Löschen fehlgeschlagen.', en: 'Delete failed.' },
     agentName: { de: 'Name', en: 'Name' },
     agentDescription: { de: 'Beschreibung (Routing-Signal)', en: 'Description (routing signal)' },
     agentDescriptionHelp: { de: 'Wofür ist dieser Agent zuständig? Der Team-Router entscheidet anhand dieser Beschreibung, wann der Agent eingesetzt wird.', en: 'What is this agent for? The team router uses this description to decide when to involve it.' },
@@ -1937,6 +1967,8 @@ export const translations = {
     kbAgentsSectionHelp: { de: 'Verknüpfe eigene Agenten oder Teams mit dieser Knowledge Base, um sie im Chat auswählbar zu machen.', en: 'Attach your agents or teams to this knowledge base to make them selectable in chat.' },
     kbAgentsDefault: { de: 'Standard', en: 'Default' },
     kbAgentsMakeDefault: { de: 'Als Standard festlegen', en: 'Make default' },
+    kbAgentsCreateFirst: { de: 'Agent erstellen', en: 'Create an agent' },
+    kbAgentsNoKbNote: { de: 'Öffne eine Knowledge Base, um Agenten zu verknüpfen.', en: 'Open a knowledge base to attach agents.' },
     kbAgentsAttach: { de: 'Verknüpfen', en: 'Attach' },
     kbAgentsDetach: { de: 'Entfernen', en: 'Detach' },
     agentPicker: { de: 'Agent / Team', en: 'Agent / Team' },

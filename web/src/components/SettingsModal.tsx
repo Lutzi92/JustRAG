@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import type { KnowledgeBase, SafeAIConfig } from '../types';
 import { useTheme } from '../contexts/ThemeContext';
-import KbAgentsSection from './agents/KbAgentsSection';
+
+import AgentPicker from './agents/AgentPicker';
+import type { AgentSelection } from '../hooks/useKbSettings';
 
 interface SettingsModalProps {
     show: boolean;
@@ -10,10 +12,19 @@ interface SettingsModalProps {
     currentKb: KnowledgeBase | null;
     availableConfigs: SafeAIConfig[];
     onUpdateSettings: (data: Record<string, unknown>) => void;
+
+
+    /**
+     * Per-chat agent selection. Only supplied by the KB-workspace mount point —
+     * HomeView has no chat, so the picker is omitted there.
+     */
+    agentSelection?: AgentSelection;
+    onAgentSelect?: (value: AgentSelection) => void;
 }
 
 const SettingsModalContent: React.FC<Omit<SettingsModalProps, 'show'>> = ({
-    onClose, currentKb, availableConfigs, onUpdateSettings
+    onClose, currentKb, availableConfigs, onUpdateSettings,
+    agentSelection, onAgentSelect
 }) => {
     const { t } = useTheme();
     const [systemPrompt, setSystemPrompt] = useState(currentKb?.systemPrompt || '');
@@ -70,7 +81,18 @@ const SettingsModalContent: React.FC<Omit<SettingsModalProps, 'show'>> = ({
                         </div>
                     </div>
 
-                    {currentKb && <KbAgentsSection kbId={currentKb.id} />}
+                    {/* Attaching agents to the KB lives in the composer's
+                        system-prompt panel, next to the prompt it composes
+                        with — rendering that list here too would mean two
+                        live copies that can disagree. This modal keeps the
+                        per-chat picker only. */}
+                    {onAgentSelect && (
+                        <AgentPicker
+                            kbId={currentKb?.id}
+                            selection={agentSelection ?? {}}
+                            onSelect={onAgentSelect}
+                        />
+                    )}
 
                     <div className="input-group">
                         <label htmlFor="ai-config" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', display: 'block' }}>{t('aiProviderConfig')}</label>

@@ -372,6 +372,7 @@ function AuthenticatedAppInner() {
     kbMgmt,
     handleGoHome: viewState.handleGoHome,
     handleViewHome: viewState.handleViewHome,
+    onViewAgents: () => setView('agents'),
     handleUpdateKBSettings,
   };
 

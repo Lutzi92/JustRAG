@@ -10,6 +10,8 @@ import {
 } from './api';
 import AgentForm from './AgentForm';
 import TeamForm from './TeamForm';
+import AgentEntityRow from './AgentEntityRow';
+import ConfirmDialog from './ConfirmDialog';
 
 interface Props {
   onBack: () => void;
@@ -49,35 +51,60 @@ export default function AgentsView({ onBack, availableModels = [] }: Props) {
     reload();
   };
 
-  const removeAgent = async (id: string) => {
-    if (!window.confirm(t('deleteAgentConfirm'))) return;
-    await deleteAgent(id);
-    reload();
+  // Which entity is queued for deletion, plus the in-flight request state.
+  // Held here (not in ConfirmDialog) so a failed request keeps the dialog open
+  // with its message — the dialog itself stays presentational.
+  const [pendingDelete, setPendingDelete] = useState<
+    { kind: 'agent' | 'team'; id: string; name: string } | null
+  >(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const askDelete = (kind: 'agent' | 'team', id: string, name: string) => {
+    setDeleteError(null);
+    setPendingDelete({ kind, id, name });
   };
 
-  const removeTeam = async (id: string) => {
-    if (!window.confirm(t('deleteTeamConfirm'))) return;
-    await deleteTeam(id);
-    reload();
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      if (pendingDelete.kind === 'agent') await deleteAgent(pendingDelete.id);
+      else await deleteTeam(pendingDelete.id);
+      setPendingDelete(null);
+      reload();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : t('deleteFailed'));
+    } finally {
+      setDeleteBusy(false);
+    }
   };
 
   return (
-    <div style={{ maxWidth: 860, margin: '0 auto', padding: '1.5rem' }}>
+    <div className="admin-container">
       <header style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-        <button type="button" onClick={onBack} aria-label={t('back')}
-          style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+        <button type="button" className="btn btn--icon" onClick={onBack} aria-label={t('back')}>
           <ArrowLeft size={20} aria-hidden="true" />
         </button>
         <h1 style={{ fontSize: '1.25rem', margin: 0 }}>{t('myAgents')}</h1>
       </header>
 
-      <nav style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-        <button type="button" onClick={() => setTab('agents')}
-          aria-pressed={tab === 'agents'}>
+      <nav className="segmented-control" style={{ marginBottom: '1rem' }}>
+        <button
+          type="button"
+          className="segmented-control__item"
+          onClick={() => setTab('agents')}
+          aria-pressed={tab === 'agents'}
+        >
           <Bot size={16} aria-hidden="true" /> {t('agentsTabAgents')}
         </button>
-        <button type="button" onClick={() => setTab('teams')}
-          aria-pressed={tab === 'teams'}>
+        <button
+          type="button"
+          className="segmented-control__item"
+          onClick={() => setTab('teams')}
+          aria-pressed={tab === 'teams'}
+        >
           <Users size={16} aria-hidden="true" /> {t('agentsTabTeams')}
         </button>
       </nav>
@@ -95,22 +122,32 @@ export default function AgentsView({ onBack, availableModels = [] }: Props) {
             />
           ) : (
             <>
-              <button type="button" onClick={() => setEditingAgent('new')}>
+              <button type="button" className="btn btn--primary" onClick={() => setEditingAgent('new')}>
                 <Plus size={16} aria-hidden="true" /> {t('newAgent')}
               </button>
-              {agents.length === 0 && <p>{t('noAgentsYet')}</p>}
+              {agents.length === 0 && <p className="form-hint">{t('noAgentsYet')}</p>}
               {agents.map(a => (
-                <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 8, marginTop: '0.5rem' }}>
-                  <Bot size={18} aria-hidden="true" />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <strong>{a.name}</strong>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{a.description}</div>
-                  </div>
-                  <button type="button" onClick={() => setEditingAgent(a)}>{t('editAgent')}</button>
-                  <button type="button" onClick={() => removeAgent(a.id)} aria-label={t('delete')}>
-                    <Trash2 size={16} aria-hidden="true" />
-                  </button>
-                </div>
+                <AgentEntityRow
+                  key={a.id}
+                  icon={<Bot size={18} aria-hidden="true" />}
+                  name={a.name}
+                  secondary={a.description}
+                  actions={
+                    <>
+                      <button type="button" className="btn btn--secondary" onClick={() => setEditingAgent(a)}>
+                        {t('editAgent')}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--icon btn--destructive"
+                        onClick={() => askDelete('agent', a.id, a.name)}
+                        aria-label={t('delete')}
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                      </button>
+                    </>
+                  }
+                />
               ))}
             </>
           )}
@@ -128,28 +165,71 @@ export default function AgentsView({ onBack, availableModels = [] }: Props) {
             />
           ) : (
             <>
-              <button type="button" onClick={() => setEditingTeam('new')} disabled={agents.length === 0}>
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => setEditingTeam('new')}
+                disabled={agents.length === 0}
+              >
                 <Plus size={16} aria-hidden="true" /> {t('newTeam')}
               </button>
-              {teams.length === 0 && <p>{t('noTeamsYet')}</p>}
+              {teams.length === 0 && <p className="form-hint">{t('noTeamsYet')}</p>}
               {teams.map(tm => (
-                <div key={tm.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 8, marginTop: '0.5rem' }}>
-                  <Users size={18} aria-hidden="true" />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <strong>{tm.name}</strong>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                      {tm.description} · {tm.memberIds.length} {t('membersCount')}
-                    </div>
-                  </div>
-                  <button type="button" onClick={() => setEditingTeam(tm)}>{t('editTeam')}</button>
-                  <button type="button" onClick={() => removeTeam(tm.id)} aria-label={t('delete')}>
-                    <Trash2 size={16} aria-hidden="true" />
-                  </button>
-                </div>
+                <AgentEntityRow
+                  key={tm.id}
+                  icon={<Users size={18} aria-hidden="true" />}
+                  name={tm.name}
+                  secondary={`${tm.description} · ${tm.memberIds.length} ${t('membersCount')}`}
+                  actions={
+                    <>
+                      <button type="button" className="btn btn--secondary" onClick={() => setEditingTeam(tm)}>
+                        {t('editTeam')}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--icon btn--destructive"
+                        onClick={() => askDelete('team', tm.id, tm.name)}
+                        aria-label={t('delete')}
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                      </button>
+                    </>
+                  }
+                />
               ))}
             </>
           )}
         </section>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={pendingDelete.kind === 'agent' ? t('deleteAgentTitle') : t('deleteTeamTitle')}
+          body={
+            <>
+              <strong>{pendingDelete.name}</strong>
+              <br />
+              {pendingDelete.kind === 'agent' ? t('deleteAgentConfirm') : t('deleteTeamConfirm')}
+              {pendingDelete.kind === 'agent' && (() => {
+                const usedByCount = teams.filter(tm => tm.memberIds.includes(pendingDelete.id)).length;
+                return usedByCount > 0 && (
+                  <>
+                    <br />
+                    {t('deleteAgentUsedByTeams').replace('{count}', String(usedByCount))}
+                  </>
+                );
+              })()}
+              <br />
+              {t('deleteAttributionNote')}
+            </>
+          }
+          confirmLabel={t('delete')}
+          tone="destructive"
+          busy={deleteBusy}
+          error={deleteError}
+          onCancel={() => { setPendingDelete(null); setDeleteError(null); }}
+          onConfirm={confirmDelete}
+        />
       )}
     </div>
   );

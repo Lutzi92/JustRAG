@@ -15,8 +15,8 @@ export default function AgentConfigFields({ fields, values, onChange }: Props) {
   return (
     <div>
       {groups.map(group => (
-        <fieldset key={group} style={{ border: '1px solid var(--border-color)', borderRadius: 8, marginBottom: '0.75rem', padding: '0.75rem' }}>
-          <legend style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', padding: '0 0.4rem' }}>{group}</legend>
+        <fieldset key={group} className="form-fieldset">
+          <legend className="form-fieldset__legend">{group}</legend>
           {fields.filter(f => f.group === group).map(f => (
             <label key={f.key} title={f.help} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem', fontSize: '0.85rem' }}>
               <span style={{ flex: 1 }}>{f.label}</span>

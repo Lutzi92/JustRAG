@@ -21,6 +21,8 @@ export interface KbCoreContextValue {
   kbMgmt: ReturnType<typeof useKnowledgeBases>;
   handleGoHome: () => void;
   handleViewHome: () => void;
+  /** Navigate to the My Agents screen (linked from KB settings). */
+  onViewAgents: () => void;
   handleUpdateKBSettings: (data: Record<string, unknown>) => Promise<void>;
 }
 

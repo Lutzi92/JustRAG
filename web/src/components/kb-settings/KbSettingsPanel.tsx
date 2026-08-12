@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
-import { SlidersHorizontal, FlaskConical, ChevronDown, ChevronRight, Search, Save, RotateCcw } from 'lucide-react';
+import { SlidersHorizontal, FlaskConical, ChevronDown, ChevronRight, Search, Save, RotateCcw, Copy, Check } from 'lucide-react';
 import type { KbConfigField, KbSettingsResponse } from '../../types';
 import { fetchKbSettings, saveKbSettings, resetKbSetting, reembedKb } from './api';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
 import { useModalContext } from '../../contexts/ModalContext';
+import { copyToClipboard } from '../../utils/clipboard';
 import AdminEvalTab from '../admin/AdminEvalTab';
 
 interface Props {
@@ -110,40 +111,43 @@ export function KbSettingsPanel({ kbId }: Props) {
     });
   };
 
-  const tabBar = (
-    <div style={{ display: 'flex', gap: '1.75rem', borderBottom: '1px solid var(--border-color)', marginBottom: '1.25rem' }}>
-      {TABS.map(({ id, label, Icon }) => {
-        const active = tab === id;
-        return (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id)}
-            aria-pressed={active}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 0',
-              background: 'none', border: 'none', cursor: 'pointer', position: 'relative',
-              color: active ? 'var(--accent-primary)' : 'var(--text-secondary)',
-              fontWeight: active ? 600 : 400, fontSize: '0.9rem',
-            }}
-          >
-            <Icon size={16} aria-hidden="true" /> {label}
-            {active && (
-              <motion.div
-                layoutId={reducedMotion ? undefined : 'kb-settings-tab-underline'}
-                style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }}
-              />
-            )}
-          </button>
-        );
-      })}
-    </div>
+  const header = (
+    <>
+      <KbModelNameRow kbId={kbId} />
+      <div style={{ display: 'flex', gap: '1.75rem', borderBottom: '1px solid var(--border-color)', marginBottom: '1.25rem' }}>
+        {TABS.map(({ id, label, Icon }) => {
+          const active = tab === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              aria-pressed={active}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 0',
+                background: 'none', border: 'none', cursor: 'pointer', position: 'relative',
+                color: active ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                fontWeight: active ? 600 : 400, fontSize: '0.9rem',
+              }}
+            >
+              <Icon size={16} aria-hidden="true" /> {label}
+              {active && (
+                <motion.div
+                  layoutId={reducedMotion ? undefined : 'kb-settings-tab-underline'}
+                  style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-primary)' }}
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </>
   );
 
   if (error) {
     return (
       <div className="kb-settings">
-        {tabBar}
+        {header}
         <div role="alert" style={{ color: 'var(--text-primary)' }}>{error}</div>
       </div>
     );
@@ -151,7 +155,7 @@ export function KbSettingsPanel({ kbId }: Props) {
   if (!data) {
     return (
       <div className="kb-settings">
-        {tabBar}
+        {header}
         <div style={{ opacity: 0.6 }}>Loading…</div>
       </div>
     );
@@ -172,7 +176,7 @@ export function KbSettingsPanel({ kbId }: Props) {
 
   return (
     <div className="kb-settings">
-      {tabBar}
+      {header}
       {tab === 'settings' ? (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
@@ -242,6 +246,50 @@ export function KbSettingsPanel({ kbId }: Props) {
       ) : (
         <AdminEvalTab basePath={`/api/kb/${kbId}/eval`} kbId={kbId} />
       )}
+    </div>
+  );
+}
+
+// The OpenAI-compatible endpoint takes "kb-{uuid}" in the `model` field, NOT the
+// raw KB uuid — see extractKBID in internal/openaicompat/handler.go. Surfaced
+// here because this panel is the only in-KB surface api-users can reach.
+function KbModelNameRow({ kbId }: { kbId: string }) {
+  const modelName = `kb-${kbId}`;
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  const onCopy = async () => {
+    if (await copyToClipboard(modelName)) setCopied(true);
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '1.1rem' }}>
+      <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>API model name</span>
+      <code
+        data-testid="kb-model-value"
+        style={{
+          fontFamily: 'var(--font-mono, monospace)', fontSize: '0.8rem', color: 'var(--text-primary)',
+          background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+          borderRadius: 6, padding: '0.25rem 0.5rem', userSelect: 'all', wordBreak: 'break-all',
+        }}
+      >
+        {modelName}
+      </code>
+      <button
+        type="button"
+        onClick={onCopy}
+        title="Copy the model name for the OpenAI-compatible API"
+        aria-label="Copy API model name"
+        style={{ ...resetBtn, color: copied ? 'var(--accent-primary)' : 'var(--text-secondary)' }}
+      >
+        {copied ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
+        {copied ? 'Copied' : 'Copy'}
+      </button>
     </div>
   );
 }

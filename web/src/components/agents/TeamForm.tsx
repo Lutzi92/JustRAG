@@ -21,7 +21,8 @@ export default function TeamForm({ initial, agents, onSave, onCancel }: Props) {
   const toggleMember = (id: string) =>
     setMemberIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
-  const submit = async () => {
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
     setSaving(true);
     setError('');
     try {
@@ -30,30 +31,30 @@ export default function TeamForm({ initial, agents, onSave, onCancel }: Props) {
         icon: initial?.icon ?? 'users',
         isEnabled: initial?.isEnabled ?? true,
       });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+    } catch (e2) {
+      setError(e2 instanceof Error ? e2.message : String(e2));
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+    <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
       <label>{t('agentName')}
         <input value={name} onChange={e => setName(e.target.value)} maxLength={100} required />
       </label>
       <label>{t('agentDescription')}
         <textarea value={description} onChange={e => setDescription(e.target.value)} rows={2} maxLength={1000} />
       </label>
-      <fieldset>
-        <legend>{t('teamMembers')}</legend>
-        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{t('teamMembersHelp')}</p>
+      <fieldset className="form-fieldset">
+        <legend className="form-fieldset__legend">{t('teamMembers')}</legend>
+        <p className="form-hint">{t('teamMembersHelp')}</p>
         {agents.map(a => (
           <label key={a.id} style={{ display: 'block', marginBottom: '0.3rem' }}>
             <input type="checkbox" checked={memberIds.includes(a.id)}
               disabled={!memberIds.includes(a.id) && memberIds.length >= 8}
               onChange={() => toggleMember(a.id)} />
-            {' '}{a.name} <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{a.description}</span>
+            {' '}{a.name} <span className="form-hint" style={{ display: 'inline' }}>{a.description}</span>
           </label>
         ))}
       </fieldset>
@@ -61,11 +62,11 @@ export default function TeamForm({ initial, agents, onSave, onCancel }: Props) {
         <input type="number" min={1} max={5} value={maxAgentsPerTurn}
           onChange={e => setMaxAgentsPerTurn(Number(e.target.value) || 3)} style={{ width: 80 }} />
       </label>
-      {error && <div role="alert" style={{ color: 'var(--error-text)' }}>{error}</div>}
+      {error && <div role="alert" className="form-hint form-hint--error">{error}</div>}
       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-        <button type="button" onClick={onCancel}>{t('cancel')}</button>
-        <button type="button" onClick={submit} disabled={saving || !name.trim() || memberIds.length === 0}>{t('save')}</button>
+        <button type="button" className="btn btn--tertiary" onClick={onCancel}>{t('cancel')}</button>
+        <button type="submit" className="btn btn--primary" disabled={saving || !name.trim() || memberIds.length === 0}>{t('save')}</button>
       </div>
-    </div>
+    </form>
   );
 }

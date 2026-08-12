@@ -57,6 +57,19 @@ afterEach(() => {
 });
 
 describe('KbSettingsPanel', () => {
+  // The OpenAI-compatible endpoint only accepts "kb-{uuid}" in `model`
+  // (extractKBID in internal/openaicompat/handler.go), so the panel shows the
+  // prefixed form rather than the raw KB uuid.
+  it('shows the kb- prefixed API model name and copies it to the clipboard', async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    render(<KbSettingsPanel kbId="kb1" />);
+    expect(screen.getByTestId('kb-model-value').textContent).toBe('kb-kb1');
+    fireEvent.click(screen.getByLabelText('Copy API model name'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('kb-kb1'));
+    await waitFor(() => screen.getByText('Copied'));
+  });
+
   it('renders effective values and marks overridden fields', async () => {
     render(<KbSettingsPanel kbId="kb1" />);
     await waitFor(() => screen.getByText('Reranker blend α'));
