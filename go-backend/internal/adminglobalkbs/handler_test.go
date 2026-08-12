@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/justrag/go-backend/internal/adminglobalkbs"
+	"github.com/justrag/go-backend/internal/kbmembers"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,6 +28,16 @@ type mockStore struct {
 	kb      *adminglobalkbs.GlobalKBRow
 	editors []adminglobalkbs.GlobalKBEditorRow
 	err     error
+	// editorErr, when non-nil, is returned by Add/RemoveGlobalKBEditor
+	// instead of err — so a test can exercise the kbmembers sentinel mapping
+	// without also failing the KB-CRUD methods.
+	editorErr error
+	// Recorded arguments of the last Add/RemoveGlobalKBEditor call and the
+	// audit actions logged, so tests can assert the role grant and the audit
+	// trail rather than only the status code.
+	addedKBID, addedUserID, addedGrantedBy string
+	removedKBID, removedUserID             string
+	auditActions                           []string
 }
 
 func (m *mockStore) ListGlobalKBs(_ context.Context) ([]adminglobalkbs.GlobalKBRow, error) {
@@ -45,15 +56,24 @@ func (m *mockStore) ListGlobalKBEditors(_ context.Context, _ string) ([]adminglo
 	return m.editors, m.err
 }
 
-func (m *mockStore) AddGlobalKBEditor(_ context.Context, _, _ string) error {
+func (m *mockStore) AddGlobalKBEditor(_ context.Context, kbID, userID, grantedBy string) error {
+	m.addedKBID, m.addedUserID, m.addedGrantedBy = kbID, userID, grantedBy
+	if m.editorErr != nil {
+		return m.editorErr
+	}
 	return m.err
 }
 
-func (m *mockStore) RemoveGlobalKBEditor(_ context.Context, _, _ string) error {
+func (m *mockStore) RemoveGlobalKBEditor(_ context.Context, kbID, userID string) error {
+	m.removedKBID, m.removedUserID = kbID, userID
+	if m.editorErr != nil {
+		return m.editorErr
+	}
 	return m.err
 }
 
-func (m *mockStore) LogAuditAction(_ context.Context, _, _, _, _ string, _ any) error {
+func (m *mockStore) LogAuditAction(_ context.Context, _, action, _, _ string, _ any) error {
+	m.auditActions = append(m.auditActions, action)
 	return nil
 }
 
@@ -278,6 +298,34 @@ func TestAddEditor_OK(t *testing.T) {
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", rr.Code)
 	}
+	if store.addedKBID != "kb-1" || store.addedUserID != "user-1" {
+		t.Errorf("store called with (%q, %q), want (kb-1, user-1)", store.addedKBID, store.addedUserID)
+	}
+	// The audit trail must not regress: this is an admin surface handing out a
+	// KB-admin role.
+	if len(store.auditActions) != 1 || store.auditActions[0] != "global_kb.editor.add" {
+		t.Errorf("audit actions = %v, want [global_kb.editor.add]", store.auditActions)
+	}
+}
+
+// TestAddEditor_OwnerImmutable pins the kbmembers sentinel mapping: granting
+// admin to the KB's owner must surface as 409, not a 500 or a silent success.
+func TestAddEditor_OwnerImmutable(t *testing.T) {
+	store := &mockStore{editorErr: kbmembers.ErrOwnerImmutable}
+	h := newHandler(store)
+
+	body := map[string]string{"userId": "user-1"}
+	req := newRequest(http.MethodPost, "/api/admin/global-kbs/kb-1/editors", body)
+	req.SetPathValue("id", "kb-1")
+	rr := httptest.NewRecorder()
+	h.AddEditor(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rr.Code)
+	}
+	if len(store.auditActions) != 0 {
+		t.Errorf("a refused grant must not be audited as applied, got %v", store.auditActions)
+	}
 }
 
 func TestAddEditor_MissingUserID(t *testing.T) {
@@ -307,5 +355,49 @@ func TestRemoveEditor_OK(t *testing.T) {
 
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", rr.Code)
+	}
+	if store.removedKBID != "kb-1" || store.removedUserID != "user-1" {
+		t.Errorf("store called with (%q, %q), want (kb-1, user-1)", store.removedKBID, store.removedUserID)
+	}
+	if len(store.auditActions) != 1 || store.auditActions[0] != "global_kb.editor.remove" {
+		t.Errorf("audit actions = %v, want [global_kb.editor.remove]", store.auditActions)
+	}
+}
+
+// TestRemoveEditor_NotFound pins the kbmembers.ErrNotFound mapping: revoking a
+// role nobody holds is a 404, not a silent 204 — the old global_kb_editors
+// DELETE reported success for a row it never touched, which is how the
+// un-revokable-privilege bug stayed invisible.
+func TestRemoveEditor_NotFound(t *testing.T) {
+	store := &mockStore{editorErr: kbmembers.ErrNotFound}
+	h := newHandler(store)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/global-kbs/kb-1/editors/user-1", nil)
+	req.SetPathValue("id", "kb-1")
+	req.SetPathValue("userId", "user-1")
+	rr := httptest.NewRecorder()
+	h.RemoveEditor(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rr.Code)
+	}
+	if len(store.auditActions) != 0 {
+		t.Errorf("a no-op revoke must not be audited, got %v", store.auditActions)
+	}
+}
+
+// TestRemoveEditor_OwnerImmutable pins the owner guard.
+func TestRemoveEditor_OwnerImmutable(t *testing.T) {
+	store := &mockStore{editorErr: kbmembers.ErrOwnerImmutable}
+	h := newHandler(store)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/global-kbs/kb-1/editors/user-1", nil)
+	req.SetPathValue("id", "kb-1")
+	req.SetPathValue("userId", "user-1")
+	rr := httptest.NewRecorder()
+	h.RemoveEditor(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rr.Code)
 	}
 }

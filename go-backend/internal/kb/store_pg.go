@@ -189,11 +189,19 @@ func toKBRowWithStats(r kbListRow) KBRow {
 // caller passing an unbounded user-supplied limit.
 const listKnowledgeBasesMaxLimit = 1000
 
-// ListKnowledgeBases returns the user's personal KBs: those they own plus those
-// explicitly shared with them. Global published KBs are intentionally excluded
-// — the frontend and API clients fetch those separately via
-// ListGlobalKnowledgeBases, and including them here caused them to appear
-// twice in the UI.
+// ListKnowledgeBases returns the user's personal KBs: every non-global KB they
+// hold a kb_members row for (owner, admin, edit or view).
+//
+// Global KBs are excluded by an explicit `kb.is_global = false`, because the
+// frontend and API clients fetch those separately via
+// ListGlobalKnowledgeBases and rendering them from both sources shows the same
+// KB twice. The exclusion used to fall out of the old user_id/shares predicate
+// on its own; since migration 0064 it does not — a global-KB curator has a
+// real kb_members row (the backfill turned every global_kb_editors entry into
+// role='admin'), so the membership predicate matches them and the filter has
+// to be stated. Duplicating such a KB is not merely cosmetic: HomeView's
+// personal card offers "leave", which would drop the curator's own admin row
+// and their chats with it.
 // Results are ordered by created_at DESC with limit/offset pagination.
 // limit is clamped to listKnowledgeBasesMaxLimit and silently coerced to 1
 // when ≤ 0; offset < 0 is coerced to 0.
@@ -225,7 +233,8 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 		       u.username   AS owner_username` + kbStatsCols + kbMembershipCols("$1") + `
 		FROM knowledge_bases kb
 		LEFT JOIN users u ON kb.user_id = u.id` + kbStatsJoins + `
-		WHERE EXISTS (
+		WHERE kb.is_global = false
+		  AND EXISTS (
 		    SELECT 1 FROM kb_members
 		    WHERE kb_id = kb.id AND user_id = $1
 		)

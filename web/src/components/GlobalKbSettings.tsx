@@ -410,7 +410,7 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
 
     const handleRemoveEditor = async (userId: string) => {
         const prev = editors;
-        setEditors(editors.filter(e => e.userId !== userId));
+        setEditors(editors.filter(e => e.id !== userId));
         try {
             await axios.delete(`${API_BASE_URL}/api/admin/global-kbs/${kb.id}/editors/${userId}`);
         } catch {
@@ -950,7 +950,7 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
                                     )}
                                 </div>
                                 <button
-                                    onClick={() => handleRemoveEditor(editor.userId)}
+                                    onClick={() => handleRemoveEditor(editor.id)}
                                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '4px' }}
                                     title={t('removeEditor')}
                                 >

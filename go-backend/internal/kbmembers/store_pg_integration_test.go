@@ -91,24 +91,37 @@ func mustQueryRow(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) pgx
 	return pool.QueryRow(context.Background(), sql, args...)
 }
 
-// runBackfill re-runs the three backfill INSERTs from migration 0064
-// verbatim. They are idempotent by construction (ON CONFLICT DO NOTHING),
-// so re-running them against a live DB in a test is safe.
-func runBackfill(t *testing.T, pool *pgxpool.Pool) {
+// runBackfill re-runs the three backfill INSERTs from migration 0064 against
+// one KB. They are idempotent by construction (ON CONFLICT DO NOTHING), so
+// re-running them against a live DB in a test is safe.
+//
+// Each statement is scoped to kbID. The migration itself runs them unscoped,
+// but a test must not: CI executes cascade, kb, adminkboverview, adminglobalkbs,
+// authhandler and kbmembers in a single `go test` invocation against one shared
+// database, so those packages run concurrently. An unscoped
+// `SELECT ... FROM knowledge_bases` picks up another package's fixture KB
+// mid-flight — internal/cascade builds exactly this shape and then deletes the
+// parent KB in a transaction — and one side takes an FK violation on
+// kb_members_kb_id_fkey. What these tests assert is backfill *priority* (owner
+// beats share beats global editor), not backfill *reach*, so the kbID scope
+// preserves their intent completely.
+func runBackfill(t *testing.T, pool *pgxpool.Pool, kbID string) {
 	t.Helper()
 	mustExec(t, pool, `
 		INSERT INTO kb_members (kb_id, user_id, role)
-		SELECT id, user_id, 'owner' FROM knowledge_bases WHERE user_id IS NOT NULL
-		ON CONFLICT (kb_id, user_id) DO NOTHING`)
+		SELECT id, user_id, 'owner' FROM knowledge_bases
+		WHERE user_id IS NOT NULL AND id = $1::uuid
+		ON CONFLICT (kb_id, user_id) DO NOTHING`, kbID)
 	mustExec(t, pool, `
 		INSERT INTO kb_members (kb_id, user_id, role)
 		SELECT kb_id, user_id, permission FROM knowledge_base_shares
-		WHERE permission IN ('view','edit')
-		ON CONFLICT (kb_id, user_id) DO NOTHING`)
+		WHERE permission IN ('view','edit') AND kb_id = $1::uuid
+		ON CONFLICT (kb_id, user_id) DO NOTHING`, kbID)
 	mustExec(t, pool, `
 		INSERT INTO kb_members (kb_id, user_id, role)
 		SELECT kb_id, user_id, 'admin' FROM global_kb_editors
-		ON CONFLICT (kb_id, user_id) DO NOTHING`)
+		WHERE kb_id = $1::uuid
+		ON CONFLICT (kb_id, user_id) DO NOTHING`, kbID)
 }
 
 // TestBackfill_OwnerWinsOverShare legt eine KB an, deren Owner zusaetzlich eine
@@ -124,7 +137,7 @@ func TestBackfill_OwnerWinsOverShare(t *testing.T) {
 	mustExec(t, pool, `INSERT INTO knowledge_base_shares (kb_id, user_id, permission)
                        VALUES ($1, $2, 'view')`, kbID, userID)
 
-	runBackfill(t, pool) // die drei INSERT ... ON CONFLICT DO NOTHING
+	runBackfill(t, pool, kbID) // die drei INSERT ... ON CONFLICT DO NOTHING
 
 	var role string
 	var count int
@@ -145,7 +158,7 @@ func TestBackfill_GlobalEditorBecomesAdmin(t *testing.T) {
 	kbID := insertKB(t, pool, owner, true /*isGlobal*/, true /*isPublished*/)
 	mustExec(t, pool, `INSERT INTO global_kb_editors (kb_id, user_id) VALUES ($1, $2)`, kbID, editor)
 
-	runBackfill(t, pool)
+	runBackfill(t, pool, kbID)
 
 	var role string
 	mustQueryRow(t, pool, `SELECT role FROM kb_members WHERE kb_id = $1 AND user_id = $2`,

@@ -268,9 +268,12 @@ export interface KnowledgeBase {
     memberCount?: number;
 }
 
+// A curator of a global KB: a kb_members row with role='admin'. `id` is the
+// *user* id — the wire shape predates kb_members and the backend keeps it. It
+// used to also declare a `userId` field the API never sent, so the remove
+// button posted `undefined` as the user id.
 export interface GlobalKbEditor {
     id: string;
-    userId: string;
     username: string;
     firstName?: string | null;
     lastName?: string | null;

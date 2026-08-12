@@ -95,12 +95,12 @@ func (h *Handler) ListMembers(w http.ResponseWriter, r *http.Request) {
 
 	members, err := h.store.ListMembers(ctx, kbID)
 	if err != nil {
-		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to list members")
+		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to list members: %w", err))
 		return
 	}
 	pending, err := h.pending.ListPendingInvites(ctx, kbID)
 	if err != nil {
-		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to list pending invites")
+		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to list pending invites: %w", err))
 		return
 	}
 
@@ -139,7 +139,7 @@ func (h *Handler) SetMemberRole(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrOwnerImmutable):
 		httputil.WriteErrorCtx(ctx, w, http.StatusConflict, "the owner's role cannot be changed")
 	case err != nil:
-		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to set role")
+		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to set role: %w", err))
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -161,7 +161,7 @@ func (h *Handler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrOwnerImmutable):
 		httputil.WriteErrorCtx(ctx, w, http.StatusConflict, "the owner cannot be removed")
 	case err != nil:
-		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to remove member")
+		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to remove member: %w", err))
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -182,7 +182,7 @@ func (h *Handler) RevokePendingInvite(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrNotFound):
 		httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "pending invite not found")
 	case err != nil:
-		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to remove pending invite")
+		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to remove pending invite: %w", err))
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -231,7 +231,7 @@ func (h *Handler) TransferOwner(w http.ResponseWriter, r *http.Request) {
 			"the new owner must already be a member of this knowledge base")
 		return
 	case err != nil:
-		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to check target membership")
+		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to check target membership: %w", err))
 		return
 	case targetRole == kbaccess.RoleOwner:
 		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "that user is already the owner")
@@ -243,7 +243,7 @@ func (h *Handler) TransferOwner(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNotFound):
 		httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "target user not found")
 	case err != nil:
-		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to transfer ownership")
+		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to transfer ownership: %w", err))
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -274,7 +274,7 @@ func (h *Handler) LeaveKB(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNotAMember):
 		httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "not a member of this knowledge base")
 	case err != nil:
-		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to leave")
+		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to leave: %w", err))
 	default:
 		httputil.WriteJSONCtx(ctx, w, http.StatusOK, leaveResponse{DeletedChats: deleted})
 	}
@@ -310,13 +310,13 @@ func (h *Handler) MembershipImpact(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "not a member of this knowledge base")
 			return
 		}
-		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to check membership")
+		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to check membership: %w", err))
 		return
 	}
 
 	n, err := h.store.CountOwnChats(ctx, kbID, user.ID)
 	if err != nil {
-		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to count chats")
+		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to count chats: %w", err))
 		return
 	}
 	httputil.WriteJSONCtx(ctx, w, http.StatusOK, membershipImpactResponse{ChatCount: n})
@@ -400,12 +400,12 @@ func (h *Handler) BulkInvite(w http.ResponseWriter, r *http.Request) {
 	for _, username := range usernames {
 		userID, found, err := h.pending.GetUserIDByUsername(ctx, username)
 		if err != nil {
-			httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to look up users")
+			httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to look up users: %w", err))
 			return
 		}
 		if !found {
 			if err := h.pending.UpsertPendingInvite(ctx, kbID, username, body.Role, inviterID); err != nil {
-				httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to record pending invite")
+				httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to record pending invite: %w", err))
 				return
 			}
 			result.Pending = append(result.Pending, username)
@@ -422,11 +422,11 @@ func (h *Handler) BulkInvite(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if !errors.Is(err, ErrNotFound) {
-			httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to check existing membership")
+			httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to check existing membership: %w", err))
 			return
 		}
 		if err := h.store.SetRole(ctx, kbID, userID, body.Role, inviterID); err != nil {
-			httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to add member")
+			httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to add member: %w", err))
 			return
 		}
 		result.Shared = append(result.Shared, username)

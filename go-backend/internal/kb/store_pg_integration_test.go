@@ -157,6 +157,77 @@ func TestCreateKnowledgeBase_WritesOwnerKBMembersRow(t *testing.T) {
 	}
 }
 
+// TestListKnowledgeBases_ExcludesGlobalKBsWithMembership pins the
+// `kb.is_global = false` filter in ListKnowledgeBases.
+//
+// Since migration 0064 the query selects purely on membership in kb_members,
+// and the backfill turned every global_kb_editors row into role='admin' — so a
+// global-KB curator matches the membership predicate. Without the explicit
+// is_global filter, HomeView renders that KB twice (once from /kb, once from
+// /kb/global) and the personal card's destructive action resolves to "leave",
+// which would drop the curator's own admin row plus their chats. The KB must
+// appear only in ListGlobalKnowledgeBases.
+func TestListKnowledgeBases_ExcludesGlobalKBsWithMembership(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kb.NewStore(pool)
+
+	curator := insertUser(t, pool, "kb-global-curator")
+
+	// A published global KB with no owner — the shape adminglobalkbs.CreateGlobalKB
+	// produces (is_global = true, user_id = NULL).
+	var kbID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO knowledge_bases (name, description, is_global, is_published, user_id)
+		VALUES ('kb-global-membership-test', 'fixture', true, true, NULL)
+		RETURNING id::text`).Scan(&kbID); err != nil {
+		t.Fatalf("insert global kb: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM knowledge_bases WHERE id = $1::uuid`, kbID) //nolint:errcheck
+	})
+
+	// The curator's real membership row — exactly what migration 0064's
+	// global_kb_editors backfill writes.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1::uuid, $2::uuid, 'admin')`,
+		kbID, curator); err != nil {
+		t.Fatalf("insert kb_members admin row: %v", err)
+	}
+
+	list, err := store.ListKnowledgeBases(ctx, curator, 100, 0)
+	if err != nil {
+		t.Fatalf("ListKnowledgeBases: %v", err)
+	}
+	for i := range list {
+		if list[i].ID == kbID {
+			t.Fatalf("ListKnowledgeBases(%s) included global KB %s — it is fetched separately via "+
+				"ListGlobalKnowledgeBases and would render twice", curator, kbID)
+		}
+	}
+
+	// Counter-assertion: the KB is genuinely reachable, just through the other
+	// list path — so the test above is not passing because the fixture is
+	// invisible everywhere.
+	globalList, err := store.ListGlobalKnowledgeBases(ctx, curator, false)
+	if err != nil {
+		t.Fatalf("ListGlobalKnowledgeBases: %v", err)
+	}
+	var found *kb.KBRow
+	for i := range globalList {
+		if globalList[i].ID == kbID {
+			found = &globalList[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("ListGlobalKnowledgeBases(%s) did not include global KB %s", curator, kbID)
+	}
+	if found.MyRole == nil || *found.MyRole != "admin" {
+		t.Fatalf("ListGlobalKnowledgeBases: myRole = %v, want admin", found.MyRole)
+	}
+}
+
 // insertKBForPending inserts a bare personal KB and returns its id.
 func insertKBForPending(t *testing.T, pool *pgxpool.Pool, ownerID string) string {
 	t.Helper()

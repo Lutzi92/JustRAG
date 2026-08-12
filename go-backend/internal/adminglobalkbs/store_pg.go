@@ -9,17 +9,23 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/kbmembers"
 	"github.com/justrag/go-backend/internal/pgxutil"
 )
 
 // PGStore is a PostgreSQL-backed implementation of the adminglobalkbs Store interface.
 type PGStore struct {
 	pool *pgxpool.Pool
+	// members backs the editor endpoints. Editors are kb_members rows with
+	// role='admin'; see the "Editors" section below for why global_kb_editors
+	// is no longer consulted.
+	members kbmembers.Store
 }
 
 // NewStore creates a new PGStore backed by pool.
 func NewStore(pool *pgxpool.Pool) *PGStore {
-	return &PGStore{pool: pool}
+	return &PGStore{pool: pool, members: kbmembers.NewStore(pool)}
 }
 
 // Compile-time interface assertion.
@@ -58,15 +64,6 @@ const globalKBSelectCols = `id, name, description, language, is_published,
 
 func toGlobalKBRow(r globalKBDBRow) GlobalKBRow {
 	return GlobalKBRow(r)
-}
-
-// globalKBEditorDBRow is an internal struct for scanning editor rows joined with users.
-type globalKBEditorDBRow struct {
-	ID        string    `db:"id"`
-	Username  string    `db:"username"`
-	FirstName *string   `db:"first_name"`
-	LastName  *string   `db:"last_name"`
-	CreatedAt time.Time `db:"created_at"`
 }
 
 // ---------------------------------------------------------------------------
@@ -215,43 +212,65 @@ func (s *PGStore) UpdateGlobalKB(ctx context.Context, id string, data GlobalKBUp
 	return &r, nil
 }
 
-// ListGlobalKBEditors returns all editors for a global KB, ordered by joined date DESC.
-func (s *PGStore) ListGlobalKBEditors(ctx context.Context, kbID string) ([]GlobalKBEditorRow, error) {
-	const sql = `
-		SELECT u.id, u.username, u.first_name, u.last_name, gke.created_at
-		FROM global_kb_editors gke
-		INNER JOIN users u ON gke.user_id = u.id
-		WHERE gke.kb_id = $1
-		ORDER BY gke.created_at DESC`
+// ---------------------------------------------------------------------------
+// Editors — backed by kb_members, not global_kb_editors
+// ---------------------------------------------------------------------------
+//
+// A "global KB editor" is exactly a kb_members row with role='admin' on a
+// global KB: migration 0064 backfilled global_kb_editors that way, and
+// kbaccess.EffectiveRole resolves access from kb_members alone. The three
+// operations below therefore delegate to kbmembers.Store — which also carries
+// the owner invariants in SQL, so this surface cannot demote or delete a KB
+// owner by accident.
+//
+// The queries that used to read and write global_kb_editors here were the last
+// place that table took part in an access decision. It survives as a table only
+// for expand/contract and is dropped in a release after Phase 2 of the KB role
+// model (visibility enum, system user, subscriptions, categories, catalogue);
+// see docs/superpowers/specs/2026-08-12-kb-rollen-und-sichtbarkeit-design.md.
+// Nothing may consult it for access again. internal/cascade still DELETEs from
+// it, which is cleanup, not an access decision.
 
-	rows, err := pgxutil.QueryRows[globalKBEditorDBRow](ctx, s.pool, sql, kbID)
+// ListGlobalKBEditors returns the KB's role='admin' members — the four-role
+// successor to the old global_kb_editors listing. Ordered by username (the
+// order kbmembers.ListMembers produces within one role) rather than the old
+// joined-date DESC.
+func (s *PGStore) ListGlobalKBEditors(ctx context.Context, kbID string) ([]GlobalKBEditorRow, error) {
+	members, err := s.members.ListMembers(ctx, kbID)
 	if err != nil {
 		return nil, err
 	}
 
-	result := make([]GlobalKBEditorRow, len(rows))
-	for i, r := range rows {
-		result[i] = GlobalKBEditorRow(r)
+	result := make([]GlobalKBEditorRow, 0, len(members))
+	for _, m := range members {
+		if m.Role != kbaccess.RoleAdmin {
+			continue
+		}
+		// GlobalKBEditorRow.ID is the *user* id — the wire shape predates
+		// kb_members and is kept so the admin UI needs no contract change.
+		result = append(result, GlobalKBEditorRow{
+			ID:        m.UserID,
+			Username:  m.Username,
+			FirstName: m.FirstName,
+			LastName:  m.LastName,
+			CreatedAt: m.CreatedAt,
+		})
 	}
 	return result, nil
 }
 
-// AddGlobalKBEditor adds a user as an editor of a global KB.
-// If the (kb_id, user_id) pair already exists, it is a no-op (ON CONFLICT DO NOTHING).
-func (s *PGStore) AddGlobalKBEditor(ctx context.Context, kbID, userID string) error {
-	const sql = `
-		INSERT INTO global_kb_editors (kb_id, user_id)
-		VALUES ($1, $2)
-		ON CONFLICT DO NOTHING`
-	_, err := s.pool.Exec(ctx, sql, kbID, userID)
-	return err
+// AddGlobalKBEditor grants a user KB-admin on a global KB. grantedBy is the
+// acting operator, recorded in kb_members.created_by; it may be empty.
+// Returns kbmembers.ErrOwnerImmutable if the target already owns the KB.
+func (s *PGStore) AddGlobalKBEditor(ctx context.Context, kbID, userID, grantedBy string) error {
+	return s.members.SetRole(ctx, kbID, userID, kbaccess.RoleAdmin, grantedBy)
 }
 
-// RemoveGlobalKBEditor removes a user from the editors of a global KB.
+// RemoveGlobalKBEditor revokes a user's KB-admin role on a global KB. Returns
+// kbmembers.ErrNotFound when they had no membership at all and
+// kbmembers.ErrOwnerImmutable when the row is the owner's.
 func (s *PGStore) RemoveGlobalKBEditor(ctx context.Context, kbID, userID string) error {
-	_, err := s.pool.Exec(ctx,
-		`DELETE FROM global_kb_editors WHERE kb_id = $1 AND user_id = $2`, kbID, userID)
-	return err
+	return s.members.RemoveMember(ctx, kbID, userID)
 }
 
 // ---------------------------------------------------------------------------

@@ -5,12 +5,15 @@ package adminglobalkbs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/httputil"
+	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/kbmembers"
 )
 
 // ---------------------------------------------------------------------------
@@ -40,7 +43,9 @@ type GlobalKBRow struct {
 	CreatedAt      time.Time       `json:"createdAt"      db:"created_at"`
 }
 
-// GlobalKBEditorRow is the shape returned for an editor of a global KB.
+// GlobalKBEditorRow is the shape returned for an editor of a global KB — a
+// kb_members row with role='admin'. ID is the *user* id: the wire shape
+// predates kb_members and is kept unchanged so the admin UI keeps working.
 type GlobalKBEditorRow struct {
 	ID        string    `json:"id"        db:"id"`
 	Username  string    `json:"username"  db:"username"`
@@ -87,7 +92,9 @@ type Store interface {
 	CreateGlobalKB(ctx context.Context, data GlobalKBCreate) (*GlobalKBRow, error)
 	UpdateGlobalKB(ctx context.Context, id string, data GlobalKBUpdate) (*GlobalKBRow, error)
 	ListGlobalKBEditors(ctx context.Context, kbID string) ([]GlobalKBEditorRow, error)
-	AddGlobalKBEditor(ctx context.Context, kbID, userID string) error
+	// AddGlobalKBEditor grants role='admin'. grantedBy is the acting operator
+	// (recorded as kb_members.created_by); may be empty.
+	AddGlobalKBEditor(ctx context.Context, kbID, userID, grantedBy string) error
 	RemoveGlobalKBEditor(ctx context.Context, kbID, userID string) error
 	LogAuditAction(ctx context.Context, operatorID, action, targetType, targetID string, diff any) error
 }
@@ -273,6 +280,13 @@ func (h *Handler) DeleteGlobalKB(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 // Endpoint handlers — Editors
 // ---------------------------------------------------------------------------
+//
+// "Editor" of a global KB means a kb_members row with role='admin' — the
+// single authority kbaccess.EffectiveRole resolves from. These endpoints used
+// to read and write global_kb_editors, which EffectiveRole stopped consulting
+// when migration 0064 landed: adding an editor was a silent no-op grant, and
+// removing one left the backfilled kb_members admin row in place, i.e. an
+// invisible and un-revokable privilege. They now go through kbmembers.Store.
 
 // ListEditors handles GET /api/admin/global-kbs/{id}/editors.
 func (h *Handler) ListEditors(w http.ResponseWriter, r *http.Request) {
@@ -319,10 +333,19 @@ func (h *Handler) AddEditor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.store.AddGlobalKBEditor(ctx, kbID, userID); err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to add editor")
+	operator := operatorID(r)
+	switch err := h.store.AddGlobalKBEditor(ctx, kbID, userID, operator); {
+	case errors.Is(err, kbmembers.ErrOwnerImmutable):
+		httputil.WriteErrorCtx(ctx, w, http.StatusConflict,
+			"that user owns this knowledge base — their role cannot be changed here")
+		return
+	case err != nil:
+		httputil.WriteInternalErrorCtx(ctx, w, err)
 		return
 	}
+
+	_ = h.store.LogAuditAction(ctx, operator, "global_kb.editor.add", "global_kb", kbID,
+		map[string]any{"userId": userID, "role": kbaccess.RoleAdmin})
 
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusCreated, map[string]bool{"success": true})
 }
@@ -337,10 +360,21 @@ func (h *Handler) RemoveEditor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.store.RemoveGlobalKBEditor(ctx, kbID, userID); err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to remove editor")
+	switch err := h.store.RemoveGlobalKBEditor(ctx, kbID, userID); {
+	case errors.Is(err, kbmembers.ErrNotFound):
+		httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "editor not found")
+		return
+	case errors.Is(err, kbmembers.ErrOwnerImmutable):
+		httputil.WriteErrorCtx(ctx, w, http.StatusConflict,
+			"that user owns this knowledge base and cannot be removed here")
+		return
+	case err != nil:
+		httputil.WriteInternalErrorCtx(ctx, w, err)
 		return
 	}
+
+	_ = h.store.LogAuditAction(ctx, operatorID(r), "global_kb.editor.remove", "global_kb", kbID,
+		map[string]any{"userId": userID})
 
 	w.WriteHeader(http.StatusNoContent)
 }
