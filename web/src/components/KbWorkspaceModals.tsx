@@ -15,7 +15,7 @@ const WebWorkspace = lazy(() => import('./WebWorkspace').then(module => ({ defau
 
 export function KbWorkspaceModals() {
   const { currentKb, availableConfigs, handleUpdateKBSettings } = useKbCore();
-  const { showSettings, setShowSettings, agentSelection, setAgentSelection } = useKbChat();
+  const { showSettings, setShowSettings } = useKbChat();
   const { sharing, content, fileMgmt, webTools } = useKbData();
 
   return (
@@ -45,8 +45,6 @@ export function KbWorkspaceModals() {
           currentKb={currentKb}
           availableConfigs={availableConfigs}
           onUpdateSettings={handleUpdateKBSettings}
-          agentSelection={agentSelection}
-          onAgentSelect={setAgentSelection}
         />}
       </Suspense>
 

@@ -3,8 +3,6 @@ import { X } from 'lucide-react';
 import type { KnowledgeBase, SafeAIConfig } from '../types';
 import { useTheme } from '../contexts/ThemeContext';
 
-import AgentPicker from './agents/AgentPicker';
-import type { AgentSelection } from '../hooks/useKbSettings';
 
 interface SettingsModalProps {
     show: boolean;
@@ -13,18 +11,10 @@ interface SettingsModalProps {
     availableConfigs: SafeAIConfig[];
     onUpdateSettings: (data: Record<string, unknown>) => void;
 
-
-    /**
-     * Per-chat agent selection. Only supplied by the KB-workspace mount point —
-     * HomeView has no chat, so the picker is omitted there.
-     */
-    agentSelection?: AgentSelection;
-    onAgentSelect?: (value: AgentSelection) => void;
 }
 
 const SettingsModalContent: React.FC<Omit<SettingsModalProps, 'show'>> = ({
-    onClose, currentKb, availableConfigs, onUpdateSettings,
-    agentSelection, onAgentSelect
+    onClose, currentKb, availableConfigs, onUpdateSettings
 }) => {
     const { t } = useTheme();
     const [systemPrompt, setSystemPrompt] = useState(currentKb?.systemPrompt || '');
@@ -80,19 +70,6 @@ const SettingsModalContent: React.FC<Omit<SettingsModalProps, 'show'>> = ({
                             {systemPrompt.length} / 8000
                         </div>
                     </div>
-
-                    {/* Attaching agents to the KB lives in the composer's
-                        system-prompt panel, next to the prompt it composes
-                        with — rendering that list here too would mean two
-                        live copies that can disagree. This modal keeps the
-                        per-chat picker only. */}
-                    {onAgentSelect && (
-                        <AgentPicker
-                            kbId={currentKb?.id}
-                            selection={agentSelection ?? {}}
-                            onSelect={onAgentSelect}
-                        />
-                    )}
 
                     <div className="input-group">
                         <label htmlFor="ai-config" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', display: 'block' }}>{t('aiProviderConfig')}</label>
