@@ -57,7 +57,7 @@ All routes below are under `/api`.
 | GET | `/api-keys` |
 | DELETE | `/api-keys/{id}` |
 
-### Knowledge bases and shares
+### Knowledge bases
 
 | Method | Path |
 |---|---|
@@ -67,9 +67,34 @@ All routes below are under `/api`.
 | PATCH | `/kb/{id}` |
 | DELETE | `/kb/{id}` |
 | GET | `/kb/{id}/files` |
-| GET | `/kb/{id}/shares` |
-| POST | `/kb/{id}/share` |
-| DELETE | `/kb/{id}/share/{userId}` |
+
+### KB members and ownership
+
+Four roles, strictly ordered `view < edit < admin < owner` (migration 0064,
+`kb_members`). "Min. role" is the effective KB role the caller must resolve to
+via `kbaccess.EffectiveRole`; `owner` and `self` are enforced inside the
+handler rather than by the route gate. Replaces the removed `/kb/{id}/shares`
+and `/kb/{id}/share[/{userId}]` endpoints.
+
+| Method | Path | Min. role |
+|---|---|---|
+| GET | `/kb/{id}/members` | admin |
+| PUT | `/kb/{id}/members/{userId}` | admin |
+| DELETE | `/kb/{id}/members/{userId}` | admin |
+| POST | `/kb/{id}/members/bulk` | admin |
+| DELETE | `/kb/{id}/members/pending/{username}` | admin |
+| POST | `/kb/{id}/transfer-owner` | owner |
+| DELETE | `/kb/{id}/membership` | view (self) |
+| GET | `/kb/{id}/membership/impact` | view (self) |
+
+`PUT /members/{userId}` and `POST /members/bulk` accept `view`, `edit` and
+`admin` only — ownership moves solely through `/transfer-owner`, and the target
+must already be a member. `DELETE /members/{userId}` (an admin revoking someone)
+leaves that user's chats intact; `DELETE /membership` (self-service leave)
+deletes them, and `GET /membership/impact` returns the chat count backing the
+confirmation dialog. The member list sits behind `admin`, not `view`: on a
+published global KB every authenticated caller resolves to `view`, and the
+roster is not theirs to read.
 
 ### Files and source ingestion
 
