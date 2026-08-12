@@ -29,6 +29,7 @@ e2e/.auth/
 !/docs/runbooks/
 /docs/runbooks/*
 !/docs/runbooks/hnsw-reindex.md
+!/docs/runbooks/release.md
 .playwright-mcp
 .tmp/
 /example/
