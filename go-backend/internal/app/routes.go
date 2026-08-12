@@ -659,6 +659,7 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("PUT /api/kb/{id}/members/{userId}", rc.kbAdminChain(kbMembersHandler.SetMemberRole))
 	rc.mux.Handle("DELETE /api/kb/{id}/members/{userId}", rc.kbAdminChain(kbMembersHandler.RemoveMember))
 	rc.mux.Handle("POST /api/kb/{id}/members/bulk", rc.kbAdminChain(kbMembersHandler.BulkInvite))
+	rc.mux.Handle("DELETE /api/kb/{id}/members/pending/{username}", rc.kbAdminChain(kbMembersHandler.RevokePendingInvite))
 	// transfer-owner and membership sit on kbViewChain, not kbAdminChain:
 	// RequireKBRole has no owner tier to gate on without also excluding
 	// superadmins (they resolve to RoleOwner and must be let through), and

@@ -13,10 +13,7 @@ import { useFormValidation } from '../hooks/useFormValidation';
 import { splitUsernames } from '../utils/splitUsernames';
 
 // PendingInvite mirrors GET /api/kb/{id}/members' `pending` array
-// (kbmembers.PendingInvite: username/role/createdAt). There is currently no
-// endpoint to revoke a pending invite on the /members surface (unlike the
-// deprecated /share/pending/{username} route it replaces), so these render
-// read-only — see the MembersModal report for that gap.
+// (kbmembers.PendingInvite: username/role/createdAt).
 interface PendingMemberInvite {
     username: string;
     role: string;
@@ -110,6 +107,24 @@ export const MembersModal: React.FC<MembersModalProps> = ({
             await axios.delete(`${API_BASE_URL}/api/kb/${sharingKb.id}/members/${userId}`);
         } catch {
             setMembers(prev);
+            toast.error(t('removeShareError'));
+        }
+    };
+
+    // Withdraws a not-yet-applied invite. Optimistic with rollback on
+    // failure, mirroring handleRemoveMember above — no confirm dialog,
+    // matching the old ShareModal.handleRevokePending this replaces
+    // (nothing was granted yet, so there's nothing destructive to confirm).
+    // url.PathEscape-equivalent encodeURIComponent on the client, since
+    // usernames can contain characters that need escaping in a path segment.
+    const handleRevokePending = async (username: string) => {
+        if (!sharingKb) return;
+        const prev = pendingInvites;
+        setPendingInvites(pendingInvites.filter(p => p.username !== username));
+        try {
+            await axios.delete(`${API_BASE_URL}/api/kb/${sharingKb.id}/members/pending/${encodeURIComponent(username)}`);
+        } catch {
+            setPendingInvites(prev);
             toast.error(t('removeShareError'));
         }
     };
@@ -501,13 +516,22 @@ export const MembersModal: React.FC<MembersModalProps> = ({
                         <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: '0 0 1rem 0' }}>{t('pendingInviteHint')}</p>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '160px', overflowY: 'auto' }}>
                             {pendingInvites.map(p => (
-                                <div key={p.username} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0.75rem', background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                                <div key={p.username} data-testid={`pending-row-${p.username}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0.75rem', background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                                         <Clock size={14} aria-hidden="true" style={{ color: 'var(--text-secondary)' }} />
                                         <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
                                             @{p.username} &middot; {p.role === 'edit' ? t('editPermission') : p.role === 'admin' ? t('kbRoleAdmin') : t('viewPermission')}
                                         </span>
                                     </div>
+                                    <button
+                                        onClick={() => handleRevokePending(p.username)}
+                                        className="icon-button"
+                                        style={{ color: 'var(--error-color)', padding: '6px' }}
+                                        title={t('revokeInvite')}
+                                        aria-label={t('revokeInvite')}
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
                                 </div>
                             ))}
                         </div>

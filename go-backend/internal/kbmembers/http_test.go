@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/kbmembers"
+	"github.com/justrag/go-backend/internal/store"
 )
 
 // mockStore is a test double for kbmembers.Store.
@@ -91,6 +93,9 @@ var _ kbmembers.Store = (*mockStore)(nil)
 type mockPending struct {
 	knownUsers map[string]string // lower(username) -> userID
 	upserted   []string          // usernames sent to UpsertPendingInvite, in order
+
+	removed   []string // usernames sent to RemovePendingInvite, in order
+	removeErr error
 }
 
 func (m *mockPending) GetUserIDByUsername(_ context.Context, username string) (string, bool, error) {
@@ -103,6 +108,10 @@ func (m *mockPending) UpsertPendingInvite(_ context.Context, _, username, _, _ s
 }
 func (m *mockPending) ListPendingInvites(context.Context, string) ([]kbmembers.PendingInvite, error) {
 	return nil, nil
+}
+func (m *mockPending) RemovePendingInvite(_ context.Context, _, username string) error {
+	m.removed = append(m.removed, strings.ToLower(username))
+	return m.removeErr
 }
 
 var _ kbmembers.PendingInviteStore = (*mockPending)(nil)
@@ -199,6 +208,51 @@ func TestRemoveMember_Self_Allowed(t *testing.T) {
 	}
 	if !store.removeCall {
 		t.Errorf("expected RemoveMember to be called")
+	}
+}
+
+// TestRevokePendingInvite_NotFound covers the 404 mapping for
+// DELETE /api/kb/{id}/members/pending/{username}. The underlying store
+// (internal/kb.PGStore, promoted through pendingInviteAdapter in
+// routes.go) wraps internal/store.ErrNotFound, not kbmembers.ErrNotFound —
+// this test pins that the handler checks the right sentinel.
+func TestRevokePendingInvite_NotFound(t *testing.T) {
+	pending := &mockPending{removeErr: fmt.Errorf("pending_invite kb=kb-1 user=nobody: %w", store.ErrNotFound)}
+	handler := kbmembers.NewHandler(&mockStore{}, pending)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/kb/kb-1/members/pending/nobody", nil)
+	req.SetPathValue("id", "kb-1")
+	req.SetPathValue("username", "nobody")
+	req = req.WithContext(adminContext(req.Context(), "kb-1", kbaccess.RoleAdmin, "admin-1"))
+
+	rr := httptest.NewRecorder()
+	handler.RevokePendingInvite(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestRevokePendingInvite_Success covers the happy path: 204 and the right
+// username reaches the store, case-normalized the same way BulkInvite's
+// upsert side normalizes it.
+func TestRevokePendingInvite_Success(t *testing.T) {
+	pending := &mockPending{}
+	handler := kbmembers.NewHandler(&mockStore{}, pending)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/kb/kb-1/members/pending/Carol", nil)
+	req.SetPathValue("id", "kb-1")
+	req.SetPathValue("username", "Carol")
+	req = req.WithContext(adminContext(req.Context(), "kb-1", kbaccess.RoleAdmin, "admin-1"))
+
+	rr := httptest.NewRecorder()
+	handler.RevokePendingInvite(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if len(pending.removed) != 1 || pending.removed[0] != "carol" {
+		t.Fatalf("expected RemovePendingInvite to be called with 'carol', got %v", pending.removed)
 	}
 }
 

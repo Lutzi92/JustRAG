@@ -63,6 +63,15 @@ const renderModal = (myRole: string) => {
   return render(<MembersModal show onClose={vi.fn()} sharingKb={kb} myRole={myRole} {...noopProps} />);
 };
 
+const pendingInvites = [
+  { username: 'bob', role: 'view', createdAt: '2026-01-01T00:00:00Z' },
+];
+
+const renderModalWithPending = (myRole: string) => {
+  vi.spyOn(axios, 'get').mockResolvedValue({ data: { members: [], pending: pendingInvites } });
+  return render(<MembersModal show onClose={vi.fn()} sharingKb={kb} myRole={myRole} {...noopProps} />);
+};
+
 describe('MembersModal', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -111,5 +120,27 @@ describe('MembersModal', () => {
 
     // Optimistisch auf 'edit', nach dem Fehlschlag zurueck auf 'view'.
     await waitFor(() => expect(select).toHaveValue('view'));
+  });
+
+  it('revokes a pending invite', async () => {
+    const del = vi.spyOn(axios, 'delete').mockResolvedValue({ status: 204 });
+    renderModalWithPending('owner');
+
+    const row = await screen.findByTestId('pending-row-bob');
+    await userEvent.click(within(row).getByRole('button', { name: /revoke|zurückziehen/i }));
+
+    expect(del).toHaveBeenCalledWith(expect.stringContaining('/members/pending/bob'));
+    await waitFor(() => expect(screen.queryByTestId('pending-row-bob')).toBeNull());
+  });
+
+  it('rolls the pending invite back when the revoke request fails', async () => {
+    vi.spyOn(axios, 'delete').mockRejectedValue(new Error('boom'));
+    renderModalWithPending('owner');
+
+    const row = await screen.findByTestId('pending-row-bob');
+    await userEvent.click(within(row).getByRole('button', { name: /revoke|zurückziehen/i }));
+
+    // Optimistisch entfernt, nach dem Fehlschlag kehrt die Zeile zurueck.
+    await waitFor(() => expect(screen.getByTestId('pending-row-bob')).toBeInTheDocument());
   });
 });

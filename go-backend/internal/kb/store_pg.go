@@ -497,13 +497,13 @@ func (s *PGStore) ListFiles(ctx context.Context, kbID string, limit, offset int)
 // ---------------------------------------------------------------------------
 // Pending KB invites — backs kbmembers.PendingInviteStore (via
 // internal/app/routes.go's pendingInviteAdapter) for the four-role /members
-// surface. GetUserIDByUsername, UpsertPendingInvite, and ListPendingInvites
-// are the only three methods that surface still needs; the rest of this
-// package's former ShareStore implementation (ListKBShares, AddKBShare,
-// RemoveKBShare, ShareExists, RemovePendingInvite) was removed in Task 9 of
-// the four-role KB permission model, along with the deprecated /share*
-// HTTP surface that was its only caller. knowledge_base_shares itself is
-// untouched — dropping it is a later, separate migration.
+// surface. GetUserIDByUsername, UpsertPendingInvite, ListPendingInvites, and
+// RemovePendingInvite are the four methods that surface needs; the rest of
+// this package's former ShareStore implementation (ListKBShares, AddKBShare,
+// RemoveKBShare, ShareExists) was removed in Task 9 of the four-role KB
+// permission model, along with the deprecated /share* HTTP surface that was
+// its only caller. knowledge_base_shares itself is untouched — dropping it
+// is a later, separate migration.
 // ---------------------------------------------------------------------------
 
 // PendingInviteRow is an invite for a username that does not yet exist as a
@@ -575,6 +575,21 @@ func (s *PGStore) ListPendingInvites(ctx context.Context, kbID string) ([]Pendin
 		result[i] = PendingInviteRow(r)
 	}
 	return result, nil
+}
+
+// RemovePendingInvite deletes a pending invite by KB + username (case-insensitive).
+// Wraps store.ErrNotFound when no row was deleted.
+func (s *PGStore) RemovePendingInvite(ctx context.Context, kbID, username string) error {
+	ct, err := s.pool.Exec(ctx,
+		`DELETE FROM pending_kb_invites WHERE kb_id = $1 AND LOWER(username) = LOWER($2)`,
+		kbID, username)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("pending_invite kb=%s user=%s: %w", kbID, username, store.ErrNotFound)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

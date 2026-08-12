@@ -303,6 +303,7 @@ export const translations = {
     inviteAnywaySuccess: { de: 'Einladung ausstehend für "{username}"', en: 'Invite pending for "{username}"' },
     bulkInviteSummary: { de: '{shared} sofort geteilt · {pending} ausstehend · {already} bereits berechtigt', en: '{shared} shared now · {pending} pending · {already} already had access' },
     bulkInviteError: { de: 'Sammeleinladung fehlgeschlagen', en: 'Bulk invite failed' },
+    revokeInvite: { de: 'Einladung zurückziehen', en: 'Revoke invite' },
     selectPermission: { de: 'Berechtigung auswählen', en: 'Select permission' },
     viewPermission: { de: 'Ansehen', en: 'View' },
     editPermission: { de: 'Bearbeiten', en: 'Edit' },

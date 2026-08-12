@@ -1,13 +1,14 @@
 // HTTP layer for the four-role KB permission model. The routes and their
 // chains are registered in internal/app/routes.go:
 //
-//	GET    /api/kb/{id}/members                kbAdminChain
-//	PUT    /api/kb/{id}/members/{userId}        kbAdminChain
-//	DELETE /api/kb/{id}/members/{userId}        kbAdminChain
-//	POST   /api/kb/{id}/members/bulk            kbAdminChain
-//	POST   /api/kb/{id}/transfer-owner          kbViewChain + owner check here
-//	DELETE /api/kb/{id}/membership              kbViewChain
-//	GET    /api/kb/{id}/membership/impact       kbViewChain
+//	GET    /api/kb/{id}/members                       kbAdminChain
+//	PUT    /api/kb/{id}/members/{userId}               kbAdminChain
+//	DELETE /api/kb/{id}/members/{userId}               kbAdminChain
+//	POST   /api/kb/{id}/members/bulk                   kbAdminChain
+//	DELETE /api/kb/{id}/members/pending/{username}     kbAdminChain
+//	POST   /api/kb/{id}/transfer-owner                 kbViewChain + owner check here
+//	DELETE /api/kb/{id}/membership                     kbViewChain
+//	GET    /api/kb/{id}/membership/impact              kbViewChain
 //
 // The member list itself sits behind admin, not view: on a public KB every
 // authenticated user resolves to view, and the membership roster is not
@@ -26,6 +27,7 @@ import (
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/store"
 )
 
 // MaxBulkUsernames caps a single bulk-invite request to bound payload + DB
@@ -42,9 +44,10 @@ type PendingInvite struct {
 
 // PendingInviteStore is the subset of pending-invite bookkeeping the members
 // handler needs for usernames that don't have an account yet: BulkInvite
-// parks them here instead of granting a role directly, and ListMembers
+// parks them here instead of granting a role directly, ListMembers
 // surfaces them alongside real members so the UI can show both in one
-// fetch. Backed today by internal/kb's PGStore (see the adapter wired in
+// fetch, and RevokePendingInvite withdraws one before it's ever applied.
+// Backed today by internal/kb's PGStore (see the adapter wired in
 // internal/app/routes.go), which already owns the pending_kb_invites table
 // — there is no reason to duplicate that SQL in this package.
 //
@@ -58,6 +61,12 @@ type PendingInviteStore interface {
 	GetUserIDByUsername(ctx context.Context, username string) (userID string, found bool, err error)
 	UpsertPendingInvite(ctx context.Context, kbID, username, role, invitedBy string) error
 	ListPendingInvites(ctx context.Context, kbID string) ([]PendingInvite, error)
+	// RemovePendingInvite deletes a not-yet-applied invite by KB + username
+	// (case-insensitive). Returns an error wrapping internal/store.ErrNotFound
+	// (not this package's ErrNotFound) when no row was deleted — it comes
+	// straight from internal/kb.PGStore's implementation, promoted unchanged
+	// through the pendingInviteAdapter wired in internal/app/routes.go.
+	RemovePendingInvite(ctx context.Context, kbID, username string) error
 }
 
 // Handler serves the member-management and ownership-transfer endpoints.
@@ -154,6 +163,27 @@ func (h *Handler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteErrorCtx(ctx, w, http.StatusConflict, "the owner cannot be removed")
 	case err != nil:
 		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to remove member")
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// RevokePendingInvite handles DELETE /api/kb/{id}/members/pending/{username}
+// — withdrawing an invite parked by BulkInvite (or the single-invite "add
+// anyway" flow) for a username with no account yet, before it is ever
+// applied. This is the four-role successor to the deprecated
+// DELETE /api/kb/{id}/share/pending/{username} (kb.SharingHandler.RemovePendingShare,
+// removed in Task 9 of the four-role KB permission model); it was missed in
+// that task's route table and had no replacement for a short window.
+func (h *Handler) RevokePendingInvite(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	err := h.pending.RemovePendingInvite(ctx, r.PathValue("id"), r.PathValue("username"))
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "pending invite not found")
+	case err != nil:
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to remove pending invite")
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
