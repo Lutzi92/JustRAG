@@ -286,6 +286,8 @@ export const translations = {
     confirmDeleteContent: { de: 'Möchtest du diesen Inhalt wirklich löschen?', en: 'Do you really want to delete this content?' },
     confirmDeleteChat: { de: 'Bist du sicher, dass du diesen Chat-Verlauf löschen möchtest?', en: 'Are you sure you want to delete this chat history?' },
     confirmDeleteKB: { de: 'Bist du sicher, dass du diese Knowledge Base löschen möchtest?', en: 'Are you sure you want to delete this knowledge base?' },
+    confirmLeaveKb: { de: 'Diese Knowledge Base verlassen? {count} deiner Chats darin werden dabei gelöscht.', en: 'Leave this knowledge base? {count} of your chats in it will be deleted.' },
+    confirmLeaveKbNoChats: { de: 'Diese Knowledge Base verlassen?', en: 'Leave this knowledge base?' },
     confirmDeleteFile: { de: 'Bist du sicher, dass du diese Datei löschen möchtest? Dies entfernt auch alle daraus extrahierten Informationen.', en: 'Are you sure you want to delete this file? This will also remove all extracted information.' },
     enterKBName: { de: 'Name für deine Knowledge Base eingeben:', en: 'Enter name for your Knowledge Base:' },
     shareSuccess: { de: 'Knowledge Base geteilt mit', en: 'Knowledge Base shared with' },
@@ -330,6 +332,8 @@ export const translations = {
     globalKbNamePrompt: { de: 'Name der globalen Knowledge Base:', en: 'Name for the global Knowledge Base:' },
     confirmDeleteGlobalKb: { de: 'Diese globale Knowledge Base wirklich löschen? Alle Dateien und Chats werden gelöscht.', en: 'Delete this global Knowledge Base? All files and chats will be deleted.' },
     deleteGlobalKb: { de: 'Globale Knowledge Base löschen', en: 'Delete global Knowledge Base' },
+    deleteKb: { de: 'Knowledge Base löschen', en: 'Delete knowledge base' },
+    removeFromMyView: { de: 'Aus meiner Ansicht entfernen', en: 'Remove from my view' },
     editSettings: { de: 'Einstellungen bearbeiten', en: 'Edit settings' },
     globalKbSettings: { de: 'Globale KB-Einstellungen', en: 'Global KB Settings' },
     openKb: { de: 'Knowledge Base öffnen', en: 'Open Knowledge Base' },
@@ -524,7 +528,15 @@ export const translations = {
     selectSource: { de: 'Quelle auswählen', en: 'Select source' },
 
     // HomeView
-    sharedBadge: { de: 'Geteilt', en: 'Shared' },
+    badgePersonal: { de: 'Persönlich', en: 'Personal' },
+    badgeShared: { de: 'Geteilt mit {n}', en: 'Shared with {n}' },
+    // KB member roles (kb_members.role) — distinct from the "Roles" (system
+    // user role) keys below; roleAdmin there is the site-wide admin role,
+    // not a per-KB one, so these carry a kbRole* prefix to avoid colliding.
+    kbRoleView: { de: 'Leser', en: 'Viewer' },
+    kbRoleEdit: { de: 'Bearbeiter', en: 'Editor' },
+    kbRoleAdmin: { de: 'Admin', en: 'Admin' },
+    kbRoleOwner: { de: 'Besitzer', en: 'Owner' },
     copyUsername: { de: 'Benutzername kopieren', en: 'Copy username' },
     websiteLogo: { de: 'Website-Logo', en: 'Website Logo' },
 

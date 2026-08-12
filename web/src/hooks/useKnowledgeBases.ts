@@ -5,6 +5,7 @@ import { API_BASE_URL } from '../api';
 import { useTheme } from '../contexts/ThemeContext';
 import { useModalContext } from '../contexts/ModalContext';
 import { useToast } from '../contexts/ToastContext';
+import { useKbRemoval } from './useKbRemoval';
 
 interface UseKnowledgeBasesParams {
   onKBSelected: () => void;
@@ -24,6 +25,7 @@ export function useKnowledgeBases({
   const { t } = useTheme();
   const { showConfirm, showPrompt } = useModalContext();
   const toast = useToast();
+  const { removeKb } = useKbRemoval();
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
   const [globalKbs, setGlobalKbs] = useState<KnowledgeBase[]>([]);
 
@@ -79,19 +81,24 @@ export function useKnowledgeBases({
     }
   };
 
-  const handleDeleteKB = useCallback(async (id: string, e: React.MouseEvent) => {
+  // Thin caller: removeKb (useKbRemoval) owns the delete-vs-leave decision,
+  // the confirmation dialog(s), and the request. This only reacts to the
+  // outcome — updating the local list and navigating home on success,
+  // rolling nothing back (nothing was mutated yet) and toasting on failure.
+  const handleDeleteKB = useCallback(async (kb: KnowledgeBase, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!await showConfirm(t('confirmDeleteKB'))) return;
-    let snapshot: KnowledgeBase[] = [];
-    setKbs(prev => { snapshot = prev; return prev.filter(kb => kb.id !== id); });
-    handleGoHome();
+    let outcome: Awaited<ReturnType<typeof removeKb>>;
     try {
-      await axios.delete(`${API_BASE_URL}/api/kb/${id}`);
-    } catch {
-      setKbs(snapshot);
+      outcome = await removeKb(kb);
+    } catch (err: unknown) {
+      console.error('Failed to remove KB:', err);
       toast.error(t('deleteKBError'));
+      return;
     }
-  }, [showConfirm, t, handleGoHome, toast]);
+    if (outcome === 'cancelled') return;
+    setKbs(prev => prev.filter(k => k.id !== kb.id));
+    handleGoHome();
+  }, [removeKb, handleGoHome, toast, t]);
 
   const handleCreateGlobalKB = async () => {
     const name = await showPrompt(t('globalKbNamePrompt'));

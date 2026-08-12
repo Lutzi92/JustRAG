@@ -215,6 +215,11 @@ export interface StudioConfig {
     quiz?: boolean;
 }
 
+// KbRole is the caller's role on a KB, per kb_members: 'view' < 'edit' <
+// 'admin' < 'owner'. A KnowledgeBase.myRole of undefined means the caller has
+// no kb_members row — an implicit viewer on a published global KB.
+export type KbRole = 'view' | 'edit' | 'admin' | 'owner';
+
 export interface KnowledgeBase {
     id: string;
     name: string;
@@ -244,6 +249,11 @@ export interface KnowledgeBase {
     processingFileCount?: number;
     messageCount?: number;
     lastMessageAt?: string | null;
+    // Caller's own role + total member count — returned by the same list
+    // endpoints (Task 8). myRole is undefined for an implicit viewer with no
+    // kb_members row (e.g. a published global KB nobody explicitly joined).
+    myRole?: KbRole;
+    memberCount?: number;
 }
 
 export interface GlobalKbEditor {

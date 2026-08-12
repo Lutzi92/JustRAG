@@ -99,20 +99,61 @@ func TestCreateKnowledgeBase_WritesOwnerKBMembersRow(t *testing.T) {
 		t.Fatalf("knowledge_bases.user_id = %v, want %s", row.UserID, userID)
 	}
 
-	// (b) ListKnowledgeBases (EXISTS against kb_members) returns the new KB.
+	// (b) ListKnowledgeBases (EXISTS against kb_members) returns the new KB,
+	// and — Task 8 — its myRole/memberCount subqueries report the creator as
+	// 'owner' with a member count of 1.
 	list, err := store.ListKnowledgeBases(context.Background(), userID, 100, 0)
 	if err != nil {
 		t.Fatalf("ListKnowledgeBases: %v", err)
 	}
-	found := false
-	for _, r := range list {
-		if r.ID == row.ID {
-			found = true
+	var found *kb.KBRow
+	for i := range list {
+		if list[i].ID == row.ID {
+			found = &list[i]
 			break
 		}
 	}
-	if !found {
+	if found == nil {
 		t.Fatalf("ListKnowledgeBases(%s) did not include newly created KB %s", userID, row.ID)
+	}
+	if found.MyRole == nil || *found.MyRole != "owner" {
+		t.Fatalf("ListKnowledgeBases: myRole = %v, want owner", found.MyRole)
+	}
+	if found.MemberCount != 1 {
+		t.Fatalf("ListKnowledgeBases: memberCount = %d, want 1", found.MemberCount)
+	}
+
+	// (c) A different user has no kb_members row on this personal KB, so
+	// myRole must come back nil — never a stale/wrong role — even though the
+	// KB itself won't appear in that user's ListKnowledgeBases result (it's
+	// not global and they're not a member). Exercised via
+	// ListGlobalKnowledgeBases instead by temporarily marking the KB global,
+	// which is the only list path a non-member can see a KB through.
+	otherUserID := insertUser(t, pool, "kb-create-other")
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE knowledge_bases SET is_global = true, is_published = true WHERE id = $1::uuid`, row.ID,
+	); err != nil {
+		t.Fatalf("mark KB global: %v", err)
+	}
+	globalList, err := store.ListGlobalKnowledgeBases(context.Background(), otherUserID, false)
+	if err != nil {
+		t.Fatalf("ListGlobalKnowledgeBases: %v", err)
+	}
+	var foundGlobal *kb.KBRow
+	for i := range globalList {
+		if globalList[i].ID == row.ID {
+			foundGlobal = &globalList[i]
+			break
+		}
+	}
+	if foundGlobal == nil {
+		t.Fatalf("ListGlobalKnowledgeBases(%s) did not include KB %s", otherUserID, row.ID)
+	}
+	if foundGlobal.MyRole != nil {
+		t.Fatalf("ListGlobalKnowledgeBases: myRole = %v, want nil (non-member implicit viewer)", *foundGlobal.MyRole)
+	}
+	if foundGlobal.MemberCount != 1 {
+		t.Fatalf("ListGlobalKnowledgeBases: memberCount = %d, want 1 (owner only)", foundGlobal.MemberCount)
 	}
 }
 

@@ -57,6 +57,16 @@ type KBRow struct {
 	ProcessingFileCount int        `json:"processingFileCount"`
 	MessageCount        int        `json:"messageCount"`
 	LastMessageAt       *time.Time `json:"lastMessageAt,omitempty"`
+
+	// MyRole is the caller's own kb_members.role for this KB, and MemberCount
+	// the KB's total member count — populated only by the same two list
+	// queries as the card metadata above, via correlated subqueries. MyRole
+	// is null when the caller has no kb_members row (a published global KB
+	// grants an implicit 'view' role to any authenticated user without one);
+	// the frontend must treat a null MyRole as an implicit viewer, never as
+	// owner. Zero/nil on single-row fetches (create / get-by-id).
+	MyRole      *string `json:"myRole"`
+	MemberCount int     `json:"memberCount"`
 }
 
 // ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ interface HomeViewProps {
   onViewAgents: () => void;
   onCreateKB: () => void;
   onSelectKB: (kb: KnowledgeBase) => void;
-  onDeleteKB: (id: string, e: React.MouseEvent) => void;
+  onDeleteKB: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onCreateGlobalKB: () => void;
   onDeleteGlobalKB: (id: string, e: React.MouseEvent) => void;
   onOpenGlobalKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
@@ -355,12 +355,10 @@ export function HomeView(props: HomeViewProps) {
             <div className="home-view__card-top">
               <BookOpen size={20} color="var(--text-secondary)" aria-hidden="true" />
               <div className="home-view__badge-row">
-                {kb.userId !== user?.id && (
-                  <div className="home-view__badge home-view__badge--shared">
-                    <User size={10} aria-hidden="true" />
-                    {t('sharedBadge')}
-                  </div>
-                )}
+                <div className={`home-view__badge ${(kb.memberCount ?? 1) <= 1 ? 'home-view__badge--personal' : 'home-view__badge--shared'}`}>
+                  <User size={10} aria-hidden="true" />
+                  {(kb.memberCount ?? 1) <= 1 ? t('badgePersonal') : t('badgeShared').replace('{n}', String(kb.memberCount))}
+                </div>
 
                 {kb.userId === user?.id && (
                   <button
@@ -373,11 +371,16 @@ export function HomeView(props: HomeViewProps) {
                   </button>
                 )}
 
+                {/* Label + aria-label reflect the caller's own role: owners
+                    delete the KB outright, everyone else only leaves it
+                    (removeKb — useKbRemoval — decides which request that
+                    means; a missing myRole is treated as an implicit
+                    viewer, never as owner). */}
                 <button
-                  onClick={(e) => onDeleteKB(kb.id, e)}
+                  onClick={(e) => onDeleteKB(kb, e)}
                   className="home-view__mini-icon"
-                  title={t('delete')}
-                  aria-label={t('delete')}
+                  title={kb.myRole === 'owner' ? t('deleteKb') : t('removeFromMyView')}
+                  aria-label={kb.myRole === 'owner' ? t('deleteKb') : t('removeFromMyView')}
                 >
                   <Trash2 size={16} aria-hidden="true" />
                 </button>

@@ -102,6 +102,23 @@ const kbSelectColsNoAlias = `id, name, user_id, description, is_global, is_publi
        system_prompt, header_text, example_prompts, studio_config, chunk_size, chunk_overlap, created_at,
        NULL::text AS owner_first_name, NULL::text AS owner_last_name, NULL::text AS owner_username`
 
+// kbMembershipCols surfaces the caller's own role (my_role) and the KB's
+// total member count (member_count) for list endpoints, so the frontend can
+// decide delete-vs-leave and render a "shared with N" badge without an extra
+// per-KB round trip. Kept separate from kbSelectCols/kbSelectColsNoAlias
+// (rather than baked in, the way those constants are) because
+// Create/UpdateKnowledgeBase RETURNING clauses have no "the caller" bind
+// parameter and no `kb`-aliased row to correlate against; only the two list
+// queries below use this. userIDParam is the caller-supplied $N placeholder,
+// which differs between ListKnowledgeBases and ListGlobalKnowledgeBases.
+// Correlates against `kb.id`, so the caller's FROM clause must alias
+// knowledge_bases as `kb` (both list queries already do, for kbStatsJoins).
+func kbMembershipCols(userIDParam string) string {
+	return `,
+       (SELECT role FROM kb_members WHERE kb_id = kb.id AND user_id = ` + userIDParam + `) AS my_role,
+       (SELECT COUNT(*)::int FROM kb_members WHERE kb_id = kb.id)         AS member_count`
+}
+
 func toKBRow(r kbFullRow) KBRow {
 	return KBRow{
 		ID:             r.ID,
@@ -140,6 +157,8 @@ type kbListRow struct {
 	ProcessingFileCount int        `db:"processing_file_count"`
 	MessageCount        int        `db:"message_count"`
 	LastMessageAt       *time.Time `db:"last_message_at"`
+	MyRole              *string    `db:"my_role"`
+	MemberCount         int        `db:"member_count"`
 }
 
 func toKBRowWithStats(r kbListRow) KBRow {
@@ -149,6 +168,8 @@ func toKBRowWithStats(r kbListRow) KBRow {
 	row.ProcessingFileCount = r.ProcessingFileCount
 	row.MessageCount = r.MessageCount
 	row.LastMessageAt = r.LastMessageAt
+	row.MyRole = r.MyRole
+	row.MemberCount = r.MemberCount
 	return row
 }
 
@@ -189,11 +210,14 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 	// construction, letting the planner use the btree index on
 	// kb_members.kb_id. The owner always has a kb_members row since
 	// migration 0064, so a separate kb.user_id = $1 clause is unnecessary.
-	const sql = `
+	// sql concatenates kbMembershipCols's function-call result, so it cannot
+	// be a const (unlike the analogous ListGlobalKnowledgeBases query below,
+	// this one was previously a const; keep it a plain string now).
+	sql := `
 		SELECT ` + kbSelectCols + `,
 		       u.first_name AS owner_first_name,
 		       u.last_name  AS owner_last_name,
-		       u.username   AS owner_username` + kbStatsCols + `
+		       u.username   AS owner_username` + kbStatsCols + kbMembershipCols("$1") + `
 		FROM knowledge_bases kb
 		LEFT JOIN users u ON kb.user_id = u.id` + kbStatsJoins + `
 		WHERE EXISTS (
@@ -221,28 +245,29 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 // guard: on a deployment with many global KBs an uncapped query would stream
 // every row into the process on every call. The admin variant skips the
 // is_published filter and is especially exposed.
-// userID is part of the interface contract for future per-user filtering of
-// global KBs (currently only the published/unpublished split applies); it is
-// intentionally unused in this implementation.
+// userID now also seeds kbMembershipCols's correlated my_role subquery, so a
+// global KB the caller has an explicit kb_members row on (e.g. an admin- or
+// self-added membership) reports that role instead of the implicit-viewer
+// null.
 func (s *PGStore) ListGlobalKnowledgeBases(ctx context.Context, userID string, isAdmin bool) ([]KBRow, error) {
 	var sql string
 	if isAdmin {
 		sql = `
-			SELECT ` + kbSelectColsNoAlias + kbStatsCols + `
+			SELECT ` + kbSelectColsNoAlias + kbStatsCols + kbMembershipCols("$1") + `
 			FROM knowledge_bases kb` + kbStatsJoins + `
 			WHERE is_global = true
 			ORDER BY created_at DESC
-			LIMIT $1`
+			LIMIT $2`
 	} else {
 		sql = `
-			SELECT ` + kbSelectColsNoAlias + kbStatsCols + `
+			SELECT ` + kbSelectColsNoAlias + kbStatsCols + kbMembershipCols("$1") + `
 			FROM knowledge_bases kb` + kbStatsJoins + `
 			WHERE is_global = true AND is_published = true
 			ORDER BY created_at DESC
-			LIMIT $1`
+			LIMIT $2`
 	}
 
-	rows, err := pgxutil.QueryRows[kbListRow](ctx, s.pool, sql, listKnowledgeBasesMaxLimit)
+	rows, err := pgxutil.QueryRows[kbListRow](ctx, s.pool, sql, userID, listKnowledgeBasesMaxLimit)
 	if err != nil {
 		return []KBRow{}, err
 	}
