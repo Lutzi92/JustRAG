@@ -46,9 +46,9 @@ func (m *mockStore) GetRetrievalQualityStats(_ context.Context, _ string, _ anal
 // getKBID() inside the handler resolves to kbID.
 func makeContext(ctx context.Context, kbID string) context.Context {
 	access := &kbaccess.KBAccessResult{
-		KB:         &kbaccess.KnowledgeBase{ID: kbID, IsGlobal: true},
-		IsOwner:    false,
-		Permission: "edit",
+		KB:      &kbaccess.KnowledgeBase{ID: kbID, IsGlobal: true},
+		IsOwner: false,
+		Role:    kbaccess.RoleEdit,
 	}
 	return kbaccess.WithAccess(ctx, access)
 }

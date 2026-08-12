@@ -293,12 +293,13 @@ func (d *Deleter) deleteKBTransaction(ctx context.Context, kbID string) error {
 		{`DELETE FROM generated_content WHERE kb_id = $1`, []any{kbID}},
 		{`DELETE FROM knowledge_base_shares WHERE kb_id = $1`, []any{kbID}},
 		{`DELETE FROM global_kb_editors WHERE kb_id = $1`, []any{kbID}},
+		{`DELETE FROM kb_members WHERE kb_id = $1`, []any{kbID}},
 		{`DELETE FROM knowledge_bases WHERE id = $1`, []any{kbID}},
 	})
 }
 
 func (d *Deleter) deleteUserTransaction(ctx context.Context, userID string, kbIDs []string) error {
-	steps := make([]txStep, 0, 8)
+	steps := make([]txStep, 0, 10)
 	if len(kbIDs) > 0 {
 		steps = append(steps,
 			txStep{`DELETE FROM files WHERE kb_id = ANY($1::uuid[])`, []any{kbIDs}},
@@ -306,12 +307,15 @@ func (d *Deleter) deleteUserTransaction(ctx context.Context, userID string, kbID
 			txStep{`DELETE FROM generated_content WHERE kb_id = ANY($1::uuid[])`, []any{kbIDs}},
 			txStep{`DELETE FROM knowledge_base_shares WHERE kb_id = ANY($1::uuid[])`, []any{kbIDs}},
 			txStep{`DELETE FROM global_kb_editors WHERE kb_id = ANY($1::uuid[])`, []any{kbIDs}},
+			txStep{`DELETE FROM kb_members WHERE kb_id = ANY($1::uuid[])`, []any{kbIDs}},
 			txStep{`DELETE FROM knowledge_bases WHERE user_id = $1`, []any{userID}},
 		)
 	}
-	// Remove user's share entries in KBs they don't own, then the user itself.
+	// Remove user's share/membership entries in KBs they don't own, then the
+	// user itself.
 	steps = append(steps,
 		txStep{`DELETE FROM knowledge_base_shares WHERE user_id = $1`, []any{userID}},
+		txStep{`DELETE FROM kb_members WHERE user_id = $1`, []any{userID}},
 		txStep{`DELETE FROM users WHERE id = $1`, []any{userID}},
 	)
 	return d.runSteps(ctx, "deleteUserTransaction", steps)
@@ -321,6 +325,7 @@ func (d *Deleter) deleteGlobalKBTransaction(ctx context.Context, kbID string) er
 	return d.runSteps(ctx, "deleteGlobalKBTransaction", []txStep{
 		{`DELETE FROM global_kb_editors WHERE kb_id = $1`, []any{kbID}},
 		{`DELETE FROM knowledge_base_shares WHERE kb_id = $1`, []any{kbID}},
+		{`DELETE FROM kb_members WHERE kb_id = $1`, []any{kbID}},
 		{`DELETE FROM files WHERE kb_id = $1`, []any{kbID}},
 		{`DELETE FROM chats WHERE kb_id = $1`, []any{kbID}},
 		{`DELETE FROM generated_content WHERE kb_id = $1`, []any{kbID}},

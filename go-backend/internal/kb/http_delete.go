@@ -28,11 +28,13 @@ func NewDeleteHandler(deleter CascadeDeleter) *DeleteHandler {
 // DeleteKB handles DELETE /api/kb/{id}.
 //
 // Permission rules (enforced by the kbaccess middleware upstream):
-//   - The middleware already resolved view access. Here we additionally verify
-//     that the caller is the owner or a superadmin — only they may delete.
+//   - The middleware already resolved edit access (kbEditChain). Here we
+//     additionally verify the resolved role is exactly owner — superadmins
+//     resolve to RoleOwner via kbaccess.EffectiveRole, so no separate
+//     system-role check is needed.
 //
 // Flow:
-//  1. Confirm owner or superadmin.
+//  1. Confirm the resolved role is owner.
 //  2. Delegate cascade deletion to the CascadeDeleter service.
 //  3. Return 204 No Content.
 func (h *DeleteHandler) DeleteKB(w http.ResponseWriter, r *http.Request) {
@@ -50,9 +52,11 @@ func (h *DeleteHandler) DeleteKB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only the owner or a superadmin may delete a KB.
-	if !access.IsOwner && user.Role != "superadmin" {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusForbidden, "only the owner or a superadmin may delete this knowledge base")
+	// Only the owner may delete a KB. Superadmins resolve to RoleOwner in
+	// kbaccess, so the separate role check the old code carried is gone.
+	if access.Role != kbaccess.RoleOwner {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusForbidden,
+			"only the owner may delete this knowledge base")
 		return
 	}
 

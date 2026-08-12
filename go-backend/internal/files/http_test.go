@@ -34,8 +34,8 @@ type mockStore struct {
 	fileErr         error
 	kb              *kbaccess.KnowledgeBase
 	kbErr           error
-	share           *kbaccess.KBShare
-	shareErr        error
+	role            string
+	roleErr         error
 	deleteErr       error
 	deletedIDs      []string // records every ID passed to DeleteFileRecord
 	createFile      *files.FileRecord
@@ -80,8 +80,8 @@ func (m *mockStore) GetKBByID(_ context.Context, _ string) (*kbaccess.KnowledgeB
 	return m.kb, m.kbErr
 }
 
-func (m *mockStore) GetKBShare(_ context.Context, _, _ string) (*kbaccess.KBShare, error) {
-	return m.share, m.shareErr
+func (m *mockStore) GetKBRole(_ context.Context, _, _ string) (string, error) {
+	return m.role, m.roleErr
 }
 
 func (m *mockStore) GetKBFileLimits(_ context.Context, _ string) (*files.KBFileLimits, error) {
@@ -191,7 +191,9 @@ func TestDownload_Success(t *testing.T) {
 	}
 	kb := &kbaccess.KnowledgeBase{ID: "kb-1", UserID: &ownerID, IsGlobal: false}
 
-	store := &mockStore{file: fileInfo, kb: kb}
+	// role mirrors the kb_members row a real owner has (migration 0064's
+	// owner-mirror trigger) — kb.UserID alone no longer grants access.
+	store := &mockStore{file: fileInfo, kb: kb, role: kbaccess.RoleOwner}
 	stor := &mockStorage{stream: io.NopCloser(strings.NewReader("PDF content"))}
 	h := files.NewHandler(store, stor, noopChunks())
 
@@ -277,8 +279,8 @@ func TestDownload_AccessDenied(t *testing.T) {
 	}
 	kb := &kbaccess.KnowledgeBase{ID: "kb-1", UserID: &otherOwnerID, IsGlobal: false}
 
-	// No share record returned.
-	store := &mockStore{file: fileInfo, kb: kb, share: nil}
+	// No kb_members row returned.
+	store := &mockStore{file: fileInfo, kb: kb}
 	stor := &mockStorage{}
 	h := files.NewHandler(store, stor, noopChunks())
 
@@ -308,7 +310,9 @@ func TestDelete_Success(t *testing.T) {
 	}
 	kb := &kbaccess.KnowledgeBase{ID: "kb-1", UserID: &ownerID, IsGlobal: false}
 
-	store := &mockStore{file: fileInfo, kb: kb}
+	// role mirrors the kb_members row a real owner has (migration 0064's
+	// owner-mirror trigger) — kb.UserID alone no longer grants access.
+	store := &mockStore{file: fileInfo, kb: kb, role: kbaccess.RoleOwner}
 	stor := &mockStorage{}
 	h := files.NewHandler(store, stor, noopChunks())
 
@@ -334,11 +338,11 @@ func TestDelete_NoAccess(t *testing.T) {
 	}
 	kb := &kbaccess.KnowledgeBase{ID: "kb-1", UserID: &otherOwnerID, IsGlobal: false}
 
-	// user-1 has view-only share.
+	// user-1 has a view-only kb_members row.
 	store := &mockStore{
-		file:  fileInfo,
-		kb:    kb,
-		share: &kbaccess.KBShare{Permission: "view"},
+		file: fileInfo,
+		kb:   kb,
+		role: kbaccess.RoleView,
 	}
 	stor := &mockStorage{}
 	h := files.NewHandler(store, stor, noopChunks())
@@ -427,7 +431,7 @@ func buildMultipartRequest(t *testing.T, filename string, content []byte) *http.
 }
 
 func withKBAccess(r *http.Request, kb *kbaccess.KnowledgeBase) *http.Request {
-	result := &kbaccess.KBAccessResult{KB: kb, Permission: "edit"}
+	result := &kbaccess.KBAccessResult{KB: kb, Role: kbaccess.RoleEdit}
 	return r.WithContext(kbaccess.WithAccess(r.Context(), result))
 }
 

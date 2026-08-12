@@ -128,7 +128,7 @@ type routeCtx struct {
 	adminChain      func(http.HandlerFunc) http.Handler
 	kbViewChain     func(http.HandlerFunc) http.Handler
 	kbEditChain     func(http.HandlerFunc) http.Handler
-	kbTuningChain   func(http.HandlerFunc) http.Handler
+	kbAdminChain    func(http.HandlerFunc) http.Handler
 	analyticsChain  func(http.HandlerFunc) http.Handler
 	apiKeyChain     func(http.HandlerFunc) http.Handler
 
@@ -265,26 +265,24 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 		superadminChain:    auth.RoleChain(authMiddleware, auth.RoleSuperAdmin),
 		adminChain:         auth.RoleChain(authMiddleware, auth.RoleAdmin, auth.RoleSuperAdmin),
 		kbViewChain: func(h http.HandlerFunc) http.Handler {
-			return authMiddleware.Authenticate(kbMw.RequireKBPermission("view")(http.HandlerFunc(h)))
+			return authMiddleware.Authenticate(kbMw.RequireKBRole(kbaccess.RoleView)(http.HandlerFunc(h)))
 		},
 		kbEditChain: func(h http.HandlerFunc) http.Handler {
-			return authMiddleware.Authenticate(kbMw.RequireKBPermission("edit")(http.HandlerFunc(h)))
+			return authMiddleware.Authenticate(kbMw.RequireKBRole(kbaccess.RoleEdit)(http.HandlerFunc(h)))
 		},
-		// kbTuningChain gates the per-KB Settings surface: KB edit permission
-		// AND role in {api-user, admin, superadmin}. Order:
-		// Authenticate -> RequireRole -> RequireKBPermission("edit").
-		// Superadmin bypasses RequireRole and is granted edit by the KB check.
-		kbTuningChain: func(h http.HandlerFunc) http.Handler {
-			return authMiddleware.Authenticate(
-				authMiddleware.RequireRole(auth.RoleAPIUser, auth.RoleAdmin)(
-					kbMw.RequireKBPermission("edit")(http.HandlerFunc(h))))
+		// kbAdminChain replaces kbTuningChain. The extra RequireRole hurdle
+		// (api-user/admin/superadmin) is gone: the KB role 'admin' is now
+		// the permission for the settings surface, independent of the
+		// system role. Superadmins resolve to 'owner' anyway.
+		kbAdminChain: func(h http.HandlerFunc) http.Handler {
+			return authMiddleware.Authenticate(kbMw.RequireKBRole(kbaccess.RoleAdmin)(http.HandlerFunc(h)))
 		},
 		kbConfigStore:   kbConfigStore,
 		kbConfigHandler: kbConfigHandler,
 		agentTeamsStore: agentTeamsStore,
 		analyticsChain: func(h http.HandlerFunc) http.Handler {
 			return authMiddleware.Authenticate(
-				kbMw.RequireKBPermission("view")(
+				kbMw.RequireKBRole(kbaccess.RoleView)(
 					kbMw.RequireAnalyticsAccess(http.HandlerFunc(h))))
 		},
 		apiKeyChain: auth.RoleChain(authMiddleware, auth.RoleAdmin, auth.RoleSuperAdmin, auth.RoleAPIUser),
@@ -482,7 +480,7 @@ func registerAdminRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/admin/reembed-all", rc.superadminChain(maintenanceHandler.ReembedAll))
 	rc.mux.Handle("POST /api/admin/reembed-user-memory", rc.superadminChain(maintenanceHandler.ReembedUserMemory))
 	rc.mux.Handle("POST /api/admin/agent/template", rc.superadminChain(maintenanceHandler.UploadAgentTemplate))
-	rc.mux.Handle("POST /api/kb/{id}/reembed", rc.kbTuningChain(maintenanceHandler.ReembedKB))
+	rc.mux.Handle("POST /api/kb/{id}/reembed", rc.kbAdminChain(maintenanceHandler.ReembedKB))
 
 	// Admin-triggered batch entity canonicalization (EDC dedup) for a KB.
 	canonicalizeHandler := kggraph.NewCanonicalizeHandler(
@@ -490,13 +488,13 @@ func registerAdminRoutes(rc *routeCtx) {
 		rc.chatStore,
 		func(ctx context.Context, r kggraph.CanonReader) bool { return canonicalize.Enabled(ctx, r) },
 	)
-	rc.mux.Handle("POST /api/kb/{id}/canonicalize", rc.kbTuningChain(canonicalizeHandler.PostCanonicalize))
+	rc.mux.Handle("POST /api/kb/{id}/canonicalize", rc.kbAdminChain(canonicalizeHandler.PostCanonicalize))
 
 	communitiesHandler := kggraph.NewCommunitiesHandler(
 		rc.infra.asynqClient, rc.chatStore,
 		func(ctx context.Context, r kggraph.CanonReader) bool { return community.Enabled(ctx, r) },
 	)
-	rc.mux.Handle("POST /api/kb/{id}/communities/build", rc.kbTuningChain(communitiesHandler.PostBuildCommunities))
+	rc.mux.Handle("POST /api/kb/{id}/communities/build", rc.kbAdminChain(communitiesHandler.PostBuildCommunities))
 
 	// Phase 1 §1.4 admin agent-metrics panel — per-(window,kb) outcome
 	// distributions for the agentic / plan-execute / CRAG paths. Reads
@@ -586,18 +584,18 @@ func registerAdminEvalRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/admin/eval/golden-sets/jobs", rc.adminChain(h.ListGenJobs))
 	rc.mux.Handle("GET /api/admin/eval/golden-sets/{id}", rc.adminChain(h.GetGoldenSet))
 
-	// Per-KB eval surface (api-user/admin/superadmin with KB edit permission).
-	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets", rc.kbTuningChain(h.ListGoldenSetsForKB))
-	rc.mux.Handle("POST /api/kb/{id}/eval/golden-sets", rc.kbTuningChain(h.CreateGoldenSetForKB))
-	rc.mux.Handle("POST /api/kb/{id}/eval/golden-sets/generate", rc.kbTuningChain(h.GenerateGoldenSetForKB))
-	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/jobs", rc.kbTuningChain(h.ListGenJobsForKB))
-	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbTuningChain(h.GetGoldenSetForKB))
-	rc.mux.Handle("DELETE /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbTuningChain(h.DeleteGoldenSetForKB))
-	rc.mux.Handle("POST /api/kb/{id}/eval/runs", rc.kbTuningChain(h.CreateRunForKB))
-	rc.mux.Handle("GET /api/kb/{id}/eval/runs", rc.kbTuningChain(h.ListRunsForKB))
-	rc.mux.Handle("GET /api/kb/{id}/eval/runs/{runId}", rc.kbTuningChain(h.GetRunForKB))
-	rc.mux.Handle("GET /api/kb/{id}/eval/runs/{runId}/export", rc.kbTuningChain(h.ExportRunForKB))
-	rc.mux.Handle("DELETE /api/kb/{id}/eval/runs/{runId}", rc.kbTuningChain(h.DeleteRunForKB))
+	// Per-KB eval surface (KB admin role, independent of system role).
+	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets", rc.kbAdminChain(h.ListGoldenSetsForKB))
+	rc.mux.Handle("POST /api/kb/{id}/eval/golden-sets", rc.kbAdminChain(h.CreateGoldenSetForKB))
+	rc.mux.Handle("POST /api/kb/{id}/eval/golden-sets/generate", rc.kbAdminChain(h.GenerateGoldenSetForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/jobs", rc.kbAdminChain(h.ListGenJobsForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbAdminChain(h.GetGoldenSetForKB))
+	rc.mux.Handle("DELETE /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbAdminChain(h.DeleteGoldenSetForKB))
+	rc.mux.Handle("POST /api/kb/{id}/eval/runs", rc.kbAdminChain(h.CreateRunForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/runs", rc.kbAdminChain(h.ListRunsForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/runs/{runId}", rc.kbAdminChain(h.GetRunForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/runs/{runId}/export", rc.kbAdminChain(h.ExportRunForKB))
+	rc.mux.Handle("DELETE /api/kb/{id}/eval/runs/{runId}", rc.kbAdminChain(h.DeleteRunForKB))
 }
 
 func registerKBRoutes(rc *routeCtx) {
@@ -612,14 +610,15 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/kb", rc.authMw.Authenticate(http.HandlerFunc(kbHandler.CreateKnowledgeBase)))
 
 	// Per-KB settings (registry-driven RAG-pipeline overrides)
-	rc.mux.Handle("GET /api/kb/{id}/settings", rc.kbTuningChain(rc.kbConfigHandler.GetSettings))
-	rc.mux.Handle("PUT /api/kb/{id}/settings", rc.kbTuningChain(rc.kbConfigHandler.PutSettings))
-	rc.mux.Handle("DELETE /api/kb/{id}/settings/{key}", rc.kbTuningChain(rc.kbConfigHandler.DeleteSetting))
+	rc.mux.Handle("GET /api/kb/{id}/settings", rc.kbAdminChain(rc.kbConfigHandler.GetSettings))
+	rc.mux.Handle("PUT /api/kb/{id}/settings", rc.kbAdminChain(rc.kbConfigHandler.PutSettings))
+	rc.mux.Handle("DELETE /api/kb/{id}/settings/{key}", rc.kbAdminChain(rc.kbConfigHandler.DeleteSetting))
 
 	// KB operations (need KB permission middleware)
-	rc.mux.Handle("PATCH /api/kb/{id}", rc.kbEditChain(kbUpdateHandler.UpdateKB))
-	// kbEditChain rejects shared-view users at the middleware boundary; the
-	// handler itself further restricts deletion to owner-or-superadmin.
+	rc.mux.Handle("PATCH /api/kb/{id}", rc.kbAdminChain(kbUpdateHandler.UpdateKB))
+	// DELETE stays on kbEditChain: the handler itself further restricts
+	// deletion to owner-or-superadmin (see http_delete.go), so gating the
+	// middleware chain any tighter than edit would be redundant.
 	rc.mux.Handle("DELETE /api/kb/{id}", rc.kbEditChain(kbDeleteHandler.DeleteKB))
 	rc.mux.Handle("GET /api/kb/{id}/files", rc.kbViewChain(kbUpdateHandler.ListFiles))
 	rc.mux.Handle("GET /api/kb/{id}/shares", rc.kbViewChain(kbSharingHandler.ListShares))
@@ -934,12 +933,12 @@ func registerAgentTeamRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/agent-teams/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.GetTeam)))
 	rc.mux.Handle("PUT /api/agent-teams/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.UpdateTeam)))
 	rc.mux.Handle("DELETE /api/agent-teams/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.DeleteTeam)))
-	// KB attachment: view to list (picker), edit to attach/detach.
+	// KB attachment: view to list (picker), admin to attach/detach.
 	rc.mux.Handle("GET /api/kb/{id}/agents", rc.kbViewChain(h.ListKBAgents))
-	rc.mux.Handle("PUT /api/kb/{id}/agents/{agentId}", rc.kbEditChain(h.AttachAgent))
-	rc.mux.Handle("DELETE /api/kb/{id}/agents/{agentId}", rc.kbEditChain(h.DetachAgent))
-	rc.mux.Handle("PUT /api/kb/{id}/teams/{teamId}", rc.kbEditChain(h.AttachTeam))
-	rc.mux.Handle("DELETE /api/kb/{id}/teams/{teamId}", rc.kbEditChain(h.DetachTeam))
+	rc.mux.Handle("PUT /api/kb/{id}/agents/{agentId}", rc.kbAdminChain(h.AttachAgent))
+	rc.mux.Handle("DELETE /api/kb/{id}/agents/{agentId}", rc.kbAdminChain(h.DetachAgent))
+	rc.mux.Handle("PUT /api/kb/{id}/teams/{teamId}", rc.kbAdminChain(h.AttachTeam))
+	rc.mux.Handle("DELETE /api/kb/{id}/teams/{teamId}", rc.kbAdminChain(h.DetachTeam))
 }
 
 func registerFileRoutes(rc *routeCtx) {
@@ -1079,22 +1078,22 @@ func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 
 	rc.mux.Handle("GET /api/v1/kb", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(publicHandler.ListKBs))))
 	rc.mux.Handle("GET /api/v1/kb/{id}/chats", apiRL.Middleware(apiKeyAuth.Authenticate(
-		rc.kbMw.RequireKBPermission("view")(http.HandlerFunc(publicHandler.ListChats)))))
+		rc.kbMw.RequireKBRole(kbaccess.RoleView)(http.HandlerFunc(publicHandler.ListChats)))))
 	rc.mux.Handle("GET /api/v1/kb/{id}/chats/{chatId}/messages", apiRL.Middleware(apiKeyAuth.Authenticate(
-		rc.kbMw.RequireKBPermission("view")(http.HandlerFunc(publicHandler.GetMessages)))))
+		rc.kbMw.RequireKBRole(kbaccess.RoleView)(http.HandlerFunc(publicHandler.GetMessages)))))
 	rc.mux.Handle("POST /api/v1/kb/{id}/chat", apiRL.Middleware(apiKeyAuth.Authenticate(
-		rc.kbMw.RequireKBPermission("view")(http.HandlerFunc(publicHandler.SendMessage)))))
+		rc.kbMw.RequireKBRole(kbaccess.RoleView)(http.HandlerFunc(publicHandler.SendMessage)))))
 	rc.mux.Handle("POST /api/v1/kb/{id}/research", apiRL.Middleware(apiKeyAuth.Authenticate(
-		rc.kbMw.RequireKBPermission("view")(http.HandlerFunc(publicHandler.Research)))))
+		rc.kbMw.RequireKBRole(kbaccess.RoleView)(http.HandlerFunc(publicHandler.Research)))))
 
 	// KB-as-MCP-server: expose each KB as an MCP server (one tool, ask_kb).
 	// Gated by the mcp_server_enabled site_config flag (default off); per-KB
-	// access is enforced by the same apiKeyAuth + RequireKBPermission("view")
+	// access is enforced by the same apiKeyAuth + RequireKBRole(kbaccess.RoleView)
 	// chain as the public chat endpoint.
 	mcpAnswerer := mcpserver.NewPipelineAnswerer(rc.aiResolver, rc.searchService, rc.chatStore, rc.chatStore)
 	mcpKBHandler := mcpserver.NewHandler(mcpAnswerer, rc.chatStore)
 	rc.mux.Handle("POST /api/v1/kb/{id}/mcp", apiRL.Middleware(apiKeyAuth.Authenticate(
-		rc.kbMw.RequireKBPermission("view")(http.HandlerFunc(mcpKBHandler.ServeHTTP)))))
+		rc.kbMw.RequireKBRole(kbaccess.RoleView)(http.HandlerFunc(mcpKBHandler.ServeHTTP)))))
 }
 
 func registerMiscRoutes(rc *routeCtx) {

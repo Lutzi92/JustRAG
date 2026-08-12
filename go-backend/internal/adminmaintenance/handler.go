@@ -151,8 +151,8 @@ func (h *Handler) ReembedAll(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusOK, map[string]any{"success": true, "queued": queued})
 }
 
-// ReembedKB handles POST /api/kb/{id}/reembed. KB edit permission is enforced by
-// kbTuningChain. It lists the KB's re-embeddable files and enqueues a
+// ReembedKB handles POST /api/kb/{id}/reembed. KB admin permission is enforced by
+// kbAdminChain. It lists the KB's re-embeddable files and enqueues a
 // re-embedding task per file onto the heavy queue (a KB-wide sweep, same
 // semantics as reembed-all). The re-embed worker deletes old chunks and
 // reprocesses with the KB's current — now per-KB-aware — config. Files without

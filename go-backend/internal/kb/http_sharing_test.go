@@ -76,9 +76,9 @@ func (m *mockShareStore) RemovePendingInvite(_ context.Context, _, _ string) err
 // ownerContext injects a KBAccessResult (IsOwner: true) and a Claims user into the context.
 func ownerContext(ctx context.Context, kbID string) context.Context {
 	access := &kbaccess.KBAccessResult{
-		KB:         &kbaccess.KnowledgeBase{ID: kbID},
-		IsOwner:    true,
-		Permission: "edit",
+		KB:      &kbaccess.KnowledgeBase{ID: kbID},
+		IsOwner: true,
+		Role:    kbaccess.RoleOwner,
 	}
 	ctx = kbaccess.WithAccess(ctx, access)
 	ctx = auth.WithUser(ctx, &auth.Claims{ID: "user-1", Role: "user"})
@@ -319,9 +319,9 @@ func TestRemovePendingShare(t *testing.T) {
 // viewerContext injects a non-owner, non-superadmin KBAccessResult and Claims.
 func viewerContext(ctx context.Context, kbID string) context.Context {
 	access := &kbaccess.KBAccessResult{
-		KB:         &kbaccess.KnowledgeBase{ID: kbID},
-		IsOwner:    false,
-		Permission: "view",
+		KB:      &kbaccess.KnowledgeBase{ID: kbID},
+		IsOwner: false,
+		Role:    kbaccess.RoleView,
 	}
 	ctx = kbaccess.WithAccess(ctx, access)
 	ctx = auth.WithUser(ctx, &auth.Claims{ID: "user-9", Role: "user"})

@@ -34,18 +34,30 @@ func injectKBAccessResult(r *http.Request, result *kbaccess.KBAccessResult) *htt
 func ownerAccess(kbID string) *kbaccess.KBAccessResult {
 	uid := "user-1"
 	return &kbaccess.KBAccessResult{
-		KB:         &kbaccess.KnowledgeBase{ID: kbID, UserID: &uid, IsGlobal: false},
-		IsOwner:    true,
-		Permission: "edit",
+		KB:      &kbaccess.KnowledgeBase{ID: kbID, UserID: &uid, IsGlobal: false},
+		IsOwner: true,
+		Role:    kbaccess.RoleOwner,
 	}
 }
 
 func nonOwnerAccess(kbID string) *kbaccess.KBAccessResult {
 	uid := "owner-99"
 	return &kbaccess.KBAccessResult{
-		KB:         &kbaccess.KnowledgeBase{ID: kbID, UserID: &uid, IsGlobal: false},
-		IsOwner:    false,
-		Permission: "view",
+		KB:      &kbaccess.KnowledgeBase{ID: kbID, UserID: &uid, IsGlobal: false},
+		IsOwner: false,
+		Role:    kbaccess.RoleView,
+	}
+}
+
+// superadminAccess mirrors what kbaccess.RequireKBRole resolves a superadmin
+// to (kbaccess.EffectiveRole rule 1: system role superadmin -> owner),
+// regardless of the caller's own kb_members row.
+func superadminAccess(kbID string) *kbaccess.KBAccessResult {
+	uid := "owner-99"
+	return &kbaccess.KBAccessResult{
+		KB:      &kbaccess.KnowledgeBase{ID: kbID, UserID: &uid, IsGlobal: false},
+		IsOwner: true,
+		Role:    kbaccess.RoleOwner,
 	}
 }
 
@@ -76,7 +88,7 @@ func TestDeleteKB_SuperadminGets204(t *testing.T) {
 
 	r := httptest.NewRequest(http.MethodDelete, "/api/kb/kb-2", nil)
 	r = withUser(r, &auth.Claims{ID: "superadmin-1", Role: "superadmin"})
-	r = injectKBAccessResult(r, nonOwnerAccess("kb-2"))
+	r = injectKBAccessResult(r, superadminAccess("kb-2"))
 
 	rec := httptest.NewRecorder()
 	h.DeleteKB(rec, r)

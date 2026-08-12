@@ -39,7 +39,7 @@ type AcademicStore interface {
 	CreateResearchSession(ctx context.Context, kbID, userID, goal, sessionType string) (*chat.ChatRow, error)
 	CreateFile(ctx context.Context, data files.CreateFileData) (*files.FileRecord, error)
 	GetKBByID(ctx context.Context, id string) (*kbaccess.KnowledgeBase, error)
-	GetKBShare(ctx context.Context, kbID, userID string) (*kbaccess.KBShare, error)
+	GetKBRole(ctx context.Context, kbID, userID string) (string, error)
 }
 
 // ---------------------------------------------------------------------------
@@ -302,23 +302,20 @@ func (h *Handler) AddPapers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the caller has access to the target KB before writing files into it.
+	// Verify the caller has edit access to the target KB before writing files
+	// into it, via the same role ladder the kbaccess middleware enforces.
 	kb, err := h.store.GetKBByID(r.Context(), body.KbID)
 	if err != nil || kb == nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusNotFound, "knowledge base not found")
 		return
 	}
-	isOwner := kb.UserID != nil && *kb.UserID == user.ID
-	isAdmin := user.Role == "admin" || user.Role == "superadmin"
-	hasEditAccess := isOwner || isAdmin
-	if !hasEditAccess {
-		// Check for edit share
-		share, shareErr := h.store.GetKBShare(r.Context(), body.KbID, user.ID)
-		if shareErr == nil && share != nil && share.Permission == "edit" {
-			hasEditAccess = true
-		}
+	memberRole, err := h.store.GetKBRole(r.Context(), body.KbID, user.ID)
+	if err != nil {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to check kb access")
+		return
 	}
-	if !hasEditAccess {
+	role := kbaccess.EffectiveRole(kb, user.Role, memberRole)
+	if !kbaccess.AtLeast(role, kbaccess.RoleEdit) {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusForbidden, "you do not have edit access to this knowledge base")
 		return
 	}

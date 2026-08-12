@@ -35,7 +35,7 @@ type Store interface {
 	ListKnowledgeBases(ctx context.Context, userID string, limit, offset int) ([]kb.KBRow, error)
 	ListGlobalKnowledgeBases(ctx context.Context, userID string, isAdmin bool) ([]kb.KBRow, error)
 	GetKBByID(ctx context.Context, id string) (*kbaccess.KnowledgeBase, error)
-	GetKBShare(ctx context.Context, kbID, userID string) (*kbaccess.KBShare, error)
+	GetKBRole(ctx context.Context, kbID, userID string) (string, error)
 	GetKBSystemPrompt(ctx context.Context, kbID string) (*string, error)
 }
 
@@ -182,8 +182,9 @@ func extractKBID(model string) (string, error) {
 }
 
 // checkKBAccess verifies that the authenticated user has at least view access
-// to kbID. Returns a non-nil error string when access should be denied, along
-// with the appropriate HTTP status code.
+// to kbID, using the same role ladder (kbaccess.EffectiveRole) the in-app
+// kbaccess middleware enforces. Returns a non-nil error string when access
+// should be denied, along with the appropriate HTTP status code.
 func (h *Handler) checkKBAccess(ctx context.Context, kbID, userID, userRole string) (int, string) {
 	kbRow, err := h.store.GetKBByID(ctx, kbID)
 	if err != nil {
@@ -193,27 +194,13 @@ func (h *Handler) checkKBAccess(ctx context.Context, kbID, userID, userRole stri
 		return http.StatusNotFound, "knowledge base not found"
 	}
 
-	// Superadmin always has access.
-	if userRole == "superadmin" {
-		return 0, ""
-	}
-
-	// Owner has access.
-	if kbRow.UserID != nil && *kbRow.UserID == userID {
-		return 0, ""
-	}
-
-	// Global KB: any authenticated user can view.
-	if kbRow.IsGlobal {
-		return 0, ""
-	}
-
-	// Check shares.
-	share, err := h.store.GetKBShare(ctx, kbID, userID)
+	memberRole, err := h.store.GetKBRole(ctx, kbID, userID)
 	if err != nil {
 		return http.StatusInternalServerError, "internal server error"
 	}
-	if share == nil {
+
+	role := kbaccess.EffectiveRole(kbRow, userRole, memberRole)
+	if !kbaccess.AtLeast(role, kbaccess.RoleView) {
 		return http.StatusForbidden, "access denied"
 	}
 

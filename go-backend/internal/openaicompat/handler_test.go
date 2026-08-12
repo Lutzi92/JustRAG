@@ -25,7 +25,7 @@ type mockStore struct {
 	personalKBs  []kb.KBRow
 	globalKBs    []kb.KBRow
 	kbByID       *kbaccess.KnowledgeBase
-	kbShare      *kbaccess.KBShare
+	kbRole       string
 	systemPrompt *string
 	err          error
 }
@@ -42,8 +42,8 @@ func (m *mockStore) GetKBByID(_ context.Context, _ string) (*kbaccess.KnowledgeB
 	return m.kbByID, m.err
 }
 
-func (m *mockStore) GetKBShare(_ context.Context, _, _ string) (*kbaccess.KBShare, error) {
-	return m.kbShare, m.err
+func (m *mockStore) GetKBRole(_ context.Context, _, _ string) (string, error) {
+	return m.kbRole, m.err
 }
 
 func (m *mockStore) GetKBSystemPrompt(_ context.Context, _ string) (*string, error) {
@@ -315,7 +315,7 @@ func TestChatCompletions_AccessDenied_403(t *testing.T) {
 			UserID:   &otherUser,
 			IsGlobal: false,
 		},
-		kbShare: nil, // no share
+		// kbRole zero-value: no kb_members row → no access.
 	}
 	h := openaicompat.NewHandler(store, nil, nil)
 

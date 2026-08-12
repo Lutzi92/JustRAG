@@ -46,7 +46,7 @@ func NewMiddleware(store KBStore) *Middleware {
 	return &Middleware{store: store}
 }
 
-// resolveRole implements the five-rule ladder from the design doc. Ordering
+// EffectiveRole implements the five-rule ladder from the design doc. Ordering
 // matters: an explicit membership row (rule 2) beats the implicit roles a
 // public KB grants (rules 3 and 4), otherwise an editor on a public KB would
 // be demoted to view.
@@ -56,7 +56,14 @@ func NewMiddleware(store KBStore) *Middleware {
 //  3. IsGlobal and system role admin    -> admin
 //  4. IsGlobal and IsPublished          -> view
 //  5. otherwise                         -> "" (403)
-func resolveRole(kb *KnowledgeBase, sysRole, memberRole string) string {
+//
+// This is the single source of truth for resolving a caller's KB role.
+// RequireKBRole calls it for the standard middleware chain; packages that
+// need a second, handler-internal permission check (internal/files,
+// internal/openaicompat, internal/academic) call it directly instead of
+// hand-rolling their own owner/IsGlobal/superadmin special-cases — those
+// would drift from this ladder.
+func EffectiveRole(kb *KnowledgeBase, sysRole, memberRole string) string {
 	if sysRole == auth.RoleSuperAdmin {
 		return RoleOwner
 	}
@@ -112,7 +119,7 @@ func (m *Middleware) RequireKBRole(required string) func(http.Handler) http.Hand
 				return
 			}
 
-			role := resolveRole(kb, user.Role, memberRole)
+			role := EffectiveRole(kb, user.Role, memberRole)
 			if !AtLeast(role, required) {
 				// 403 und nicht 404: die Existenz der KB ist ueber die
 				// bestehenden Endpunkte ohnehin erkennbar, und ein 404 hier

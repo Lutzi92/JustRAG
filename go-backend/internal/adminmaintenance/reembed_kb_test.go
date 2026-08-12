@@ -26,8 +26,8 @@ func TestReembedKB_UsesKBAccessOverride(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/kb/WRONG/reembed", nil)
 	req.SetPathValue("id", "WRONG")
 	access := &kbaccess.KBAccessResult{
-		KB:         &kbaccess.KnowledgeBase{ID: "kb1"},
-		Permission: "edit",
+		KB:   &kbaccess.KnowledgeBase{ID: "kb1"},
+		Role: kbaccess.RoleEdit,
 	}
 	req = req.WithContext(kbaccess.WithAccess(req.Context(), access))
 	rec := httptest.NewRecorder()

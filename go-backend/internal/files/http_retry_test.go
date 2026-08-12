@@ -28,7 +28,11 @@ func retryFixtureStore() *mockStore {
 			ID: "file-1", KbID: "kb-1", Name: "doc.pdf",
 			Type: "application/pdf", StoragePath: strPtr("alice/kb-1/doc.pdf"),
 		},
-		kb:      &kbaccess.KnowledgeBase{ID: "kb-1", UserID: strPtr("user-1")},
+		kb: &kbaccess.KnowledgeBase{ID: "kb-1", UserID: strPtr("user-1")},
+		// role mirrors the kb_members row a real owner has (migration
+		// 0064's owner-mirror trigger) — kb.UserID alone no longer grants
+		// access.
+		role:    kbaccess.RoleOwner,
 		resetOK: true,
 	}
 }
@@ -88,7 +92,7 @@ func TestRetryNotInErrorState(t *testing.T) {
 func TestRetryForbiddenWithoutEdit(t *testing.T) {
 	store := retryFixtureStore()
 	store.kb = &kbaccess.KnowledgeBase{ID: "kb-1", UserID: strPtr("someone-else")}
-	store.share = nil // no share → no edit access
+	store.role = "" // no kb_members row → no edit access
 	h := files.NewHandlerWithEnqueuer(store, &mockStorage{}, &mockChunkDeleter{}, &recordingEnqueuer{})
 
 	w := doRetry(h)
@@ -137,7 +141,7 @@ func TestRetryFailedBulk(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/kb/kb-1/files/retry-failed", nil)
 	r.SetPathValue("id", "kb-1")
 	// kbEditChain runs before the handler in production; simulate its context.
-	access := &kbaccess.KBAccessResult{KB: &kbaccess.KnowledgeBase{ID: "kb-1"}, IsOwner: true, Permission: "edit"}
+	access := &kbaccess.KBAccessResult{KB: &kbaccess.KnowledgeBase{ID: "kb-1"}, IsOwner: true, Role: kbaccess.RoleEdit}
 	r = r.WithContext(kbaccess.WithAccess(auth.WithUser(r.Context(), &auth.Claims{ID: "user-1", Role: "user"}), access))
 	w := httptest.NewRecorder()
 	h.RetryFailed(w, r)

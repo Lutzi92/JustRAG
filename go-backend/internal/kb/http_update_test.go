@@ -45,12 +45,12 @@ func (m *mockUpdateStore) GetKBChunkConfig(_ context.Context, _ string) (int, in
 // ---------------------------------------------------------------------------
 
 // injectKBAccess returns a copy of r with a KBAccessResult injected into the
-// context, mirroring what kbaccess.RequireKBPermission does in production.
+// context, mirroring what kbaccess.RequireKBRole does in production.
 func injectKBAccess(r *http.Request, kbID string) *http.Request {
 	access := &kbaccess.KBAccessResult{
-		KB:         &kbaccess.KnowledgeBase{ID: kbID, IsGlobal: false},
-		IsOwner:    true,
-		Permission: "edit",
+		KB:      &kbaccess.KnowledgeBase{ID: kbID, IsGlobal: false},
+		IsOwner: true,
+		Role:    kbaccess.RoleEdit,
 	}
 	return r.WithContext(kbaccess.WithAccess(r.Context(), access))
 }

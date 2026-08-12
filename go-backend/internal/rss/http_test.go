@@ -134,7 +134,7 @@ func newRequest(method, path string, body any) *http.Request {
 // kbIDFromContext picks it up without needing real middleware.
 func withKBAccess(r *http.Request, kbID string) *http.Request {
 	kb := &kbaccess.KnowledgeBase{ID: kbID}
-	result := &kbaccess.KBAccessResult{KB: kb, Permission: "edit"}
+	result := &kbaccess.KBAccessResult{KB: kb, Role: kbaccess.RoleEdit}
 	return r.WithContext(kbaccess.WithAccess(r.Context(), result))
 }
 

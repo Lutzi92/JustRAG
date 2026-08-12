@@ -33,8 +33,8 @@ func (d *academicDeps) GetKBByID(ctx context.Context, id string) (*kbaccess.Know
 	return d.filesStore.GetKBByID(ctx, id)
 }
 
-func (d *academicDeps) GetKBShare(ctx context.Context, kbID, userID string) (*kbaccess.KBShare, error) {
-	return d.filesStore.GetKBShare(ctx, kbID, userID)
+func (d *academicDeps) GetKBRole(ctx context.Context, kbID, userID string) (string, error) {
+	return d.filesStore.GetKBRole(ctx, kbID, userID)
 }
 
 // publicAPIDeps composes chat.PGStore + kb.PGStore to satisfy publicapi.Store.
@@ -61,8 +61,8 @@ func (d *openaiDeps) GetKBByID(ctx context.Context, id string) (*kbaccess.Knowle
 	return d.kbAccessStore.GetKBByID(ctx, id)
 }
 
-func (d *openaiDeps) GetKBShare(ctx context.Context, kbID, userID string) (*kbaccess.KBShare, error) {
-	return d.kbAccessStore.GetKBShare(ctx, kbID, userID)
+func (d *openaiDeps) GetKBRole(ctx context.Context, kbID, userID string) (string, error) {
+	return d.kbAccessStore.GetKBRole(ctx, kbID, userID)
 }
 
 // serverInfra holds all shared infrastructure connections created during server startup.

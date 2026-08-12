@@ -193,7 +193,7 @@ func withUser(r *http.Request, userID string) *http.Request {
 // withKBAccess injects a KBAccessResult into the request context.
 func withKBAccess(r *http.Request, kbID string) *http.Request {
 	kb := &kbaccess.KnowledgeBase{ID: kbID}
-	result := &kbaccess.KBAccessResult{KB: kb, Permission: "edit"}
+	result := &kbaccess.KBAccessResult{KB: kb, Role: kbaccess.RoleEdit}
 	return r.WithContext(kbaccess.WithAccess(r.Context(), result))
 }
 

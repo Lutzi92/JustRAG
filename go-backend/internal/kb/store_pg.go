@@ -180,13 +180,14 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 	if offset < 0 {
 		offset = 0
 	}
-	// Ownership-or-share membership is expressed as an EXISTS subquery rather
-	// than a LEFT JOIN + DISTINCT. The join form could emit one row per share
-	// for a KB the user both owns and is shared on, which forced a DISTINCT
+	// Membership is expressed as an EXISTS subquery against kb_members rather
+	// than a LEFT JOIN + DISTINCT. The join form could emit one row per
+	// membership for a KB with multiple rows, which forced a DISTINCT
 	// sort/dedup of the full result set before LIMIT/OFFSET — defeating
 	// index-driven pagination. EXISTS yields at most one row per KB by
-	// construction, letting the planner use the btree indexes on
-	// knowledge_bases.user_id and knowledge_base_shares.kb_id.
+	// construction, letting the planner use the btree index on
+	// kb_members.kb_id. The owner always has a kb_members row since
+	// migration 0064, so a separate kb.user_id = $1 clause is unnecessary.
 	const sql = `
 		SELECT ` + kbSelectCols + `,
 		       u.first_name AS owner_first_name,
@@ -194,11 +195,10 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 		       u.username   AS owner_username` + kbStatsCols + `
 		FROM knowledge_bases kb
 		LEFT JOIN users u ON kb.user_id = u.id` + kbStatsJoins + `
-		WHERE kb.user_id = $1
-		   OR EXISTS (
-		       SELECT 1 FROM knowledge_base_shares
-		       WHERE kb_id = kb.id AND user_id = $1
-		   )
+		WHERE EXISTS (
+		    SELECT 1 FROM kb_members
+		    WHERE kb_id = kb.id AND user_id = $1
+		)
 		ORDER BY kb.created_at DESC
 		LIMIT $2 OFFSET $3`
 

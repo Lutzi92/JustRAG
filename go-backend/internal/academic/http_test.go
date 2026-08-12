@@ -28,6 +28,7 @@ type stubStore struct {
 	siteConfig map[string]string
 	createErr  error
 	fileErr    error
+	kbRole     string
 }
 
 func newStubStore(enabled bool, baseURL string) *stubStore {
@@ -38,7 +39,11 @@ func newStubStore(enabled bool, baseURL string) *stubStore {
 	if baseURL != "" {
 		cfg["academic_search_base_url"] = baseURL
 	}
-	return &stubStore{siteConfig: cfg}
+	// GetKBByID below always returns a KB owned by "user-1" (the caller in
+	// every AddPapers test); kbRole mirrors the kb_members row a real owner
+	// has (migration 0064's owner-mirror trigger) so kbaccess.EffectiveRole
+	// grants edit access the same way the old kb.UserID-equality check did.
+	return &stubStore{siteConfig: cfg, kbRole: kbaccess.RoleOwner}
 }
 
 func (s *stubStore) GetSiteConfigValue(_ context.Context, key string) (*string, error) {
@@ -86,8 +91,8 @@ func (s *stubStore) GetKBByID(_ context.Context, id string) (*kbaccess.Knowledge
 	return &kbaccess.KnowledgeBase{ID: id, UserID: &userID, IsGlobal: false}, nil
 }
 
-func (s *stubStore) GetKBShare(_ context.Context, kbID, userID string) (*kbaccess.KBShare, error) {
-	return nil, nil
+func (s *stubStore) GetKBRole(_ context.Context, kbID, userID string) (string, error) {
+	return s.kbRole, nil
 }
 
 // ---------------------------------------------------------------------------

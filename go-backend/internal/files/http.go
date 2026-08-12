@@ -77,7 +77,7 @@ type Store interface {
 	GetFileByID(ctx context.Context, id string) (*FileInfo, error)
 	DeleteFileRecord(ctx context.Context, id string) error
 	GetKBByID(ctx context.Context, id string) (*kbaccess.KnowledgeBase, error)
-	GetKBShare(ctx context.Context, kbID, userID string) (*kbaccess.KBShare, error)
+	GetKBRole(ctx context.Context, kbID, userID string) (string, error)
 	CreateFile(ctx context.Context, data CreateFileData) (*FileRecord, error)
 	GetKBFileLimits(ctx context.Context, kbID string) (*KBFileLimits, error)
 	// Retry support (see http_retry.go).
@@ -261,39 +261,28 @@ func SanitizeFilename(name string) string {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-// hasViewAccess returns true when the user can view the given KB.
-// Grants access if: superadmin, KB owner, global KB, or has a share.
+// hasViewAccess returns true when the user has at least view access to the
+// given KB, per the same role ladder the kbaccess middleware enforces
+// (superadmin, kb_members row, or view on a published global KB).
 func (h *Handler) hasViewAccess(ctx context.Context, kb *kbaccess.KnowledgeBase, user *auth.Claims) (bool, error) {
-	if user.Role == "superadmin" {
-		return true, nil
-	}
-	if kb.UserID != nil && *kb.UserID == user.ID {
-		return true, nil
-	}
-	if kb.IsGlobal {
-		return true, nil
-	}
-	share, err := h.store.GetKBShare(ctx, kb.ID, user.ID)
+	memberRole, err := h.store.GetKBRole(ctx, kb.ID, user.ID)
 	if err != nil {
-		return false, fmt.Errorf("check share: %w", err)
+		return false, fmt.Errorf("get kb role: %w", err)
 	}
-	return share != nil, nil
+	role := kbaccess.EffectiveRole(kb, user.Role, memberRole)
+	return kbaccess.AtLeast(role, kbaccess.RoleView), nil
 }
 
-// hasEditAccess returns true when the user can edit (delete files from) the given KB.
-// Grants access if: superadmin, KB owner, or has an "edit" share.
+// hasEditAccess returns true when the user has at least edit access
+// (can delete files from) the given KB, per the same role ladder the
+// kbaccess middleware enforces.
 func (h *Handler) hasEditAccess(ctx context.Context, kb *kbaccess.KnowledgeBase, user *auth.Claims) (bool, error) {
-	if user.Role == "superadmin" {
-		return true, nil
-	}
-	if kb.UserID != nil && *kb.UserID == user.ID {
-		return true, nil
-	}
-	share, err := h.store.GetKBShare(ctx, kb.ID, user.ID)
+	memberRole, err := h.store.GetKBRole(ctx, kb.ID, user.ID)
 	if err != nil {
-		return false, fmt.Errorf("check share: %w", err)
+		return false, fmt.Errorf("get kb role: %w", err)
 	}
-	return share != nil && share.Permission == "edit", nil
+	role := kbaccess.EffectiveRole(kb, user.Role, memberRole)
+	return kbaccess.AtLeast(role, kbaccess.RoleEdit), nil
 }
 
 // ---------------------------------------------------------------------------
