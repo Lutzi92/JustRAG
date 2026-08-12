@@ -3,6 +3,7 @@ name: Build and Push Docker Image
 on:
   push:
     branches: ["main"]
+    tags: ["v*"]
 
 env:
   REGISTRY: ghcr.io
@@ -23,6 +24,15 @@ jobs:
         with:
           fetch-depth: 0 # needed for git rev-parse in Dockerfile
 
+      # `git describe` gives a human-legible build id: exactly `v0.1.0` on a
+      # release tag, `v0.1.0-12-gabc1234` on main. Still unique per commit, so
+      # the frontend's useVersionCheck (which only compares for inequality)
+      # keeps working unchanged. `--always` covers the pre-first-tag case.
+      # No `--dirty`: CI trees are always clean and it would only mislead.
+      - name: Compute build version
+        id: ver
+        run: echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
@@ -35,9 +45,17 @@ jobs:
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # `latest` is deliberately absent: a floating tag pinned by every
+          # deployment is exactly how production drifts forward on an
+          # unrelated pod restart. `edge` replaces it for tip-of-main.
+          # The `v` prefix keeps image tag == git tag and lets the prune
+          # step below exclude releases with an unambiguous `v*`.
           tags: |
-            type=sha,prefix=
-            type=raw,value=latest
+            type=sha,prefix=,enable={{is_default_branch}}
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       # Buildx is required for the SBOM/provenance attestations below — the
       # default docker driver silently ignores them.
@@ -52,14 +70,14 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Stamps the commit into the server binary via -ldflags (see the
+          # Stamps the build id into the server binary via -ldflags (see the
           # BUILD_VERSION ARG in the Dockerfile), which is what GET /version
           # reports. The frontend polls that endpoint to notice a deployment;
           # without this the ARG keeps its "unknown" default, /version returns
           # the same string for every release, and update detection can never
-          # fire. Matches the `type=sha` image tag above.
+          # fire. On a release tag this is exactly the tag (`v0.1.0`).
           build-args: |
-            BUILD_VERSION=${{ github.sha }}
+            BUILD_VERSION=${{ steps.ver.outputs.version }}
           # Attach SBOM + minimal provenance attestations to the pushed image
           # (inspectable via `docker buildx imagetools inspect <ref> --format
           # '{{ json .SBOM }}'`).
@@ -105,5 +123,10 @@ jobs:
         with:
           package: ${{ steps.pkg.outputs.name }}
           delete-untagged: true # remove dangling layers left after re-tagging
-          keep-n-tagged: 10 # retain the 10 most recent SHA-tagged images for rollback
+          # Without this, `keep-n-tagged` deletes release images after ten
+          # further main pushes — destroying the exact rollback targets
+          # versioning exists to create. `exclude-tags` supports wildcards and
+          # is applied BEFORE keep-n-tagged, so releases are never considered.
+          exclude-tags: stable,edge,v*
+          keep-n-tagged: 10 # applies only to main's SHA-tagged images now
           token: ${{ secrets.GITHUB_TOKEN }}

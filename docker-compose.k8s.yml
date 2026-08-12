@@ -21,7 +21,7 @@ services:
   # and seeds the admin user. Exits 0 on success; go-server waits for it via
   # service_completed_successfully.
   migrate:
-    image: ghcr.io/lutzi92/justrag:latest
+    image: ghcr.io/lutzi92/justrag:${JUSTRAG_VERSION:-stable}
     command: ["/app/migrate"]
     env_file:
       - .env
@@ -32,7 +32,7 @@ services:
         condition: service_healthy
 
   go-server:
-    image: ghcr.io/lutzi92/justrag:latest
+    image: ghcr.io/lutzi92/justrag:${JUSTRAG_VERSION:-stable}
     restart: unless-stopped
     expose:
       - "3000"

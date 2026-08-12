@@ -34,7 +34,7 @@ services:
   # Per-process concurrency is set via WORKER_CONCURRENCY env var.
 
   worker-quick:
-    image: ghcr.io/lutzi92/justrag:latest
+    image: ghcr.io/lutzi92/justrag:${JUSTRAG_VERSION:-stable}
     restart: unless-stopped
     command: ["/app/worker"]
     env_file:
@@ -73,7 +73,7 @@ services:
       retries: 3
 
   worker-heavy:
-    image: ghcr.io/lutzi92/justrag:latest
+    image: ghcr.io/lutzi92/justrag:${JUSTRAG_VERSION:-stable}
     restart: unless-stopped
     command: ["/app/worker"]
     env_file:
@@ -112,7 +112,7 @@ services:
       retries: 3
 
   worker-batch:
-    image: ghcr.io/lutzi92/justrag:latest
+    image: ghcr.io/lutzi92/justrag:${JUSTRAG_VERSION:-stable}
     restart: unless-stopped
     command: ["/app/worker"]
     env_file:

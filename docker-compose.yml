@@ -30,7 +30,13 @@ services:
   # and seeds the admin user. Exits 0 on success; go-server and go-worker
   # wait for it via service_completed_successfully.
   migrate:
-    image: ghcr.io/lutzi92/justrag:latest
+    # Version pin. Unset -> `stable`, which always points at the most recent
+    # release, so a bare `docker compose up -d` still works with no .env.
+    # Production sets JUSTRAG_VERSION=v0.1.0 in .env. The same expression is
+    # used in docker-compose.production.yml and docker-compose.k8s.yml so
+    # overlay combinations cannot run server and workers on different
+    # versions. Deliberately NOT `latest` — see docs/runbooks/release.md.
+    image: ghcr.io/lutzi92/justrag:${JUSTRAG_VERSION:-stable}
     command: ["/app/migrate"]
     env_file:
       - .env
@@ -41,7 +47,7 @@ services:
         condition: service_healthy
 
   go-server:
-    image: ghcr.io/lutzi92/justrag:latest
+    image: ghcr.io/lutzi92/justrag:${JUSTRAG_VERSION:-stable}
     restart: unless-stopped
     expose:
       - "3000"
@@ -76,7 +82,7 @@ services:
         condition: service_healthy
 
   go-worker:
-    image: ghcr.io/lutzi92/justrag:latest
+    image: ghcr.io/lutzi92/justrag:${JUSTRAG_VERSION:-stable}
     restart: unless-stopped
     command: ["/app/worker"]
     env_file:
