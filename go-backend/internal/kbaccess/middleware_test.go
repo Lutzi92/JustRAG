@@ -12,39 +12,25 @@ import (
 
 var _ kbaccess.KBStore = (*mockStore)(nil)
 
-// mockStore implements KBStore for tests.
+const (
+	kbID   = "kb-1"
+	userID = "user-1"
+)
+
+// mockStore implements KBStore for tests. It hands back a single fixed KB and
+// a single fixed kb_members role regardless of the ids passed in — enough for
+// the resolution-ladder matrix below, where each row builds its own store.
 type mockStore struct {
-	kbs           map[string]*kbaccess.KnowledgeBase
-	shares        map[string]*kbaccess.KBShare // key: kbID+":"+userID
-	globalEditors map[string]bool              // key: kbID+":"+userID
+	kb   *kbaccess.KnowledgeBase
+	role string
 }
 
-func newMockStore() *mockStore {
-	return &mockStore{
-		kbs:           make(map[string]*kbaccess.KnowledgeBase),
-		shares:        make(map[string]*kbaccess.KBShare),
-		globalEditors: make(map[string]bool),
-	}
+func (m *mockStore) GetKBByID(context.Context, string) (*kbaccess.KnowledgeBase, error) {
+	return m.kb, nil
 }
 
-func (s *mockStore) GetKBByID(_ context.Context, id string) (*kbaccess.KnowledgeBase, error) {
-	kb, ok := s.kbs[id]
-	if !ok {
-		return nil, nil // not found = nil, nil (matches dbstore contract)
-	}
-	return kb, nil
-}
-
-func (s *mockStore) GetKBShare(_ context.Context, kbID, userID string) (*kbaccess.KBShare, error) {
-	share, ok := s.shares[kbID+":"+userID]
-	if !ok {
-		return nil, nil // no share = nil, nil (matches dbstore contract)
-	}
-	return share, nil
-}
-
-func (s *mockStore) IsGlobalKBEditor(_ context.Context, kbID, userID string) (bool, error) {
-	return s.globalEditors[kbID+":"+userID], nil
+func (m *mockStore) GetKBRole(context.Context, string, string) (string, error) {
+	return m.role, nil
 }
 
 // claimsCtx injects auth.Claims into a context via auth.WithUser.
@@ -57,65 +43,79 @@ var okHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 })
 
-// ptr is a small helper to get a *string.
-func ptr(s string) *string { return &s }
+// ---------- TestEffectiveRole: the resolution-ladder matrix ----------
 
-// ---------- RequireKBPermission tests ----------
-
-// Test 1: Owner gets 200.
-func TestRequireKBPermission_OwnerGets200(t *testing.T) {
-	store := newMockStore()
-	store.kbs["kb-1"] = &kbaccess.KnowledgeBase{ID: "kb-1", UserID: ptr("user-1"), IsGlobal: false}
-
-	mw := kbaccess.NewMiddleware(store)
-	handler := mw.RequireKBPermission("view")(okHandler)
-
-	req := httptest.NewRequest("GET", "/kb/kb-1", nil)
-	req.SetPathValue("id", "kb-1")
-	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: "user-1", Role: "user"}))
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rec.Code)
+// TestEffectiveRole deckt das Kreuzprodukt der fuenf Aufloesungsregeln ab.
+// Diese Tabelle ist die Sicherheitsgrenze des Features — jede neue Regel
+// braucht hier Zeilen.
+func TestEffectiveRole(t *testing.T) {
+	tests := []struct {
+		name        string
+		sysRole     string // auth-Rolle des Requests
+		memberRole  string // Zeile in kb_members, "" = keine
+		isGlobal    bool
+		isPublished bool
+		required    string
+		wantStatus  int
+		wantRole    string
+	}{
+		{"superadmin_on_foreign_private", "superadmin", "", false, false, "owner", 200, "owner"},
+		{"owner_row", "user", "owner", false, false, "owner", 200, "owner"},
+		{"admin_row_denied_owner_gate", "user", "admin", false, false, "owner", 403, ""},
+		{"admin_row_passes_admin_gate", "user", "admin", false, false, "admin", 200, "admin"},
+		{"edit_row_denied_admin_gate", "user", "edit", false, false, "admin", 403, ""},
+		{"edit_row_passes_edit_gate", "user", "edit", false, false, "edit", 200, "edit"},
+		{"view_row_denied_edit_gate", "user", "view", false, false, "edit", 403, ""},
+		{"stranger_private", "user", "", false, false, "view", 403, ""},
+		{"sysadmin_on_public", "admin", "", true, true, "admin", 200, "admin"},
+		{"sysadmin_on_unpublished_public", "admin", "", true, false, "admin", 200, "admin"},
+		{"user_on_published_public", "user", "", true, true, "view", 200, "view"},
+		{"user_on_published_public_denied_edit", "user", "", true, true, "edit", 403, ""},
+		{"user_on_unpublished_public", "user", "", true, false, "view", 403, ""},
+		{"member_row_beats_public_implicit", "user", "edit", true, true, "edit", 200, "edit"},
+		{"apiuser_on_published_public", "api-user", "", true, true, "view", 200, "view"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &mockStore{
+				kb: &kbaccess.KnowledgeBase{
+					ID: kbID, IsGlobal: tt.isGlobal, IsPublished: tt.isPublished,
+				},
+				role: tt.memberRole,
+			}
+			mw := kbaccess.NewMiddleware(store)
 
-	// Also verify result is stored in context.
-	// We need to capture the context inside the handler.
-	var capturedResult *kbaccess.KBAccessResult
-	capHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedResult = kbaccess.AccessFromContext(r.Context())
-		w.WriteHeader(http.StatusOK)
-	})
-	handler2 := mw.RequireKBPermission("view")(capHandler)
-	req2 := httptest.NewRequest("GET", "/kb/kb-1", nil)
-	req2.SetPathValue("id", "kb-1")
-	req2 = req2.WithContext(claimsCtx(req2.Context(), auth.Claims{ID: "user-1", Role: "user"}))
-	rec2 := httptest.NewRecorder()
-	handler2.ServeHTTP(rec2, req2)
+			var gotRole string
+			next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				gotRole = kbaccess.AccessFromContext(r.Context()).Role
+			})
 
-	if capturedResult == nil {
-		t.Fatal("expected KBAccessResult in context")
-	}
-	if !capturedResult.IsOwner {
-		t.Error("expected IsOwner to be true")
-	}
-	if capturedResult.Permission != "edit" {
-		t.Errorf("expected edit permission for owner, got %q", capturedResult.Permission)
+			req := httptest.NewRequest(http.MethodGet, "/api/kb/"+kbID, nil)
+			req.SetPathValue("id", kbID)
+			req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: userID, Role: tt.sysRole}))
+
+			rr := httptest.NewRecorder()
+			mw.RequireKBRole(tt.required)(next).ServeHTTP(rr, req)
+
+			if rr.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body %s)", rr.Code, tt.wantStatus, rr.Body)
+			}
+			if gotRole != tt.wantRole {
+				t.Errorf("effective role = %q, want %q", gotRole, tt.wantRole)
+			}
+		})
 	}
 }
 
-// Test 2: No auth header gets 401.
-func TestRequireKBPermission_NoAuth401(t *testing.T) {
-	store := newMockStore()
-	store.kbs["kb-1"] = &kbaccess.KnowledgeBase{ID: "kb-1", UserID: ptr("user-99"), IsGlobal: false}
+// ---------- RequireKBRole: auth / not-found edge cases not covered by the matrix ----------
 
+func TestRequireKBRole_NoAuth401(t *testing.T) {
+	store := &mockStore{kb: &kbaccess.KnowledgeBase{ID: kbID}, role: ""}
 	mw := kbaccess.NewMiddleware(store)
-	handler := mw.RequireKBPermission("view")(okHandler)
+	handler := mw.RequireKBRole(kbaccess.RoleView)(okHandler)
 
-	req := httptest.NewRequest("GET", "/kb/kb-1", nil)
-	req.SetPathValue("id", "kb-1")
+	req := httptest.NewRequest(http.MethodGet, "/kb/"+kbID, nil)
+	req.SetPathValue("id", kbID)
 	// No claims in context — simulates missing/invalid auth.
 
 	rec := httptest.NewRecorder()
@@ -126,17 +126,14 @@ func TestRequireKBPermission_NoAuth401(t *testing.T) {
 	}
 }
 
-// Test 3: KB not found gets 404.
-func TestRequireKBPermission_KBNotFound404(t *testing.T) {
-	store := newMockStore()
-	// No KB added to store.
-
+func TestRequireKBRole_KBNotFound404(t *testing.T) {
+	store := &mockStore{kb: nil, role: ""}
 	mw := kbaccess.NewMiddleware(store)
-	handler := mw.RequireKBPermission("view")(okHandler)
+	handler := mw.RequireKBRole(kbaccess.RoleView)(okHandler)
 
-	req := httptest.NewRequest("GET", "/kb/nonexistent", nil)
+	req := httptest.NewRequest(http.MethodGet, "/kb/nonexistent", nil)
 	req.SetPathValue("id", "nonexistent")
-	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: "user-1", Role: "user"}))
+	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: userID, Role: "user"}))
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -146,121 +143,15 @@ func TestRequireKBPermission_KBNotFound404(t *testing.T) {
 	}
 }
 
-// Test 4: Global KB — any authenticated user can view (200).
-func TestRequireKBPermission_GlobalKBAnyUserCanView(t *testing.T) {
-	store := newMockStore()
-	store.kbs["kb-global"] = &kbaccess.KnowledgeBase{ID: "kb-global", UserID: ptr("owner-99"), IsGlobal: true}
-
-	mw := kbaccess.NewMiddleware(store)
-	handler := mw.RequireKBPermission("view")(okHandler)
-
-	req := httptest.NewRequest("GET", "/kb/kb-global", nil)
-	req.SetPathValue("id", "kb-global")
-	// Regular user, not the owner, no shares.
-	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: "user-regular", Role: "user"}))
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200 for regular user viewing global KB, got %d", rec.Code)
-	}
-}
-
-// Test 5: Superadmin always gets full access.
-func TestRequireKBPermission_SuperadminFullAccess(t *testing.T) {
-	store := newMockStore()
-	store.kbs["kb-private"] = &kbaccess.KnowledgeBase{ID: "kb-private", UserID: ptr("owner-99"), IsGlobal: false}
-
-	mw := kbaccess.NewMiddleware(store)
-	handler := mw.RequireKBPermission("edit")(okHandler)
-
-	req := httptest.NewRequest("GET", "/kb/kb-private", nil)
-	req.SetPathValue("id", "kb-private")
-	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: "superadmin-1", Role: "superadmin"}))
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200 for superadmin, got %d", rec.Code)
-	}
-}
-
-// Test 6: Shared KB with "view" permission, requesting "view" → 200.
-func TestRequireKBPermission_SharedViewAccess(t *testing.T) {
-	store := newMockStore()
-	store.kbs["kb-shared"] = &kbaccess.KnowledgeBase{ID: "kb-shared", UserID: ptr("owner-99"), IsGlobal: false}
-	store.shares["kb-shared:user-shared"] = &kbaccess.KBShare{Permission: "view"}
-
-	mw := kbaccess.NewMiddleware(store)
-	handler := mw.RequireKBPermission("view")(okHandler)
-
-	req := httptest.NewRequest("GET", "/kb/kb-shared", nil)
-	req.SetPathValue("id", "kb-shared")
-	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: "user-shared", Role: "user"}))
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200 for shared view user, got %d", rec.Code)
-	}
-}
-
-// Test 7: Shared KB with "view" permission, requesting "edit" → 403.
-func TestRequireKBPermission_SharedViewCannotEdit(t *testing.T) {
-	store := newMockStore()
-	store.kbs["kb-shared"] = &kbaccess.KnowledgeBase{ID: "kb-shared", UserID: ptr("owner-99"), IsGlobal: false}
-	store.shares["kb-shared:user-shared"] = &kbaccess.KBShare{Permission: "view"}
-
-	mw := kbaccess.NewMiddleware(store)
-	handler := mw.RequireKBPermission("edit")(okHandler)
-
-	req := httptest.NewRequest("PUT", "/kb/kb-shared", nil)
-	req.SetPathValue("id", "kb-shared")
-	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: "user-shared", Role: "user"}))
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected 403 for view-only user requesting edit, got %d", rec.Code)
-	}
-}
-
-// Test 8: Unshared non-global KB → 403.
-func TestRequireKBPermission_NoShareNoAccess(t *testing.T) {
-	store := newMockStore()
-	store.kbs["kb-private"] = &kbaccess.KnowledgeBase{ID: "kb-private", UserID: ptr("owner-99"), IsGlobal: false}
-
-	mw := kbaccess.NewMiddleware(store)
-	handler := mw.RequireKBPermission("view")(okHandler)
-
-	req := httptest.NewRequest("GET", "/kb/kb-private", nil)
-	req.SetPathValue("id", "kb-private")
-	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: "user-stranger", Role: "user"}))
-
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected 403 for unshared private KB, got %d", rec.Code)
-	}
-}
-
 // ---------- RequireAnalyticsAccess tests ----------
 
-// Test: Non-global KB in RequireAnalyticsAccess gets 403.
 func TestRequireAnalyticsAccess_NonGlobalKB403(t *testing.T) {
-	store := newMockStore()
-	store.kbs["kb-1"] = &kbaccess.KnowledgeBase{ID: "kb-1", UserID: ptr("owner-99"), IsGlobal: false}
-
+	store := &mockStore{kb: &kbaccess.KnowledgeBase{ID: kbID, IsGlobal: false}, role: ""}
 	mw := kbaccess.NewMiddleware(store)
 	handler := mw.RequireAnalyticsAccess(okHandler)
 
-	req := httptest.NewRequest("GET", "/kb/kb-1/analytics", nil)
-	req.SetPathValue("id", "kb-1")
+	req := httptest.NewRequest(http.MethodGet, "/kb/"+kbID+"/analytics", nil)
+	req.SetPathValue("id", kbID)
 	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: "admin-1", Role: "admin"}))
 
 	rec := httptest.NewRecorder()
@@ -271,16 +162,19 @@ func TestRequireAnalyticsAccess_NonGlobalKB403(t *testing.T) {
 	}
 }
 
-// Test: Global KB + admin role in RequireAnalyticsAccess gets 200.
 func TestRequireAnalyticsAccess_GlobalKBAdminGets200(t *testing.T) {
-	store := newMockStore()
-	store.kbs["kb-global"] = &kbaccess.KnowledgeBase{ID: "kb-global", UserID: ptr("owner-99"), IsGlobal: true}
-
+	store := &mockStore{kb: &kbaccess.KnowledgeBase{ID: kbID, IsGlobal: true}, role: ""}
 	mw := kbaccess.NewMiddleware(store)
-	handler := mw.RequireAnalyticsAccess(okHandler)
 
-	req := httptest.NewRequest("GET", "/kb/kb-global/analytics", nil)
-	req.SetPathValue("id", "kb-global")
+	var captured *kbaccess.KBAccessResult
+	capHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = kbaccess.AccessFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := mw.RequireAnalyticsAccess(capHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/kb/"+kbID+"/analytics", nil)
+	req.SetPathValue("id", kbID)
 	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: "admin-1", Role: "admin"}))
 
 	rec := httptest.NewRecorder()
@@ -289,19 +183,22 @@ func TestRequireAnalyticsAccess_GlobalKBAdminGets200(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200 for admin accessing global KB analytics, got %d", rec.Code)
 	}
+	if captured == nil {
+		t.Fatal("expected KBAccessResult in context")
+	}
+	if captured.Role != kbaccess.RoleAdmin {
+		t.Errorf("expected Role = %q, got %q", kbaccess.RoleAdmin, captured.Role)
+	}
 }
 
-// Test: Global KB + regular user in RequireAnalyticsAccess gets 403.
 func TestRequireAnalyticsAccess_GlobalKBRegularUser403(t *testing.T) {
-	store := newMockStore()
-	store.kbs["kb-global"] = &kbaccess.KnowledgeBase{ID: "kb-global", UserID: ptr("owner-99"), IsGlobal: true}
-
+	store := &mockStore{kb: &kbaccess.KnowledgeBase{ID: kbID, IsGlobal: true}, role: ""}
 	mw := kbaccess.NewMiddleware(store)
 	handler := mw.RequireAnalyticsAccess(okHandler)
 
-	req := httptest.NewRequest("GET", "/kb/kb-global/analytics", nil)
-	req.SetPathValue("id", "kb-global")
-	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: "user-1", Role: "user"}))
+	req := httptest.NewRequest(http.MethodGet, "/kb/"+kbID+"/analytics", nil)
+	req.SetPathValue("id", kbID)
+	req = req.WithContext(claimsCtx(req.Context(), auth.Claims{ID: userID, Role: "user"}))
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -311,16 +208,13 @@ func TestRequireAnalyticsAccess_GlobalKBRegularUser403(t *testing.T) {
 	}
 }
 
-// Test: No auth in RequireAnalyticsAccess gets 401.
 func TestRequireAnalyticsAccess_NoAuth401(t *testing.T) {
-	store := newMockStore()
-	store.kbs["kb-global"] = &kbaccess.KnowledgeBase{ID: "kb-global", UserID: ptr("owner-99"), IsGlobal: true}
-
+	store := &mockStore{kb: &kbaccess.KnowledgeBase{ID: kbID, IsGlobal: true}, role: ""}
 	mw := kbaccess.NewMiddleware(store)
 	handler := mw.RequireAnalyticsAccess(okHandler)
 
-	req := httptest.NewRequest("GET", "/kb/kb-global/analytics", nil)
-	req.SetPathValue("id", "kb-global")
+	req := httptest.NewRequest(http.MethodGet, "/kb/"+kbID+"/analytics", nil)
+	req.SetPathValue("id", kbID)
 	// No claims.
 
 	rec := httptest.NewRecorder()

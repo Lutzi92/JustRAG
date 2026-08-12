@@ -16,30 +16,24 @@ type accessKey struct{}
 
 // KnowledgeBase represents a knowledge base record.
 type KnowledgeBase struct {
-	ID       string
-	UserID   *string
-	IsGlobal bool
-}
-
-// KBShare represents a share record linking a user to a KB.
-type KBShare struct {
-	Permission string // "view" or "edit"
+	ID          string
+	UserID      *string
+	IsGlobal    bool
+	IsPublished bool
 }
 
 // KBAccessResult holds the resolved access information for a request.
 type KBAccessResult struct {
-	KB             *KnowledgeBase
-	IsOwner        bool
-	Permission     string
-	IsGlobalEditor bool
+	KB      *KnowledgeBase
+	Role    string
+	IsOwner bool
 }
 
 // KBStore is the data-access interface used by Middleware. Implementations
 // can be real database stores or mocks in tests.
 type KBStore interface {
 	GetKBByID(ctx context.Context, id string) (*KnowledgeBase, error)
-	GetKBShare(ctx context.Context, kbID, userID string) (*KBShare, error)
-	IsGlobalKBEditor(ctx context.Context, kbID, userID string) (bool, error)
+	GetKBRole(ctx context.Context, kbID, userID string) (string, error)
 }
 
 // Middleware holds the dependencies for KB access checks.
@@ -52,101 +46,85 @@ func NewMiddleware(store KBStore) *Middleware {
 	return &Middleware{store: store}
 }
 
-// RequireKBPermission returns an http.Handler middleware that:
-//  1. Verifies the user is authenticated (401 otherwise).
-//  2. Looks up the KB identified by {id} in the URL path (404 if not found).
-//  3. Checks whether the user has at least requiredPerm ("view" or "edit").
-//  4. Stores a KBAccessResult in the request context via WithAccess.
+// resolveRole implements the five-rule ladder from the design doc. Ordering
+// matters: an explicit membership row (rule 2) beats the implicit roles a
+// public KB grants (rules 3 and 4), otherwise an editor on a public KB would
+// be demoted to view.
 //
-// Permission hierarchy (highest to lowest):
-//   - superadmin  → full access
-//   - owner       → full access
-//   - global KB   → any authenticated user can view; admin/superadmin/global-editors can edit
-//   - shared KB   → per knowledge_base_shares.permission
-//   - otherwise   → 403
-func (m *Middleware) RequireKBPermission(requiredPerm string) func(http.Handler) http.Handler {
+//  1. system role superadmin           -> owner
+//  2. a row in kb_members               -> that role
+//  3. IsGlobal and system role admin    -> admin
+//  4. IsGlobal and IsPublished          -> view
+//  5. otherwise                         -> "" (403)
+func resolveRole(kb *KnowledgeBase, sysRole, memberRole string) string {
+	if sysRole == auth.RoleSuperAdmin {
+		return RoleOwner
+	}
+	if Valid(memberRole) {
+		return memberRole
+	}
+	if kb.IsGlobal {
+		if sysRole == auth.RoleAdmin {
+			return RoleAdmin
+		}
+		if kb.IsPublished {
+			return RoleView
+		}
+	}
+	return ""
+}
+
+// RequireKBRole returns middleware that resolves the caller's effective role on
+// the KB named by {id} and rejects the request unless it meets required.
+// Stores a KBAccessResult in the request context via WithAccess.
+func (m *Middleware) RequireKBRole(required string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user := auth.UserFromContext(r.Context())
+			ctx := r.Context()
+
+			user := auth.UserFromContext(ctx)
 			if user == nil {
-				httputil.WriteJSONCtx(r.Context(), w, http.StatusUnauthorized, map[string]string{"error": "Authentication required"})
+				httputil.WriteJSONCtx(ctx, w, http.StatusUnauthorized,
+					map[string]string{"error": "Authentication required"})
 				return
 			}
 
 			kbID := r.PathValue("id")
-			kb, err := m.store.GetKBByID(r.Context(), kbID)
+			kb, err := m.store.GetKBByID(ctx, kbID)
 			if err != nil {
-				httputil.WriteJSONCtx(r.Context(), w, http.StatusInternalServerError, map[string]string{"error": "Internal Server Error"})
+				httputil.WriteJSONCtx(ctx, w, http.StatusInternalServerError,
+					map[string]string{"error": "Internal Server Error"})
 				return
 			}
 			if kb == nil {
-				httputil.WriteJSONCtx(r.Context(), w, http.StatusNotFound, map[string]string{"error": "Knowledge base not found"})
+				httputil.WriteJSONCtx(ctx, w, http.StatusNotFound,
+					map[string]string{"error": "Knowledge base not found"})
 				return
 			}
 
-			result := &KBAccessResult{KB: kb}
-
-			// Superadmin: full access.
-			if user.Role == "superadmin" {
-				result.Permission = "edit"
-				result.IsOwner = isOwner(kb, user.ID)
-				ctx := WithAccess(r.Context(), result)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-
-			// Owner: full access.
-			if isOwner(kb, user.ID) {
-				result.IsOwner = true
-				result.Permission = "edit"
-				ctx := WithAccess(r.Context(), result)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-
-			// Global KB rules.
-			if kb.IsGlobal {
-				globalEditor, err := m.store.IsGlobalKBEditor(r.Context(), kbID, user.ID)
-				if err != nil {
-					httputil.WriteJSONCtx(r.Context(), w, http.StatusInternalServerError, map[string]string{"error": "Internal Server Error"})
-					return
-				}
-				result.IsGlobalEditor = globalEditor
-
-				if globalEditor || user.Role == "admin" {
-					result.Permission = "edit"
-				} else {
-					result.Permission = "view"
-				}
-
-				if !permissionSatisfies(result.Permission, requiredPerm) {
-					httputil.WriteJSONCtx(r.Context(), w, http.StatusForbidden, map[string]string{"error": "Insufficient permissions"})
-					return
-				}
-				ctx := WithAccess(r.Context(), result)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-
-			// Non-global KB: check shares.
-			share, err := m.store.GetKBShare(r.Context(), kbID, user.ID)
+			// Der Store wird auch fuer Superadmins befragt: sie loesen zwar zu
+			// owner auf, aber eine vorhandene Zeile soll in KBAccessResult
+			// sichtbar bleiben. Ein Query mehr, dafuer keine Sonderfaelle.
+			memberRole, err := m.store.GetKBRole(ctx, kbID, user.ID)
 			if err != nil {
-				httputil.WriteJSONCtx(r.Context(), w, http.StatusInternalServerError, map[string]string{"error": "Internal Server Error"})
-				return
-			}
-			if share == nil {
-				httputil.WriteJSONCtx(r.Context(), w, http.StatusForbidden, map[string]string{"error": "Access denied"})
+				httputil.WriteJSONCtx(ctx, w, http.StatusInternalServerError,
+					map[string]string{"error": "Internal Server Error"})
 				return
 			}
 
-			result.Permission = share.Permission
-			if !permissionSatisfies(result.Permission, requiredPerm) {
-				httputil.WriteJSONCtx(r.Context(), w, http.StatusForbidden, map[string]string{"error": "Insufficient permissions"})
+			role := resolveRole(kb, user.Role, memberRole)
+			if !AtLeast(role, required) {
+				// 403 und nicht 404: die Existenz der KB ist ueber die
+				// bestehenden Endpunkte ohnehin erkennbar, und ein 404 hier
+				// wuerde "nicht gefunden" von "kein Zugriff" ununterscheidbar
+				// machen — schlecht fuer den Support.
+				httputil.WriteJSONCtx(ctx, w, http.StatusForbidden,
+					map[string]string{"error": "Insufficient permissions"})
 				return
 			}
 
-			ctx := WithAccess(r.Context(), result)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			result := &KBAccessResult{KB: kb, Role: role, IsOwner: role == RoleOwner}
+			next.ServeHTTP(w, r.WithContext(WithAccess(ctx, result)))
 		})
 	}
 }
@@ -181,15 +159,15 @@ func (m *Middleware) RequireAnalyticsAccess(next http.Handler) http.Handler {
 			return
 		}
 
-		if user.Role != "admin" && user.Role != "superadmin" {
+		if user.Role != auth.RoleAdmin && user.Role != auth.RoleSuperAdmin {
 			httputil.WriteJSONCtx(r.Context(), w, http.StatusForbidden, map[string]string{"error": "Insufficient permissions"})
 			return
 		}
 
 		result := &KBAccessResult{
-			KB:         kb,
-			IsOwner:    isOwner(kb, user.ID),
-			Permission: "edit",
+			KB:      kb,
+			IsOwner: isOwner(kb, user.ID),
+			Role:    RoleAdmin,
 		}
 		ctx := WithAccess(r.Context(), result)
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -204,7 +182,7 @@ func WithAccess(ctx context.Context, result *KBAccessResult) context.Context {
 	return context.WithValue(ctx, accessKey{}, result)
 }
 
-// AccessFromContext retrieves the KBAccessResult stored by RequireKBPermission
+// AccessFromContext retrieves the KBAccessResult stored by RequireKBRole
 // or RequireAnalyticsAccess. Returns nil if none is present.
 func AccessFromContext(ctx context.Context) *KBAccessResult {
 	result, _ := ctx.Value(accessKey{}).(*KBAccessResult)
@@ -214,13 +192,4 @@ func AccessFromContext(ctx context.Context) *KBAccessResult {
 // isOwner returns true when the KB has a non-nil UserID that equals userID.
 func isOwner(kb *KnowledgeBase, userID string) bool {
 	return kb.UserID != nil && *kb.UserID == userID
-}
-
-// permissionSatisfies returns true if the granted permission meets the required
-// level. "edit" satisfies both "edit" and "view"; "view" only satisfies "view".
-func permissionSatisfies(granted, required string) bool {
-	if granted == "edit" {
-		return true
-	}
-	return granted == required
 }
