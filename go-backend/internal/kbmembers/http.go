@@ -171,6 +171,17 @@ type transferOwnerRequest struct {
 // RequireKBRole has no owner tier to gate on without also excluding
 // superadmins — they resolve to RoleOwner via kbaccess.EffectiveRole and
 // must be let through. The owner check happens here instead.
+//
+// The target must already be a member. Store.TransferOwner's
+// INSERT ... ON CONFLICT DO UPDATE has no filtered WHERE, so it always
+// affects a row (inserting one if the target had none) — meaning without
+// this check, a mistyped or arbitrary user id would silently become the new
+// owner instead of failing, and since the ex-owner is demoted to admin and
+// only an owner may transfer, that would be a one-way trapdoor: the ex-owner
+// could not undo it themselves. Checked here, in the handler, rather than by
+// changing the store's contract — Task 7 delegates adminkboverview's
+// TransferKBOwner to Store.TransferOwner directly and must find it
+// unchanged.
 func (h *Handler) TransferOwner(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -186,7 +197,22 @@ func (h *Handler) TransferOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.store.TransferOwner(ctx, r.PathValue("id"), body.UserID)
+	kbID := r.PathValue("id")
+	targetRole, err := h.store.GetRole(ctx, kbID, body.UserID)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest,
+			"the new owner must already be a member of this knowledge base")
+		return
+	case err != nil:
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to check target membership")
+		return
+	case targetRole == kbaccess.RoleOwner:
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "that user is already the owner")
+		return
+	}
+
+	err = h.store.TransferOwner(ctx, kbID, body.UserID)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "target user not found")
@@ -235,6 +261,14 @@ type membershipImpactResponse struct {
 // MembershipImpact handles GET /api/kb/{id}/membership/impact — the number
 // backing the leave-confirmation dialog (Task 8), so the UI can tell the
 // user how many chats they are about to lose before they confirm leaving.
+//
+// Membership is checked first (Store.GetRole) before counting chats: a
+// non-member (e.g. a plain viewer on a published global KB, who resolves to
+// 'view' on kbViewChain without a kb_members row) must get the same 404 that
+// DELETE /membership would give them, not a 200 with a chat count that then
+// leads into a leave-confirmation dialog for a membership that doesn't
+// exist. Task 8's frontend brief designs its subscriber branch around this
+// 404.
 func (h *Handler) MembershipImpact(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -244,7 +278,17 @@ func (h *Handler) MembershipImpact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n, err := h.store.CountOwnChats(ctx, r.PathValue("id"), user.ID)
+	kbID := r.PathValue("id")
+	if _, err := h.store.GetRole(ctx, kbID, user.ID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "not a member of this knowledge base")
+			return
+		}
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to check membership")
+		return
+	}
+
+	n, err := h.store.CountOwnChats(ctx, kbID, user.ID)
 	if err != nil {
 		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to count chats")
 		return
