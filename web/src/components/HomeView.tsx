@@ -79,6 +79,15 @@ function lastActiveLabel(
   return `${t('kbLastActive')} ${rel}`;
 }
 
+// canManageMembers gates the members-dialog trigger: admins and owners
+// manage membership, edit/view callers don't. Checking myRole (not the
+// legacy kb.userId === user.id owner comparison) is what makes the admin
+// tier reachable from the UI at all — an admin who isn't the owner used to
+// have no way to open the dialog.
+function canManageMembers(kb: KnowledgeBase): boolean {
+  return kb.myRole === 'admin' || kb.myRole === 'owner';
+}
+
 // KbCardChips is the compact metadata slice on each Home KB card (improvement
 // #6): up to two scent chips (files · messages) plus a single needs-attention
 // chip (failed, else processing). Lucide icons (#2), status tokens (#1).
@@ -361,7 +370,7 @@ export function HomeView(props: HomeViewProps) {
                   {(kb.memberCount ?? 1) <= 1 ? t('badgePersonal') : t('badgeShared').replace('{n}', String(kb.memberCount))}
                 </div>
 
-                {kb.userId === user?.id && (
+                {canManageMembers(kb) && (
                   <button
                     onClick={(e) => onOpenShare(kb, e)}
                     className="home-view__mini-icon"

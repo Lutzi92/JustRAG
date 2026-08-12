@@ -234,8 +234,11 @@ func TestRevokePendingInvite_NotFound(t *testing.T) {
 }
 
 // TestRevokePendingInvite_Success covers the happy path: 204 and the right
-// username reaches the store, case-normalized the same way BulkInvite's
-// upsert side normalizes it.
+// username reaches the store. The handler itself passes PathValue("username")
+// through verbatim — case-insensitive matching happens in the underlying
+// SQL's LOWER(...) (internal/kb/store_pg.go). The lowercasing asserted below
+// is mockPending's own strings.ToLower, standing in for that SQL behavior,
+// not something the handler does.
 func TestRevokePendingInvite_Success(t *testing.T) {
 	pending := &mockPending{}
 	handler := kbmembers.NewHandler(&mockStore{}, pending)

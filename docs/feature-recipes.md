@@ -329,3 +329,25 @@ When enabled, a grid button appears in the KB Sources panel. Clicking it opens `
 **File filter defaults:** text and code extensions allowlist (`.go`, `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.java`, `.kt`, `.rs`, `.c`, `.cpp`, `.h`, `.cs`, `.rb`, `.php`, `.swift`, `.md`, `.txt`, `.rst`, `.yaml`, `.yml`, `.json`, `.toml`, `.xml`, `.html`, `.css`, `.sh`, `.sql`, `.proto`, …) plus known-name allowlist (`README`, `LICENSE`, `CHANGELOG`, `Makefile`, `Dockerfile`, and their common variants). Skip-list noise directories: `node_modules`, `vendor`, `dist`, `build`, `.git`, `__pycache__`, `.cache`, `.idea`, `.vscode`.
 
 Migration **0060** (`git_repo_sources` table + `files.git_repo_source_id`, `files.git_file_path`, `files.git_blob_sha` columns + `'git'` value for `files.origin`). Package `internal/gitrepo`.
+
+## KB permission model — rights matrix (Phase 1)
+
+No flag; live since migration **0064**. Four roles, strictly ordered `view < edit < admin < owner`, resolved by `kbaccess.EffectiveRole` and enforced by `kbaccess.RequireKBRole(min)` — see the Quick reference block in `CLAUDE.md` for the five-rule resolution ladder. Reproduced here (from `docs/superpowers/specs/2026-08-12-kb-rollen-und-sichtbarkeit-design.md`) so operators and developers don't have to open the spec for the matrix itself:
+
+| | view | edit | admin | owner |
+|---|---|---|---|---|
+| See the KB, chat, Studio/Export/Research | ✓ | ✓ | ✓ | ✓ |
+| Upload/delete files, re-ingest, crawl | | ✓ | ✓ | ✓ |
+| Create and sync RSS/Confluence/git sources | | ✓ | ✓ | ✓ |
+| Name, description, prompt, models, tuning knobs | | | ✓ | ✓ |
+| Attach agents/teams, eval, canonicalize, communities | | | ✓ | ✓ |
+| Manage members (view/edit/admin) | | | ✓ | ✓ |
+| Delete the KB, transfer ownership | | | | ✓ |
+
+The `edit`/`admin` dividing line: `edit` fills the corpus, `admin` decides how it is processed and answered. Anything that can force a re-ingest or change answer quality belongs to `admin`. `owner` is unique per KB (`kb_members_owner_uniq` partial unique index) and is never assignable through the member endpoints — only through `POST /api/kb/{id}/transfer-owner`.
+
+**Endpoints** (`internal/kbmembers`): `GET/PUT/DELETE /api/kb/{id}/members[/{userId}]`, `POST /api/kb/{id}/members/bulk`, `DELETE /api/kb/{id}/members/pending/{username}` — all `admin`. `POST /api/kb/{id}/transfer-owner` and `DELETE /api/kb/{id}/membership` — `view` chain, with the owner-only / self-only check inside the handler. The member list itself sits behind `admin`, not `view`: on a public KB every authenticated caller resolves to `view`, and the roster isn't theirs to read.
+
+**Server-enforced invariants** (not just UI): a KB admin can neither remove nor demote the owner; the owner cannot leave their own KB; an admin can remove themselves (that's a self-leave, not a revocation); `RemoveMember` (admin revokes someone) leaves the target's chats in place, `LeaveKB` (self-service) deletes them — only the self-triggered action is destructive to chat history.
+
+**Legacy remnants, not yet dropped:** `knowledge_base_shares` and `global_kb_editors` were backfilled into `kb_members` by migration 0064 and are deliberately still present as tables (expand/contract) — only their old `/share*` HTTP surface and `kb/http_sharing.go` were already removed in Phase 1, since `MembersModal` fully replaced the share dialog. The tables themselves are dropped only in a release after Phase 2 (visibility enum, system user, subscriptions, categories, catalogue — **not built**).

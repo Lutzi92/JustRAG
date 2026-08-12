@@ -51,12 +51,11 @@ type PendingInvite struct {
 // internal/app/routes.go), which already owns the pending_kb_invites table
 // — there is no reason to duplicate that SQL in this package.
 //
-// Column note for Task 7: pending_kb_invites.permission is renamed to .role
-// in that task's migration. The `role` parameter to UpsertPendingInvite
-// below is passed straight through as the underlying SQL `permission`
-// argument until then — the rename only has to touch the concrete store
-// (internal/kb/store_pg.go) and its adapter in routes.go, not this
-// interface, BulkInvite, or ListMembers.
+// Column note: migration 0064 already renamed pending_kb_invites.permission
+// to .role (and widened its CHECK to allow 'admin'). The `role` parameter to
+// UpsertPendingInvite below maps straight onto that column — the rename only
+// touched the concrete store (internal/kb/store_pg.go) and its adapter in
+// routes.go, not this interface, BulkInvite, or ListMembers.
 type PendingInviteStore interface {
 	GetUserIDByUsername(ctx context.Context, username string) (userID string, found bool, err error)
 	UpsertPendingInvite(ctx context.Context, kbID, username, role, invitedBy string) error
