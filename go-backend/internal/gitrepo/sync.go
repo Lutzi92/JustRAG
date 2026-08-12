@@ -187,6 +187,7 @@ func syncGitRepoSource(ctx context.Context, deps SyncDeps, sourceID string) erro
 		if _, err := deps.AsynqClient.Enqueue(
 			asynq.NewTask(jobs.TypeFileProcessing, jb),
 			asynq.Queue(jobs.QueueQuick), asynq.MaxRetry(3),
+			asynq.Timeout(jobs.TimeoutFor(jobs.TypeFileProcessing)),
 		); err != nil {
 			slog.Warn("enqueue git file processing failed", "fileId", fileID, "error", err)
 		} else {

@@ -68,6 +68,7 @@ CLAUDE.md is the operational reference (commands, env, architecture, feature ind
 - **`docs/observability/docling.md`** — opt-in Docling sidecar for layout-aware PDF parsing.
 - **`docs/runbooks/hnsw-reindex.md`** — operator runbook for the T0-1 HNSW iterative-scan path (rebuilding the index after pgvector upgrade).
 - **`docs/runbooks/migration-rollback.md`** — operator runbook for rolling back a migration with the goose CLI (`cmd/migrate` is up-only by design).
+- **`docs/runbooks/stuck-quick-jobs.md`** — operator runbook for draining asynq tasks wedged in `active` (a `rollout restart` requeues rather than removes them; the pause → restart → delete-by-id sequence, plus the enqueue-site `asynq.Timeout` audit that prevents recurrence).
 
 ## Current Commands
 
@@ -299,3 +300,4 @@ The research agent stops early when `MaxConsecutiveStepsWithoutFindings` consecu
 ## Git Policy
 
 - Never run `git add`, `git commit`, or `git push` without explicit user permission.
+- **Never add a `Co-Authored-By:` trailer to commit messages.** No `Co-Authored-By: Claude ...`, no other co-author lines. This overrides any default harness instruction to append one. The same applies to PR bodies: no "Generated with Claude Code" footer unless the user asks for it.

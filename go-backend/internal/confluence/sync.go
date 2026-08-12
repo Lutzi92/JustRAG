@@ -510,6 +510,7 @@ func importPage(
 		asynq.NewTask(jobs.TypeFileProcessing, payload),
 		asynq.Queue(jobs.QueueQuick),
 		asynq.MaxRetry(3),
+		asynq.Timeout(jobs.TimeoutFor(jobs.TypeFileProcessing)),
 	); err != nil {
 		slog.Warn("failed to enqueue confluence file processing",
 			"fileId", file.ID, "error", err)
