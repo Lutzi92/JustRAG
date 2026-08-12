@@ -10,6 +10,78 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## v0.2.0 — 2026-08-12
+
+### ⚠ Upgrade notes
+
+Phase 1 of the four-role KB permission model. `kb_members` becomes the single
+authority for KB access; `knowledge_bases.user_id` survives only as a
+trigger-maintained mirror.
+
+- **Schema level:** migrations through `0064` (`go-backend/migrations/main/`).
+- **This release has no one-step rollback.** `0064` creates `kb_members`,
+  backfills it from `knowledge_bases.user_id`, `knowledge_base_shares` and
+  `global_kb_editors`, and renames `pending_kb_invites.permission` → `role`.
+  Its `Down` section deliberately does not reverse the rename, and
+  `cmd/migrate` is up-only — re-pointing the image tag is **not** sufficient.
+  See [`docs/runbooks/migration-rollback.md`](docs/runbooks/migration-rollback.md).
+- **Do not split this release across a partial deploy.** The `/api/kb/{id}/share*`
+  endpoints and the frontend that called them are removed in the same tag. An
+  older image served against a `0064` database would ship a UI calling five
+  endpoints that no longer exist.
+- **Two intentional behaviour changes an operator will notice:**
+  - Plain users can now reach the settings of KBs they own or administer. The
+    former `kbTuningChain` additionally required the *system* role
+    `api-user`/`admin`/`superadmin`, which locked users out of their own KBs.
+    The new `kbAdminChain` gates on the KB role `admin` alone.
+  - Unpublished global KBs are no longer readable by every authenticated user.
+    The old middleware granted `view` on any `is_global` KB regardless of
+    `is_published`, across the whole view chain — chat, files, graph, studio,
+    generated content, the public API and MCP included. They are now reachable
+    only by their members and by system admins.
+- **Backfilled curators become visible, not new.** Every pre-existing
+  `global_kb_editors` row was backfilled as `kb_members.role='admin'` and now
+  appears in the global-KB editor panel, which previously read a table the
+  access check no longer consults. Nothing was granted; prior state became
+  visible. To review what exists:
+
+  ```sql
+  SELECT kb_id, user_id FROM kb_members m WHERE role = 'admin'
+    AND EXISTS (SELECT 1 FROM knowledge_bases kb WHERE kb.id = m.kb_id AND kb.is_global);
+  ```
+
+- No `site_config` defaults change. No re-ingest required. No new env vars.
+- Phase 2 (visibility enum, system user, subscriptions, category catalogue) is
+  **not** in this release.
+
+### Documentation
+- Correct the Phase 1 KB-role claims and document the /members surface (fb25e3d)
+- Document the four-role KB permission model (675b971)
+
+
+### Features
+- Replace share modal with four-role members dialog (fa923be)
+- Contextual remove/delete action driven by the caller's KB role (8496591)
+- Promote pending invites into kb_members, unify owner transfer (b7a6cfa)
+- Add member management endpoints and owner transfer (2066fe0)
+- Add member store with owner invariants and self-leave (a3bfb0d)
+- Resolve effective KB role from kb_members (7acd140)
+- Add ordered KB role constants (53312d7)
+- Add kb_members table with role backfill and owner mirror trigger (cf93ded)
+
+
+### Fixes
+- Repoint the global-KB editor surface at kb_members (82eee0f)
+- Restore pending-invite revocation on the /members surface (e9a5ecc)
+- Guard KB removal against re-entry, fix vacuous test assertion (3b94bc8)
+- Guard membership-impact and owner-transfer against non-members (fc863d8)
+- Enforce LeaveKB owner-immutability in SQL, not a racy Go pre-check (622dcc5)
+- Write the owner kb_members row on KB creation (81e928b)
+
+
+### Refactoring
+- Gate settings surface on KB admin role, drop kbTuningChain (9a4f83a)
+
 ## v0.1.0 — 2026-08-12
 
 ### ⚠ Upgrade notes
