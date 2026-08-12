@@ -185,32 +185,47 @@ func (s *PGStore) TransferOwner(ctx context.Context, kbID, newOwnerID string) er
 // LeaveKB removes the caller's own membership and deletes their chats in this
 // KB. Deliberately destructive and deliberately self-service only: an admin
 // revoking someone's role must NOT delete their chats (see RemoveMember).
+//
+// The owner-immutability invariant is carried by the `AND role <> 'owner'`
+// guard on the kb_members DELETE below, not by the preceding read — the
+// transaction runs at the pool's default READ COMMITTED isolation
+// (pgxutil.WithTx), so a plain "SELECT role, then branch in Go" would race a
+// concurrent TransferOwner that promotes this same user between the SELECT
+// and the DELETEs. The guarded DELETE is checked first, and only on success
+// are the user's chats removed — so a refused leave (RowsAffected == 0)
+// never destroys chats, mirroring RemoveMember's classify-on-zero pattern.
 func (s *PGStore) LeaveKB(ctx context.Context, kbID, userID string) (int, error) {
 	var deleted int
 	err := pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var role string
-		if err := tx.QueryRow(ctx,
-			`SELECT role FROM kb_members WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
-			kbID, userID).Scan(&role); err != nil {
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM kb_members
+			 WHERE kb_id = $1::uuid AND user_id = $2::uuid AND role <> 'owner'`,
+			kbID, userID)
+		if err != nil {
+			return fmt.Errorf("LeaveKB: delete membership: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			// Entweder gab es keine Zeile, oder es war die Owner-Zeile. Ein
+			// Folge-SELECT unterscheidet das fuer eine brauchbare Fehlermeldung
+			// (siehe RemoveMember).
+			var role string
+			err := tx.QueryRow(ctx,
+				`SELECT role FROM kb_members WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
+				kbID, userID).Scan(&role)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotAMember
 			}
-			return fmt.Errorf("LeaveKB: read role: %w", err)
-		}
-		if role == kbaccess.RoleOwner {
+			if err != nil {
+				return fmt.Errorf("LeaveKB: classify: %w", err)
+			}
 			return ErrOwnerImmutable
 		}
-		tag, err := tx.Exec(ctx,
+		chatTag, err := tx.Exec(ctx,
 			`DELETE FROM chats WHERE kb_id = $1::uuid AND user_id = $2::uuid`, kbID, userID)
 		if err != nil {
 			return fmt.Errorf("LeaveKB: delete chats: %w", err)
 		}
-		deleted = int(tag.RowsAffected())
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM kb_members WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
-			kbID, userID); err != nil {
-			return fmt.Errorf("LeaveKB: delete membership: %w", err)
-		}
+		deleted = int(chatTag.RowsAffected())
 		return nil
 	})
 	return deleted, err
