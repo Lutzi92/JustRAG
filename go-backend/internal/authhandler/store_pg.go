@@ -198,21 +198,26 @@ func toAuthProviderRow(r authProviderDBRow) adminproviders.AuthProviderRow {
 
 const authProviderSelectCols = `id, type, name, config, is_active, created_at`
 
-// ApplyPendingInvites promotes any pending_kb_invites matching this username into
-// real knowledge_base_shares for userID, then deletes the promoted invites — all
+// ApplyPendingInvites promotes any pending_kb_invites matching this username
+// into real kb_members rows for userID, then deletes the promoted invites — all
 // in one statement so it fires exactly once per invite. Idempotent: a re-run
 // finds nothing to move. Called on every successful OIDC login (the username
 // lookup is indexed and empty in the common case).
+// The owner row wins: DO UPDATE skips rows that already carry ownership, so a
+// pending invite (view/edit/admin only — kbaccess.Assignable) can never
+// demote an owner.
 func (s *PGStore) ApplyPendingInvites(ctx context.Context, userID, username string) error {
 	_, err := s.pool.Exec(ctx, `
 		WITH moved AS (
 			DELETE FROM pending_kb_invites
 			WHERE LOWER(username) = LOWER($2)
-			RETURNING kb_id, permission
+			RETURNING kb_id, role
 		)
-		INSERT INTO knowledge_base_shares (kb_id, user_id, permission)
-		SELECT kb_id, $1, permission FROM moved
-		ON CONFLICT (kb_id, user_id) DO UPDATE SET permission = EXCLUDED.permission`,
+		INSERT INTO kb_members (kb_id, user_id, role)
+		SELECT kb_id, $1, role FROM moved
+		ON CONFLICT (kb_id, user_id) DO UPDATE
+		    SET role = EXCLUDED.role
+		    WHERE kb_members.role <> 'owner'`,
 		userID, username)
 	return err
 }

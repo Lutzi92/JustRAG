@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/justrag/go-backend/internal/kbmembers"
 	"github.com/justrag/go-backend/internal/pgxutil"
 )
 
@@ -20,12 +21,13 @@ var ErrKBNotFound = errors.New("knowledge base not found")
 
 // PGStore is the Postgres-backed Store.
 type PGStore struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	members kbmembers.Store
 }
 
 // NewStore creates a PGStore over the main pool.
 func NewStore(pool *pgxpool.Pool) *PGStore {
-	return &PGStore{pool: pool}
+	return &PGStore{pool: pool, members: kbmembers.NewStore(pool)}
 }
 
 // Compile-time interface assertion.
@@ -152,42 +154,53 @@ func (s *PGStore) GetOwnerInfo(ctx context.Context, userID string) (*OwnerInfo, 
 	return pgxutil.QueryOne[OwnerInfo](ctx, s.pool, sql, userID)
 }
 
-// TransferKBOwner reassigns a personal KB to newOwnerID in one transaction:
-// the new owner's redundant share row is dropped (ownership supersedes a share)
-// and the previous owner, if any, is kept as an editor so a transfer never
-// silently revokes access. prevOwnerID is nil for an ownerless KB.
+// TransferKBOwner reassigns a personal KB to newOwnerID by delegating to
+// kbmembers.Store.TransferOwner (Task 5) — the single transactional
+// implementation of an ownership swap, shared with the member-management
+// transfer endpoint (internal/kbmembers/http.go's TransferOwner). Before
+// Task 7 this method wrote knowledge_bases.user_id and
+// knowledge_base_shares directly and never touched kb_members at all, so a
+// superadmin transfer here silently left the real authority table
+// (kb_members, which internal/kbaccess actually reads) unchanged — the old
+// owner kept access and the new owner got none. That bug is fixed by routing
+// through the shared implementation instead of a second, divergent one.
+//
+// prevOwnerID is accepted only for signature compatibility with the HTTP
+// handler (internal/adminkboverview/actions.go): kbmembers.TransferOwner
+// determines the current owner itself (whichever kb_members row carries
+// role='owner'), not from a caller-supplied hint, so the parameter is unused
+// here.
+//
+// Behaviour change from the pre-Task-7 implementation: the previous owner
+// used to be kept as an 'edit' row in knowledge_base_shares. Now they are
+// demoted to 'admin' in kb_members, matching the four-role rights matrix (an
+// ex-owner keeps the "co-manages this KB" tier, not merely edit access).
+// knowledge_base_shares is no longer written by this path at all.
 func (s *PGStore) TransferKBOwner(ctx context.Context, kbID, newOwnerID string, prevOwnerID *string) error {
-	return pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx,
-			`UPDATE knowledge_bases SET user_id = $2::uuid WHERE id = $1::uuid`,
-			kbID, newOwnerID)
-		if err != nil {
-			return fmt.Errorf("TransferKBOwner: set owner: %w", err)
-		}
-		if tag.RowsAffected() == 0 {
-			// KB was deleted (or never existed) between the handler's lookup and
-			// this transaction; roll back rather than commit a no-op transfer.
-			return ErrKBNotFound
-		}
-
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM knowledge_base_shares WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
-			kbID, newOwnerID); err != nil {
-			return fmt.Errorf("TransferKBOwner: drop new-owner share: %w", err)
-		}
-
-		if prevOwnerID != nil && *prevOwnerID != "" && *prevOwnerID != newOwnerID {
-			// ON CONFLICT target is knowledge_base_shares_kb_user_uniq (migration 0027).
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO knowledge_base_shares (kb_id, user_id, permission)
-				VALUES ($1::uuid, $2::uuid, 'edit')
-				ON CONFLICT (kb_id, user_id) DO UPDATE SET permission = 'edit'`,
-				kbID, *prevOwnerID); err != nil {
-				return fmt.Errorf("TransferKBOwner: keep previous owner as editor: %w", err)
-			}
-		}
+	err := s.members.TransferOwner(ctx, kbID, newOwnerID)
+	switch {
+	case err == nil:
 		return nil
-	})
+	case errors.Is(err, kbmembers.ErrNotFound):
+		return ErrKBNotFound
+	case isMissingKBForeignKey(err):
+		return ErrKBNotFound
+	default:
+		return fmt.Errorf("TransferKBOwner: %w", err)
+	}
+}
+
+// isMissingKBForeignKey reports whether err is the kb_members_kb_id_fkey
+// violation TransferOwner's INSERT raises when kbID no longer references a
+// row in knowledge_bases. This is how "the KB was deleted between the
+// handler's lookup and this call" actually surfaces on this path:
+// TransferOwner's INSERT ... ON CONFLICT DO UPDATE has no WHERE clause, so a
+// successful insert-or-update always reports RowsAffected() > 0 — the
+// RowsAffected()==0 branch behind kbmembers.ErrNotFound is unreachable for a
+// missing KB specifically, and the foreign-key violation is the real signal.
+func isMissingKBForeignKey(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503" && pgErr.ConstraintName == "kb_members_kb_id_fkey"
 }
 
 // LogAuditAction records an admin action in admin_audit_logs. Mirrors

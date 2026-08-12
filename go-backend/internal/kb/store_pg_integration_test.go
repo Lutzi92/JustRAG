@@ -115,3 +115,73 @@ func TestCreateKnowledgeBase_WritesOwnerKBMembersRow(t *testing.T) {
 		t.Fatalf("ListKnowledgeBases(%s) did not include newly created KB %s", userID, row.ID)
 	}
 }
+
+// insertKBForPending inserts a bare personal KB and returns its id.
+func insertKBForPending(t *testing.T, pool *pgxpool.Pool, ownerID string) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO knowledge_bases (name, description, is_global, user_id)
+		VALUES ('kb-pending-invite-store-test', 'fixture', false, $1::uuid)
+		RETURNING id::text`, ownerID).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert kb: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM knowledge_bases WHERE id = $1::uuid`, id) //nolint:errcheck
+	})
+	return id
+}
+
+// TestUpsertAndListPendingInvites_UseRoleColumn exercises the real PGStore's
+// UpsertPendingInvite/ListPendingInvites against a live DB. Task 7's
+// migration 0064 addendum renamed pending_kb_invites.permission to .role; a
+// mocked-store unit test (http_sharing_test.go's TestBulkInvite_* /
+// TestListShares) cannot catch a stale column name in the SQL text — it
+// stubs ShareStore out entirely. This test calls the real PGStore so a wrong
+// column reference fails loudly instead of silently.
+func TestUpsertAndListPendingInvites_UseRoleColumn(t *testing.T) {
+	pool := testPool(t)
+	store := kb.NewStore(pool)
+
+	owner := insertUser(t, pool, "pending-invite-owner")
+	kbID := insertKBForPending(t, pool, owner)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM pending_kb_invites WHERE kb_id = $1::uuid`, kbID) //nolint:errcheck
+	})
+
+	if err := store.UpsertPendingInvite(context.Background(), kbID, "Pending-Admin", "admin", owner); err != nil {
+		t.Fatalf("UpsertPendingInvite: %v", err)
+	}
+
+	invites, err := store.ListPendingInvites(context.Background(), kbID)
+	if err != nil {
+		t.Fatalf("ListPendingInvites: %v", err)
+	}
+	if len(invites) != 1 {
+		t.Fatalf("got %d pending invites, want 1", len(invites))
+	}
+	if invites[0].Username != "pending-admin" {
+		t.Fatalf("username = %q, want lowercased %q", invites[0].Username, "pending-admin")
+	}
+	if invites[0].Permission != "admin" {
+		t.Fatalf("permission (role column) = %q, want %q", invites[0].Permission, "admin")
+	}
+
+	// Upsert again with a different role: same (kb_id, LOWER(username)) row
+	// updates in place rather than duplicating.
+	if err := store.UpsertPendingInvite(context.Background(), kbID, "pending-admin", "view", owner); err != nil {
+		t.Fatalf("UpsertPendingInvite (update): %v", err)
+	}
+	invites, err = store.ListPendingInvites(context.Background(), kbID)
+	if err != nil {
+		t.Fatalf("ListPendingInvites (after update): %v", err)
+	}
+	if len(invites) != 1 {
+		t.Fatalf("got %d pending invites after update, want 1", len(invites))
+	}
+	if invites[0].Permission != "view" {
+		t.Fatalf("permission (role column) after update = %q, want %q", invites[0].Permission, "view")
+	}
+}

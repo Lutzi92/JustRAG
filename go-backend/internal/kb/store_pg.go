@@ -568,32 +568,38 @@ func (s *PGStore) ShareExists(ctx context.Context, kbID, userID string) (bool, e
 	return exists, err
 }
 
-// UpsertPendingInvite stores (or updates the permission of) a pending invite for
+// UpsertPendingInvite stores (or updates the role of) a pending invite for
 // a username that does not yet exist as a user. invitedBy may be "" (stored NULL).
+// The column is named pending_kb_invites.role as of migration 0064's Task 7
+// addendum ("permission" renamed so "admin" can be invited too); the
+// permission parameter name is kept here for API/JSON-tag stability on the
+// (deprecated) callers above, it is only the DB column that changed.
 func (s *PGStore) UpsertPendingInvite(ctx context.Context, kbID, username, permission, invitedBy string) error {
 	var by *string
 	if invitedBy != "" {
 		by = &invitedBy
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO pending_kb_invites (kb_id, username, permission, invited_by)
+		INSERT INTO pending_kb_invites (kb_id, username, role, invited_by)
 		VALUES ($1, LOWER($2), $3, $4)
-		ON CONFLICT (kb_id, LOWER(username)) DO UPDATE SET permission = EXCLUDED.permission`,
+		ON CONFLICT (kb_id, LOWER(username)) DO UPDATE SET role = EXCLUDED.role`,
 		kbID, username, permission, by)
 	return err
 }
 
-// pendingInviteDBRow scans a pending_kb_invites row.
+// pendingInviteDBRow scans a pending_kb_invites row. The Permission field's db
+// tag maps it to the "role" column (migration 0064's Task 7 rename) while
+// keeping the Go/JSON name unchanged for the deprecated ShareStore surface.
 type pendingInviteDBRow struct {
 	Username   string    `db:"username"`
-	Permission string    `db:"permission"`
+	Permission string    `db:"role"`
 	CreatedAt  time.Time `db:"created_at"`
 }
 
 // ListPendingInvites returns all unapplied invites for a KB, newest first.
 func (s *PGStore) ListPendingInvites(ctx context.Context, kbID string) ([]PendingInviteRow, error) {
 	const sql = `
-		SELECT username, permission, created_at
+		SELECT username, role, created_at
 		FROM pending_kb_invites
 		WHERE kb_id = $1
 		ORDER BY created_at DESC`

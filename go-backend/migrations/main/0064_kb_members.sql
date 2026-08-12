@@ -61,6 +61,27 @@ CREATE TRIGGER kb_members_sync_owner_trg
     FOR EACH ROW WHEN (NEW.role = 'owner')
     EXECUTE FUNCTION kb_members_sync_owner();
 
+-- pending_kb_invites parkt Einladungen fuer noch nicht angelegte OIDC-Nutzer.
+-- 'permission' wird zu 'role', weil jetzt auch 'admin' einladbar ist.
+-- RENAME COLUMN ist nicht idempotent, deshalb per information_schema-Guard:
+-- auf einer frischen DB laeuft dieser Block direkt nach der obigen
+-- CREATE TABLE-Sektion (Spalte heisst noch 'permission'), auf einer DB, auf
+-- der 0064 schon einmal angewendet wurde, muss der zweite Lauf tolerant sein
+-- (Spalte heisst schon 'role', IF EXISTS greift nicht).
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'pending_kb_invites' AND column_name = 'permission') THEN
+        ALTER TABLE pending_kb_invites RENAME COLUMN permission TO role;
+    END IF;
+END $$;
+-- +goose StatementEnd
+
+ALTER TABLE pending_kb_invites DROP CONSTRAINT IF EXISTS pending_kb_invites_role_check;
+ALTER TABLE pending_kb_invites
+    ADD CONSTRAINT pending_kb_invites_role_check CHECK (role IN ('view','edit','admin'));
+
 -- +goose Down
 DROP TRIGGER IF EXISTS kb_members_sync_owner_trg ON kb_members;
 DROP FUNCTION IF EXISTS kb_members_sync_owner();
