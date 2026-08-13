@@ -488,7 +488,7 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
     };
 
     return (
-        <div className="admin-container">
+        <div className={`admin-container${isDataTab ? ' admin-container--wide' : ''}`}>
             <header className="header" style={{ display: 'flex', alignItems: 'center', gap: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem', marginBottom: '2rem' }}>
                 <button onClick={onBack} className="back-button" aria-label={t('back')}>
                     <ChevronLeft size={24} />
@@ -635,6 +635,15 @@ export default function AdminUI({ onBack, user, onEditGlobalKb }: AdminUIProps) 
                 .admin-container {
                     margin: 0 auto;
                     padding: 2rem clamp(1rem, 4vw, 3rem);
+                }
+                /* Data tabs render wide tables (the KB overview carries ten
+                   sortable columns plus an actions column, which the publish
+                   button pushed past the 1600px cap in index.css and into a
+                   horizontal scrollbar). They get the viewport instead; the
+                   form tabs keep the narrower reading measure. */
+                .admin-container--wide {
+                    max-width: min(2000px, 98vw);
+                    padding-inline: clamp(0.75rem, 2vw, 1.5rem);
                 }
                 .admin-layout {
                     display: flex;

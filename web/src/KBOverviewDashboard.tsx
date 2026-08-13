@@ -465,6 +465,14 @@ export default function KBOverviewDashboard() {
                                             if (idx === 0 && hasFailed) {
                                                 cellStyle.borderLeft = '3px solid var(--error-text)';
                                             }
+                                            // The name is the one free-text column; letting it
+                                            // wrap is what keeps a long KB name from widening
+                                            // the table past the viewport and pushing the
+                                            // actions column into a horizontal scroll.
+                                            if (c.key === 'name') {
+                                                cellStyle.whiteSpace = 'normal';
+                                                cellStyle.minWidth = '14rem';
+                                            }
                                             const title = c.key === 'lastActivity'
                                                 ? mergedActivityIso(row)
                                                 : c.key === 'createdAt'

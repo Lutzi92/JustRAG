@@ -135,7 +135,7 @@ describe('AdminGlobalKbsTab', () => {
         await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     });
 
-    it('disables a row\'s category select instead of risking a wipe when its assignment fetch fails', async () => {
+    it('disables a row\'s category chips instead of risking a wipe when its assignment fetch fails', async () => {
         mockedAxios.get.mockImplementation((url: string) => {
             if (url.includes('/unpublish-impact')) {
                 return Promise.resolve({
@@ -154,16 +154,62 @@ describe('AdminGlobalKbsTab', () => {
         });
         renderTab();
 
-        const select = await screen.findByRole('listbox', { name: /categories|kategorien/i });
-        await waitFor(() => expect(select).toBeDisabled());
+        // Scoped to the chip group: AdminCategoriesSection below renders its
+        // own "Edit: Security" / "Delete: Security" buttons for the same
+        // category, so an unscoped name match is ambiguous.
+        const chips = await screen.findByRole('group', { name: translations.categories.en });
+        const chip = within(chips).getByRole('button', { name: /Security/i });
+        await waitFor(() => expect(chip).toBeDisabled());
         expect(await screen.findByText(translations.categoriesLoadError.en)).toBeInTheDocument();
 
-        // Even a change event that reaches the select bypassing the disabled
-        // attribute (fireEvent dispatches directly on the node, unlike
-        // userEvent) must not be able to issue the wiping PUT — the handler
-        // itself refuses once the row is marked as failed-to-load.
-        fireEvent.change(select, { target: { value: [] } });
+        // Even a click that reaches the chip bypassing the disabled attribute
+        // (fireEvent dispatches directly on the node, unlike userEvent) must
+        // not be able to issue the wiping PUT — the handler itself refuses
+        // once the row is marked as failed-to-load.
+        fireEvent.click(chip);
         expect(mockedAxios.put).not.toHaveBeenCalled();
+    });
+
+    // The chips replaced a <select multiple> whose assigned entries could only
+    // be told apart by the browser's selection highlight and could only be
+    // dropped by ctrl-clicking them. Both directions are pinned here, since
+    // "assignments can be removed again" is the whole point of the change.
+    it('assigns a category on click and removes it on a second click', async () => {
+        mockedAxios.get.mockImplementation((url: string) => {
+            if (url.includes('/api/admin/kb-categories')) {
+                return Promise.resolve({ data: [{ id: 'cat-1', name: 'Security', sortOrder: 0 }] });
+            }
+            if (url.includes('/api/kb/kb-1/categories')) {
+                return Promise.resolve({ data: [] });
+            }
+            return Promise.resolve({
+                data: [{ id: 'kb-1', name: 'IT-Handbuch', createdAt: '2026-01-01T00:00:00Z', autoSubscribe: false }],
+            });
+        });
+        mockedAxios.put.mockResolvedValue({ status: 204 });
+        renderTab();
+
+        const chips = await screen.findByRole('group', { name: translations.categories.en });
+        const chip = within(chips).getByRole('button', { name: /Security/i });
+        await waitFor(() => expect(chip).toHaveAttribute('aria-pressed', 'false'));
+
+        await userEvent.click(chip);
+        await waitFor(() => {
+            expect(mockedAxios.put).toHaveBeenCalledWith(
+                expect.stringContaining('/api/kb/kb-1/categories'),
+                { categoryIds: ['cat-1'] }
+            );
+        });
+        await waitFor(() => expect(chip).toHaveAttribute('aria-pressed', 'true'));
+
+        await userEvent.click(chip);
+        await waitFor(() => {
+            expect(mockedAxios.put).toHaveBeenLastCalledWith(
+                expect.stringContaining('/api/kb/kb-1/categories'),
+                { categoryIds: [] }
+            );
+        });
+        await waitFor(() => expect(chip).toHaveAttribute('aria-pressed', 'false'));
     });
 });
 

@@ -316,6 +316,10 @@ export const translations = {
     editPermission: { de: 'Bearbeiten', en: 'Edit' },
     viewPermissionDesc: { de: 'Kann Inhalte ansehen und mit der Knowledge Base chatten', en: 'Can view content and chat with the knowledge base' },
     editPermissionDesc: { de: 'Kann Dateien hochladen, löschen und die Knowledge Base bearbeiten', en: 'Can upload, delete files and edit the knowledge base' },
+    // The third assignable role. Ownership is not assignable here — it moves
+    // only through the explicit transfer action (kbaccess.Assignable).
+    adminPermission: { de: 'Verwalten', en: 'Administer' },
+    adminPermissionDesc: { de: 'Zusätzlich: Einstellungen, Mitglieder, Agenten und Auswertung der Knowledge Base', en: 'Additionally: settings, members, agents and evaluation of the knowledge base' },
     kbTuning: { de: 'RAG-Einstellungen', en: 'RAG settings' },
     enterRecipientUsername: { de: 'Empfänger-Benutzername eingeben', en: 'Enter recipient username' },
     userNotFound: { de: 'Benutzer nicht gefunden', en: 'User not found' },
@@ -338,6 +342,17 @@ export const translations = {
     textContent: { de: 'Inhalt', en: 'Content' },
     addTextSource: { de: 'Text hinzufügen', en: 'Add Text' },
     backToUpload: { de: 'Zurück zum Hochladen', en: 'Back to Upload' },
+
+    // Home sections (accordions). `globalKBs` is kept for the admin surfaces
+    // that still speak of "global KBs"; the overview calls the same set
+    // "Favoriten", because that is what it now shows — the public KBs the
+    // user chose to keep, not every public KB that exists.
+    homeFavorites: { de: 'Favoriten', en: 'Favorites' },
+    homeFavoritesEmpty: { de: 'Noch keine Favoriten — unter „KBs entdecken" findest du alle öffentlichen Wissensdatenbanken.', en: 'No favorites yet — "Discover KBs" below lists every public knowledge base.' },
+    homeSharedWithMe: { de: 'Mit mir geteilt', en: 'Shared with me' },
+    homeSharedWithMeEmpty: { de: 'Dir wurde noch keine Knowledge Base freigegeben.', en: 'Nobody has shared a knowledge base with you yet.' },
+    expandSection: { de: 'Bereich aufklappen', en: 'Expand section' },
+    collapseSection: { de: 'Bereich zuklappen', en: 'Collapse section' },
 
     // Global Knowledge Bases
     globalKBs: { de: 'Globale Knowledge Bases', en: 'Global Knowledge Bases' },
@@ -1587,6 +1602,10 @@ export const translations = {
     categoryDeleteError: { de: 'Fehler beim Löschen der Kategorie', en: 'Error deleting the category' },
     categoriesAssignError: { de: 'Fehler beim Zuordnen der Kategorien', en: 'Error assigning categories' },
     categoriesLoadError: { de: 'Kategorien konnten nicht geladen werden — Zuordnung deaktiviert, um nichts zu überschreiben.', en: 'Could not load categories — assignment disabled to avoid overwriting them.' },
+    categoriesAssignHint: { de: 'Anklicken zum Zuordnen, erneut anklicken zum Entfernen. Kategorien steuern die Filter unter „KBs entdecken".', en: 'Click to assign, click again to remove. Categories drive the filters under "Discover KBs".' },
+    categoryAssigned: { de: 'Zugeordnet: {name}', en: 'Assigned: {name}' },
+    categoryNotAssigned: { de: 'Nicht zugeordnet: {name}', en: 'Not assigned: {name}' },
+    categoriesNoneAssigned: { de: 'Keine Kategorie zugeordnet', en: 'No category assigned' },
 
     // Re-embed
     reembedAllTitle: { de: 'Alle Dateien neu einbetten', en: 'Re-embed All Files' },

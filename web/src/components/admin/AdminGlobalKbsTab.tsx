@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Plus, Trash2, Globe } from 'lucide-react';
+import { Plus, Trash2, Globe, X } from 'lucide-react';
 import { API_BASE_URL } from '../../api';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -21,6 +21,86 @@ interface GlobalKbRow {
 
 interface AdminGlobalKbsTabProps {
     onEditGlobalKb?: (kb: { id: string; name: string }) => void;
+}
+
+interface KbCategoryChipsProps {
+    kbId: string;
+    categories: KbCategory[];
+    assigned: string[];
+    loadFailed: boolean;
+    onChange: (kbId: string, categoryIds: string[]) => void;
+    t: (k: string) => string;
+}
+
+/**
+ * Category assignment for one public KB, as toggle chips.
+ *
+ * This replaced a native `<select multiple>`, which read as a plain list: the
+ * assigned entries were only distinguishable by the browser's selection
+ * highlight, and *removing* one meant knowing to ctrl-click it — undiscoverable
+ * enough that assignments were effectively write-once. Chips state each
+ * category's membership on the chip itself and remove on a plain click.
+ */
+function KbCategoryChips({ kbId, categories, assigned, loadFailed, onChange, t }: KbCategoryChipsProps) {
+    const toggle = (categoryId: string) => {
+        const next = assigned.includes(categoryId)
+            ? assigned.filter(id => id !== categoryId)
+            : [...assigned, categoryId];
+        onChange(kbId, next);
+    };
+
+    return (
+        <div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.15rem' }}>
+                {t('categories')}
+            </div>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: '0 0 0.5rem' }}>
+                {t('categoriesAssignHint')}
+            </p>
+            <div
+                role="group"
+                aria-label={t('categories')}
+                style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', opacity: loadFailed ? 0.6 : 1 }}
+            >
+                {categories.map(cat => {
+                    const isAssigned = assigned.includes(cat.id);
+                    return (
+                        <button
+                            key={cat.id}
+                            type="button"
+                            aria-pressed={isAssigned}
+                            // The label spells out the state as well as the name, so a
+                            // screen-reader user does not depend on the ✓ / × glyph.
+                            aria-label={t(isAssigned ? 'categoryAssigned' : 'categoryNotAssigned').replace('{name}', cat.name)}
+                            disabled={loadFailed}
+                            onClick={() => toggle(cat.id)}
+                            style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                                padding: '0.25rem 0.6rem', borderRadius: '999px',
+                                fontSize: '0.8rem', cursor: loadFailed ? 'not-allowed' : 'pointer',
+                                border: `1px solid ${isAssigned ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                                background: isAssigned ? 'var(--accent-primary)' : 'var(--bg-secondary)',
+                                color: isAssigned ? 'white' : 'var(--text-secondary)',
+                            }}
+                        >
+                            {isAssigned ? <X size={12} aria-hidden="true" /> : <Plus size={12} aria-hidden="true" />}
+                            {cat.name}
+                        </button>
+                    );
+                })}
+            </div>
+            {assigned.length === 0 && !loadFailed && (
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: '0.4rem 0 0' }}>
+                    {t('categoriesNoneAssigned')}
+                </p>
+            )}
+            {loadFailed && (
+                <p style={{ color: 'var(--error-text)', fontSize: '0.75rem', margin: '0.4rem 0 0' }}>
+                    {t('categoriesLoadError')}
+                </p>
+            )}
+        </div>
+    );
 }
 
 /**
@@ -239,36 +319,14 @@ export default function AdminGlobalKbsTab({ onEditGlobalKb }: AdminGlobalKbsTabP
                             </div>
 
                             {categories.length > 0 && (
-                                <div>
-                                    <label htmlFor={`kb-categories-${kb.id}`} style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
-                                        {t('categories')}
-                                    </label>
-                                    <select
-                                        id={`kb-categories-${kb.id}`}
-                                        multiple
-                                        aria-label={t('categories')}
-                                        aria-invalid={kbCategoryLoadFailed[kb.id] || undefined}
-                                        disabled={!!kbCategoryLoadFailed[kb.id]}
-                                        value={kbCategoryIds[kb.id] ?? []}
-                                        onChange={(e) => handleCategoryChange(kb.id, Array.from(e.target.selectedOptions).map(o => o.value))}
-                                        style={{
-                                            width: '100%', maxWidth: '320px', background: 'var(--bg-secondary)',
-                                            border: kbCategoryLoadFailed[kb.id] ? '1px solid var(--error-text)' : '1px solid var(--border-color)',
-                                            color: 'var(--text-primary)', opacity: kbCategoryLoadFailed[kb.id] ? 0.6 : 1,
-                                            borderRadius: 'var(--shape-md)', fontSize: '0.85rem', minHeight: '2.2rem',
-                                            cursor: kbCategoryLoadFailed[kb.id] ? 'not-allowed' : undefined,
-                                        }}
-                                    >
-                                        {categories.map(cat => (
-                                            <option key={cat.id} value={cat.id}>{cat.name}</option>
-                                        ))}
-                                    </select>
-                                    {kbCategoryLoadFailed[kb.id] && (
-                                        <p style={{ color: 'var(--error-text)', fontSize: '0.75rem', margin: '0.3rem 0 0' }}>
-                                            {t('categoriesLoadError')}
-                                        </p>
-                                    )}
-                                </div>
+                                <KbCategoryChips
+                                    kbId={kb.id}
+                                    categories={categories}
+                                    assigned={kbCategoryIds[kb.id] ?? []}
+                                    loadFailed={!!kbCategoryLoadFailed[kb.id]}
+                                    onChange={handleCategoryChange}
+                                    t={t}
+                                />
                             )}
                         </div>
                     ))}
