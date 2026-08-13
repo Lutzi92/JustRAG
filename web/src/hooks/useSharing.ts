@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import axios from 'axios';
-import type { KnowledgeBase } from '../types';
+import type { KnowledgeBase, KbAssignableRole } from '../types';
 import { API_BASE_URL } from '../api';
 import { useTheme } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
@@ -19,7 +19,7 @@ export function useSharing({ username }: UseSharingParams) {
   const [shareUserId, setShareUserId] = useState('');
   const [shareTargetUser, setShareTargetUser] = useState<{ id: string; firstName: string; lastName: string; username: string } | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
-  const [sharePermission, setSharePermission] = useState<'view' | 'edit'>('view');
+  const [sharePermission, setSharePermission] = useState<KbAssignableRole>('view');
   const [copySuccess, setCopySuccess] = useState(false);
   const [notFoundUsername, setNotFoundUsername] = useState<string | null>(null);
 
@@ -66,14 +66,17 @@ export function useSharing({ username }: UseSharingParams) {
     setShareLoading(true);
     try {
       // Four-role /members surface (Task 9): PUT with { role }, not the
-      // deprecated POST /share with { permission }. sharePermission itself
-      // stays 'view' | 'edit' here — this is the single-user invite flow's
-      // 2-value picker, unrelated to the 3-value role <select> MembersModal
-      // renders per existing member row.
+      // deprecated POST /share with { permission }. The picker spans all
+      // three assignable roles, the same set kbaccess.Assignable accepts and
+      // the same set the per-member <select> in MembersModal offers — an
+      // invite could previously only grant view/edit, so making somebody a
+      // KB admin meant sharing first and correcting the role afterwards.
       await axios.put(`${API_BASE_URL}/api/kb/${sharingKb.id}/members/${shareTargetUser.id}`, {
         role: sharePermission
       });
-      const permissionLabel = sharePermission === 'edit' ? t('editPermission') : t('viewPermission');
+      const permissionLabel = sharePermission === 'admin'
+        ? t('adminPermission')
+        : sharePermission === 'edit' ? t('editPermission') : t('viewPermission');
       toast.success(`${t('shareSuccess')} ${shareTargetUser.firstName || shareTargetUser.username} (${permissionLabel})`);
       setShowShareModal(false);
     } catch (err: unknown) {

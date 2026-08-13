@@ -220,6 +220,12 @@ export interface StudioConfig {
 // no kb_members row — an implicit viewer on a published global KB.
 export type KbRole = 'view' | 'edit' | 'admin' | 'owner';
 
+// KbAssignableRole is the subset a share/invite dialog may grant, mirroring
+// the backend's kbaccess.Assignable check on PUT /members/{userId} and
+// POST /members/bulk. 'owner' is deliberately absent: ownership moves only
+// through the explicit transfer endpoint, never through a role picker.
+export type KbAssignableRole = 'view' | 'edit' | 'admin';
+
 // KbMember is one row of GET /api/kb/{id}/members' `members` array (Task 9,
 // consumed by MembersModal). firstName/lastName mirror the nullable DB
 // columns; role is never absent — every member row has one.

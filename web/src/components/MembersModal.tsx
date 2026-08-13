@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, User, Eye, Edit3, Loader2, Trash2, Clock, Users, Crown } from 'lucide-react';
-import type { KnowledgeBase, KbMember, KbRole } from '../types';
+import { X, User, Eye, Edit3, Loader2, Trash2, Clock, Users, Crown, Shield } from 'lucide-react';
+import type { KnowledgeBase, KbMember, KbRole, KbAssignableRole } from '../types';
 import { motion } from 'framer-motion';
 import axios from 'axios';
 import { API_BASE_URL } from '../api';
@@ -28,8 +28,8 @@ interface MembersModalProps {
     setShareUserId: (id: string) => void;
     shareTargetUser: { id: string; username: string; firstName?: string; lastName?: string } | null;
     shareLoading: boolean;
-    sharePermission: 'view' | 'edit';
-    setSharePermission: (perm: 'view' | 'edit') => void;
+    sharePermission: KbAssignableRole;
+    setSharePermission: (perm: KbAssignableRole) => void;
     onLookupUser: () => void;
     onConfirmShare: () => void;
     /** Username the lookup could not resolve — offer a pending invite for it. */
@@ -40,10 +40,79 @@ interface MembersModalProps {
     myRole: string;
 }
 
-// Assignable roles for the per-member <select>. Never includes 'owner' —
-// ownership moves only via the explicit transfer action, mirroring the
-// backend's kbaccess.Assignable check on PUT /members/{userId}.
-const ASSIGNABLE_ROLES: KbRole[] = ['view', 'edit', 'admin'];
+// Assignable roles for the per-member <select> and the invite pickers. Never
+// includes 'owner' — ownership moves only via the explicit transfer action,
+// mirroring the backend's kbaccess.Assignable check on PUT /members/{userId}
+// and POST /members/bulk.
+const ASSIGNABLE_ROLES: KbAssignableRole[] = ['view', 'edit', 'admin'];
+
+// roleLabelKey / roleDescKey map a role onto its translation keys. Kept as
+// lookup tables so the label of a role is defined once, rather than as a
+// ternary chain repeated at each of the four places a role is rendered.
+const ROLE_LABEL_KEY: Record<KbAssignableRole, string> = {
+    view: 'viewPermission',
+    edit: 'editPermission',
+    admin: 'adminPermission',
+};
+
+const ROLE_DESC_KEY: Record<KbAssignableRole, string> = {
+    view: 'viewPermissionDesc',
+    edit: 'editPermissionDesc',
+    admin: 'adminPermissionDesc',
+};
+
+const ROLE_ICON: Record<KbAssignableRole, typeof Eye> = {
+    view: Eye,
+    edit: Edit3,
+    admin: Shield,
+};
+
+interface RolePickerProps {
+    value: KbAssignableRole;
+    onChange: (role: KbAssignableRole) => void;
+    t: (k: string) => string;
+    /** Slightly tighter buttons for the inline pending-invite panel. */
+    compact?: boolean;
+}
+
+/**
+ * The three-way role picker shared by the single-user invite, the
+ * pending-invite panel and the bulk invite. It always renders the heading and
+ * the description of the selected role: the pending-invite panel used to omit
+ * both, so a user inviting somebody without an account saw two unlabelled
+ * buttons and no explanation of what either grants.
+ */
+function RolePicker({ value, onChange, t, compact = false }: RolePickerProps) {
+    const pad = compact ? '0.6rem' : '0.75rem';
+    const iconSize = compact ? 16 : 18;
+    return (
+        <div className="input-group" style={{ marginBottom: compact ? '1rem' : '1.5rem' }}>
+            <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', display: 'block' }}>
+                {t('selectPermission')}
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem' }} role="group" aria-label={t('selectPermission')}>
+                {ASSIGNABLE_ROLES.map(role => {
+                    const Icon = ROLE_ICON[role];
+                    return (
+                        <button
+                            key={role}
+                            onClick={() => onChange(role)}
+                            className={value === role ? 'search-button' : 'secondary-button'}
+                            style={{ flex: 1, padding: pad, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}
+                            aria-pressed={value === role}
+                        >
+                            <Icon size={iconSize} aria-hidden="true" />
+                            {t(ROLE_LABEL_KEY[role])}
+                        </button>
+                    );
+                })}
+            </div>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                {t(ROLE_DESC_KEY[value])}
+            </p>
+        </div>
+    );
+}
 
 export const MembersModal: React.FC<MembersModalProps> = ({
     show, onClose, sharingKb, shareUserId, setShareUserId, shareTargetUser,
@@ -63,7 +132,7 @@ export const MembersModal: React.FC<MembersModalProps> = ({
     const [pendingInvites, setPendingInvites] = useState<PendingMemberInvite[]>([]);
     const [mode, setMode] = useState<'single' | 'bulk'>('single');
     const [bulkText, setBulkText] = useState('');
-    const [bulkPermission, setBulkPermission] = useState<'view' | 'edit'>('view');
+    const [bulkPermission, setBulkPermission] = useState<KbAssignableRole>('view');
     const [bulkLoading, setBulkLoading] = useState(false);
     const [bulkSummary, setBulkSummary] = useState<{ shared: string[]; pending: string[]; alreadyHadAccess: string[] } | null>(null);
 
@@ -275,26 +344,7 @@ export const MembersModal: React.FC<MembersModalProps> = ({
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '0 0 1rem 0' }}>
                             {t('pendingInviteHint')}
                         </p>
-                        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem' }} role="group" aria-label={t('selectPermission')}>
-                            <button
-                                onClick={() => setSharePermission('view')}
-                                className={sharePermission === 'view' ? 'search-button' : 'secondary-button'}
-                                style={{ flex: 1, padding: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
-                                aria-pressed={sharePermission === 'view'}
-                            >
-                                <Eye size={16} aria-hidden="true" />
-                                {t('viewPermission')}
-                            </button>
-                            <button
-                                onClick={() => setSharePermission('edit')}
-                                className={sharePermission === 'edit' ? 'search-button' : 'secondary-button'}
-                                style={{ flex: 1, padding: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
-                                aria-pressed={sharePermission === 'edit'}
-                            >
-                                <Edit3 size={16} aria-hidden="true" />
-                                {t('editPermission')}
-                            </button>
-                        </div>
+                        <RolePicker value={sharePermission} onChange={setSharePermission} t={t} compact />
                         <button
                             onClick={handleInviteAnyway}
                             className="search-button"
@@ -337,34 +387,7 @@ export const MembersModal: React.FC<MembersModalProps> = ({
                 )}
 
                 {shareTargetUser && (
-                    <div className="input-group" style={{ marginBottom: '1.5rem' }}>
-                        <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', display: 'block' }}>
-                            {t('selectPermission')}
-                        </label>
-                        <div style={{ display: 'flex', gap: '0.75rem' }} role="group" aria-label={t('selectPermission')}>
-                            <button
-                                onClick={() => setSharePermission('view')}
-                                className={sharePermission === 'view' ? 'search-button' : 'secondary-button'}
-                                style={{ flex: 1, padding: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
-                                aria-pressed={sharePermission === 'view'}
-                            >
-                                <Eye size={18} aria-hidden="true" />
-                                {t('viewPermission')}
-                            </button>
-                            <button
-                                onClick={() => setSharePermission('edit')}
-                                className={sharePermission === 'edit' ? 'search-button' : 'secondary-button'}
-                                style={{ flex: 1, padding: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
-                                aria-pressed={sharePermission === 'edit'}
-                            >
-                                <Edit3 size={18} aria-hidden="true" />
-                                {t('editPermission')}
-                            </button>
-                        </div>
-                        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
-                            {sharePermission === 'view' ? t('viewPermissionDesc') : t('editPermissionDesc')}
-                        </p>
-                    </div>
+                    <RolePicker value={sharePermission} onChange={setSharePermission} t={t} />
                 )}
 
                 {shareTargetUser ? (
@@ -398,14 +421,7 @@ export const MembersModal: React.FC<MembersModalProps> = ({
                             rows={5}
                             style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', resize: 'vertical' }}
                         />
-                        <div style={{ display: 'flex', gap: '0.75rem', margin: '0.75rem 0' }} role="group" aria-label={t('selectPermission')}>
-                            <button onClick={() => setBulkPermission('view')} className={bulkPermission === 'view' ? 'search-button' : 'secondary-button'} style={{ flex: 1, padding: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }} aria-pressed={bulkPermission === 'view'}>
-                                <Eye size={16} aria-hidden="true" /> {t('viewPermission')}
-                            </button>
-                            <button onClick={() => setBulkPermission('edit')} className={bulkPermission === 'edit' ? 'search-button' : 'secondary-button'} style={{ flex: 1, padding: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }} aria-pressed={bulkPermission === 'edit'}>
-                                <Edit3 size={16} aria-hidden="true" /> {t('editPermission')}
-                            </button>
-                        </div>
+                        <RolePicker value={bulkPermission} onChange={setBulkPermission} t={t} compact />
                         <button onClick={handleBulkInvite} className="search-button" style={{ width: '100%' }} disabled={bulkLoading || splitUsernames(bulkText).length === 0}>
                             {bulkLoading ? <Loader2 className="animate-spin" size={18} /> : t('bulkInviteButton')}
                         </button>
@@ -487,7 +503,7 @@ export const MembersModal: React.FC<MembersModalProps> = ({
                                             >
                                                 {ASSIGNABLE_ROLES.map(role => (
                                                     <option key={role} value={role}>
-                                                        {role === 'view' ? t('kbRoleView') : role === 'edit' ? t('kbRoleEdit') : t('kbRoleAdmin')}
+                                                        {t(ROLE_LABEL_KEY[role])}
                                                     </option>
                                                 ))}
                                             </select>
@@ -520,7 +536,7 @@ export const MembersModal: React.FC<MembersModalProps> = ({
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                                         <Clock size={14} aria-hidden="true" style={{ color: 'var(--text-secondary)' }} />
                                         <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-                                            @{p.username} &middot; {p.role === 'edit' ? t('editPermission') : p.role === 'admin' ? t('kbRoleAdmin') : t('viewPermission')}
+                                            @{p.username} &middot; {t(ROLE_LABEL_KEY[p.role as KbAssignableRole] ?? 'viewPermission')}
                                         </span>
                                     </div>
                                     <button
