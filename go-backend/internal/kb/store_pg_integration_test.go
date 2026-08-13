@@ -128,13 +128,18 @@ func TestCreateKnowledgeBase_WritesOwnerKBMembersRow(t *testing.T) {
 	// KB itself won't appear in that user's ListKnowledgeBases result (it's
 	// not global and they're not a member). Exercised via
 	// ListGlobalKnowledgeBases instead by temporarily marking the KB global,
-	// which is the only list path a non-member can see a KB through.
+	// which is the only list path a non-member can see a KB through. Since
+	// Task 6, ListGlobalKnowledgeBases additionally requires a subscription
+	// route (kb_members / kb_subscriptions.subscribed / auto_subscribe) for
+	// non-admins, so give otherUserID an explicit subscription — that's the
+	// route unrelated to kb_members, keeping myRole nil as this test intends.
 	otherUserID := insertUser(t, pool, "kb-create-other")
 	if _, err := pool.Exec(context.Background(),
 		`UPDATE knowledge_bases SET visibility = 'public', is_published = true WHERE id = $1::uuid`, row.ID,
 	); err != nil {
 		t.Fatalf("mark KB global: %v", err)
 	}
+	mustExec(t, pool, `INSERT INTO kb_subscriptions (kb_id, user_id, state) VALUES ($1::uuid, $2::uuid, 'subscribed')`, row.ID, otherUserID)
 	globalList, err := store.ListGlobalKnowledgeBases(context.Background(), otherUserID, false)
 	if err != nil {
 		t.Fatalf("ListGlobalKnowledgeBases: %v", err)
