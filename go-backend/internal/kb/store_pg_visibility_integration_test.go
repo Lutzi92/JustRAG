@@ -88,7 +88,14 @@ func TestIsGlobalMirrorsVisibility(t *testing.T) {
 // silently diverging: any INSERT/UPDATE naming is_global must fail loudly.
 func TestIsGlobalNotWritable(t *testing.T) {
 	pool := visPool(t)
-	_, err := pool.Exec(context.Background(),
+	ctx := context.Background()
+	// Cleanup vor der Pruefung registrieren: schlaegt der Guard fehl, existiert
+	// die Zeile, und ein t.Fatal danach wuerde sie sonst liegen lassen. Genau
+	// das ist in der RED-Phase von Task 1 passiert.
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM knowledge_bases WHERE name = 'mig0065-write'`) //nolint:errcheck
+	})
+	_, err := pool.Exec(ctx,
 		`INSERT INTO knowledge_bases (name, is_global) VALUES ('mig0065-write', true)`)
 	if err == nil {
 		t.Fatal("writing the generated is_global column must fail")
