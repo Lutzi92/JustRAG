@@ -38,7 +38,6 @@ import { KbWorkspaceModals } from './components/KbWorkspaceModals';
 
 // Lazy load heavy components
 const GlobalKbSettings = lazy(() => import('./components/GlobalKbSettings').then(module => ({ default: module.GlobalKbSettings })));
-const KbCatalogModal = lazy(() => import('./components/KbCatalogModal'));
 
 import { OnboardingTour } from './components/OnboardingTour';
 import { Footer } from './components/Footer';
@@ -128,8 +127,6 @@ function AuthenticatedAppInner() {
   const [showOnboarding, setShowOnboarding] = useState(() => !localStorage.getItem('onboardingCompleted'));
   const handleCloseOnboarding = useCallback(() => { setShowOnboarding(false); localStorage.setItem('onboardingCompleted', 'true'); }, []);
 
-  // KB catalog discovery popup (Home "Discover KBs" trigger)
-  const [showCatalog, setShowCatalog] = useState(false);
 
   // Sidebar resize
   const sidebar = useSidebarResize();
@@ -202,6 +199,17 @@ function AuthenticatedAppInner() {
       fetchGitRepoSources(currentKb.id);
     }
   }, [currentKb, fetchGitRepoSources]);
+
+  // Refetch the overview whenever the user lands back on it. useKbLifecycle
+  // fetches once per token, so anything that changed a KB's visibility
+  // elsewhere in the session — publishing one from the admin UI is the case
+  // this exists for — only reached the overview after a full page reload.
+  const { fetchKBs } = kbMgmt;
+  useEffect(() => {
+    if (view === 'home') {
+      void fetchKBs({ silent: true });
+    }
+  }, [view, fetchKBs]);
 
   // Cross-hook handlers. The setters are destructured into stable locals so
   // the useCallback dep arrays don't have to depend on the whole hook objects
@@ -329,7 +337,7 @@ function AuthenticatedAppInner() {
           onDeleteKB={kbMgmt.handleDeleteKB}
           removingKb={kbMgmt.removingKb}
           onCreateGlobalKB={kbMgmt.handleCreateGlobalKB}
-          onOpenCatalog={() => setShowCatalog(true)}
+          onSubscriptionChange={() => { kbMgmt.fetchKBs(); }}
           onDeleteGlobalKB={kbMgmt.handleDeleteGlobalKB}
           onOpenGlobalKbSettings={kbMgmt.handleOpenGlobalKbSettings}
           onOpenShare={sharing.handleOpenShare}
@@ -353,13 +361,6 @@ function AuthenticatedAppInner() {
         <Footer onNavigate={(page) => setView(page)} />
         <OnboardingHelpButton onClick={() => setShowOnboarding(true)} />
         <OnboardingTour show={showOnboarding} onClose={handleCloseOnboarding} />
-        <Suspense fallback={null}>
-          <KbCatalogModal
-            isOpen={showCatalog}
-            onClose={() => setShowCatalog(false)}
-            onSubscriptionChange={() => { kbMgmt.fetchKBs(); }}
-          />
-        </Suspense>
       </motion.div>
     );
   }

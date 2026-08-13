@@ -6,6 +6,7 @@ import type { KnowledgeBase } from '../types';
 import { HomeView, type HomeViewProps } from './HomeView';
 import { translations } from '../translations';
 import { ModalProvider } from '../contexts/ModalContext';
+import { ToastProvider } from '../contexts/ToastContext';
 import { useKbRemoval } from '../hooks/useKbRemoval';
 
 vi.mock('axios');
@@ -27,7 +28,22 @@ beforeEach(() => {
     removeListener: () => {},
     dispatchEvent: () => false,
   }));
+  // KbAccordion persists each section's open state. `localStorage` is a bare
+  // object in this jsdom setup (no getItem/setItem), so the accordion's own
+  // try/catch already falls back to defaultOpen on every render and no state
+  // leaks between tests — hence no clear() here, which would throw.
+  // The discovery panel fetches on mount; a bare auto-mocked axios.get
+  // returns undefined and its .then() would throw. Individual describes
+  // override this.
+  mockedAxios.get.mockResolvedValue({ data: [] });
 });
+
+// expandSection clicks an accordion header by its title. The accessible name
+// also carries the item count and the sr-only expand/collapse hint, hence the
+// substring match.
+async function expandSection(title: string) {
+  await userEvent.click(screen.getByRole('button', { name: new RegExp(title, 'i') }));
+}
 
 vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -78,7 +94,7 @@ const noopProps = {
   onDeleteKB: vi.fn(),
   removingKb: false,
   onCreateGlobalKB: vi.fn(),
-  onOpenCatalog: vi.fn(),
+  onSubscriptionChange: vi.fn(),
   onDeleteGlobalKB: vi.fn(),
   onOpenGlobalKbSettings: vi.fn(),
   onOpenShare: vi.fn(),
@@ -132,9 +148,10 @@ function renderHomeView(overrides: Partial<HomeViewProps> & { kbs?: KnowledgeBas
 // a KB admin who isn't the owner could never open the dialog to manage
 // members or hand out roles. It must key on myRole instead.
 describe('HomeView members-dialog trigger', () => {
-  it('shows the trigger for a caller whose myRole is admin', () => {
+  it('shows the trigger for a caller whose myRole is admin', async () => {
     const kb: KnowledgeBase = { ...baseKb, myRole: 'admin' };
     render(<HomeView kbs={[kb]} {...noopProps} />);
+    await expandSection(translations.homeSharedWithMe.en);
     expect(screen.getByRole('button', { name: translations.share.en })).toBeInTheDocument();
   });
 
@@ -144,16 +161,44 @@ describe('HomeView members-dialog trigger', () => {
     expect(screen.getByRole('button', { name: translations.share.en })).toBeInTheDocument();
   });
 
-  it('hides the trigger for a caller whose myRole is edit', () => {
+  it('hides the trigger for a caller whose myRole is edit', async () => {
     const kb: KnowledgeBase = { ...baseKb, myRole: 'edit' };
     render(<HomeView kbs={[kb]} {...noopProps} />);
+    await expandSection(translations.homeSharedWithMe.en);
     expect(screen.queryByRole('button', { name: translations.share.en })).not.toBeInTheDocument();
   });
 
-  it('hides the trigger for a caller whose myRole is view', () => {
+  it('hides the trigger for a caller whose myRole is view', async () => {
     const kb: KnowledgeBase = { ...baseKb, myRole: 'view' };
     render(<HomeView kbs={[kb]} {...noopProps} />);
+    await expandSection(translations.homeSharedWithMe.en);
     expect(screen.queryByRole('button', { name: translations.share.en })).not.toBeInTheDocument();
+  });
+});
+
+// The overview splits GET /api/kb into "mine" and "shared with me" on myRole
+// alone — the backend returns one list, and both sections render the same
+// card, so the partition is the only thing keeping a KB out of the wrong
+// section.
+describe('HomeView owned/shared split', () => {
+  const owned: KnowledgeBase = { ...baseKb, id: 'kb-own', name: 'Owned KB', myRole: 'owner' };
+  const shared: KnowledgeBase = { ...baseKb, id: 'kb-shared', name: 'Shared KB', myRole: 'edit' };
+
+  it('puts an owned KB in the always-open "my KBs" section and a shared one behind the collapsed section', async () => {
+    render(<HomeView kbs={[owned, shared]} {...noopProps} />);
+
+    // "Meine KBs" is open by default, "Mit mir geteilt" is not.
+    expect(screen.getByText('Owned KB')).toBeInTheDocument();
+    expect(screen.queryByText('Shared KB')).not.toBeInTheDocument();
+
+    await expandSection(translations.homeSharedWithMe.en);
+    expect(screen.getByText('Shared KB')).toBeInTheDocument();
+  });
+
+  it('reports the per-section counts on the headers', () => {
+    render(<HomeView kbs={[owned, shared]} {...noopProps} />);
+    expect(screen.getByRole('button', { name: new RegExp(`${translations.myKBs.en}\\s*1`, 'i') })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: new RegExp(`${translations.homeSharedWithMe.en}\\s*1`, 'i') })).toBeInTheDocument();
   });
 });
 
@@ -163,31 +208,36 @@ describe('HomeView members-dialog trigger', () => {
 // case. The Discover trigger must therefore be reachable from the
 // globalKbs.length === 0 branch too, for every authenticated user — not just
 // admins (the mocked useAuth user above has role: 'user').
-describe('HomeView catalog-discovery trigger', () => {
-  it('shows the trigger for a non-admin user with no global KBs and opens the catalog on click', async () => {
-    const onOpenCatalog = vi.fn();
-    render(<HomeView kbs={[]} {...noopProps} globalKbs={[]} onOpenCatalog={onOpenCatalog} />);
+describe('HomeView discovery accordion', () => {
+  // The only test in this file that actually mounts KbCatalogPanel, which
+  // calls useToast — hence the provider here rather than around every render.
+  it('offers discovery to a non-admin with no favorites, and mounts the catalog only once expanded', async () => {
+    render(<ToastProvider><HomeView kbs={[]} {...noopProps} globalKbs={[]} /></ToastProvider>);
 
-    const trigger = screen.getByRole('button', { name: translations.discoverKbs.en });
-    expect(trigger).toBeInTheDocument();
+    // Collapsed: the panel is unmounted, so it has not fetched anything yet.
+    expect(mockedAxios.get).not.toHaveBeenCalledWith(expect.stringContaining('/api/kb/catalog'));
 
-    await userEvent.click(trigger);
-    expect(onOpenCatalog).toHaveBeenCalledTimes(1);
+    await expandSection(translations.discoverKbs.en);
+
+    expect(await screen.findByLabelText(translations.catalogSearchPlaceholder.en)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockedAxios.get).toHaveBeenCalledWith(expect.stringContaining('/api/kb/catalog'));
+    });
   });
 
-  it('does not gate the empty-state Discover trigger behind admin/superadmin', () => {
-    // Same as above but spelled out against the admin-gated create-KB button
-    // in the same branch, to pin the distinction: create stays admin-only,
-    // discover does not.
+  it('does not gate discovery behind admin/superadmin', () => {
+    // Spelled out against the admin-gated create-KB button in the same
+    // section, to pin the distinction: create stays admin-only, discover
+    // does not (the mocked useAuth user has role: 'user').
     render(<HomeView kbs={[]} {...noopProps} globalKbs={[]} />);
-    expect(screen.getByRole('button', { name: translations.discoverKbs.en })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: new RegExp(translations.discoverKbs.en, 'i') })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: translations.createGlobalKB.en })).not.toBeInTheDocument();
   });
 
-  it('shows exactly one trigger when the caller already has global KBs', () => {
+  it('shows exactly one discovery header when the caller already has favorites', () => {
     const globalKb: KnowledgeBase = { ...baseKb, id: 'gkb-1', isGlobal: true };
     render(<HomeView kbs={[]} {...noopProps} globalKbs={[globalKb]} />);
-    expect(screen.getAllByRole('button', { name: translations.discoverKbs.en })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: new RegExp(translations.discoverKbs.en, 'i') })).toHaveLength(1);
   });
 });
 
@@ -202,12 +252,12 @@ describe('HomeView catalog-discovery trigger', () => {
 // a shape the backend cannot produce — and so kept a dead badge branch green.
 describe('KB visibility badge', () => {
   it('shows "personal" for a private KB with only the owner', async () => {
-    renderHomeView({ kbs: [{ ...baseKb, id: 'kb-1', name: 'Meine KB', visibility: 'private', memberCount: 1 }] });
+    renderHomeView({ kbs: [{ ...baseKb, id: 'kb-1', name: 'Meine KB', visibility: 'private', memberCount: 1, myRole: 'owner' }] });
     expect(await screen.findByText(/persönlich|personal/i)).toBeInTheDocument();
   });
 
   it('shows the member count for a shared private KB', async () => {
-    renderHomeView({ kbs: [{ ...baseKb, id: 'kb-1', name: 'Team-KB', visibility: 'private', memberCount: 4 }] });
+    renderHomeView({ kbs: [{ ...baseKb, id: 'kb-1', name: 'Team-KB', visibility: 'private', memberCount: 4, myRole: 'owner' }] });
     expect(await screen.findByText(/geteilt \(4\)|shared \(4\)/i)).toBeInTheDocument();
   });
 

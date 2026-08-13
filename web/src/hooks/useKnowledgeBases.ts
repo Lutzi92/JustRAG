@@ -114,7 +114,7 @@ export function useKnowledgeBases({
     handleGoHome();
     // Then still reconcile with the server — an unsubscribe (or auto_subscribe)
     // can change what the public list returns in ways local state can't
-    // infer; same reload path KbCatalogModal's onSubscriptionChange already
+    // infer; same reload path KbCatalogPanel's onSubscriptionChange already
     // uses (Task 9). A failed refetch here degrades to "correct but slightly
     // stale" rather than the KB reappearing or staying stuck.
     await fetchKBs();

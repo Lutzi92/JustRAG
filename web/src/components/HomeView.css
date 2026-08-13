@@ -166,6 +166,74 @@
   color: var(--text-primary);
 }
 
+/* Accordion sections (Favoriten / Entdecken / Mit mir geteilt / Meine KBs).
+   The whole header row left of the optional action is the trigger, so the
+   click target matches what looks clickable. */
+.home-view__accordion .home-view__section-header {
+  margin-bottom: 1rem;
+  margin-block-end: 1rem;
+}
+
+.home-view__accordion-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-inline-size: 0;
+  padding: 0.4rem 0;
+  padding-block: 0.4rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+.home-view__accordion-trigger:hover .home-view__section-title {
+  color: var(--accent-primary);
+}
+
+.home-view__accordion-chevron {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  transition: transform 0.15s ease;
+}
+
+.home-view__accordion-chevron--open {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-view__accordion-chevron {
+    transition: none;
+  }
+}
+
+.home-view__accordion-count {
+  padding: 0.05rem 0.45rem;
+  padding-block: 0.05rem;
+  padding-inline: 0.45rem;
+  border-radius: 999px;
+  background: var(--tag-bg);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.home-view__accordion-action {
+  flex-shrink: 0;
+  margin-inline-start: auto;
+}
+
+.home-view__section-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  text-align: start;
+}
+
 .home-view__grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
