@@ -10,6 +10,27 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## v0.4.1 — 2026-08-13
+
+### ⚠ Upgrade notes
+
+Test-only release. No migration, no `site_config` change, no re-ingest, no
+runtime behaviour change — the application code is byte-identical to v0.4.0.
+
+- **Deploy this instead of v0.4.0.** The web test job failed on the v0.4.0
+  tag, so its CI run did not complete and no `:v0.4.0` image was published.
+  `:v0.4.1`, `:v0.4` and `:stable` come from this tag.
+
+### Tests
+- Isolate the overview tests from persisted accordion state (3c1c8d7) —
+  `KbAccordion` persists each section's open state, so a test that expanded a
+  section decided the starting state of the ones after it. The local run hid
+  it: this machine's jsdom exposes `localStorage` as a bare object with no
+  `getItem`/`setItem`, so the accordion's `try`/`catch` fell back to its
+  default on every render. The file now installs its own in-memory `Storage`
+  per test and pins that a remembered section survives a remount, so an inert
+  stub fails loudly instead of quietly weakening the file.
+
 ## v0.4.0 — 2026-08-13
 
 ### ⚠ Upgrade notes
