@@ -38,6 +38,10 @@ type mockStore struct {
 	addedKBID, addedUserID, addedGrantedBy string
 	removedKBID, removedUserID             string
 	auditActions                           []string
+	// lastUpdate captures the GlobalKBUpdate passed to UpdateGlobalKB so tests
+	// can assert on which pointer fields were actually populated after JSON
+	// decoding — not just on the (store-controlled) response body.
+	lastUpdate adminglobalkbs.GlobalKBUpdate
 }
 
 func (m *mockStore) ListGlobalKBs(_ context.Context) ([]adminglobalkbs.GlobalKBRow, error) {
@@ -48,7 +52,8 @@ func (m *mockStore) CreateGlobalKB(_ context.Context, _ adminglobalkbs.GlobalKBC
 	return m.kb, m.err
 }
 
-func (m *mockStore) UpdateGlobalKB(_ context.Context, _ string, _ adminglobalkbs.GlobalKBUpdate) (*adminglobalkbs.GlobalKBRow, error) {
+func (m *mockStore) UpdateGlobalKB(_ context.Context, _ string, data adminglobalkbs.GlobalKBUpdate) (*adminglobalkbs.GlobalKBRow, error) {
+	m.lastUpdate = data
 	return m.kb, m.err
 }
 
@@ -203,6 +208,42 @@ func TestCreateGlobalKB_OK(t *testing.T) {
 	}
 	if got.ID != "kb-new" {
 		t.Errorf("expected id=kb-new, got %s", got.ID)
+	}
+}
+
+// TestUpdateGlobalKB_AutoSubscribe pins that autoSubscribe round-trips through
+// PATCH /api/admin/global-kbs/{id} — it was not wired into GlobalKBUpdate /
+// GlobalKBRow at all, so a caller setting it silently had no effect.
+func TestUpdateGlobalKB_AutoSubscribe(t *testing.T) {
+	kb := makeKB("kb-1", "Global KB 1")
+	kb.AutoSubscribe = true
+	store := &mockStore{kb: &kb}
+	h := newHandler(store)
+
+	body := map[string]any{"autoSubscribe": true}
+	req := newRequest(http.MethodPatch, "/api/admin/global-kbs/kb-1", body)
+	req.SetPathValue("id", "kb-1")
+	rr := httptest.NewRecorder()
+	h.UpdateGlobalKB(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	var got adminglobalkbs.GlobalKBRow
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !got.AutoSubscribe {
+		t.Errorf("expected autoSubscribe=true in response, got false")
+	}
+	// The response body reflects the mock's canned kb, not the decoded
+	// request — assert on what actually reached the store so this test would
+	// fail if AutoSubscribe were missing from GlobalKBUpdate (JSON decode
+	// would silently drop the field and store.lastUpdate.AutoSubscribe would
+	// stay nil).
+	if store.lastUpdate.AutoSubscribe == nil || !*store.lastUpdate.AutoSubscribe {
+		t.Errorf("expected GlobalKBUpdate.AutoSubscribe to decode to true, got %v", store.lastUpdate.AutoSubscribe)
 	}
 }
 

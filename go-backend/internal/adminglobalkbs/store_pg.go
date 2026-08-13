@@ -42,6 +42,7 @@ type globalKBDBRow struct {
 	Description    *string         `db:"description"`
 	Language       string          `db:"language"`
 	IsPublished    bool            `db:"is_published"`
+	AutoSubscribe  bool            `db:"auto_subscribe"`
 	SystemPrompt   *string         `db:"system_prompt"`
 	HeaderText     *string         `db:"header_text"`
 	ExamplePrompts *string         `db:"example_prompts"`
@@ -57,7 +58,7 @@ type globalKBDBRow struct {
 
 // globalKBSelectCols is the column list every GlobalKBRow query selects.
 // Kept as a const so List / Create / Update / no-op SELECT all stay in sync.
-const globalKBSelectCols = `id, name, description, language, is_published,
+const globalKBSelectCols = `id, name, description, language, is_published, auto_subscribe,
 	system_prompt, header_text, example_prompts,
 	ai_config_id, chat_model, embedding_model, rerank_model, tts_model, stt_model,
 	studio_config, created_at`
@@ -143,6 +144,9 @@ func (s *PGStore) UpdateGlobalKB(ctx context.Context, id string, data GlobalKBUp
 	}
 	if data.IsPublished != nil {
 		setVal("is_published", *data.IsPublished)
+	}
+	if data.AutoSubscribe != nil {
+		setVal("auto_subscribe", *data.AutoSubscribe)
 	}
 	if data.SystemPrompt != nil || data.NullFields["systemPrompt"] {
 		setOrNull("system_prompt", "systemPrompt", data.SystemPrompt)
