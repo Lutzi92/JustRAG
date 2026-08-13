@@ -1539,6 +1539,26 @@ export const translations = {
     edit: { de: 'Bearbeiten', en: 'Edit' },
     // loading already defined in API Keys section
 
+    // Public KBs admin tab (visibility, auto-subscribe, unpublish, categories)
+    publicKnowledgeBases: { de: 'Öffentliche Wissensdatenbanken', en: 'Public knowledge bases' },
+    unpublishKb: { de: 'Zurücknehmen', en: 'Make private' },
+    unpublishTitle: { de: 'Wissensdatenbank zurücknehmen', en: 'Make knowledge base private' },
+    unpublishOwnerLabel: { de: 'Neuer Eigentümer', en: 'New owner' },
+    unpublishNoCandidates: { de: 'Es gibt keine KB-Admins — Sie werden Eigentümer.', en: 'There are no KB admins — you will become the owner.' },
+    unpublishSubscriberWarning: { de: '{count} Abonnenten verlieren den Zugriff.', en: '{count} subscribers will lose access.' },
+    unpublishImpactLoadError: { de: 'Fehler beim Laden der Auswirkungen', en: 'Error loading the impact' },
+    unpublishError: { de: 'Fehler beim Zurücknehmen der Wissensdatenbank', en: 'Error making the knowledge base private' },
+    autoSubscribe: { de: 'In allen Übersichten anzeigen', en: "Show in everyone's overview" },
+    autoSubscribeHint: { de: 'Ohne diese Option erscheint die KB nur im Katalog.', en: 'Without this, the KB appears only in the catalog.' },
+    autoSubscribeError: { de: 'Fehler beim Aktualisieren der Einstellung', en: 'Error updating the setting' },
+    categories: { de: 'Kategorien', en: 'Categories' },
+    noCategories: { de: 'Noch keine Kategorien erstellt.', en: 'No categories created yet.' },
+    categoryNamePrompt: { de: 'Name der Kategorie', en: 'Category name' },
+    categoryDeleteConfirm: { de: 'Kategorie löschen? Zuordnungen gehen verloren.', en: 'Delete this category? Assignments will be lost.' },
+    categorySaveError: { de: 'Fehler beim Speichern der Kategorie', en: 'Error saving the category' },
+    categoryDeleteError: { de: 'Fehler beim Löschen der Kategorie', en: 'Error deleting the category' },
+    categoriesAssignError: { de: 'Fehler beim Zuordnen der Kategorien', en: 'Error assigning categories' },
+
     // Re-embed
     reembedAllTitle: { de: 'Alle Dateien neu einbetten', en: 'Re-embed All Files' },
     reembedAllDesc: { de: 'Re-Embedding-Jobs für alle Dateien in allen Knowledge Bases einreihen. Verwenden Sie dies nach der Migration der Vektordatenbank.', en: 'Queue re-embedding jobs for every file across all knowledge bases. Use after migrating the vector database.' },
