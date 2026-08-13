@@ -81,12 +81,22 @@ function lastActiveLabel(
 }
 
 // Drei angezeigte Zustaende aus zwei gespeicherten. memberCount enthaelt den
-// Owner, deshalb <= 1 und nicht === 0. Der Zaehler steht ausserhalb der
-// Uebersetzung, weil t() keine Interpolation kann.
+// Owner, deshalb <= 1 und nicht === 0. Single source of truth for the
+// three-way branch — text, CSS class and icon all derive from this instead
+// of each re-implementing their own kb.visibility === 'public' check.
+type VisibilityState = 'public' | 'shared' | 'personal';
+
+function visibilityState(kb: KnowledgeBase): VisibilityState {
+  if (kb.visibility === 'public') return 'public';
+  return (kb.memberCount ?? 1) > 1 ? 'shared' : 'personal';
+}
+
+// Der Zaehler steht ausserhalb der Uebersetzung, weil t() keine
+// Interpolation kann.
 function visibilityBadge(kb: KnowledgeBase, t: (k: string) => string): string {
-  if (kb.visibility === 'public') return t('visibilityPublic');
-  const count = kb.memberCount ?? 1;
-  if (count > 1) return `${t('visibilityShared')} (${count})`;
+  const state = visibilityState(kb);
+  if (state === 'public') return t('visibilityPublic');
+  if (state === 'shared') return `${t('visibilityShared')} (${kb.memberCount})`;
   return t('visibilityPersonal');
 }
 
@@ -421,8 +431,8 @@ export function HomeView(props: HomeViewProps) {
             <div className="home-view__card-top">
               <BookOpen size={20} color="var(--text-secondary)" aria-hidden="true" />
               <div className="home-view__badge-row">
-                <div className={`home-view__badge ${kb.visibility === 'public' ? 'home-view__badge--public' : (kb.memberCount ?? 1) <= 1 ? 'home-view__badge--personal' : 'home-view__badge--shared'}`}>
-                  {kb.visibility === 'public' ? <Globe size={10} aria-hidden="true" /> : <User size={10} aria-hidden="true" />}
+                <div className={`home-view__badge home-view__badge--${visibilityState(kb)}`}>
+                  {visibilityState(kb) === 'public' ? <Globe size={10} aria-hidden="true" /> : <User size={10} aria-hidden="true" />}
                   {visibilityBadge(kb, t)}
                 </div>
 

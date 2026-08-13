@@ -96,10 +96,20 @@ export function useKnowledgeBases({
       return;
     }
     if (outcome === 'cancelled') return;
-    // A deletion/leave/unsubscribe can affect either list — a subscribed
-    // public KB lives in globalKbs, not kbs — so refetch both instead of
-    // guessing which array to splice; same reload path KbCatalogModal's
-    // onSubscriptionChange already uses (Task 9).
+    // Splice locally first, from whichever list actually holds it — a
+    // subscribed public KB lives in globalKbs, not kbs, so both are
+    // filtered. This guarantees the card disappears even if the reconciling
+    // fetchKBs() below fails: fetchKBs swallows its own errors (logs +
+    // toasts, never rethrows), so without this the just-deleted/left/
+    // unsubscribed KB would silently stay on screen after a successful
+    // request whose refetch happened to fail.
+    setKbs(prev => prev.filter(k => k.id !== kb.id));
+    setGlobalKbs(prev => prev.filter(k => k.id !== kb.id));
+    // Then still reconcile with the server — an unsubscribe (or auto_subscribe)
+    // can change what the public list returns in ways local state can't
+    // infer; same reload path KbCatalogModal's onSubscriptionChange already
+    // uses (Task 9). A failed refetch here degrades to "correct but slightly
+    // stale" rather than the KB reappearing or staying stuck.
     await fetchKBs();
     handleGoHome();
   }, [removeKb, handleGoHome, toast, t, fetchKBs]);

@@ -18,7 +18,6 @@ vi.mock('../contexts/ThemeContext', () => ({
       const strings: Record<string, string> = {
         confirmDeleteKB: 'Delete this knowledge base?',
         confirmLeaveKb: 'Leave this KB? {count} of your chats will be deleted.',
-        confirmLeaveKbNoChats: 'Leave this KB?',
         confirmUnsubscribeKb: 'Unsubscribe from this KB?',
       };
       return strings[key] ?? key;
