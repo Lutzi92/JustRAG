@@ -249,6 +249,72 @@ func TestGlobalListHonoursSubscriptions(t *testing.T) {
 	}
 }
 
+// TestGlobalListStagedKBVisibility covers a staged KB: visibility='public'
+// but is_published=false. Per the design doc, staging exists so the KB can
+// be filled and tested before going live, visible only to its KB members
+// (curators, incl. the ex-owner of a freshly published KB) and system admins
+// — never to an ordinary subscriber. This pins the non-admin membership arm
+// bypassing is_published, while the subscription and auto_subscribe arms
+// must still require is_published=true.
+func TestGlobalListStagedKBVisibility(t *testing.T) {
+	pool := visPool(t)
+	ctx := context.Background()
+	store := kb.NewStore(pool)
+
+	var memberUserID, subscriberUserID, strangerUserID string
+	for _, dst := range []*string{&memberUserID, &subscriberUserID, &strangerUserID} {
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO users (username, password_hash, role)
+			VALUES ('kbstage-'||substr(md5(random()::text), 1, 8), 'x-not-a-real-hash', 'user')
+			RETURNING id::text`).Scan(dst); err != nil {
+			t.Fatalf("insert user: %v", err)
+		}
+	}
+	for _, id := range []string{memberUserID, subscriberUserID, strangerUserID} {
+		id := id
+		t.Cleanup(func() { pool.Exec(ctx, `DELETE FROM users WHERE id = $1::uuid`, id) }) //nolint:errcheck
+	}
+
+	// Staged KB: public, not yet published.
+	stagedKB := insertVisKB(t, pool, "kbstage-staged", "public")
+	mustExec(t, pool, `UPDATE knowledge_bases SET is_published = false, auto_subscribe = true WHERE id = $1::uuid`, stagedKB)
+	mustExec(t, pool, `INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1::uuid, $2::uuid, 'admin')`, stagedKB, memberUserID)
+	mustExec(t, pool, `INSERT INTO kb_subscriptions (kb_id, user_id, state) VALUES ($1::uuid, $2::uuid, 'subscribed')`, stagedKB, subscriberUserID)
+
+	rows, err := store.ListGlobalKnowledgeBases(ctx, memberUserID, false)
+	if err != nil {
+		t.Fatalf("ListGlobalKnowledgeBases(member): %v", err)
+	}
+	if !containsKBID(rows, stagedKB) {
+		t.Errorf("KB member %s should see the staged KB %s but does not", memberUserID, stagedKB)
+	}
+
+	rows, err = store.ListGlobalKnowledgeBases(ctx, subscriberUserID, false)
+	if err != nil {
+		t.Fatalf("ListGlobalKnowledgeBases(subscriber): %v", err)
+	}
+	if containsKBID(rows, stagedKB) {
+		t.Errorf("subscriber %s should NOT see the staged KB %s", subscriberUserID, stagedKB)
+	}
+
+	rows, err = store.ListGlobalKnowledgeBases(ctx, strangerUserID, false)
+	if err != nil {
+		t.Fatalf("ListGlobalKnowledgeBases(stranger, auto_subscribe): %v", err)
+	}
+	if containsKBID(rows, stagedKB) {
+		t.Errorf("stranger %s should NOT see the staged KB %s, even with auto_subscribe=true", strangerUserID, stagedKB)
+	}
+}
+
+func containsKBID(rows []kb.KBRow, id string) bool {
+	for _, r := range rows {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func mustExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), sql, args...); err != nil {

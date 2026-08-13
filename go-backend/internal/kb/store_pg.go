@@ -262,12 +262,16 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 // ListGlobalKnowledgeBases returns global KBs. Admins see every published-or-not
 // public KB, unfiltered.
 //
-// Non-admins see a published public KB only if it reaches their overview by
-// one of three routes, unioned: (1) they hold a kb_members row on it — the
-// curator case, since a KB admin on a public KB holds no subscription and
-// would otherwise lose their own KB from their overview; (2) an explicit
-// kb_subscriptions row with state='subscribed'; (3) the KB's auto_subscribe
-// flag is set and they have no state='opted_out' row. This mirrors
+// Non-admins see a public KB by one of two routes. (1) A kb_members row on it
+// — the curator/admin case — bypasses is_published entirely: this is what
+// makes a *staged* KB (public, not yet published) usable, since it exists
+// precisely so the people meant to fill and test it can reach it before it
+// goes live (design doc: staging is visible to KB admins and system admins,
+// not to the general public). (2) Absent membership, the KB must additionally
+// be published, and then reaches the overview via either an explicit
+// kb_subscriptions row with state='subscribed', or the KB's auto_subscribe
+// flag with no state='opted_out' row. An ordinary subscriber therefore never
+// sees a staged KB — only route (1) can bypass is_published. This mirrors
 // GET /api/kb's private-KB list plus the caller's public-KB subscriptions,
 // kept as two separate queries rather than one combined query so each stays
 // simple and a KB cannot appear in both lists.
@@ -290,24 +294,32 @@ func (s *PGStore) ListGlobalKnowledgeBases(ctx context.Context, userID string, i
 			ORDER BY created_at DESC
 			LIMIT $2`
 	} else {
-		// A public KB reaches a non-system-admin's overview on three ways;
-		// the membership disjunction is not optional: a curator (KB admin)
-		// has no subscription and would otherwise lose their own KB.
-		// EXISTS rather than JOIN, so at most one row per KB is emitted and
-		// index-driven sorting/pagination survives (see the comment on
-		// ListKnowledgeBases above for the full rationale).
+		// A public KB reaches a non-system-admin's overview by membership,
+		// unconditionally, or — for everyone else — only once it is
+		// published. EXISTS rather than JOIN, so at most one row per KB is
+		// emitted and index-driven sorting/pagination survives (see the
+		// comment on ListKnowledgeBases above for the full rationale).
 		sql = `
 			SELECT ` + kbSelectColsNoAlias + kbStatsCols + kbMembershipCols("$1") + `
 			FROM knowledge_bases kb` + kbStatsJoins + `
-			WHERE visibility = 'public' AND is_published = true
+			WHERE visibility = 'public'
 			  AND (
-			        EXISTS (SELECT 1 FROM kb_members s
-			                WHERE s.kb_id = kb.id AND s.user_id = $1)
-			     OR EXISTS (SELECT 1 FROM kb_subscriptions s
-			                WHERE s.kb_id = kb.id AND s.user_id = $1 AND s.state = 'subscribed')
-			     OR (kb.auto_subscribe
-			         AND NOT EXISTS (SELECT 1 FROM kb_subscriptions s
-			                         WHERE s.kb_id = kb.id AND s.user_id = $1 AND s.state = 'opted_out'))
+			        -- Members (incl. curators and the ex-owner of a freshly
+			        -- published KB) see the KB even while it is staged, i.e.
+			        -- not yet published. This is what makes staging usable:
+			        -- the people meant to fill and test it can actually
+			        -- reach it. Ordinary subscribers cannot.
+			        EXISTS (SELECT 1 FROM kb_members m
+			                WHERE m.kb_id = kb.id AND m.user_id = $1)
+			     OR (kb.is_published = true
+			         AND (
+			               EXISTS (SELECT 1 FROM kb_subscriptions s
+			                       WHERE s.kb_id = kb.id AND s.user_id = $1 AND s.state = 'subscribed')
+			            OR (kb.auto_subscribe
+			                AND NOT EXISTS (SELECT 1 FROM kb_subscriptions s
+			                                WHERE s.kb_id = kb.id AND s.user_id = $1 AND s.state = 'opted_out'))
+			             )
+			        )
 			      )
 			ORDER BY created_at DESC
 			LIMIT $2`
