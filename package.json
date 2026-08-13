@@ -1,6 +1,6 @@
 {
     "name": "JustRAG",
-    "version": "0.4.1",
+    "version": "0.5.0",
     "description": "A high-performance, self-hosted Retrieval-Augmented Generation (RAG) platform for managing knowledge bases, researching documents, and generating context-aware insights.",
     "workspaces": [
         "web"

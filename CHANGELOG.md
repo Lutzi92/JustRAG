@@ -10,6 +10,40 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## v0.5.0 — 2026-08-13
+
+### ⚠ Upgrade notes
+
+- **No migration.** Schema level stays at `0065`. No `site_config` defaults
+  change, no re-ingest, no new env vars. Rollback by re-pointing the image
+  tag works.
+- **New endpoint `GET /api/kb/{id}`**, view-gated through `kbViewChain`. It
+  returns one KB in the shape the list endpoints already produce and grants
+  nothing new: `RequireKBRole(view)` is the whole access decision, so a
+  caller can read exactly the KBs they could read before. A KB the caller
+  may not see answers 403 (from the chain); a KB that does not exist answers
+  404.
+- **The product name in the UI is now "JLU RAG"** — browser title, meta
+  description, PWA manifest `name`/`short_name` and the onboarding welcome
+  text. The manifest change means installed PWAs will show the new name after
+  the service worker updates. The privacy policies under
+  `web/public/legal/` and the `langfuse_base_url` admin tooltip still say
+  "JustRAG"; renaming a published privacy policy is a legal decision and was
+  left out on purpose. Repository, module path, image name and this
+  changelog's preamble are unchanged.
+
+### Features
+- Render discovery results as KB cards with a favorites toggle (630a1f2) —
+  "KBs entdecken" now uses the same tile as the other three overview
+  sections, with a star toggle for adding to Favoriten. The cards carry no
+  chips or "last active": `GET /api/kb/catalog` is a thin projection, and
+  enriching it was weighed and declined in favour of keeping the list light,
+  so the detail row is fetched on click instead.
+- Add a view-gated single-KB read endpoint (e5a015d)
+
+### Chores
+- Rebrand the product name to "JLU RAG" (84a4b00)
+
 ## v0.4.1 — 2026-08-13
 
 ### ⚠ Upgrade notes
