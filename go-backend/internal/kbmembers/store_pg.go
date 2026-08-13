@@ -182,9 +182,23 @@ func (s *PGStore) TransferOwner(ctx context.Context, kbID, newOwnerID string) er
 	})
 }
 
-// LeaveKB removes the caller's own membership and deletes their chats in this
-// KB. Deliberately destructive and deliberately self-service only: an admin
-// revoking someone's role must NOT delete their chats (see RemoveMember).
+// LeaveKB removes the caller's own membership, deletes their chats in this KB,
+// and records them as opted out of it — all in one transaction. Deliberately
+// destructive and deliberately self-service only: an admin revoking someone's
+// role must NOT delete their chats (see RemoveMember).
+//
+// The opt-out write is not optional and it is not a DELETE. A user can reach a
+// public KB's tile both as a member and as a subscriber, so "remove from my
+// overview" has to sever both bonds at once (design doc: „entfernt Entfernen
+// beides in einer Transaktion — und löscht dann die Chats, weil die
+// Mitgliedschaft der stärkere Bezug ist"). Deleting the subscription row
+// instead would be worse than doing nothing: with the KB's auto_subscribe flag
+// set — the state migration 0065 left on every previously published global KB —
+// the third arm of ListGlobalKnowledgeBases' OR matches again the moment no row
+// exists, so the tile returns while the membership and the chats are already
+// gone. Only a stored 'opted_out' row suppresses that arm; same reasoning as
+// kbsubs.SetState. On a private KB the row is inert (ListKnowledgeBases never
+// consults kb_subscriptions).
 //
 // The owner-immutability invariant is carried by the `AND role <> 'owner'`
 // guard on the kb_members DELETE below, not by the preceding read — the
@@ -192,8 +206,9 @@ func (s *PGStore) TransferOwner(ctx context.Context, kbID, newOwnerID string) er
 // (pgxutil.WithTx), so a plain "SELECT role, then branch in Go" would race a
 // concurrent TransferOwner that promotes this same user between the SELECT
 // and the DELETEs. The guarded DELETE is checked first, and only on success
-// are the user's chats removed — so a refused leave (RowsAffected == 0)
-// never destroys chats, mirroring RemoveMember's classify-on-zero pattern.
+// are the user's chats removed and the opt-out written — so a refused leave
+// (RowsAffected == 0) destroys nothing and subscribes nobody out, mirroring
+// RemoveMember's classify-on-zero pattern.
 func (s *PGStore) LeaveKB(ctx context.Context, kbID, userID string) (int, error) {
 	var deleted int
 	err := pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -226,6 +241,14 @@ func (s *PGStore) LeaveKB(ctx context.Context, kbID, userID string) (int, error)
 			return fmt.Errorf("LeaveKB: delete chats: %w", err)
 		}
 		deleted = int(chatTag.RowsAffected())
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO kb_subscriptions (kb_id, user_id, state)
+			VALUES ($1::uuid, $2::uuid, 'opted_out')
+			ON CONFLICT (kb_id, user_id) DO UPDATE SET state = 'opted_out'`,
+			kbID, userID); err != nil {
+			return fmt.Errorf("LeaveKB: record opt-out: %w", err)
+		}
 		return nil
 	})
 	return deleted, err

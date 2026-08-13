@@ -82,14 +82,21 @@ func TestPublishDropsOwnerAndClearsMirror(t *testing.T) {
 	}
 
 	var visibility string
+	var isPublished bool
 	var mirror *string
 	if err := pool.QueryRow(ctx,
-		`SELECT visibility, user_id::text FROM knowledge_bases WHERE id = $1::uuid`,
-		kbID).Scan(&visibility, &mirror); err != nil {
+		`SELECT visibility, is_published, user_id::text FROM knowledge_bases WHERE id = $1::uuid`,
+		kbID).Scan(&visibility, &isPublished, &mirror); err != nil {
 		t.Fatalf("select kb: %v", err)
 	}
 	if visibility != "public" {
 		t.Fatalf("visibility = %q, want public", visibility)
+	}
+	// Veroeffentlichen ist gestuft: oeffentlich, aber noch nicht im Katalog.
+	// is_published DEFAULTet auf true, ohne den expliziten Write waere die KB
+	// sofort fuer jeden angemeldeten Nutzer lesbar.
+	if isPublished {
+		t.Fatal("is_published = true after Publish — publishing must stage, not go live")
 	}
 	// Der eigentliche Punkt: der Trigger feuert bei der Herabstufung NICHT.
 	if mirror != nil {

@@ -67,6 +67,17 @@ var _ Store = (*PGStore)(nil)
 // previous owner keeps full access as a KB admin, and system admins are
 // covered implicitly by rule 3 of kbaccess.EffectiveRole.
 //
+// Publishing is staged: it also forces is_published = false, so a freshly
+// published KB is public-but-not-yet-live — visible only to its KB admins and
+// to system admins (rule 3) until an operator flips the catalog toggle in the
+// admin tab. Two reasons this is set rather than left alone. is_published
+// DEFAULTS to true (migration 0012), so without the write a first publish would
+// go world-readable the instant the button is clicked, with no chance to fill
+// or proof-read the KB — the spec's „erst befüllt und getestet … dann live".
+// And Unpublish sets is_published = false, so re-publishing a KB that was ever
+// unpublished would otherwise land in a silently invisible state that nothing
+// resets. Setting it here makes publish and unpublish symmetric.
+//
 // The explicit user_id = NULL is not redundant. Migration 0064's
 // kb_members_sync_owner_trg fires only WHEN (NEW.role = 'owner'); demoting the
 // owner to admin does not satisfy that clause, so the mirror on
@@ -75,7 +86,7 @@ var _ Store = (*PGStore)(nil)
 func (s *PGStore) Publish(ctx context.Context, kbID string) error {
 	return pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
-			UPDATE knowledge_bases SET visibility = 'public'
+			UPDATE knowledge_bases SET visibility = 'public', is_published = false
 			WHERE id = $1::uuid AND visibility = 'private'`, kbID)
 		if err != nil {
 			return fmt.Errorf("Publish: set visibility: %w", err)
