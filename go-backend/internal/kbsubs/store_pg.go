@@ -9,6 +9,8 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/justrag/go-backend/internal/pgxutil"
 )
 
 // The two states a stored subscription row can carry. A user with no row at
@@ -18,9 +20,19 @@ const (
 	StateOptedOut   = "opted_out"
 )
 
+// CatalogEntry is one card in the discovery popup.
+type CatalogEntry struct {
+	ID          string   `json:"id"          db:"id"`
+	Name        string   `json:"name"        db:"name"`
+	Description *string  `json:"description" db:"description"`
+	Subscribed  bool     `json:"subscribed"  db:"subscribed"`
+	CategoryIDs []string `json:"categoryIds" db:"category_ids"`
+}
+
 // Store is the subscription data layer. PGStore is its only implementation.
 type Store interface {
 	SetState(ctx context.Context, kbID, userID, state string) error
+	Catalog(ctx context.Context, userID, query string, categoryIDs []string) ([]CatalogEntry, error)
 }
 
 // PGStore is the Postgres-backed Store.
@@ -49,4 +61,49 @@ func (s *PGStore) SetState(ctx context.Context, kbID, userID, state string) erro
 		return fmt.Errorf("SetState(%s): %w", state, err)
 	}
 	return nil
+}
+
+// Catalog lists every published public KB, annotated with whether this user
+// currently sees it in their overview. Filtering happens in SQL rather than in
+// Go so the LIMIT applies to the filtered set.
+//
+// `subscribed` mirrors the same three-way rule as ListGlobalKnowledgeBases —
+// explicit subscription, or auto_subscribe without an opt-out — so the toggle
+// in the popup shows the state the overview actually has. The membership arm
+// is deliberately absent here: a curator's tile is not something they can
+// unsubscribe from, and showing the toggle as "on" would imply it is.
+func (s *PGStore) Catalog(ctx context.Context, userID, query string, categoryIDs []string) ([]CatalogEntry, error) {
+	const catalogLimit = 200
+
+	sql := `
+		SELECT kb.id::text, kb.name, kb.description,
+		       (
+		         EXISTS (SELECT 1 FROM kb_subscriptions s
+		                 WHERE s.kb_id = kb.id AND s.user_id = $1::uuid AND s.state = 'subscribed')
+		         OR (kb.auto_subscribe
+		             AND NOT EXISTS (SELECT 1 FROM kb_subscriptions s
+		                             WHERE s.kb_id = kb.id AND s.user_id = $1::uuid AND s.state = 'opted_out'))
+		       ) AS subscribed,
+		       COALESCE(
+		         (SELECT array_agg(l.category_id::text) FROM kb_category_links l WHERE l.kb_id = kb.id),
+		         ARRAY[]::text[]
+		       ) AS category_ids
+		FROM knowledge_bases kb
+		WHERE kb.visibility = 'public' AND kb.is_published = true
+		  AND ($2 = '' OR kb.name ILIKE '%' || $2 || '%' OR COALESCE(kb.description, '') ILIKE '%' || $2 || '%')
+		  AND (cardinality($3::uuid[]) = 0 OR EXISTS (
+		        SELECT 1 FROM kb_category_links l
+		        WHERE l.kb_id = kb.id AND l.category_id = ANY($3::uuid[])
+		      ))
+		ORDER BY kb.name
+		LIMIT $4`
+
+	if categoryIDs == nil {
+		categoryIDs = []string{}
+	}
+	rows, err := pgxutil.QueryRows[CatalogEntry](ctx, s.pool, sql, userID, query, categoryIDs, catalogLimit)
+	if err != nil {
+		return nil, fmt.Errorf("Catalog: %w", err)
+	}
+	return rows, nil
 }

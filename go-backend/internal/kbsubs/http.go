@@ -3,6 +3,7 @@ package kbsubs
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/httputil"
@@ -62,4 +63,30 @@ func (h *Handler) setState(w http.ResponseWriter, r *http.Request, state string)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Catalog handles GET /api/kb/catalog. Authentication only — the listing
+// contains just name, description and categories of KBs that every
+// authenticated user may already read (rule 4 of kbaccess.EffectiveRole).
+func (h *Handler) Catalog(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	categoryIDs := r.URL.Query()["category"]
+
+	entries, err := h.store.Catalog(ctx, user.ID, query, categoryIDs)
+	if err != nil {
+		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to list the catalog: %w", err))
+		return
+	}
+	if entries == nil {
+		entries = []CatalogEntry{}
+	}
+	httputil.WriteJSONCtx(ctx, w, http.StatusOK, entries)
 }

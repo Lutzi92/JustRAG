@@ -688,6 +688,7 @@ func registerKBRoutes(rc *routeCtx) {
 	kbSubsHandler := kbsubs.NewHandler(kbsubs.NewStore(rc.infra.db.Main))
 	rc.mux.Handle("PUT /api/kb/{id}/subscription", rc.kbViewChain(kbSubsHandler.Subscribe))
 	rc.mux.Handle("DELETE /api/kb/{id}/subscription", rc.kbViewChain(kbSubsHandler.Unsubscribe))
+	rc.mux.Handle("GET /api/kb/catalog", rc.authMw.Authenticate(http.HandlerFunc(kbSubsHandler.Catalog)))
 
 	// Catalog categories — a flat, system-admin curated taxonomy (adminChain
 	// on the CRUD routes: the list is shared across the whole deployment).
