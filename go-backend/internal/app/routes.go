@@ -649,6 +649,13 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/kb", rc.authMw.Authenticate(http.HandlerFunc(kbHandler.ListKnowledgeBases)))
 	rc.mux.Handle("GET /api/kb/global", rc.authMw.Authenticate(http.HandlerFunc(kbHandler.ListGlobalKnowledgeBases)))
 	rc.mux.Handle("POST /api/kb", rc.authMw.Authenticate(http.HandlerFunc(kbHandler.CreateKnowledgeBase)))
+	// Single-KB read. Unlike the two list routes above this is view-gated
+	// rather than auth-only, because it addresses one KB by id: the chain's
+	// RequireKBRole(view) is the whole access decision, and the handler
+	// deliberately carries no visibility predicate of its own. Serves the
+	// discovery panel, where opening a not-yet-subscribed public KB needs the
+	// full row that GET /api/kb/global (subscription-filtered) will not return.
+	rc.mux.Handle("GET /api/kb/{id}", rc.kbViewChain(kbHandler.GetKnowledgeBase))
 
 	// Per-KB settings (registry-driven RAG-pipeline overrides)
 	rc.mux.Handle("GET /api/kb/{id}/settings", rc.kbAdminChain(rc.kbConfigHandler.GetSettings))

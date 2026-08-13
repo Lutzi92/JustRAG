@@ -26,6 +26,8 @@ type mockStore struct {
 	// gotIsAdmin records the last isAdmin argument ListGlobalKnowledgeBases
 	// was called with, so tests can pin which store arm the overview picks.
 	gotIsAdmin bool
+	// gotKBID records the id GetKnowledgeBase was called with.
+	gotKBID string
 }
 
 func (m *mockStore) ListKnowledgeBases(_ context.Context, _ string, _, _ int) ([]kb.KBRow, error) {
@@ -35,6 +37,11 @@ func (m *mockStore) ListKnowledgeBases(_ context.Context, _ string, _, _ int) ([
 func (m *mockStore) ListGlobalKnowledgeBases(_ context.Context, _ string, isAdmin bool) ([]kb.KBRow, error) {
 	m.gotIsAdmin = isAdmin
 	return m.kbs, m.err
+}
+
+func (m *mockStore) GetKnowledgeBase(_ context.Context, kbID, _ string) (*kb.KBRow, error) {
+	m.gotKBID = kbID
+	return m.kb, m.err
 }
 
 func (m *mockStore) CreateKnowledgeBase(_ context.Context, _ string, _ *string, _ string, _ *string) (*kb.KBRow, error) {
@@ -189,6 +196,67 @@ func TestListGlobalKnowledgeBases_AdminIsSubscriptionFiltered(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Fatalf("expected 1 KB, got %d", len(got))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: GetKnowledgeBase
+// ---------------------------------------------------------------------------
+
+func TestGetKnowledgeBase_OK(t *testing.T) {
+	row := makeKB("kb-detail", "Discovered KB")
+	store := &mockStore{kb: &row}
+	h := kb.NewHandler(store)
+
+	req := withUser(httptest.NewRequest(http.MethodGet, "/api/kb/kb-detail", nil), testUser())
+	req.SetPathValue("id", "kb-detail")
+	rr := httptest.NewRecorder()
+	h.GetKnowledgeBase(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if store.gotKBID != "kb-detail" {
+		t.Errorf("store called with id %q, want %q", store.gotKBID, "kb-detail")
+	}
+
+	var got kb.KBRow
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.ID != "kb-detail" {
+		t.Errorf("expected id=kb-detail, got %s", got.ID)
+	}
+}
+
+// A missing row is 404, not 403: hiding a KB the caller may not see is the
+// route chain's job (kbViewChain → RequireKBRole), which answers before the
+// handler ever runs. The handler must not grow a second, diverging copy of
+// that rule.
+func TestGetKnowledgeBase_NotFound(t *testing.T) {
+	store := &mockStore{kb: nil}
+	h := kb.NewHandler(store)
+
+	req := withUser(httptest.NewRequest(http.MethodGet, "/api/kb/missing", nil), testUser())
+	req.SetPathValue("id", "missing")
+	rr := httptest.NewRecorder()
+	h.GetKnowledgeBase(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestGetKnowledgeBase_MissingID(t *testing.T) {
+	store := &mockStore{}
+	h := kb.NewHandler(store)
+
+	req := withUser(httptest.NewRequest(http.MethodGet, "/api/kb/", nil), testUser())
+	rr := httptest.NewRecorder()
+	h.GetKnowledgeBase(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
 	}
 }
 

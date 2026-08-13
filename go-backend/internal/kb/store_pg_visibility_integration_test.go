@@ -321,3 +321,69 @@ func mustExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 		t.Fatalf("exec %q: %v", sql, err)
 	}
 }
+
+// TestGetKnowledgeBaseReturnsUnsubscribedPublicKB pins the reason
+// GetKnowledgeBase exists at all: the discovery panel opens public KBs the
+// caller has *not* subscribed to, and those are absent from
+// ListGlobalKnowledgeBases by construction. A mocked handler test cannot
+// catch a regression here — it would stub out the very predicate at issue,
+// namely that this query carries no visibility filter of its own (access is
+// the route chain's job).
+func TestGetKnowledgeBaseReturnsUnsubscribedPublicKB(t *testing.T) {
+	pool := visPool(t)
+	ctx := context.Background()
+	store := kb.NewStore(pool)
+
+	var userID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO users (username, password_hash, role)
+		VALUES ('kbget-stranger', 'x-not-a-real-hash', 'user') RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	t.Cleanup(func() { pool.Exec(ctx, `DELETE FROM users WHERE id = $1::uuid`, userID) }) //nolint:errcheck
+
+	kbID := insertVisKB(t, pool, "kbget-published", "public")
+	mustExec(t, pool, `UPDATE knowledge_bases SET is_published = true WHERE id = $1::uuid`, kbID)
+
+	// Precondition: the list endpoint genuinely hides it from this caller.
+	listed, err := store.ListGlobalKnowledgeBases(ctx, userID, false)
+	if err != nil {
+		t.Fatalf("ListGlobalKnowledgeBases: %v", err)
+	}
+	for _, r := range listed {
+		if r.ID == kbID {
+			t.Fatal("fixture is wrong: the KB is already in the caller's list, so this proves nothing")
+		}
+	}
+
+	row, err := store.GetKnowledgeBase(ctx, kbID, userID)
+	if err != nil {
+		t.Fatalf("GetKnowledgeBase: %v", err)
+	}
+	if row == nil {
+		t.Fatal("GetKnowledgeBase returned no row — the discovery panel could not open this KB")
+	}
+	if row.ID != kbID || row.Visibility != "public" {
+		t.Fatalf("got id=%s visibility=%s, want id=%s visibility=public", row.ID, row.Visibility, kbID)
+	}
+	// my_role is the caller's own membership; a stranger has none.
+	if row.MyRole != nil {
+		t.Errorf("myRole = %q, want nil for a caller with no kb_members row", *row.MyRole)
+	}
+}
+
+// A row that does not exist is (nil, nil), not an error — the handler turns
+// that into 404.
+func TestGetKnowledgeBaseMissingRow(t *testing.T) {
+	pool := visPool(t)
+	ctx := context.Background()
+	store := kb.NewStore(pool)
+
+	row, err := store.GetKnowledgeBase(ctx, "00000000-0000-0000-0000-000000000000", "00000000-0000-0000-0000-000000000000")
+	if err != nil {
+		t.Fatalf("GetKnowledgeBase: %v", err)
+	}
+	if row != nil {
+		t.Fatalf("expected nil row, got %+v", row)
+	}
+}

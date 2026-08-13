@@ -337,6 +337,42 @@ func (s *PGStore) ListGlobalKnowledgeBases(ctx context.Context, userID string, i
 	return result, nil
 }
 
+// GetKnowledgeBase returns a single KB in the same shape the list endpoints
+// produce — base columns, owner attribution, card stats and the caller's own
+// membership. Returns (nil, nil) when no such KB exists.
+//
+// It deliberately carries **no** visibility predicate of its own. Access is
+// the route's job: the handler sits on kbViewChain, whose
+// kbaccess.RequireKBRole(view) resolves the caller's effective role through
+// the one ladder in internal/kbaccess and answers 403 otherwise. Repeating a
+// filter here would be a second, silently diverging copy of that rule.
+//
+// The discovery panel is what needs this: its catalog rows are a thin
+// projection (id/name/description/subscribed), while opening a KB requires
+// the full row, and an unsubscribed public KB is by construction absent from
+// ListGlobalKnowledgeBases. Fetching the detail on click keeps the catalog
+// list light.
+func (s *PGStore) GetKnowledgeBase(ctx context.Context, kbID, userID string) (*KBRow, error) {
+	sql := `
+		SELECT ` + kbSelectCols + `,
+		       u.first_name AS owner_first_name,
+		       u.last_name  AS owner_last_name,
+		       u.username   AS owner_username` + kbStatsCols + kbMembershipCols("$2") + `
+		FROM knowledge_bases kb
+		LEFT JOIN users u ON kb.user_id = u.id` + kbStatsJoins + `
+		WHERE kb.id = $1`
+
+	row, err := pgxutil.QueryOne[kbListRow](ctx, s.pool, sql, kbID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, nil
+	}
+	result := toKBRowWithStats(*row)
+	return &result, nil
+}
+
 // CreateKnowledgeBase inserts a new knowledge base owned by userID and returns
 // the created row. Writes both the knowledge_bases row and the owner's
 // kb_members row (role='owner') in one transaction — kb_members is the

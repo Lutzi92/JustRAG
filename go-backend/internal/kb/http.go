@@ -78,6 +78,7 @@ type KBRow struct {
 type Store interface {
 	ListKnowledgeBases(ctx context.Context, userID string, limit, offset int) ([]KBRow, error)
 	ListGlobalKnowledgeBases(ctx context.Context, userID string, isAdmin bool) ([]KBRow, error)
+	GetKnowledgeBase(ctx context.Context, kbID, userID string) (*KBRow, error)
 	CreateKnowledgeBase(ctx context.Context, name string, description *string, userID string, systemPrompt *string) (*KBRow, error)
 }
 
@@ -169,6 +170,42 @@ func (h *Handler) ListGlobalKnowledgeBases(w http.ResponseWriter, r *http.Reques
 		kbs = []KBRow{}
 	}
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusOK, kbs)
+}
+
+// GetKnowledgeBase handles GET /api/kb/{id} — one KB in the same shape the
+// list endpoints return.
+//
+// The route sits on kbViewChain, so by the time this runs the caller already
+// holds at least `view` on the KB; there is no access check here on purpose
+// (see the store method's comment). A 404 therefore means the row is gone,
+// not that it is hidden — hiding is the chain's 403.
+//
+// This exists for the discovery panel: a public KB the caller has not
+// subscribed to is absent from GET /api/kb/global by design, yet opening it
+// needs the full row, and the catalog list is a thin projection.
+func (h *Handler) GetKnowledgeBase(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromContext(r.Context())
+	if user == nil {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	kbID := r.PathValue("id")
+	if kbID == "" {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "missing KB id")
+		return
+	}
+
+	row, err := h.store.GetKnowledgeBase(r.Context(), kbID, user.ID)
+	if err != nil {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to fetch knowledge base")
+		return
+	}
+	if row == nil {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusNotFound, "knowledge base not found")
+		return
+	}
+	httputil.WriteJSONCtx(r.Context(), w, http.StatusOK, row)
 }
 
 // createKBRequest is the parsed JSON body for POST /api/kb.
