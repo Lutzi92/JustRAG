@@ -26,6 +26,11 @@ one-step rollback** (`cmd/migrate` is up-only).
 - **Newly** published public KBs default to `auto_subscribe=false`: they are
   discoverable in the catalog but appear in nobody's overview until a user
   subscribes, or an admin enables the flag.
+- Making a KB public is **staged**: `POST /api/admin/kb/{id}/publish` (now
+  reachable from the admin KB-Übersicht) sets `visibility='public'` *and*
+  `is_published=false`, so the KB is visible only to its KB admins and to
+  system admins until an operator publishes it in the global-KB tab. Existing
+  rows are untouched; this only affects KBs published from this release on.
 
 ## v0.2.0 — 2026-08-12
 
