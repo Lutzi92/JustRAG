@@ -159,7 +159,7 @@ export const translations = {
     spell: { de: 'Rechtschreibung', en: 'Spelling' },
     enhanceLabel: { de: 'Verbessern', en: 'Improve' },
     enhanceNeedsDraft: { de: 'Tippe zuerst einen Entwurf, um ihn zu verbessern.', en: 'Type a draft first to improve it.' },
-    manageSources: { de: 'Quellen verwalten', en: 'Manage sources' },
+    activeSources: { de: 'Aktive Quellen', en: 'Active sources' },
     reasoningMode: { de: 'Gedankengang-Modus', en: 'Reasoning Mode' },
     reasoningLabel: { de: 'Gedankengang', en: 'Chain of Thought' },
     reasoningToggle: { de: 'Gedankengang-Modus umschalten', en: 'Toggle reasoning mode' },
