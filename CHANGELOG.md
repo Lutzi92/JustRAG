@@ -10,7 +10,63 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
-## Unreleased
+## v0.4.0 — 2026-08-13
+
+### ⚠ Upgrade notes
+
+Follow-up round on the Phase-2 visibility model: the overview becomes
+"Favoriten" and gains discovery, shared and own sections as accordions.
+
+- **No migration.** Schema level stays at `0065` (unchanged since v0.3.0). No
+  `site_config` defaults change, no re-ingest, no new env vars. This release
+  *is* rollback-able by re-pointing the image tag — v0.3.0 is not.
+- **System admins are now subscription-filtered in the overview.** `GET
+  /api/kb/global` previously returned every public KB to a system admin,
+  regardless of subscription; it now applies the same rule as for everyone
+  else (a `kb_members` row, an explicit subscription, or `auto_subscribe`
+  without an opt-out). An admin who saw *every* public KB in their overview
+  will now see fewer. Nothing became unreachable: the full list is in
+  Admin → Globale KBs and in the "KBs entdecken" section, and subscribing
+  there puts a tile back. Migration 0065 backfilled `auto_subscribe=true` for
+  everything that was global *and* published before v0.3.0, so on a
+  deployment upgraded through that path most tiles stay. Staged (public but
+  not yet published) KBs are the exception — they are reachable only by their
+  members, which is what staging means.
+- **The OpenAI-compat / ILIAS surface is unaffected** — `internal/openaicompat`
+  still lists every public KB for an admin caller.
+- **Creating a global KB now enrols the creating admin as a KB admin**
+  (`kb_members` `role='admin'`). Required by the filter above, or a
+  freshly created public KB would be invisible to its creator. Pre-existing
+  public KBs are untouched; add curators through Admin → Globale KBs →
+  Editors as before.
+- **Bookkeeping fix from v0.3.0.** That release was tagged without running
+  steps 2, 4 and 5 of `docs/runbooks/release.md`: its changelog section was
+  left headed `## Unreleased`, `package.json` stayed at `0.2.0` and
+  `k8s/worker-*.yml` stayed pinned to `:v0.2.0`. All three are corrected here
+  (`package.json` jumps `0.2.0` → `0.4.0`). The **tag `v0.3.0` is immutable
+  and still carries the stale pins** — `git checkout v0.3.0 && kubectl apply
+  -f k8s/` deploys v0.2.0 workers. Deploy v0.4.0 rather than v0.3.0 from the
+  manifests, or override the image on the command line.
+
+### Documentation
+- Record the favorites overview and the admin subscription filter (f06d48f)
+
+
+### Features
+- Allow granting KB admin when sharing, and label every role picker (555dfc9)
+- Rebuild the overview as favorites, discovery, shared and own (678dfa5)
+- Subscription-filter the public KB overview for admins too (6cdbc95)
+
+
+### Fixes
+- Make category assignment removable and widen the admin KB overview (cade01f)
+
+
+### Uncategorized
+- JLU design guide upgrade (f5038d4) — not in conventional-commit form, so
+  git-cliff skipped it; recorded by hand.
+
+## v0.3.0 — 2026-08-13
 
 ### ⚠ Upgrade notes
 
