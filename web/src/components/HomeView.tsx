@@ -1,7 +1,7 @@
 import { lazy, Suspense, useMemo } from 'react';
 import {
   BookOpen, Settings, Sun, Moon, User, LogOut, Copy, Check, Plus,
-  Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, Loader2, Bot
+  Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, Loader2, Bot, Search
 } from 'lucide-react';
 import type { KnowledgeBase, SafeAIConfig } from '../types';
 import { API_BASE_URL } from '../api';
@@ -29,6 +29,7 @@ interface HomeViewProps {
   onDeleteKB: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   removingKb: boolean;
   onCreateGlobalKB: () => void;
+  onOpenCatalog: () => void;
   onDeleteGlobalKB: (id: string, e: React.MouseEvent) => void;
   onOpenGlobalKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onOpenShare: (kb: KnowledgeBase, e: React.MouseEvent) => void;
@@ -128,7 +129,7 @@ export function HomeView(props: HomeViewProps) {
   const {
     kbs, globalKbs, currentKb, availableConfigs,
     copySuccess, onCopyUserId, onLogout, onViewProfile, onViewAdmin, onViewAgents,
-    onCreateKB, onSelectKB, onDeleteKB, removingKb, onCreateGlobalKB, onDeleteGlobalKB,
+    onCreateKB, onSelectKB, onDeleteKB, removingKb, onCreateGlobalKB, onOpenCatalog, onDeleteGlobalKB,
     onOpenGlobalKbSettings, onOpenShare, onUpdateKBSettings,
     showShareModal, setShowShareModal, sharingKb, shareUserId, setShareUserId,
     shareTargetUser, shareLoading, sharePermission, setSharePermission,
@@ -219,6 +220,15 @@ export function HomeView(props: HomeViewProps) {
           <div className="home-view__section-header">
             <Globe size={20} color="var(--accent-primary)" aria-hidden="true" />
             <h2 className="home-view__section-title">{t('globalKBs')}</h2>
+            <button
+              type="button"
+              onClick={onOpenCatalog}
+              className="secondary-button"
+              style={{ marginInlineStart: 'auto', display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.8rem', fontSize: '0.85rem' }}
+            >
+              <Search size={14} aria-hidden="true" />
+              {t('discoverKbs')}
+            </button>
           </div>
 
           <ul className="home-view__grid">

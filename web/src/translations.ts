@@ -344,6 +344,18 @@ export const translations = {
     editSettings: { de: 'Einstellungen bearbeiten', en: 'Edit settings' },
     globalKbSettings: { de: 'Globale KB-Einstellungen', en: 'Global KB Settings' },
     openKb: { de: 'Knowledge Base öffnen', en: 'Open Knowledge Base' },
+
+    // KB Catalog Modal
+    discoverKbs: { de: 'KBs entdecken', en: 'Discover KBs' },
+    catalogTitle: { de: 'Öffentliche Wissensdatenbanken', en: 'Public knowledge bases' },
+    catalogSearchPlaceholder: { de: 'Name oder Beschreibung suchen…', en: 'Search name or description…' },
+    catalogEmpty: { de: 'Keine öffentlichen Wissensdatenbanken gefunden.', en: 'No public knowledge bases found.' },
+    catalogAllCategories: { de: 'Alle', en: 'All' },
+    // `subscribe` already exists (RSS-feed subscribe button) with the identical
+    // Abonnieren/Subscribe copy — reused here rather than duplicating the key.
+    unsubscribe: { de: 'Abbestellen', en: 'Unsubscribe' },
+    subscribedBadge: { de: 'Abonniert', en: 'Subscribed' },
+    subscriptionError: { de: 'Abo konnte nicht geändert werden.', en: 'Could not change the subscription.' },
     generalInfo: { de: 'Allgemein', en: 'General' },
     kbName: { de: 'Name', en: 'Name' },
     headerTextLabel: { de: 'Beschreibung & Tipps', en: 'Description & Tips' },

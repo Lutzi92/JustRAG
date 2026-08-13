@@ -38,6 +38,7 @@ import { KbWorkspaceModals } from './components/KbWorkspaceModals';
 
 // Lazy load heavy components
 const GlobalKbSettings = lazy(() => import('./components/GlobalKbSettings').then(module => ({ default: module.GlobalKbSettings })));
+const KbCatalogModal = lazy(() => import('./components/KbCatalogModal'));
 
 import { OnboardingTour } from './components/OnboardingTour';
 import { Footer } from './components/Footer';
@@ -126,6 +127,9 @@ function AuthenticatedAppInner() {
   // Onboarding Tour
   const [showOnboarding, setShowOnboarding] = useState(() => !localStorage.getItem('onboardingCompleted'));
   const handleCloseOnboarding = useCallback(() => { setShowOnboarding(false); localStorage.setItem('onboardingCompleted', 'true'); }, []);
+
+  // KB catalog discovery popup (Home "Discover KBs" trigger)
+  const [showCatalog, setShowCatalog] = useState(false);
 
   // Sidebar resize
   const sidebar = useSidebarResize();
@@ -325,6 +329,7 @@ function AuthenticatedAppInner() {
           onDeleteKB={kbMgmt.handleDeleteKB}
           removingKb={kbMgmt.removingKb}
           onCreateGlobalKB={kbMgmt.handleCreateGlobalKB}
+          onOpenCatalog={() => setShowCatalog(true)}
           onDeleteGlobalKB={kbMgmt.handleDeleteGlobalKB}
           onOpenGlobalKbSettings={kbMgmt.handleOpenGlobalKbSettings}
           onOpenShare={sharing.handleOpenShare}
@@ -348,6 +353,13 @@ function AuthenticatedAppInner() {
         <Footer onNavigate={(page) => setView(page)} />
         <OnboardingHelpButton onClick={() => setShowOnboarding(true)} />
         <OnboardingTour show={showOnboarding} onClose={handleCloseOnboarding} />
+        <Suspense fallback={null}>
+          <KbCatalogModal
+            isOpen={showCatalog}
+            onClose={() => setShowCatalog(false)}
+            onSubscriptionChange={() => { kbMgmt.fetchKBs(); }}
+          />
+        </Suspense>
       </motion.div>
     );
   }

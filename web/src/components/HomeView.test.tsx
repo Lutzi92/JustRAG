@@ -53,6 +53,7 @@ const noopProps = {
   onDeleteKB: vi.fn(),
   removingKb: false,
   onCreateGlobalKB: vi.fn(),
+  onOpenCatalog: vi.fn(),
   onDeleteGlobalKB: vi.fn(),
   onOpenGlobalKbSettings: vi.fn(),
   onOpenShare: vi.fn(),
