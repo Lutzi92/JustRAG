@@ -217,6 +217,17 @@ func (h *Handler) TransferOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Eine oeffentliche KB hat seit Phase 2 keinen Owner (siehe
+	// internal/kbvisibility.Publish). Es gibt also nichts zu uebertragen, und
+	// ein Durchlassen wuerde eine Owner-Zeile anlegen, die Publish gerade
+	// entfernt hat. Superadmins kommen ueber Regel 1 als RoleOwner bis
+	// hierher, deshalb faengt die Rollenpruefung darueber diesen Fall nicht.
+	if access.KB != nil && access.KB.IsGlobal {
+		httputil.WriteErrorCtx(ctx, w, http.StatusConflict,
+			"public knowledge bases have no owner — make it private first")
+		return
+	}
+
 	var body transferOwnerRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.UserID == "" {
 		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid request body")

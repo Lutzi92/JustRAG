@@ -276,6 +276,29 @@ func TestTransferOwner_NonOwnerForbidden(t *testing.T) {
 	}
 }
 
+// Eine oeffentliche KB hat keinen Owner. Ein Superadmin loest zwar ueber Regel
+// 1 zu RoleOwner auf und kaeme durch die Rollenpruefung — der Transfer wuerde
+// dann eine Owner-Zeile auf einer oeffentlichen KB anlegen und damit die
+// Nachbedingung von kbvisibility.Publish verletzen.
+func TestTransferOwnerOnPublicKBReturns409(t *testing.T) {
+	h := kbmembers.NewHandler(&mockStore{}, &mockPending{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/kb/kb-1/transfer-owner",
+		strings.NewReader(`{"userId":"user-2"}`))
+	req.SetPathValue("id", "kb-1")
+	ctx := kbaccess.WithAccess(req.Context(), &kbaccess.KBAccessResult{
+		KB:      &kbaccess.KnowledgeBase{ID: "kb-1", IsGlobal: true, IsPublished: true},
+		Role:    kbaccess.RoleOwner,
+		IsOwner: true,
+	})
+	rec := httptest.NewRecorder()
+	h.TransferOwner(rec, req.WithContext(ctx))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", rec.Code, rec.Body)
+	}
+}
+
 func TestLeaveKB_OwnerForbidden(t *testing.T) {
 	store := &mockStore{leaveErr: kbmembers.ErrOwnerImmutable}
 	handler := kbmembers.NewHandler(store, &mockPending{})

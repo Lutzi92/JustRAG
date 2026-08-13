@@ -53,6 +53,7 @@ import (
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/kbconfig"
 	"github.com/justrag/go-backend/internal/kbmembers"
+	"github.com/justrag/go-backend/internal/kbvisibility"
 	"github.com/justrag/go-backend/internal/kg"
 	"github.com/justrag/go-backend/internal/kgevents"
 	"github.com/justrag/go-backend/internal/kggraph"
@@ -475,6 +476,16 @@ func registerAdminRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/admin/global-kbs/{id}/editors", rc.adminChain(adminGlobalKBsHandler.ListEditors))
 	rc.mux.Handle("POST /api/admin/global-kbs/{id}/editors", rc.adminChain(adminGlobalKBsHandler.AddEditor))
 	rc.mux.Handle("DELETE /api/admin/global-kbs/{id}/editors/{userId}", rc.adminChain(adminGlobalKBsHandler.RemoveEditor))
+
+	// Veroeffentlichen/Zuruecknehmen liegt auf adminChain, nicht auf
+	// kbAdminChain: eine KB oeffentlich zu machen gibt JEDEM authentifizierten
+	// Zugang view-Recht (Regel 4 der Zugriffsaufloesung). Das ist eine
+	// System-, keine KB-Entscheidung.
+	kbVisibilityHandler := kbvisibility.NewHandler(
+		kbvisibility.NewStore(rc.infra.db.Main), kbOverviewStore)
+	rc.mux.Handle("POST /api/admin/kb/{id}/publish", rc.adminChain(kbVisibilityHandler.Publish))
+	rc.mux.Handle("POST /api/admin/kb/{id}/unpublish", rc.adminChain(kbVisibilityHandler.Unpublish))
+	rc.mux.Handle("GET /api/admin/kb/{id}/unpublish-impact", rc.adminChain(kbVisibilityHandler.UnpublishImpact))
 
 	// Maintenance endpoints — bulk re-embed sweep, user-memory re-embed, and agent template upload.
 	maintenanceHandler := adminmaintenance.NewHandler(rc.kbStore, rc.infra.asynqClient, longmem.NewPgStore(rc.infra.db.Main))
