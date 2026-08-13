@@ -19,6 +19,7 @@ vi.mock('../contexts/ThemeContext', () => ({
         confirmDeleteKB: 'Delete this knowledge base?',
         confirmLeaveKb: 'Leave this KB? {count} of your chats will be deleted.',
         confirmLeaveKbNoChats: 'Leave this KB?',
+        confirmUnsubscribeKb: 'Unsubscribe from this KB?',
       };
       return strings[key] ?? key;
     },
@@ -76,22 +77,38 @@ describe('useKbRemoval', () => {
     expect(del).not.toHaveBeenCalled();
   });
 
-  it('treats an implicit viewer as leave, never delete', async () => {
+  it('unsubscribes an implicit viewer (no kb_members row), never leaves or deletes', async () => {
     vi.spyOn(axios, 'get').mockRejectedValue({ response: { status: 404 } });
-    const del = vi.spyOn(axios, 'delete').mockResolvedValue({ data: { deletedChats: 0 } });
+    const del = vi.spyOn(axios, 'delete').mockResolvedValue({ status: 204 });
     showConfirm.mockResolvedValue(true);
 
     const { result } = renderHook(() => useKbRemoval(), { wrapper });
-    // myRole ist undefined: implizite view-Rolle auf einer globalen KB.
+    // myRole ist undefined: implizite view-Rolle auf einer globalen KB, d.h.
+    // Abonnent ohne kb_members-Zeile (Phase 2, vorher Phase-1-Fallback).
     await act(async () => {
-      await expect(result.current.removeKb(kb(undefined))).resolves.toBe('left');
+      await expect(result.current.removeKb(kb(undefined))).resolves.toBe('unsubscribed');
     });
-    // Phase 1 has no subscription endpoint to leave, so this must not fire
-    // ANY delete request — least of all the bare owner-delete endpoint.
-    // (A hardcoded 'http://localhost/api/kb/kb-1' literal here would never
-    // match the real API_BASE_URL in this test environment regardless of
-    // what the hook does, making the assertion vacuously true — see fix
-    // report.)
+    // Unsubscribing deletes no chats and must hit the subscription endpoint
+    // only — never /membership (that would delete chats) and never the bare
+    // owner-delete endpoint.
+    expect(del).toHaveBeenCalledWith(expect.stringContaining('/api/kb/kb-1/subscription'));
+    expect(del).not.toHaveBeenCalledWith(expect.stringContaining('/membership'));
+    expect(del).toHaveBeenCalledTimes(1);
+    // The dialog must name the difference: no chat-loss warning here, unlike
+    // the member-leave path above.
+    const message = showConfirm.mock.calls[0][0] as string;
+    expect(message.toLowerCase()).not.toContain('chat');
+  });
+
+  it('sends no request when the subscriber dismisses the unsubscribe confirmation', async () => {
+    vi.spyOn(axios, 'get').mockRejectedValue({ response: { status: 404 } });
+    const del = vi.spyOn(axios, 'delete');
+    showConfirm.mockResolvedValue(false);
+
+    const { result } = renderHook(() => useKbRemoval(), { wrapper });
+    await act(async () => {
+      await expect(result.current.removeKb(kb(undefined))).resolves.toBe('cancelled');
+    });
     expect(del).not.toHaveBeenCalled();
   });
 

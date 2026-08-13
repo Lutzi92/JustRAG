@@ -288,6 +288,10 @@ export const translations = {
     confirmDeleteKB: { de: 'Bist du sicher, dass du diese Knowledge Base löschen möchtest?', en: 'Are you sure you want to delete this knowledge base?' },
     confirmLeaveKb: { de: 'Diese Knowledge Base verlassen? {count} deiner Chats darin werden dabei gelöscht.', en: 'Leave this knowledge base? {count} of your chats in it will be deleted.' },
     confirmLeaveKbNoChats: { de: 'Diese Knowledge Base verlassen?', en: 'Leave this knowledge base?' },
+    // Subscriber (no kb_members row) removing a public KB tile: unlike
+    // leaving a membership, this deletes no chats — access survives via rule
+    // 4 of EffectiveRole — so the wording must not carry a chat warning.
+    confirmUnsubscribeKb: { de: 'Diese Knowledge Base nicht mehr abonnieren?', en: 'Unsubscribe from this knowledge base?' },
     confirmDeleteFile: { de: 'Bist du sicher, dass du diese Datei löschen möchtest? Dies entfernt auch alle daraus extrahierten Informationen.', en: 'Are you sure you want to delete this file? This will also remove all extracted information.' },
     enterKBName: { de: 'Name für deine Knowledge Base eingeben:', en: 'Enter name for your Knowledge Base:' },
     shareSuccess: { de: 'Knowledge Base geteilt mit', en: 'Knowledge Base shared with' },
@@ -547,8 +551,12 @@ export const translations = {
     selectSource: { de: 'Quelle auswählen', en: 'Select source' },
 
     // HomeView
-    badgePersonal: { de: 'Persönlich', en: 'Personal' },
-    badgeShared: { de: 'Geteilt mit {n}', en: 'Shared with {n}' },
+    // Three displayed visibility states from two stored fields (visibility +
+    // memberCount). visibilityShared has no {n} placeholder — t() takes no
+    // interpolation args, so the count is appended outside the translation.
+    visibilityPersonal: { de: 'Persönlich', en: 'Personal' },
+    visibilityShared: { de: 'Geteilt', en: 'Shared' },
+    visibilityPublic: { de: 'Öffentlich', en: 'Public' },
     // KB member roles (kb_members.role) — distinct from the "Roles" (system
     // user role) keys below; roleAdmin there is the site-wide admin role,
     // not a per-KB one, so these carry a kbRole* prefix to avoid colliding.

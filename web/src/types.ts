@@ -266,6 +266,9 @@ export interface KnowledgeBase {
     // kb_members row (e.g. a published global KB nobody explicitly joined).
     myRole?: KbRole;
     memberCount?: number;
+    // visibility is the stored truth since migration 0065; isGlobal above is
+    // the derived mirror kept for API compatibility.
+    visibility?: 'private' | 'public';
 }
 
 // A curator of a global KB: a kb_members row with role='admin'. `id` is the

@@ -1,9 +1,33 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import axios from 'axios';
 import type { KnowledgeBase } from '../types';
-import { HomeView } from './HomeView';
+import { HomeView, type HomeViewProps } from './HomeView';
 import { translations } from '../translations';
+import { ModalProvider } from '../contexts/ModalContext';
+import { useKbRemoval } from '../hooks/useKbRemoval';
+
+vi.mock('axios');
+const mockedAxios = vi.mocked(axios, true);
+
+// Modal (behind ModalProvider) calls useReducedMotion, which reads
+// window.matchMedia — jsdom doesn't implement it, so tests that mount a real
+// ModalProvider need it stubbed (see KbSettingsPanel.test.tsx for the same
+// pattern). Harmless for the other describe blocks in this file, which never
+// mount ModalProvider.
+beforeEach(() => {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+});
 
 vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -76,6 +100,33 @@ const noopProps = {
   setShowSettings: vi.fn(),
 };
 
+// RealRemovalHomeView wires onDeleteKB to the real useKbRemoval hook (rather
+// than noopProps' vi.fn() stub) so tests can exercise the actual delete /
+// leave / unsubscribe decision, including the real confirmation dialog —
+// which needs a real ModalProvider underneath, not a mocked showConfirm.
+function RealRemovalHomeView(props: { kbs: KnowledgeBase[]; globalKbs: KnowledgeBase[] } & Partial<HomeViewProps>) {
+  const { removeKb, removing } = useKbRemoval();
+  const onDeleteKB = async (kb: KnowledgeBase, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await removeKb(kb);
+  };
+  const merged = { ...noopProps, ...props, onDeleteKB, removingKb: removing } as HomeViewProps;
+  return <HomeView {...merged} />;
+}
+
+// The single render helper for this file (Step 2 of the brief): plain
+// prop-override tests (badge) and real-removal-flow tests (subscriber
+// unsubscribe) both go through it, wrapped in a real ModalProvider so
+// showConfirm's dialog actually renders.
+function renderHomeView(overrides: Partial<HomeViewProps> & { kbs?: KnowledgeBase[]; globalKbs?: KnowledgeBase[] } = {}) {
+  const { kbs = [], globalKbs = [], ...rest } = overrides;
+  return render(
+    <ModalProvider>
+      <RealRemovalHomeView kbs={kbs} globalKbs={globalKbs} {...rest} />
+    </ModalProvider>
+  );
+}
+
 // The members-dialog trigger used to be gated on kb.userId === user.id
 // (owner-only), which made the whole `admin` tier unreachable from the UI —
 // a KB admin who isn't the owner could never open the dialog to manage
@@ -137,5 +188,68 @@ describe('HomeView catalog-discovery trigger', () => {
     const globalKb: KnowledgeBase = { ...baseKb, id: 'gkb-1', isGlobal: true };
     render(<HomeView kbs={[]} {...noopProps} globalKbs={[globalKb]} />);
     expect(screen.getAllByRole('button', { name: translations.discoverKbs.en })).toHaveLength(1);
+  });
+});
+
+// Three displayed states from two stored ones (visibility + memberCount).
+// memberCount counts the owner too, hence <= 1 rather than === 0.
+describe('KB visibility badge', () => {
+  it('shows "personal" for a private KB with only the owner', async () => {
+    renderHomeView({ kbs: [{ ...baseKb, id: 'kb-1', name: 'Meine KB', visibility: 'private', memberCount: 1 }] });
+    expect(await screen.findByText(/persönlich|personal/i)).toBeInTheDocument();
+  });
+
+  it('shows the member count for a shared private KB', async () => {
+    renderHomeView({ kbs: [{ ...baseKb, id: 'kb-1', name: 'Team-KB', visibility: 'private', memberCount: 4 }] });
+    expect(await screen.findByText(/geteilt \(4\)|shared \(4\)/i)).toBeInTheDocument();
+  });
+
+  it('shows "public" regardless of member count', async () => {
+    renderHomeView({ kbs: [{ ...baseKb, id: 'kb-1', name: 'Katalog-KB', visibility: 'public', memberCount: 1 }] });
+    expect(await screen.findByText(/öffentlich|public/i)).toBeInTheDocument();
+  });
+});
+
+// Phase 1 built the contextual remove button for members and explicitly
+// deferred the subscriber case: a 404 on /membership/impact means there is
+// no kb_members row at all, i.e. the caller reaches this KB through a
+// subscription (or auto_subscribe), not membership. Leaving a membership
+// deletes the caller's chats in that KB; unsubscribing from a public KB does
+// not — access survives via rule 4 of EffectiveRole — so the dialog and the
+// request must differ.
+describe('remove action for a subscriber', () => {
+  beforeEach(() => {
+    mockedAxios.get.mockReset();
+    mockedAxios.delete.mockReset();
+  });
+
+  // Kein kb_members-Eintrag (myRole undefined) auf einer oeffentlichen KB:
+  // der Nutzer ist Abonnent, nicht Mitglied.
+  it('unsubscribes instead of leaving, and does not warn about chats', async () => {
+    mockedAxios.get.mockRejectedValueOnce({ response: { status: 404 } }); // /membership/impact
+    mockedAxios.delete.mockResolvedValue({ status: 204 });
+
+    renderHomeView({
+      globalKbs: [{ ...baseKb, id: 'kb-1', name: 'Katalog-KB', visibility: 'public', isPublished: true }],
+    });
+
+    await userEvent.click(await screen.findByRole('button', { name: /entfernen|remove/i }));
+
+    // Wait for the confirmation dialog to actually mount before asserting on
+    // its content.
+    await screen.findByRole('dialog');
+
+    // Kein Chat-Verlust in dieser Variante — die Warnung darf nicht erscheinen.
+    expect(screen.queryByText(/chat/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /bestätigen|confirm/i }));
+
+    await waitFor(() => {
+      expect(mockedAxios.delete).toHaveBeenCalledWith(
+        expect.stringContaining('/api/kb/kb-1/subscription')
+      );
+    });
+    expect(mockedAxios.delete).not.toHaveBeenCalledWith(
+      expect.stringContaining('/membership')
+    );
   });
 });

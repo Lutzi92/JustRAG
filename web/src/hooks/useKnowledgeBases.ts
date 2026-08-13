@@ -96,9 +96,13 @@ export function useKnowledgeBases({
       return;
     }
     if (outcome === 'cancelled') return;
-    setKbs(prev => prev.filter(k => k.id !== kb.id));
+    // A deletion/leave/unsubscribe can affect either list — a subscribed
+    // public KB lives in globalKbs, not kbs — so refetch both instead of
+    // guessing which array to splice; same reload path KbCatalogModal's
+    // onSubscriptionChange already uses (Task 9).
+    await fetchKBs();
     handleGoHome();
-  }, [removeKb, handleGoHome, toast, t]);
+  }, [removeKb, handleGoHome, toast, t, fetchKBs]);
 
   const handleCreateGlobalKB = async () => {
     const name = await showPrompt(t('globalKbNamePrompt'));

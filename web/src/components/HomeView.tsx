@@ -13,7 +13,7 @@ import './HomeView.css';
 const MembersModal = lazy(() => import('./MembersModal').then(module => ({ default: module.MembersModal })));
 const SettingsModal = lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
 
-interface HomeViewProps {
+export interface HomeViewProps {
   kbs: KnowledgeBase[];
   globalKbs: KnowledgeBase[];
   currentKb: KnowledgeBase | null;
@@ -78,6 +78,16 @@ function lastActiveLabel(
   else if (Math.abs(hr) < 24) rel = rtf.format(hr, 'hour');
   else rel = rtf.format(day, 'day');
   return `${t('kbLastActive')} ${rel}`;
+}
+
+// Drei angezeigte Zustaende aus zwei gespeicherten. memberCount enthaelt den
+// Owner, deshalb <= 1 und nicht === 0. Der Zaehler steht ausserhalb der
+// Uebersetzung, weil t() keine Interpolation kann.
+function visibilityBadge(kb: KnowledgeBase, t: (k: string) => string): string {
+  if (kb.visibility === 'public') return t('visibilityPublic');
+  const count = kb.memberCount ?? 1;
+  if (count > 1) return `${t('visibilityShared')} (${count})`;
+  return t('visibilityPersonal');
 }
 
 // canManageMembers gates the members-dialog trigger: admins and owners
@@ -295,6 +305,31 @@ export function HomeView(props: HomeViewProps) {
                         </button>
                       </>
                     )}
+
+                    {/* Non-admins reach this card only via subscription/
+                        membership (ListGlobalKnowledgeBases scopes their
+                        query to that), so removal here is always "get this
+                        tile out of my overview", never the admin's outright
+                        delete above — hence gated on the inverse of the
+                        admin check rather than composed with it. onDeleteKB
+                        (useKbRemoval) already branches on myRole: undefined
+                        means a subscriber and lands in the unsubscribe
+                        branch, a curator's 'admin' role means leaving the
+                        KB. Admins never see this button: their
+                        ListGlobalKnowledgeBases query is unfiltered by
+                        subscription, so "remove" would be misleading — the
+                        KB reappears on next load regardless. */}
+                    {!(user?.role === 'admin' || user?.role === 'superadmin') && (
+                      <button
+                        onClick={(e) => onDeleteKB(kb, e)}
+                        className="home-view__mini-icon"
+                        disabled={removingKb}
+                        title={kb.myRole === 'owner' ? t('deleteKb') : t('removeFromMyView')}
+                        aria-label={kb.myRole === 'owner' ? t('deleteKb') : t('removeFromMyView')}
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -386,9 +421,9 @@ export function HomeView(props: HomeViewProps) {
             <div className="home-view__card-top">
               <BookOpen size={20} color="var(--text-secondary)" aria-hidden="true" />
               <div className="home-view__badge-row">
-                <div className={`home-view__badge ${(kb.memberCount ?? 1) <= 1 ? 'home-view__badge--personal' : 'home-view__badge--shared'}`}>
-                  <User size={10} aria-hidden="true" />
-                  {(kb.memberCount ?? 1) <= 1 ? t('badgePersonal') : t('badgeShared').replace('{n}', String(kb.memberCount))}
+                <div className={`home-view__badge ${kb.visibility === 'public' ? 'home-view__badge--public' : (kb.memberCount ?? 1) <= 1 ? 'home-view__badge--personal' : 'home-view__badge--shared'}`}>
+                  {kb.visibility === 'public' ? <Globe size={10} aria-hidden="true" /> : <User size={10} aria-hidden="true" />}
+                  {visibilityBadge(kb, t)}
                 </div>
 
                 {canManageMembers(kb) && (

@@ -274,6 +274,12 @@
   border: 1px solid var(--border-color);
 }
 
+.home-view__badge--public {
+  color: #15803d;
+  background: #dcfce7;
+  border: 1px solid #15803d;
+}
+
 .home-view__mini-icon {
   position: static;
   padding: 4px;
