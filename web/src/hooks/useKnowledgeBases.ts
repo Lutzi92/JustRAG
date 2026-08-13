@@ -68,6 +68,21 @@ export function useKnowledgeBases({
     onKBSelected();
   }, [onKBSelected, setCurrentKb, setIsPro, setKbView, setView, setSelectedContent, setGeneratedContent]);
 
+  // Opens a KB known only by id. The discovery panel's rows are a thin
+  // catalog projection (id/name/description/subscribed), while handleSelectKB
+  // needs the full row — and an unsubscribed public KB is absent from
+  // globalKbs by design, so it cannot be looked up locally either. Hence the
+  // round trip to GET /api/kb/{id}, which is view-gated server-side.
+  const handleOpenKbById = useCallback(async (id: string) => {
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/kb/${id}`);
+      handleSelectKB(res.data);
+    } catch (err: unknown) {
+      console.error('Failed to open KB:', err);
+      toast.error(t('kbFetchError'));
+    }
+  }, [handleSelectKB, toast, t]);
+
   const handleCreateKB = async () => {
     const name = await showPrompt(t('enterKBName'));
     if (!name) return;
@@ -154,7 +169,7 @@ export function useKnowledgeBases({
 
   return {
     kbs, setKbs, globalKbs, setGlobalKbs,
-    fetchKBs, handleCreateKB, handleSelectKB, handleDeleteKB, removingKb,
+    fetchKBs, handleCreateKB, handleSelectKB, handleOpenKbById, handleDeleteKB, removingKb,
     handleCreateGlobalKB, handleDeleteGlobalKB, handleOpenGlobalKbSettings,
   };
 }

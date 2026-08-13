@@ -33,6 +33,8 @@ export interface HomeViewProps {
   onCreateGlobalKB: () => void;
   /** Refetches the KB lists after a subscribe/unsubscribe in the discovery panel. */
   onSubscriptionChange: () => void;
+  /** Opens a KB the caller knows only by id — the discovery panel's rows carry nothing else. */
+  onOpenKbById: (id: string) => void;
   onDeleteGlobalKB: (id: string, e: React.MouseEvent) => void;
   onOpenGlobalKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onOpenShare: (kb: KnowledgeBase, e: React.MouseEvent) => void;
@@ -371,7 +373,7 @@ export function HomeView(props: HomeViewProps) {
   const {
     kbs, globalKbs, currentKb, availableConfigs,
     copySuccess, onCopyUserId, onLogout, onViewProfile, onViewAdmin, onViewAgents,
-    onCreateKB, onSelectKB, onDeleteKB, removingKb, onCreateGlobalKB, onSubscriptionChange, onDeleteGlobalKB,
+    onCreateKB, onSelectKB, onDeleteKB, removingKb, onCreateGlobalKB, onSubscriptionChange, onOpenKbById, onDeleteGlobalKB,
     onOpenGlobalKbSettings, onOpenShare, onUpdateKBSettings,
     showShareModal, setShowShareModal, sharingKb, shareUserId, setShareUserId,
     shareTargetUser, shareLoading, sharePermission, setSharePermission,
@@ -526,7 +528,7 @@ export function HomeView(props: HomeViewProps) {
         title={t('discoverKbs')}
         icon={<Search size={20} color="var(--text-secondary)" aria-hidden="true" />}
       >
-        <KbCatalogPanel onSubscriptionChange={onSubscriptionChange} />
+        <KbCatalogPanel onSubscriptionChange={onSubscriptionChange} onOpenKb={onOpenKbById} />
       </KbAccordion>
 
       {/* Private KBs somebody else shared with me. */}

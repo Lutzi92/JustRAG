@@ -20,8 +20,8 @@ const toastMock = { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi
 vi.mock('../contexts/ThemeContext', () => ({ useTheme: () => themeMock }));
 vi.mock('../contexts/ToastContext', () => ({ useToast: () => toastMock }));
 
-function renderPanel(onSubscriptionChange = vi.fn()) {
-    return render(<KbCatalogPanel onSubscriptionChange={onSubscriptionChange} />);
+function renderPanel(onSubscriptionChange = vi.fn(), onOpenKb = vi.fn()) {
+    return render(<KbCatalogPanel onSubscriptionChange={onSubscriptionChange} onOpenKb={onOpenKb} />);
 }
 
 describe('KbCatalogPanel', () => {
@@ -75,5 +75,53 @@ describe('KbCatalogPanel', () => {
                 expect.stringContaining('/api/kb/kb-2/subscription')
             );
         });
+    });
+
+    // The discovery rows are cards now, matching the other overview sections.
+    // Two things have to hold for that to be usable: the card opens the KB,
+    // and the add-to-favorites control on it does not.
+    it('opens the KB when the card is activated', async () => {
+        const onOpenKb = vi.fn();
+        renderPanel(vi.fn(), onOpenKb);
+
+        const row = (await screen.findByText('IT-Handbuch')).closest('[data-testid="catalog-entry"]');
+        await userEvent.click(row as HTMLElement);
+        expect(onOpenKb).toHaveBeenCalledWith('kb-1');
+    });
+
+    it('opens the KB from the name button', async () => {
+        const onOpenKb = vi.fn();
+        renderPanel(vi.fn(), onOpenKb);
+
+        await userEvent.click(await screen.findByRole('button', { name: 'IT-Handbuch' }));
+        expect(onOpenKb).toHaveBeenCalledWith('kb-1');
+    });
+
+    it('does not open the KB when the favorites toggle is clicked', async () => {
+        mockedAxios.put.mockResolvedValue({ status: 204 });
+        const onOpenKb = vi.fn();
+        renderPanel(vi.fn(), onOpenKb);
+
+        const row = (await screen.findByText('IT-Handbuch')).closest('[data-testid="catalog-entry"]');
+        await userEvent.click(within(row as HTMLElement).getByRole('button', { name: /abonnieren|subscribe/i }));
+
+        await waitFor(() => {
+            expect(mockedAxios.put).toHaveBeenCalledWith(expect.stringContaining('/api/kb/kb-1/subscription'));
+        });
+        expect(onOpenKb).not.toHaveBeenCalled();
+    });
+
+    // aria-pressed is what tells a screen-reader user whether the KB is
+    // already a favorite; the filled/outline star alone would not.
+    it('reflects the subscription state on the toggle', async () => {
+        renderPanel();
+
+        const unsubscribed = (await screen.findByText('IT-Handbuch')).closest('[data-testid="catalog-entry"]');
+        expect(within(unsubscribed as HTMLElement).getByRole('button', { name: /abonnieren|subscribe/i }))
+            .toHaveAttribute('aria-pressed', 'false');
+
+        const subscribed = screen.getByText('Rechtsfragen').closest('[data-testid="catalog-entry"]');
+        expect(within(subscribed as HTMLElement).getByRole('button', { name: /abbestellen|unsubscribe/i }))
+            .toHaveAttribute('aria-pressed', 'true');
     });
 });

@@ -338,6 +338,7 @@ function AuthenticatedAppInner() {
           removingKb={kbMgmt.removingKb}
           onCreateGlobalKB={kbMgmt.handleCreateGlobalKB}
           onSubscriptionChange={() => { kbMgmt.fetchKBs(); }}
+          onOpenKbById={kbMgmt.handleOpenKbById}
           onDeleteGlobalKB={kbMgmt.handleDeleteGlobalKB}
           onOpenGlobalKbSettings={kbMgmt.handleOpenGlobalKbSettings}
           onOpenShare={sharing.handleOpenShare}

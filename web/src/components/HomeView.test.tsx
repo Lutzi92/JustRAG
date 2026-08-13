@@ -124,6 +124,7 @@ const noopProps = {
   removingKb: false,
   onCreateGlobalKB: vi.fn(),
   onSubscriptionChange: vi.fn(),
+  onOpenKbById: vi.fn(),
   onDeleteGlobalKB: vi.fn(),
   onOpenGlobalKbSettings: vi.fn(),
   onOpenShare: vi.fn(),
