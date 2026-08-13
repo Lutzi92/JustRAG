@@ -1558,6 +1558,7 @@ export const translations = {
     categorySaveError: { de: 'Fehler beim Speichern der Kategorie', en: 'Error saving the category' },
     categoryDeleteError: { de: 'Fehler beim Löschen der Kategorie', en: 'Error deleting the category' },
     categoriesAssignError: { de: 'Fehler beim Zuordnen der Kategorien', en: 'Error assigning categories' },
+    categoriesLoadError: { de: 'Kategorien konnten nicht geladen werden — Zuordnung deaktiviert, um nichts zu überschreiben.', en: 'Could not load categories — assignment disabled to avoid overwriting them.' },
 
     // Re-embed
     reembedAllTitle: { de: 'Alle Dateien neu einbetten', en: 'Re-embed All Files' },

@@ -38,6 +38,12 @@ export default function AdminGlobalKbsTab({ onEditGlobalKb }: AdminGlobalKbsTabP
     const [loading, setLoading] = useState(true);
     const [categories, setCategories] = useState<KbCategory[]>([]);
     const [kbCategoryIds, setKbCategoryIds] = useState<Record<string, string[]>>({});
+    // Tracks, per row, whether the GET /api/kb/{id}/categories prefetch below
+    // failed — an empty array from a failed fetch must never be
+    // indistinguishable from "this KB genuinely has no categories", because
+    // the former rendered as if true would let a subsequent PUT silently
+    // wipe the KB's real assignments.
+    const [kbCategoryLoadFailed, setKbCategoryLoadFailed] = useState<Record<string, boolean>>({});
 
     const [unpublishTarget, setUnpublishTarget] = useState<GlobalKbRow | null>(null);
     const [unpublishBusy, setUnpublishBusy] = useState(false);
@@ -53,16 +59,23 @@ export default function AdminGlobalKbsTab({ onEditGlobalKb }: AdminGlobalKbsTabP
                 setGlobalKbs(rows);
                 // Pre-populate each row's current assignment so the multi-select
                 // below doesn't start empty and wipe existing categories on the
-                // first unrelated PUT.
+                // first unrelated PUT. A failed fetch must not masquerade as "no
+                // categories" — track it separately (kbCategoryLoadFailed) so the
+                // row's control can be disabled instead of rendered as if the
+                // empty result were true.
                 const entries = await Promise.all(rows.map(async (kb) => {
                     try {
                         const catRes = await axios.get(`${API_BASE_URL}/api/kb/${kb.id}/categories`);
-                        return [kb.id, (catRes.data as KbCategory[]).map(c => c.id)] as const;
-                    } catch {
-                        return [kb.id, []] as const;
+                        return { id: kb.id, categoryIds: (catRes.data as KbCategory[]).map(c => c.id), failed: false };
+                    } catch (err: unknown) {
+                        console.error(err);
+                        return { id: kb.id, categoryIds: [] as string[], failed: true };
                     }
                 }));
-                if (!cancelled) setKbCategoryIds(Object.fromEntries(entries));
+                if (!cancelled) {
+                    setKbCategoryIds(Object.fromEntries(entries.map(e => [e.id, e.categoryIds])));
+                    setKbCategoryLoadFailed(Object.fromEntries(entries.map(e => [e.id, e.failed])));
+                }
             } catch (err: unknown) {
                 console.error(err);
             } finally {
@@ -114,6 +127,10 @@ export default function AdminGlobalKbsTab({ onEditGlobalKb }: AdminGlobalKbsTabP
     };
 
     const handleCategoryChange = async (kbId: string, categoryIds: string[]) => {
+        // Defense in depth alongside the disabled select below: a row whose
+        // current assignments failed to load must never be saved over, even
+        // if a change event reaches this handler some other way.
+        if (kbCategoryLoadFailed[kbId]) return;
         const previous = kbCategoryIds[kbId] ?? [];
         setKbCategoryIds(prev => ({ ...prev, [kbId]: categoryIds }));
         try {
@@ -230,18 +247,27 @@ export default function AdminGlobalKbsTab({ onEditGlobalKb }: AdminGlobalKbsTabP
                                         id={`kb-categories-${kb.id}`}
                                         multiple
                                         aria-label={t('categories')}
+                                        aria-invalid={kbCategoryLoadFailed[kb.id] || undefined}
+                                        disabled={!!kbCategoryLoadFailed[kb.id]}
                                         value={kbCategoryIds[kb.id] ?? []}
                                         onChange={(e) => handleCategoryChange(kb.id, Array.from(e.target.selectedOptions).map(o => o.value))}
                                         style={{
                                             width: '100%', maxWidth: '320px', background: 'var(--bg-secondary)',
-                                            border: '1px solid var(--border-color)', color: 'var(--text-primary)',
+                                            border: kbCategoryLoadFailed[kb.id] ? '1px solid var(--error-text)' : '1px solid var(--border-color)',
+                                            color: 'var(--text-primary)', opacity: kbCategoryLoadFailed[kb.id] ? 0.6 : 1,
                                             borderRadius: 'var(--shape-md)', fontSize: '0.85rem', minHeight: '2.2rem',
+                                            cursor: kbCategoryLoadFailed[kb.id] ? 'not-allowed' : undefined,
                                         }}
                                     >
                                         {categories.map(cat => (
                                             <option key={cat.id} value={cat.id}>{cat.name}</option>
                                         ))}
                                     </select>
+                                    {kbCategoryLoadFailed[kb.id] && (
+                                        <p style={{ color: 'var(--error-text)', fontSize: '0.75rem', margin: '0.3rem 0 0' }}>
+                                            {t('categoriesLoadError')}
+                                        </p>
+                                    )}
                                 </div>
                             )}
                         </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 import AdminGlobalKbsTab from './AdminGlobalKbsTab';
@@ -133,6 +133,37 @@ describe('AdminGlobalKbsTab', () => {
             );
         });
         await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    });
+
+    it('disables a row\'s category select instead of risking a wipe when its assignment fetch fails', async () => {
+        mockedAxios.get.mockImplementation((url: string) => {
+            if (url.includes('/unpublish-impact')) {
+                return Promise.resolve({
+                    data: { subscribers: 4, candidates: [{ userId: 'u1', username: 'alice' }] },
+                });
+            }
+            if (url.includes('/api/admin/kb-categories')) {
+                return Promise.resolve({ data: [{ id: 'cat-1', name: 'Security', sortOrder: 0 }] });
+            }
+            if (url.includes('/api/kb/kb-1/categories')) {
+                return Promise.reject(new Error('boom'));
+            }
+            return Promise.resolve({
+                data: [{ id: 'kb-1', name: 'IT-Handbuch', createdAt: '2026-01-01T00:00:00Z', autoSubscribe: false }],
+            });
+        });
+        renderTab();
+
+        const select = await screen.findByRole('listbox', { name: /categories|kategorien/i });
+        await waitFor(() => expect(select).toBeDisabled());
+        expect(await screen.findByText(translations.categoriesLoadError.en)).toBeInTheDocument();
+
+        // Even a change event that reaches the select bypassing the disabled
+        // attribute (fireEvent dispatches directly on the node, unlike
+        // userEvent) must not be able to issue the wiping PUT — the handler
+        // itself refuses once the row is marked as failed-to-load.
+        fireEvent.change(select, { target: { value: [] } });
+        expect(mockedAxios.put).not.toHaveBeenCalled();
     });
 });
 
