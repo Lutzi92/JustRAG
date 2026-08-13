@@ -74,8 +74,8 @@ export default defineConfig({
       registerType: 'prompt',
       includeAssets: ['vite.svg', 'apple-touch-icon.png'],
       manifest: {
-        name: 'JustRAG',
-        short_name: 'JustRAG',
+        name: 'JLU RAG',
+        short_name: 'JLU RAG',
         description: 'Advanced Knowledge Retrieval System',
         theme_color: '#ffffff',
         icons: [

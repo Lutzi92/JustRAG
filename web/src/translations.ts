@@ -501,7 +501,7 @@ export const translations = {
     analyzingContentHint: { de: 'Dies kann je nach Umfang der Quellen einige Sekunden dauern.', en: 'This may take a few seconds depending on the size of your sources.' },
 
     // Onboarding Tour
-    onboardingWelcomeTitle: { de: 'Willkommen bei JustRAG!', en: 'Welcome to JustRAG!' },
+    onboardingWelcomeTitle: { de: 'Willkommen bei JLU RAG!', en: 'Welcome to JLU RAG!' },
     onboardingWelcomeDesc: { de: 'Lass uns dir einen kurzen Überblick geben, wie du das Beste aus deiner Wissensplattform herausholst.', en: 'Let us give you a quick overview of how to get the most out of your knowledge platform.' },
     onboardingCreateKbTitle: { de: 'Knowledge Base erstellen', en: 'Create a Knowledge Base' },
     onboardingCreateKbDesc: { de: 'Erstelle eine Knowledge Base, um deine Dokumente, Notizen und Quellen zu einem Thema zu organisieren. Du kannst beliebig viele erstellen.', en: 'Create a Knowledge Base to organize your documents, notes, and sources on a topic. You can create as many as you like.' },
