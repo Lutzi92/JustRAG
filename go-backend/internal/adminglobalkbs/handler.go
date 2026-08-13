@@ -60,6 +60,16 @@ type GlobalKBCreate struct {
 	Name        string  `json:"name"`
 	Description *string `json:"description"`
 	Language    string  `json:"language"` // default "de"
+	// CreatedBy is the admin performing the creation. They are enrolled as a
+	// KB admin (kb_members role='admin') on the new KB — a public KB has no
+	// owner, so a curator membership is the only thing that ties it to a
+	// person. Without it the creator would not see their own new KB in the
+	// overview: the Favoriten list is subscription-filtered for admins too
+	// (kb.Handler.ListGlobalKnowledgeBases), a fresh KB has no subscribers,
+	// and auto_subscribe defaults to false. Empty is tolerated (no
+	// membership is written) so non-HTTP callers and tests need not supply
+	// one.
+	CreatedBy string `json:"-"`
 }
 
 // GlobalKBUpdate carries the fields to update on a global KB. Only non-nil
@@ -190,6 +200,7 @@ func (h *Handler) CreateGlobalKB(w http.ResponseWriter, r *http.Request) {
 		Name:        name,
 		Description: body.Description,
 		Language:    lang,
+		CreatedBy:   operatorID(r),
 	})
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to create global KB")

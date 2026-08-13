@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/kbaccess"
@@ -93,21 +94,48 @@ func (s *PGStore) ListGlobalKBs(ctx context.Context) ([]GlobalKBRow, error) {
 
 // CreateGlobalKB inserts a new global knowledge base (visibility='public', user_id=NULL)
 // and returns the created row.
+//
+// When data.CreatedBy is set, the creating admin is enrolled as a KB admin in
+// the same transaction — see the field's doc comment for why the KB would
+// otherwise be invisible to them. The membership is written directly rather
+// than through kbmembers.SetRole because that method takes the pool, not the
+// transaction; a separate Exec afterwards could leave a public KB with no
+// curator if it failed. role='admin' (never 'owner') keeps the ownerless
+// invariant of a public KB intact, and with it the owner-mirror trigger,
+// which fires only WHEN (NEW.role = 'owner') and so stays silent here.
 func (s *PGStore) CreateGlobalKB(ctx context.Context, data GlobalKBCreate) (*GlobalKBRow, error) {
 	const sql = `
 		INSERT INTO knowledge_bases (name, description, language, visibility, user_id)
 		VALUES ($1, $2, $3, 'public', NULL)
 		RETURNING ` + globalKBSelectCols
 
-	rows, err := pgxutil.QueryRows[globalKBDBRow](ctx, s.pool, sql, data.Name, data.Description, data.Language)
+	var result *GlobalKBRow
+	err := pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := pgxutil.QueryRows[globalKBDBRow](ctx, tx, sql, data.Name, data.Description, data.Language)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return fmt.Errorf("create global KB: no row returned")
+		}
+		r := toGlobalKBRow(rows[0])
+
+		if data.CreatedBy != "" {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO kb_members (kb_id, user_id, role, created_by)
+				VALUES ($1::uuid, $2::uuid, $3, $2::uuid)`,
+				r.ID, data.CreatedBy, kbaccess.RoleAdmin); err != nil {
+				return fmt.Errorf("create global KB: enroll creator as admin: %w", err)
+			}
+		}
+
+		result = &r
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
-		return nil, fmt.Errorf("create global KB: no row returned")
-	}
-	r := toGlobalKBRow(rows[0])
-	return &r, nil
+	return result, nil
 }
 
 // UpdateGlobalKB applies the non-nil fields in data to the global KB with

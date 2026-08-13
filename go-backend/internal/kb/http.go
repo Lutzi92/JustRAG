@@ -140,8 +140,19 @@ func (h *Handler) ListKnowledgeBases(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusOK, kbs)
 }
 
-// ListGlobalKnowledgeBases handles GET /api/kb/global.
-// Admins/superadmins see all global KBs; regular users see only published ones.
+// ListGlobalKnowledgeBases handles GET /api/kb/global — the "Favoriten"
+// section of the overview.
+//
+// The subscription filter applies to system admins too, which is why `false`
+// is passed unconditionally instead of deriving it from user.Role. Favoriten
+// means "the public KBs I chose to keep", and the store's admin arm (every
+// public KB, published or not, regardless of subscription) contradicts that:
+// it left an admin unable to remove a tile at all, since the KB reappeared on
+// the next fetch no matter what they clicked. The full inventory stays
+// reachable — the discovery panel lists every published public KB, and the
+// admin tabs list the staged ones as well. The store's isAdmin arm is still
+// live for openaicompat, whose API surface deliberately keeps addressing
+// every public KB.
 func (h *Handler) ListGlobalKnowledgeBases(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
@@ -149,9 +160,7 @@ func (h *Handler) ListGlobalKnowledgeBases(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	isAdmin := user.Role == "admin" || user.Role == "superadmin"
-
-	kbs, err := h.store.ListGlobalKnowledgeBases(r.Context(), user.ID, isAdmin)
+	kbs, err := h.store.ListGlobalKnowledgeBases(r.Context(), user.ID, false)
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to fetch global knowledge bases")
 		return

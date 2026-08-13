@@ -23,13 +23,17 @@ type mockStore struct {
 	kbs []kb.KBRow
 	kb  *kb.KBRow
 	err error
+	// gotIsAdmin records the last isAdmin argument ListGlobalKnowledgeBases
+	// was called with, so tests can pin which store arm the overview picks.
+	gotIsAdmin bool
 }
 
 func (m *mockStore) ListKnowledgeBases(_ context.Context, _ string, _, _ int) ([]kb.KBRow, error) {
 	return m.kbs, m.err
 }
 
-func (m *mockStore) ListGlobalKnowledgeBases(_ context.Context, _ string, _ bool) ([]kb.KBRow, error) {
+func (m *mockStore) ListGlobalKnowledgeBases(_ context.Context, _ string, isAdmin bool) ([]kb.KBRow, error) {
+	m.gotIsAdmin = isAdmin
 	return m.kbs, m.err
 }
 
@@ -155,7 +159,15 @@ func TestListGlobalKnowledgeBases_OK(t *testing.T) {
 	}
 }
 
-func TestListGlobalKnowledgeBases_Admin(t *testing.T) {
+// TestListGlobalKnowledgeBases_AdminIsSubscriptionFiltered pins that the
+// overview asks the store for the subscription-filtered arm even for a system
+// admin. The endpoint backs the "Favoriten" section, which means "the public
+// KBs I chose to keep": the store's admin arm returns every public KB
+// regardless of subscription, which left an admin unable to remove a tile at
+// all — it came back on the next fetch whatever they clicked. The unfiltered
+// inventory is still reachable from the discovery panel and the admin tabs,
+// and openaicompat still passes isAdmin=true for its own listing.
+func TestListGlobalKnowledgeBases_AdminIsSubscriptionFiltered(t *testing.T) {
 	row := makeKB("kb-g2", "Unpublished Global KB")
 	store := &mockStore{kbs: []kb.KBRow{row}}
 	h := kb.NewHandler(store)
@@ -167,13 +179,16 @@ func TestListGlobalKnowledgeBases_Admin(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
+	if store.gotIsAdmin {
+		t.Fatal("overview passed isAdmin=true for an admin caller — Favoriten must stay subscription-filtered for everyone")
+	}
 
 	var got []kb.KBRow
 	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("expected 1 KB (admin sees all), got %d", len(got))
+		t.Fatalf("expected 1 KB, got %d", len(got))
 	}
 }
 
