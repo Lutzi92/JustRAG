@@ -64,8 +64,8 @@ func insertKB(t *testing.T, pool *pgxpool.Pool, ownerID string, isGlobal, isPubl
 	ctx := context.Background()
 	var id string
 	err := pool.QueryRow(ctx, `
-		INSERT INTO knowledge_bases (name, description, is_global, is_published, user_id)
-		VALUES ('kb-members-test', 'fixture', $1, $2, $3::uuid)
+		INSERT INTO knowledge_bases (name, description, visibility, is_published, user_id)
+		VALUES ('kb-members-test', 'fixture', CASE WHEN $1 THEN 'public' ELSE 'private' END, $2, $3::uuid)
 		RETURNING id::text`, isGlobal, isPublished, ownerID).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert kb: %v", err)

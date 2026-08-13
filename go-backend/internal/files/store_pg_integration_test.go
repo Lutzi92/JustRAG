@@ -39,8 +39,8 @@ func seedErrorFile(t *testing.T, pool *pgxpool.Pool, status string) (kbID, fileI
 	t.Helper()
 	ctx := context.Background()
 	err := pool.QueryRow(ctx, `
-		INSERT INTO knowledge_bases (name, description, is_global)
-		VALUES ('file-error-store-test', 'fixture', true)
+		INSERT INTO knowledge_bases (name, description, visibility)
+		VALUES ('file-error-store-test', 'fixture', 'public')
 		RETURNING id::text`).Scan(&kbID)
 	if err != nil {
 		t.Fatalf("insert kb: %v", err)

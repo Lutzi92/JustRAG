@@ -65,15 +65,15 @@ func insertUser(t *testing.T, pool *pgxpool.Pool, username string) string {
 }
 
 // insertGlobalKB inserts a published global KB with no owner — the shape
-// CreateGlobalKB produces (is_global = true, user_id = NULL), so no owner row
+// CreateGlobalKB produces (visibility = 'public', user_id = NULL), so no owner row
 // exists in kb_members and the editor operations are the only writers.
 func insertGlobalKB(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	ctx := context.Background()
 	var id string
 	err := pool.QueryRow(ctx, `
-		INSERT INTO knowledge_bases (name, description, is_global, is_published, user_id)
-		VALUES ('adminglobalkbs-editor-test', 'fixture', true, true, NULL)
+		INSERT INTO knowledge_bases (name, description, visibility, is_published, user_id)
+		VALUES ('adminglobalkbs-editor-test', 'fixture', 'public', true, NULL)
 		RETURNING id::text`).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert global kb: %v", err)

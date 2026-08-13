@@ -84,8 +84,8 @@ func seedFixture(t *testing.T, pool *pgxpool.Pool, kbIsGlobal bool) (userID, kbI
 
 	// Two KBs per fixture so DeleteUser tests can verify multi-KB cleanup.
 	err = pool.QueryRow(ctx, `
-		INSERT INTO knowledge_bases (name, user_id, description, is_global)
-		VALUES ($1, $2::uuid, 'fixture', $3)
+		INSERT INTO knowledge_bases (name, user_id, description, visibility)
+		VALUES ($1, $2::uuid, 'fixture', CASE WHEN $3 THEN 'public' ELSE 'private' END)
 		RETURNING id::text`, "cascade-kb-"+username, userID, kbIsGlobal).Scan(&kbID)
 	if err != nil {
 		t.Fatalf("insert kb: %v", err)
@@ -321,7 +321,7 @@ func TestDeleteGlobalKB(t *testing.T) {
 }
 
 // DeleteGlobalKB must NOT delete a non-global KB even if the ID matches —
-// the SQL is guarded by `WHERE id = $1 AND is_global = true`. A bug that
+// the SQL is guarded by `WHERE id = $1 AND visibility = 'public'`. A bug that
 // drops that guard would let any caller delete any KB by id.
 func TestDeleteGlobalKB_RefusesNonGlobalKB(t *testing.T) {
 	mainPool, vectorPool := openTestPools(t)
