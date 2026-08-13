@@ -96,9 +96,29 @@ export function useKnowledgeBases({
       return;
     }
     if (outcome === 'cancelled') return;
+    // Splice locally first, from whichever list actually holds it — a
+    // subscribed public KB lives in globalKbs, not kbs, so both are
+    // filtered. This guarantees the card disappears even if the reconciling
+    // fetchKBs() below fails: fetchKBs swallows its own errors (logs +
+    // toasts, never rethrows), so without this the just-deleted/left/
+    // unsubscribed KB would silently stay on screen after a successful
+    // request whose refetch happened to fail.
     setKbs(prev => prev.filter(k => k.id !== kb.id));
+    setGlobalKbs(prev => prev.filter(k => k.id !== kb.id));
+    // Navigate before the refetch, not after. If the caller was viewing the KB
+    // they just removed, awaiting first would park them on a view whose KB no
+    // longer exists for the whole round trip — and fetchKBs never rejects (it
+    // swallows into console.error + a toast), so a hanging network would strand
+    // them there indefinitely. The splice above already happened, so leaving is
+    // safe immediately.
     handleGoHome();
-  }, [removeKb, handleGoHome, toast, t]);
+    // Then still reconcile with the server — an unsubscribe (or auto_subscribe)
+    // can change what the public list returns in ways local state can't
+    // infer; same reload path KbCatalogModal's onSubscriptionChange already
+    // uses (Task 9). A failed refetch here degrades to "correct but slightly
+    // stale" rather than the KB reappearing or staying stuck.
+    await fetchKBs();
+  }, [removeKb, handleGoHome, toast, t, fetchKBs]);
 
   const handleCreateGlobalKB = async () => {
     const name = await showPrompt(t('globalKbNamePrompt'));

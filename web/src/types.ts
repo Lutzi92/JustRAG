@@ -266,6 +266,9 @@ export interface KnowledgeBase {
     // kb_members row (e.g. a published global KB nobody explicitly joined).
     myRole?: KbRole;
     memberCount?: number;
+    // visibility is the stored truth since migration 0065; isGlobal above is
+    // the derived mirror kept for API compatibility.
+    visibility?: 'private' | 'public';
 }
 
 // A curator of a global KB: a kb_members row with role='admin'. `id` is the
@@ -561,4 +564,23 @@ export interface KbConfigValue {
 export interface KbSettingsResponse {
   registry: KbConfigField[];
   values: Record<string, KbConfigValue>;
+}
+
+// GET /api/kb/catalog row — the discovery-surface view of a published global
+// KB: name/description plus the caller's own subscribed flag, so the catalog
+// modal can render a subscribe/unsubscribe toggle without a second request.
+export interface KbCatalogEntry {
+    id: string;
+    name: string;
+    description?: string | null;
+    subscribed: boolean;
+    categoryIds: string[];
+}
+
+// GET /api/admin/kb-categories row — system-admin only; used to render the
+// catalog's optional filter chips.
+export interface KbCategory {
+    id: string;
+    name: string;
+    sortOrder: number;
 }

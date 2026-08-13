@@ -1,8 +1,33 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import axios from 'axios';
 import type { KnowledgeBase } from '../types';
-import { HomeView } from './HomeView';
+import { HomeView, type HomeViewProps } from './HomeView';
 import { translations } from '../translations';
+import { ModalProvider } from '../contexts/ModalContext';
+import { useKbRemoval } from '../hooks/useKbRemoval';
+
+vi.mock('axios');
+const mockedAxios = vi.mocked(axios, true);
+
+// Modal (behind ModalProvider) calls useReducedMotion, which reads
+// window.matchMedia — jsdom doesn't implement it, so tests that mount a real
+// ModalProvider need it stubbed (see KbSettingsPanel.test.tsx for the same
+// pattern). Harmless for the other describe blocks in this file, which never
+// mount ModalProvider.
+beforeEach(() => {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+});
 
 vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -53,6 +78,7 @@ const noopProps = {
   onDeleteKB: vi.fn(),
   removingKb: false,
   onCreateGlobalKB: vi.fn(),
+  onOpenCatalog: vi.fn(),
   onDeleteGlobalKB: vi.fn(),
   onOpenGlobalKbSettings: vi.fn(),
   onOpenShare: vi.fn(),
@@ -73,6 +99,33 @@ const noopProps = {
   showSettings: false,
   setShowSettings: vi.fn(),
 };
+
+// RealRemovalHomeView wires onDeleteKB to the real useKbRemoval hook (rather
+// than noopProps' vi.fn() stub) so tests can exercise the actual delete /
+// leave / unsubscribe decision, including the real confirmation dialog —
+// which needs a real ModalProvider underneath, not a mocked showConfirm.
+function RealRemovalHomeView(props: { kbs: KnowledgeBase[]; globalKbs: KnowledgeBase[] } & Partial<HomeViewProps>) {
+  const { removeKb, removing } = useKbRemoval();
+  const onDeleteKB = async (kb: KnowledgeBase, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await removeKb(kb);
+  };
+  const merged = { ...noopProps, ...props, onDeleteKB, removingKb: removing } as HomeViewProps;
+  return <HomeView {...merged} />;
+}
+
+// The single render helper for this file (Step 2 of the brief): plain
+// prop-override tests (badge) and real-removal-flow tests (subscriber
+// unsubscribe) both go through it, wrapped in a real ModalProvider so
+// showConfirm's dialog actually renders.
+function renderHomeView(overrides: Partial<HomeViewProps> & { kbs?: KnowledgeBase[]; globalKbs?: KnowledgeBase[] } = {}) {
+  const { kbs = [], globalKbs = [], ...rest } = overrides;
+  return render(
+    <ModalProvider>
+      <RealRemovalHomeView kbs={kbs} globalKbs={globalKbs} {...rest} />
+    </ModalProvider>
+  );
+}
 
 // The members-dialog trigger used to be gated on kb.userId === user.id
 // (owner-only), which made the whole `admin` tier unreachable from the UI —
@@ -101,5 +154,121 @@ describe('HomeView members-dialog trigger', () => {
     const kb: KnowledgeBase = { ...baseKb, myRole: 'view' };
     render(<HomeView kbs={[kb]} {...noopProps} />);
     expect(screen.queryByRole('button', { name: translations.share.en })).not.toBeInTheDocument();
+  });
+});
+
+// auto_subscribe defaults to false (Phase 2): a newly published global KB
+// shows up in the catalog but not in anyone's overview until they subscribe,
+// so "globalKbs: []" is the default state for every new user, not an edge
+// case. The Discover trigger must therefore be reachable from the
+// globalKbs.length === 0 branch too, for every authenticated user — not just
+// admins (the mocked useAuth user above has role: 'user').
+describe('HomeView catalog-discovery trigger', () => {
+  it('shows the trigger for a non-admin user with no global KBs and opens the catalog on click', async () => {
+    const onOpenCatalog = vi.fn();
+    render(<HomeView kbs={[]} {...noopProps} globalKbs={[]} onOpenCatalog={onOpenCatalog} />);
+
+    const trigger = screen.getByRole('button', { name: translations.discoverKbs.en });
+    expect(trigger).toBeInTheDocument();
+
+    await userEvent.click(trigger);
+    expect(onOpenCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not gate the empty-state Discover trigger behind admin/superadmin', () => {
+    // Same as above but spelled out against the admin-gated create-KB button
+    // in the same branch, to pin the distinction: create stays admin-only,
+    // discover does not.
+    render(<HomeView kbs={[]} {...noopProps} globalKbs={[]} />);
+    expect(screen.getByRole('button', { name: translations.discoverKbs.en })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: translations.createGlobalKB.en })).not.toBeInTheDocument();
+  });
+
+  it('shows exactly one trigger when the caller already has global KBs', () => {
+    const globalKb: KnowledgeBase = { ...baseKb, id: 'gkb-1', isGlobal: true };
+    render(<HomeView kbs={[]} {...noopProps} globalKbs={[globalKb]} />);
+    expect(screen.getAllByRole('button', { name: translations.discoverKbs.en })).toHaveLength(1);
+  });
+});
+
+// Three displayed states from two stored ones (visibility + memberCount).
+// memberCount counts the owner too, hence <= 1 rather than === 0.
+//
+// The fixtures have to respect where each state can actually come from, or the
+// test proves nothing about production. GET /api/kb hard-filters
+// `WHERE kb.visibility = 'private'`, so the `kbs` prop can never hold a public
+// KB; public ones arrive through GET /api/kb/global, i.e. the `globalKbs` prop.
+// The earlier version of this file passed `kbs: [{ visibility: 'public' }]` —
+// a shape the backend cannot produce — and so kept a dead badge branch green.
+describe('KB visibility badge', () => {
+  it('shows "personal" for a private KB with only the owner', async () => {
+    renderHomeView({ kbs: [{ ...baseKb, id: 'kb-1', name: 'Meine KB', visibility: 'private', memberCount: 1 }] });
+    expect(await screen.findByText(/persönlich|personal/i)).toBeInTheDocument();
+  });
+
+  it('shows the member count for a shared private KB', async () => {
+    renderHomeView({ kbs: [{ ...baseKb, id: 'kb-1', name: 'Team-KB', visibility: 'private', memberCount: 4 }] });
+    expect(await screen.findByText(/geteilt \(4\)|shared \(4\)/i)).toBeInTheDocument();
+  });
+
+  it('shows "public" on a public KB card, regardless of member count', async () => {
+    renderHomeView({
+      globalKbs: [{ ...baseKb, id: 'gkb-1', name: 'Katalog-KB', visibility: 'public', isPublished: true, memberCount: 1 }],
+    });
+    expect(await screen.findByText(/öffentlich|public/i)).toBeInTheDocument();
+  });
+
+  // Vor dem Fix trug die oeffentliche Karte einen eigenen statischen
+  // "Global"-Chip, waehrend der 'public'-Zweig des Badges unerreichbar war.
+  it('renders the shared badge, not the old static global chip, on a public KB card', async () => {
+    renderHomeView({
+      globalKbs: [{ ...baseKb, id: 'gkb-1', name: 'Katalog-KB', visibility: 'public', isPublished: true }],
+    });
+    expect(await screen.findByText(translations.visibilityPublic.en)).toBeInTheDocument();
+    expect(screen.queryByText(translations.globalBadge.en)).not.toBeInTheDocument();
+  });
+});
+
+// Phase 1 built the contextual remove button for members and explicitly
+// deferred the subscriber case: a 404 on /membership/impact means there is
+// no kb_members row at all, i.e. the caller reaches this KB through a
+// subscription (or auto_subscribe), not membership. Leaving a membership
+// deletes the caller's chats in that KB; unsubscribing from a public KB does
+// not — access survives via rule 4 of EffectiveRole — so the dialog and the
+// request must differ.
+describe('remove action for a subscriber', () => {
+  beforeEach(() => {
+    mockedAxios.get.mockReset();
+    mockedAxios.delete.mockReset();
+  });
+
+  // Kein kb_members-Eintrag (myRole undefined) auf einer oeffentlichen KB:
+  // der Nutzer ist Abonnent, nicht Mitglied.
+  it('unsubscribes instead of leaving, and does not warn about chats', async () => {
+    mockedAxios.get.mockRejectedValueOnce({ response: { status: 404 } }); // /membership/impact
+    mockedAxios.delete.mockResolvedValue({ status: 204 });
+
+    renderHomeView({
+      globalKbs: [{ ...baseKb, id: 'kb-1', name: 'Katalog-KB', visibility: 'public', isPublished: true }],
+    });
+
+    await userEvent.click(await screen.findByRole('button', { name: /entfernen|remove/i }));
+
+    // Wait for the confirmation dialog to actually mount before asserting on
+    // its content.
+    await screen.findByRole('dialog');
+
+    // Kein Chat-Verlust in dieser Variante — die Warnung darf nicht erscheinen.
+    expect(screen.queryByText(/chat/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /bestätigen|confirm/i }));
+
+    await waitFor(() => {
+      expect(mockedAxios.delete).toHaveBeenCalledWith(
+        expect.stringContaining('/api/kb/kb-1/subscription')
+      );
+    });
+    expect(mockedAxios.delete).not.toHaveBeenCalledWith(
+      expect.stringContaining('/membership')
+    );
   });
 });

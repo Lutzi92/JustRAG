@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
-import { RefreshCw, AlertTriangle, Loader2, ChevronDown, Hourglass, Play, XCircle, Trash2, UserCog } from 'lucide-react';
+import { RefreshCw, AlertTriangle, Loader2, ChevronDown, Hourglass, Play, XCircle, Trash2, UserCog, Globe } from 'lucide-react';
 import { getApiErrorMessage } from './utils/apiError';
 import { API_BASE_URL } from './api';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
 import { KbDeleteDialog } from './components/admin/KbDeleteDialog';
+import { KbPublishDialog } from './components/admin/KbPublishDialog';
 import { KbTransferOwnerDialog } from './components/admin/KbTransferOwnerDialog';
 
 interface QueueStats {
@@ -100,8 +101,14 @@ const QUEUE_NAMES = ['rag-quick', 'rag-heavy', 'rag-batch'];
 export default function KBOverviewDashboard() {
     const { t, language } = useTheme();
     const { user } = useAuth();
+    // Delete and transfer stay superadmin-only. Publishing does not: it sits on
+    // adminChain server-side (POST /api/admin/kb/{id}/publish), so plain system
+    // admins get that one action — and therefore the actions column — too.
     const canManage = user?.role === 'superadmin';
+    const canPublish = user?.role === 'admin' || user?.role === 'superadmin';
+    const showActions = canManage || canPublish;
     const [deleteTarget, setDeleteTarget] = useState<KBRow | null>(null);
+    const [publishTarget, setPublishTarget] = useState<KBRow | null>(null);
     const [transferTarget, setTransferTarget] = useState<KBRow | null>(null);
     const [actionBusy, setActionBusy] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
@@ -162,6 +169,33 @@ export default function KBOverviewDashboard() {
             setActionBusy(false);
         }
     }, [deleteTarget, fetchData, t]);
+
+    // Publishing flips visibility to 'public' and (server-side) forces
+    // is_published = false, so the row's badges change in two ways at once. The
+    // local patch keeps the row honest the instant the request returns; the
+    // refetch behind it reconciles the derived columns (owner is cleared on
+    // publish) without a page reload — same shape as confirmDelete above.
+    const confirmPublish = useCallback(async () => {
+        if (!publishTarget) return;
+        setActionBusy(true);
+        try {
+            await axios.post(`${API_BASE_URL}/api/admin/kb/${publishTarget.id}/publish`);
+            const publishedId = publishTarget.id;
+            setData((prev) => prev && {
+                ...prev,
+                rows: prev.rows.map((r) => r.id === publishedId
+                    ? { ...r, isGlobal: true, isPublished: false, ownerName: undefined, ownerId: undefined, ownerUsername: undefined }
+                    : r),
+            });
+            setPublishTarget(null);
+            setActionError(null);
+            await fetchData();
+        } catch (err: unknown) {
+            setActionError(getApiErrorMessage(err, t('kbPublishFailed')));
+        } finally {
+            setActionBusy(false);
+        }
+    }, [publishTarget, fetchData, t]);
 
     const confirmTransfer = useCallback(async (userId: string) => {
         if (!transferTarget) return;
@@ -404,7 +438,7 @@ export default function KBOverviewDashboard() {
                                         {c.label}{sortKey === c.key ? (sortAsc ? ' ▲' : ' ▼') : ''}
                                     </th>
                                 ))}
-                                {canManage && (
+                                {showActions && (
                                     <th style={{ ...thStyle, textAlign: 'right', cursor: 'default' }}>{t('colActions')}</th>
                                 )}
                             </tr>
@@ -442,9 +476,24 @@ export default function KBOverviewDashboard() {
                                                 </td>
                                             );
                                         })}
-                                        {canManage && (
+                                        {showActions && (
                                             <td style={{ ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                                                {!row.isGlobal && (
+                                                {/* isGlobal is the generated mirror of (visibility = 'public'),
+                                                    so !isGlobal is exactly "still private" — the only state
+                                                    Publish accepts (it answers 409 otherwise). The reverse
+                                                    direction lives in the global-KB admin tab. */}
+                                                {canPublish && !row.isGlobal && (
+                                                    <button
+                                                        type="button"
+                                                        aria-label={t('kbActionPublish')}
+                                                        title={t('kbActionPublish')}
+                                                        onClick={() => { setActionError(null); setPublishTarget(row); }}
+                                                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '0.25rem' }}
+                                                    >
+                                                        <Globe size={16} aria-hidden="true" />
+                                                    </button>
+                                                )}
+                                                {canManage && !row.isGlobal && (
                                                     <button
                                                         type="button"
                                                         aria-label={t('kbActionTransfer')}
@@ -455,22 +504,24 @@ export default function KBOverviewDashboard() {
                                                         <UserCog size={16} aria-hidden="true" />
                                                     </button>
                                                 )}
-                                                <button
-                                                    type="button"
-                                                    aria-label={t('kbActionDelete')}
-                                                    title={t('kbActionDelete')}
-                                                    onClick={() => { setActionError(null); setDeleteTarget(row); }}
-                                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--error-text)', padding: '0.25rem' }}
-                                                >
-                                                    <Trash2 size={16} aria-hidden="true" />
-                                                </button>
+                                                {canManage && (
+                                                    <button
+                                                        type="button"
+                                                        aria-label={t('kbActionDelete')}
+                                                        title={t('kbActionDelete')}
+                                                        onClick={() => { setActionError(null); setDeleteTarget(row); }}
+                                                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--error-text)', padding: '0.25rem' }}
+                                                    >
+                                                        <Trash2 size={16} aria-hidden="true" />
+                                                    </button>
+                                                )}
                                             </td>
                                         )}
                                     </tr>
                                 );
                             })}
                             {sortedRows.length === 0 && (
-                                <tr><td style={tdStyle} colSpan={columns.length + (canManage ? 1 : 0)}>{t('kbNoKnowledgeBases')}</td></tr>
+                                <tr><td style={tdStyle} colSpan={columns.length + (showActions ? 1 : 0)}>{t('kbNoKnowledgeBases')}</td></tr>
                             )}
                         </tbody>
                     </table>
@@ -488,6 +539,15 @@ export default function KBOverviewDashboard() {
                     error={actionError}
                     onCancel={() => { setDeleteTarget(null); setActionError(null); }}
                     onConfirm={confirmDelete}
+                />
+            )}
+            {publishTarget && (
+                <KbPublishDialog
+                    kbName={publishTarget.name}
+                    busy={actionBusy}
+                    error={actionError}
+                    onCancel={() => { setPublishTarget(null); setActionError(null); }}
+                    onConfirm={confirmPublish}
                 />
             )}
             {transferTarget && (

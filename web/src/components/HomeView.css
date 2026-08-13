@@ -261,7 +261,6 @@
   background: #fdecd6;
 }
 
-.home-view__badge--global,
 .home-view__badge--shared {
   color: var(--accent-primary);
   background: var(--tag-bg);
@@ -272,6 +271,12 @@
   color: var(--text-secondary);
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
+}
+
+.home-view__badge--public {
+  color: #15803d;
+  background: #dcfce7;
+  border: 1px solid #15803d;
 }
 
 .home-view__mini-icon {

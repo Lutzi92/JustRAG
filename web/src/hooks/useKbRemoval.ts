@@ -5,7 +5,7 @@ import { API_BASE_URL } from '../api';
 import { useTheme } from '../contexts/ThemeContext';
 import { useModalContext } from '../contexts/ModalContext';
 
-export type KbRemovalOutcome = 'deleted' | 'left' | 'cancelled';
+export type KbRemovalOutcome = 'deleted' | 'left' | 'unsubscribed' | 'cancelled';
 
 // useKbRemoval is the single place that decides delete vs. leave for a KB
 // card's remove action. Nothing else should scatter its own
@@ -44,6 +44,15 @@ export function useKbRemoval(): { removeKb: (kb: KnowledgeBase) => Promise<KbRem
       // Non-owner: look up how many of the caller's chats in this KB would
       // be destroyed by leaving, so the confirmation names the real number
       // instead of asking the user to delete chats blindly.
+      //
+      // A 200 here means "member", and the leave branch below is then correct
+      // even for a caller who is ALSO a subscriber (or covered by the KB's
+      // auto_subscribe): DELETE /membership severs both bonds server-side —
+      // kbmembers.LeaveKB drops the membership, the chats and writes an
+      // 'opted_out' subscription row in one transaction. Without that opt-out
+      // the tile would return on the very next fetch while the chats were
+      // already gone, which is why this branch does not need (and must not
+      // grow) a second subscription request of its own.
       let chatCount: number;
       try {
         const res = await axios.get(`${API_BASE_URL}/api/kb/${kb.id}/membership/impact`);
@@ -52,16 +61,24 @@ export function useKbRemoval(): { removeKb: (kb: KnowledgeBase) => Promise<KbRem
         const status = (err as { response?: { status?: number } } | null)?.response?.status;
         if (status !== 404) throw err;
 
-        // 404 means the caller has no kb_members row at all — a subscriber-
-        // style implicit viewer (e.g. on a published global KB), not a
-        // member. Phase 1 has no subscription endpoint to unsubscribe from,
-        // so this just confirms and reports nothing removed; do not invent
-        // one.
-        const confirmed = await showConfirm(t('confirmLeaveKbNoChats'));
-        return confirmed ? 'left' : 'cancelled';
+        // 404 auf /membership/impact heisst: keine kb_members-Zeile, also
+        // Abonnent. Abbestellen loescht bewusst KEINE Chats — der Zugriff
+        // besteht ueber Regel 4 der Zugriffsaufloesung weiter, und ein
+        // Admin, der auto_subscribe setzt, darf niemandem durch das
+        // Wegraeumen einer aufgedraengten Kachel den Verlauf kosten.
+        const confirmed = await showConfirm(t('confirmUnsubscribeKb'));
+        if (!confirmed) return 'cancelled';
+        await axios.delete(`${API_BASE_URL}/api/kb/${kb.id}/subscription`);
+        return 'unsubscribed';
       }
 
-      const confirmed = await showConfirm(t('confirmLeaveKb').replace('{count}', String(chatCount)));
+      // Der Chat-Satz faellt weg, wenn es nichts zu verlieren gibt — sonst
+      // stuende dort "0 deiner Chats werden geloescht", was den Nutzer eine
+      // Warnung lesen laesst, die auf ihn nicht zutrifft.
+      const message = chatCount > 0
+        ? t('confirmLeaveKb').replace('{count}', String(chatCount))
+        : t('confirmLeaveKbNoChats');
+      const confirmed = await showConfirm(message);
       if (!confirmed) return 'cancelled';
       await axios.delete(`${API_BASE_URL}/api/kb/${kb.id}/membership`);
       return 'left';

@@ -74,8 +74,8 @@ func seedPersonalKB(t *testing.T, pool *pgxpool.Pool, ownerID string) string {
 		owner = ownerID
 	}
 	err := pool.QueryRow(ctx, `
-		INSERT INTO knowledge_bases (name, description, is_global, user_id)
-		VALUES ('kb-transfer-test', 'fixture', false, $1::uuid)
+		INSERT INTO knowledge_bases (name, description, visibility, user_id)
+		VALUES ('kb-transfer-test', 'fixture', 'private', $1::uuid)
 		RETURNING id::text`, owner).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert kb: %v", err)

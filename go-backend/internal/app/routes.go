@@ -51,8 +51,11 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/kbcategories"
 	"github.com/justrag/go-backend/internal/kbconfig"
 	"github.com/justrag/go-backend/internal/kbmembers"
+	"github.com/justrag/go-backend/internal/kbsubs"
+	"github.com/justrag/go-backend/internal/kbvisibility"
 	"github.com/justrag/go-backend/internal/kg"
 	"github.com/justrag/go-backend/internal/kgevents"
 	"github.com/justrag/go-backend/internal/kggraph"
@@ -476,6 +479,16 @@ func registerAdminRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/admin/global-kbs/{id}/editors", rc.adminChain(adminGlobalKBsHandler.AddEditor))
 	rc.mux.Handle("DELETE /api/admin/global-kbs/{id}/editors/{userId}", rc.adminChain(adminGlobalKBsHandler.RemoveEditor))
 
+	// Veroeffentlichen/Zuruecknehmen liegt auf adminChain, nicht auf
+	// kbAdminChain: eine KB oeffentlich zu machen gibt JEDEM authentifizierten
+	// Zugang view-Recht (Regel 4 der Zugriffsaufloesung). Das ist eine
+	// System-, keine KB-Entscheidung.
+	kbVisibilityHandler := kbvisibility.NewHandler(
+		kbvisibility.NewStore(rc.infra.db.Main), kbOverviewStore)
+	rc.mux.Handle("POST /api/admin/kb/{id}/publish", rc.adminChain(kbVisibilityHandler.Publish))
+	rc.mux.Handle("POST /api/admin/kb/{id}/unpublish", rc.adminChain(kbVisibilityHandler.Unpublish))
+	rc.mux.Handle("GET /api/admin/kb/{id}/unpublish-impact", rc.adminChain(kbVisibilityHandler.UnpublishImpact))
+
 	// Maintenance endpoints — bulk re-embed sweep, user-memory re-embed, and agent template upload.
 	maintenanceHandler := adminmaintenance.NewHandler(rc.kbStore, rc.infra.asynqClient, longmem.NewPgStore(rc.infra.db.Main))
 	rc.mux.Handle("POST /api/admin/reembed-all", rc.superadminChain(maintenanceHandler.ReembedAll))
@@ -668,6 +681,26 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/kb/{id}/transfer-owner", rc.kbViewChain(kbMembersHandler.TransferOwner))
 	rc.mux.Handle("DELETE /api/kb/{id}/membership", rc.kbViewChain(kbMembersHandler.LeaveKB))
 	rc.mux.Handle("GET /api/kb/{id}/membership/impact", rc.kbViewChain(kbMembersHandler.MembershipImpact))
+
+	// Subscription — display comfort only, never an access grant. Access to a
+	// published public KB already comes from rule 4 of kbaccess.EffectiveRole;
+	// the handler itself rejects private/unpublished KBs with 409.
+	kbSubsHandler := kbsubs.NewHandler(kbsubs.NewStore(rc.infra.db.Main))
+	rc.mux.Handle("PUT /api/kb/{id}/subscription", rc.kbViewChain(kbSubsHandler.Subscribe))
+	rc.mux.Handle("DELETE /api/kb/{id}/subscription", rc.kbViewChain(kbSubsHandler.Unsubscribe))
+	rc.mux.Handle("GET /api/kb/catalog", rc.authMw.Authenticate(http.HandlerFunc(kbSubsHandler.Catalog)))
+
+	// Catalog categories — a flat, system-admin curated taxonomy (adminChain
+	// on the CRUD routes: the list is shared across the whole deployment).
+	// Assigning a KB to categories is a per-KB decision (kbAdminChain);
+	// reading a KB's categories only needs kbViewChain.
+	kbCategoriesHandler := kbcategories.NewHandler(kbcategories.NewStore(rc.infra.db.Main))
+	rc.mux.Handle("GET /api/admin/kb-categories", rc.adminChain(kbCategoriesHandler.List))
+	rc.mux.Handle("POST /api/admin/kb-categories", rc.adminChain(kbCategoriesHandler.Create))
+	rc.mux.Handle("PATCH /api/admin/kb-categories/{catId}", rc.adminChain(kbCategoriesHandler.Update))
+	rc.mux.Handle("DELETE /api/admin/kb-categories/{catId}", rc.adminChain(kbCategoriesHandler.Delete))
+	rc.mux.Handle("GET /api/kb/{id}/categories", rc.kbViewChain(kbCategoriesHandler.ListKBCategories))
+	rc.mux.Handle("PUT /api/kb/{id}/categories", rc.kbAdminChain(kbCategoriesHandler.SetKBCategories))
 
 	// Analytics
 	analyticsHandler := analytics.NewHandler(analytics.NewStore(rc.infra.db.Main))

@@ -30,6 +30,7 @@ type GlobalKBRow struct {
 	Description    *string         `json:"description"    db:"description"`
 	Language       string          `json:"language"       db:"language"`
 	IsPublished    bool            `json:"isPublished"    db:"is_published"`
+	AutoSubscribe  bool            `json:"autoSubscribe"  db:"auto_subscribe"`
 	SystemPrompt   *string         `json:"systemPrompt"   db:"system_prompt"`
 	HeaderText     *string         `json:"headerText"     db:"header_text"`
 	ExamplePrompts *string         `json:"examplePrompts" db:"example_prompts"`
@@ -69,6 +70,7 @@ type GlobalKBUpdate struct {
 	Description    *string         `json:"description"`
 	Language       *string         `json:"language"`
 	IsPublished    *bool           `json:"isPublished"`
+	AutoSubscribe  *bool           `json:"autoSubscribe"`
 	SystemPrompt   *string         `json:"systemPrompt"`
 	HeaderText     *string         `json:"headerText"`
 	ExamplePrompts *string         `json:"examplePrompts"`

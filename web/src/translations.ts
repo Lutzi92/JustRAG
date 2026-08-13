@@ -286,8 +286,15 @@ export const translations = {
     confirmDeleteContent: { de: 'Möchtest du diesen Inhalt wirklich löschen?', en: 'Do you really want to delete this content?' },
     confirmDeleteChat: { de: 'Bist du sicher, dass du diesen Chat-Verlauf löschen möchtest?', en: 'Are you sure you want to delete this chat history?' },
     confirmDeleteKB: { de: 'Bist du sicher, dass du diese Knowledge Base löschen möchtest?', en: 'Are you sure you want to delete this knowledge base?' },
+    // Zwei Varianten derselben Frage: die Chat-Warnung erscheint nur, wenn es
+    // wirklich Chats zu verlieren gibt (chatCount > 0 in useKbRemoval) — sonst
+    // stuende dort "0 deiner Chats werden geloescht".
     confirmLeaveKb: { de: 'Diese Knowledge Base verlassen? {count} deiner Chats darin werden dabei gelöscht.', en: 'Leave this knowledge base? {count} of your chats in it will be deleted.' },
     confirmLeaveKbNoChats: { de: 'Diese Knowledge Base verlassen?', en: 'Leave this knowledge base?' },
+    // Subscriber (no kb_members row) removing a public KB tile: unlike
+    // leaving a membership, this deletes no chats — access survives via rule
+    // 4 of EffectiveRole — so the wording must not carry a chat warning.
+    confirmUnsubscribeKb: { de: 'Diese Knowledge Base nicht mehr abonnieren?', en: 'Unsubscribe from this knowledge base?' },
     confirmDeleteFile: { de: 'Bist du sicher, dass du diese Datei löschen möchtest? Dies entfernt auch alle daraus extrahierten Informationen.', en: 'Are you sure you want to delete this file? This will also remove all extracted information.' },
     enterKBName: { de: 'Name für deine Knowledge Base eingeben:', en: 'Enter name for your Knowledge Base:' },
     shareSuccess: { de: 'Knowledge Base geteilt mit', en: 'Knowledge Base shared with' },
@@ -344,6 +351,18 @@ export const translations = {
     editSettings: { de: 'Einstellungen bearbeiten', en: 'Edit settings' },
     globalKbSettings: { de: 'Globale KB-Einstellungen', en: 'Global KB Settings' },
     openKb: { de: 'Knowledge Base öffnen', en: 'Open Knowledge Base' },
+
+    // KB Catalog Modal
+    discoverKbs: { de: 'KBs entdecken', en: 'Discover KBs' },
+    catalogTitle: { de: 'Öffentliche Wissensdatenbanken', en: 'Public knowledge bases' },
+    catalogSearchPlaceholder: { de: 'Name oder Beschreibung suchen…', en: 'Search name or description…' },
+    catalogEmpty: { de: 'Keine öffentlichen Wissensdatenbanken gefunden.', en: 'No public knowledge bases found.' },
+    catalogAllCategories: { de: 'Alle', en: 'All' },
+    // `subscribe` already exists (RSS-feed subscribe button) with the identical
+    // Abonnieren/Subscribe copy — reused here rather than duplicating the key.
+    unsubscribe: { de: 'Abbestellen', en: 'Unsubscribe' },
+    subscribedBadge: { de: 'Abonniert', en: 'Subscribed' },
+    subscriptionError: { de: 'Abo konnte nicht geändert werden.', en: 'Could not change the subscription.' },
     generalInfo: { de: 'Allgemein', en: 'General' },
     kbName: { de: 'Name', en: 'Name' },
     headerTextLabel: { de: 'Beschreibung & Tipps', en: 'Description & Tips' },
@@ -535,8 +554,12 @@ export const translations = {
     selectSource: { de: 'Quelle auswählen', en: 'Select source' },
 
     // HomeView
-    badgePersonal: { de: 'Persönlich', en: 'Personal' },
-    badgeShared: { de: 'Geteilt mit {n}', en: 'Shared with {n}' },
+    // Three displayed visibility states from two stored fields (visibility +
+    // memberCount). visibilityShared has no {n} placeholder — t() takes no
+    // interpolation args, so the count is appended outside the translation.
+    visibilityPersonal: { de: 'Persönlich', en: 'Personal' },
+    visibilityShared: { de: 'Geteilt', en: 'Shared' },
+    visibilityPublic: { de: 'Öffentlich', en: 'Public' },
     // KB member roles (kb_members.role) — distinct from the "Roles" (system
     // user role) keys below; roleAdmin there is the site-wide admin role,
     // not a per-KB one, so these carry a kbRole* prefix to avoid colliding.
@@ -881,6 +904,23 @@ export const translations = {
     kbTransferSubmit: { de: 'Besitzer übertragen', en: 'Transfer ownership' },
     kbTransferFailed: { de: 'Übertragung fehlgeschlagen', en: 'Transfer failed' },
     kbTransferUsersLoadError: { de: 'Fehler beim Laden der Nutzenden', en: 'Error loading users' },
+    // KB Overview — publish (POST /api/admin/kb/{id}/publish). Only offered
+    // for private KBs; the reverse direction lives in the global-KB admin tab.
+    kbActionPublish: { de: 'Öffentlich machen', en: 'Make public' },
+    kbPublishTitle: { de: 'Knowledge Base öffentlich machen', en: 'Make knowledge base public' },
+    kbPublishWarning: {
+        de: 'Sobald sie veröffentlicht ist, kann JEDE angemeldete Person diese Knowledge Base lesen.',
+        en: 'Once it is published, EVERY authenticated user will be able to read this knowledge base.',
+    },
+    kbPublishStagedNote: {
+        de: 'Sie geht dabei noch nicht live: bis du sie im Tab „Globale KBs" veröffentlichst, sehen sie nur KB-Admins und Systemadmins.',
+        en: 'It does not go live yet: until you publish it in the “Global KBs” tab, only KB admins and system admins can see it.',
+    },
+    kbPublishOwnerNote: {
+        de: 'Öffentliche KBs haben keinen Besitzer — der bisherige Besitzer behält als KB-Admin vollen Zugriff.',
+        en: 'Public KBs have no owner — the previous owner keeps full access as a KB admin.',
+    },
+    kbPublishFailed: { de: 'Veröffentlichen fehlgeschlagen', en: 'Publishing failed' },
     queueWaiting: { de: 'Wartend', en: 'Waiting' },
     queueActive: { de: 'Aktiv', en: 'Active' },
     queueFailed: { de: 'Fehlgeschlagen', en: 'Failed' },
@@ -1526,6 +1566,27 @@ export const translations = {
     // create already defined in API Keys section
     edit: { de: 'Bearbeiten', en: 'Edit' },
     // loading already defined in API Keys section
+
+    // Public KBs admin tab (visibility, auto-subscribe, unpublish, categories)
+    publicKnowledgeBases: { de: 'Öffentliche Wissensdatenbanken', en: 'Public knowledge bases' },
+    unpublishKb: { de: 'Zurücknehmen', en: 'Make private' },
+    unpublishTitle: { de: 'Wissensdatenbank zurücknehmen', en: 'Make knowledge base private' },
+    unpublishOwnerLabel: { de: 'Neuer Eigentümer', en: 'New owner' },
+    unpublishNoCandidates: { de: 'Es gibt keine KB-Admins — Sie werden Eigentümer.', en: 'There are no KB admins — you will become the owner.' },
+    unpublishSubscriberWarning: { de: '{count} Abonnenten verlieren den Zugriff.', en: '{count} subscribers will lose access.' },
+    unpublishImpactLoadError: { de: 'Fehler beim Laden der Auswirkungen', en: 'Error loading the impact' },
+    unpublishError: { de: 'Fehler beim Zurücknehmen der Wissensdatenbank', en: 'Error making the knowledge base private' },
+    autoSubscribe: { de: 'In allen Übersichten anzeigen', en: "Show in everyone's overview" },
+    autoSubscribeHint: { de: 'Ohne diese Option erscheint die KB nur im Katalog.', en: 'Without this, the KB appears only in the catalog.' },
+    autoSubscribeError: { de: 'Fehler beim Aktualisieren der Einstellung', en: 'Error updating the setting' },
+    categories: { de: 'Kategorien', en: 'Categories' },
+    noCategories: { de: 'Noch keine Kategorien erstellt.', en: 'No categories created yet.' },
+    categoryNamePrompt: { de: 'Name der Kategorie', en: 'Category name' },
+    categoryDeleteConfirm: { de: 'Kategorie löschen? Zuordnungen gehen verloren.', en: 'Delete this category? Assignments will be lost.' },
+    categorySaveError: { de: 'Fehler beim Speichern der Kategorie', en: 'Error saving the category' },
+    categoryDeleteError: { de: 'Fehler beim Löschen der Kategorie', en: 'Error deleting the category' },
+    categoriesAssignError: { de: 'Fehler beim Zuordnen der Kategorien', en: 'Error assigning categories' },
+    categoriesLoadError: { de: 'Kategorien konnten nicht geladen werden — Zuordnung deaktiviert, um nichts zu überschreiben.', en: 'Could not load categories — assignment disabled to avoid overwriting them.' },
 
     // Re-embed
     reembedAllTitle: { de: 'Alle Dateien neu einbetten', en: 'Re-embed All Files' },

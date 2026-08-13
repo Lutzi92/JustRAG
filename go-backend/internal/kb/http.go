@@ -25,6 +25,7 @@ type KBRow struct {
 	UserID         *string         `json:"userId"         db:"user_id"`
 	Description    *string         `json:"description"    db:"description"`
 	IsGlobal       bool            `json:"isGlobal"       db:"is_global"`
+	Visibility     string          `json:"visibility"     db:"visibility"`
 	IsPublished    bool            `json:"isPublished"    db:"is_published"`
 	Language       string          `json:"language"       db:"language"`
 	SystemPrompt   *string         `json:"systemPrompt"   db:"system_prompt"`

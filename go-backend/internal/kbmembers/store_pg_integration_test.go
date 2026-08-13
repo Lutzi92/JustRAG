@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/kbmembers"
 )
@@ -64,8 +65,8 @@ func insertKB(t *testing.T, pool *pgxpool.Pool, ownerID string, isGlobal, isPubl
 	ctx := context.Background()
 	var id string
 	err := pool.QueryRow(ctx, `
-		INSERT INTO knowledge_bases (name, description, is_global, is_published, user_id)
-		VALUES ('kb-members-test', 'fixture', $1, $2, $3::uuid)
+		INSERT INTO knowledge_bases (name, description, visibility, is_published, user_id)
+		VALUES ('kb-members-test', 'fixture', CASE WHEN $1 THEN 'public' ELSE 'private' END, $2, $3::uuid)
 		RETURNING id::text`, isGlobal, isPublished, ownerID).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert kb: %v", err)
@@ -344,6 +345,117 @@ func TestLeaveKB_DeletesOwnChatsOnly(t *testing.T) {
 	}
 }
 
+// insertPublicKB inserts an ownerless published public KB — the shape a KB has
+// after kbvisibility.Publish — with the given auto_subscribe flag.
+func insertPublicKB(t *testing.T, pool *pgxpool.Pool, name string, autoSubscribe bool) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO knowledge_bases (name, visibility, is_published, auto_subscribe)
+		VALUES ($1, 'public', true, $2)
+		RETURNING id::text`, name, autoSubscribe).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert public kb: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM knowledge_bases WHERE id = $1::uuid`, id) //nolint:errcheck
+	})
+	return id
+}
+
+// TestLeaveKB_RecordsOptOut pins the second half of the spec's "Entfernen
+// entfernt beides in einer Transaktion": leaving must ALSO store an
+// opted_out subscription row. Deleting the row (or writing none) is not
+// equivalent — see TestLeaveKB_TileDoesNotReturnOnAutoSubscribe.
+func TestLeaveKB_RecordsOptOut(t *testing.T) {
+	pool := testPool(t)
+	store := kbmembers.NewStore(pool)
+
+	curator := insertUser(t, pool, "leave-optout-curator")
+	kbID := insertPublicKB(t, pool, "leave-optout-kb", true)
+	mustExec(t, pool, `INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1, $2, 'admin')`, kbID, curator)
+	chatID := insertChat(t, pool, kbID, curator)
+
+	deleted, err := store.LeaveKB(context.Background(), kbID, curator)
+	if err != nil {
+		t.Fatalf("LeaveKB: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deletedChats = %d, want 1", deleted)
+	}
+
+	var memberCount, chatCount int
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM kb_members WHERE kb_id = $1 AND user_id = $2`,
+		kbID, curator).Scan(&memberCount)
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM chats WHERE id = $1`, chatID).Scan(&chatCount)
+	if memberCount != 0 {
+		t.Errorf("membership should be gone, got %d rows", memberCount)
+	}
+	if chatCount != 0 {
+		t.Errorf("chat should be gone, got %d rows", chatCount)
+	}
+
+	var state string
+	if err := mustQueryRow(t, pool,
+		`SELECT state FROM kb_subscriptions WHERE kb_id = $1 AND user_id = $2`,
+		kbID, curator).Scan(&state); err != nil {
+		t.Fatalf("no kb_subscriptions row after LeaveKB: %v", err)
+	}
+	if state != "opted_out" {
+		t.Fatalf("subscription state = %q, want opted_out", state)
+	}
+}
+
+// TestLeaveKB_TileDoesNotReturnOnAutoSubscribe is the regression test for the
+// reported bug: a curator (kb_members role='admin', the backfilled shape of
+// every pre-Phase-2 global-KB editor) removes a published public KB with
+// auto_subscribe = true from their overview. Before the opt-out write, the
+// membership and their chats were destroyed while arm 3 of
+// ListGlobalKnowledgeBases' three-way OR still matched — so the tile came
+// straight back and the role was gone irrecoverably.
+func TestLeaveKB_TileDoesNotReturnOnAutoSubscribe(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbmembers.NewStore(pool)
+	kbStore := kb.NewStore(pool)
+
+	curator := insertUser(t, pool, "leave-tile-curator")
+	kbID := insertPublicKB(t, pool, "leave-tile-kb", true /*auto_subscribe*/)
+	mustExec(t, pool, `INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1, $2, 'admin')`, kbID, curator)
+
+	// Vorbedingung: die Kachel ist sichtbar.
+	before, err := kbStore.ListGlobalKnowledgeBases(ctx, curator, false)
+	if err != nil {
+		t.Fatalf("ListGlobalKnowledgeBases (before): %v", err)
+	}
+	if !containsKB(before, kbID) {
+		t.Fatalf("precondition failed: KB %s is not in the overview before leaving", kbID)
+	}
+
+	if _, err := store.LeaveKB(ctx, kbID, curator); err != nil {
+		t.Fatalf("LeaveKB: %v", err)
+	}
+
+	after, err := kbStore.ListGlobalKnowledgeBases(ctx, curator, false)
+	if err != nil {
+		t.Fatalf("ListGlobalKnowledgeBases (after): %v", err)
+	}
+	if containsKB(after, kbID) {
+		t.Fatal("KB reappeared in the overview after leaving — auto_subscribe arm still matches, " +
+			"so the chats and the role were destroyed for nothing")
+	}
+}
+
+func containsKB(rows []kb.KBRow, id string) bool {
+	for _, r := range rows {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // TestLeaveKB_OwnerRefused stellt sicher, dass der Owner nicht verlassen kann.
 func TestLeaveKB_OwnerRefused(t *testing.T) {
 	pool := testPool(t)
@@ -361,14 +473,20 @@ func TestLeaveKB_OwnerRefused(t *testing.T) {
 		t.Fatalf("deletedChats = %d, want 0", deleted)
 	}
 
-	var chatCount, memberCount int
+	var chatCount, memberCount, subCount int
 	mustQueryRow(t, pool, `SELECT COUNT(*) FROM chats WHERE id = $1`, chatID).Scan(&chatCount)
 	mustQueryRow(t, pool, `SELECT COUNT(*) FROM kb_members WHERE kb_id = $1 AND user_id = $2`,
 		kbID, owner).Scan(&memberCount)
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM kb_subscriptions WHERE kb_id = $1 AND user_id = $2`,
+		kbID, owner).Scan(&subCount)
 	if chatCount != 1 {
 		t.Fatalf("owner's chat should survive, got %d rows", chatCount)
 	}
 	if memberCount != 1 {
 		t.Fatalf("owner's membership should survive, got %d rows", memberCount)
+	}
+	// Ein abgelehntes Verlassen darf auch keinen Opt-out schreiben.
+	if subCount != 0 {
+		t.Fatalf("refused leave wrote %d kb_subscriptions rows, want 0", subCount)
 	}
 }

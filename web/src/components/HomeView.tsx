@@ -1,7 +1,7 @@
 import { lazy, Suspense, useMemo } from 'react';
 import {
   BookOpen, Settings, Sun, Moon, User, LogOut, Copy, Check, Plus,
-  Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, Loader2, Bot
+  Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, Loader2, Bot, Search
 } from 'lucide-react';
 import type { KnowledgeBase, SafeAIConfig } from '../types';
 import { API_BASE_URL } from '../api';
@@ -13,7 +13,7 @@ import './HomeView.css';
 const MembersModal = lazy(() => import('./MembersModal').then(module => ({ default: module.MembersModal })));
 const SettingsModal = lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
 
-interface HomeViewProps {
+export interface HomeViewProps {
   kbs: KnowledgeBase[];
   globalKbs: KnowledgeBase[];
   currentKb: KnowledgeBase | null;
@@ -29,6 +29,7 @@ interface HomeViewProps {
   onDeleteKB: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   removingKb: boolean;
   onCreateGlobalKB: () => void;
+  onOpenCatalog: () => void;
   onDeleteGlobalKB: (id: string, e: React.MouseEvent) => void;
   onOpenGlobalKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onOpenShare: (kb: KnowledgeBase, e: React.MouseEvent) => void;
@@ -77,6 +78,44 @@ function lastActiveLabel(
   else if (Math.abs(hr) < 24) rel = rtf.format(hr, 'hour');
   else rel = rtf.format(day, 'day');
   return `${t('kbLastActive')} ${rel}`;
+}
+
+// Drei angezeigte Zustaende aus zwei gespeicherten. memberCount enthaelt den
+// Owner, deshalb <= 1 und nicht === 0. Single source of truth for the
+// three-way branch — text, CSS class and icon all derive from this instead
+// of each re-implementing their own kb.visibility === 'public' check.
+type VisibilityState = 'public' | 'shared' | 'personal';
+
+function visibilityState(kb: KnowledgeBase): VisibilityState {
+  if (kb.visibility === 'public') return 'public';
+  return (kb.memberCount ?? 1) > 1 ? 'shared' : 'personal';
+}
+
+// Der Zaehler steht ausserhalb der Uebersetzung, weil t() keine
+// Interpolation kann.
+function visibilityBadge(kb: KnowledgeBase, t: (k: string) => string): string {
+  const state = visibilityState(kb);
+  if (state === 'public') return t('visibilityPublic');
+  if (state === 'shared') return `${t('visibilityShared')} (${kb.memberCount})`;
+  return t('visibilityPersonal');
+}
+
+// VisibilityBadge renders the three-state badge on every KB card, personal and
+// public alike. It has to be shared: GET /api/kb hard-filters
+// `WHERE kb.visibility = 'private'`, so a public KB never reaches the personal
+// grid — and while the public grid rendered its own static "Global" chip, the
+// 'public' state of this badge was unreachable code and the spec's third state
+// shipped to nobody. One component, one branch, three reachable states.
+function VisibilityBadge({ kb, t }: { kb: KnowledgeBase; t: (k: string) => string }) {
+  const state = visibilityState(kb);
+  return (
+    <div className={`home-view__badge home-view__badge--${state}`}>
+      {state === 'public'
+        ? <Globe size={10} aria-hidden="true" />
+        : <User size={10} aria-hidden="true" />}
+      {visibilityBadge(kb, t)}
+    </div>
+  );
 }
 
 // canManageMembers gates the members-dialog trigger: admins and owners
@@ -128,7 +167,7 @@ export function HomeView(props: HomeViewProps) {
   const {
     kbs, globalKbs, currentKb, availableConfigs,
     copySuccess, onCopyUserId, onLogout, onViewProfile, onViewAdmin, onViewAgents,
-    onCreateKB, onSelectKB, onDeleteKB, removingKb, onCreateGlobalKB, onDeleteGlobalKB,
+    onCreateKB, onSelectKB, onDeleteKB, removingKb, onCreateGlobalKB, onOpenCatalog, onDeleteGlobalKB,
     onOpenGlobalKbSettings, onOpenShare, onUpdateKBSettings,
     showShareModal, setShowShareModal, sharingKb, shareUserId, setShareUserId,
     shareTargetUser, shareLoading, sharePermission, setSharePermission,
@@ -219,6 +258,15 @@ export function HomeView(props: HomeViewProps) {
           <div className="home-view__section-header">
             <Globe size={20} color="var(--accent-primary)" aria-hidden="true" />
             <h2 className="home-view__section-title">{t('globalKBs')}</h2>
+            <button
+              type="button"
+              onClick={onOpenCatalog}
+              className="secondary-button"
+              style={{ marginInlineStart: 'auto', display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.8rem', fontSize: '0.85rem' }}
+            >
+              <Search size={14} aria-hidden="true" />
+              {t('discoverKbs')}
+            </button>
           </div>
 
           <ul className="home-view__grid">
@@ -260,10 +308,7 @@ export function HomeView(props: HomeViewProps) {
                       </div>
                     )}
 
-                    <div className="home-view__badge home-view__badge--global">
-                      <Globe size={10} aria-hidden="true" />
-                      {t('globalBadge')}
-                    </div>
+                    <VisibilityBadge kb={kb} t={t} />
 
                     {(user?.role === 'admin' || user?.role === 'superadmin') && (
                       <>
@@ -284,6 +329,31 @@ export function HomeView(props: HomeViewProps) {
                           <Trash2 size={16} aria-hidden="true" />
                         </button>
                       </>
+                    )}
+
+                    {/* Non-admins reach this card only via subscription/
+                        membership (ListGlobalKnowledgeBases scopes their
+                        query to that), so removal here is always "get this
+                        tile out of my overview", never the admin's outright
+                        delete above — hence gated on the inverse of the
+                        admin check rather than composed with it. onDeleteKB
+                        (useKbRemoval) already branches on myRole: undefined
+                        means a subscriber and lands in the unsubscribe
+                        branch, a curator's 'admin' role means leaving the
+                        KB. Admins never see this button: their
+                        ListGlobalKnowledgeBases query is unfiltered by
+                        subscription, so "remove" would be misleading — the
+                        KB reappears on next load regardless. */}
+                    {!(user?.role === 'admin' || user?.role === 'superadmin') && (
+                      <button
+                        onClick={(e) => onDeleteKB(kb, e)}
+                        className="home-view__mini-icon"
+                        disabled={removingKb}
+                        title={kb.myRole === 'owner' ? t('deleteKb') : t('removeFromMyView')}
+                        aria-label={kb.myRole === 'owner' ? t('deleteKb') : t('removeFromMyView')}
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                      </button>
                     )}
                   </div>
                 </div>
@@ -310,23 +380,34 @@ export function HomeView(props: HomeViewProps) {
         </section>
       )}
 
-      {globalKbs.length === 0 && (user?.role === 'admin' || user?.role === 'superadmin') && (
+      {globalKbs.length === 0 && (
         <section className="home-view__section">
           <div className="home-view__section-header">
             <Globe size={20} color="var(--accent-primary)" aria-hidden="true" />
             <h2 className="home-view__section-title">{t('globalKBs')}</h2>
-          </div>
-          <div className="home-view__grid">
             <button
               type="button"
-              className="source-card home-view__create-card home-view__create-card-btn"
-              onClick={onCreateGlobalKB}
-              aria-label={t('createGlobalKB')}
+              onClick={onOpenCatalog}
+              className="secondary-button"
+              style={{ marginInlineStart: 'auto', display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.8rem', fontSize: '0.85rem' }}
             >
-              <Plus size={32} aria-hidden="true" />
-              <span className="home-view__create-label">{t('createGlobalKB')}</span>
+              <Search size={14} aria-hidden="true" />
+              {t('discoverKbs')}
             </button>
           </div>
+          {(user?.role === 'admin' || user?.role === 'superadmin') && (
+            <div className="home-view__grid">
+              <button
+                type="button"
+                className="source-card home-view__create-card home-view__create-card-btn"
+                onClick={onCreateGlobalKB}
+                aria-label={t('createGlobalKB')}
+              >
+                <Plus size={32} aria-hidden="true" />
+                <span className="home-view__create-label">{t('createGlobalKB')}</span>
+              </button>
+            </div>
+          )}
         </section>
       )}
 
@@ -365,10 +446,7 @@ export function HomeView(props: HomeViewProps) {
             <div className="home-view__card-top">
               <BookOpen size={20} color="var(--text-secondary)" aria-hidden="true" />
               <div className="home-view__badge-row">
-                <div className={`home-view__badge ${(kb.memberCount ?? 1) <= 1 ? 'home-view__badge--personal' : 'home-view__badge--shared'}`}>
-                  <User size={10} aria-hidden="true" />
-                  {(kb.memberCount ?? 1) <= 1 ? t('badgePersonal') : t('badgeShared').replace('{n}', String(kb.memberCount))}
-                </div>
+                <VisibilityBadge kb={kb} t={t} />
 
                 {canManageMembers(kb) && (
                   <button

@@ -10,6 +10,28 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## Unreleased
+
+### ⚠ Upgrade notes
+
+- **Migration 0065** is required and **cannot be rolled back by re-pointing the
+  image tag** (`cmd/migrate` is up-only). Under k8s, run the migrate step
+  before `kubectl apply` — see `docs/runbooks/release.md`.
+- `knowledge_bases.is_global` becomes a **generated column**. Any external tool
+  that writes it will fail with SQLSTATE 428C9; write `visibility` instead
+  (`'public'` / `'private'`). Reads are unaffected.
+- Existing global KBs are backfilled to `visibility='public'`, and those that
+  were also published get `auto_subscribe=true` — every user keeps seeing
+  exactly what they saw before.
+- **Newly** published public KBs default to `auto_subscribe=false`: they are
+  discoverable in the catalog but appear in nobody's overview until a user
+  subscribes, or an admin enables the flag.
+- Making a KB public is **staged**: `POST /api/admin/kb/{id}/publish` (now
+  reachable from the admin KB-Übersicht) sets `visibility='public'` *and*
+  `is_published=false`, so the KB is visible only to its KB admins and to
+  system admins until an operator publishes it in the global-KB tab. Existing
+  rows are untouched; this only affects KBs published from this release on.
+
 ## v0.2.0 — 2026-08-12
 
 ### ⚠ Upgrade notes
