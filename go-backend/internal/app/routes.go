@@ -53,6 +53,7 @@ import (
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/kbconfig"
 	"github.com/justrag/go-backend/internal/kbmembers"
+	"github.com/justrag/go-backend/internal/kbsubs"
 	"github.com/justrag/go-backend/internal/kbvisibility"
 	"github.com/justrag/go-backend/internal/kg"
 	"github.com/justrag/go-backend/internal/kgevents"
@@ -679,6 +680,13 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/kb/{id}/transfer-owner", rc.kbViewChain(kbMembersHandler.TransferOwner))
 	rc.mux.Handle("DELETE /api/kb/{id}/membership", rc.kbViewChain(kbMembersHandler.LeaveKB))
 	rc.mux.Handle("GET /api/kb/{id}/membership/impact", rc.kbViewChain(kbMembersHandler.MembershipImpact))
+
+	// Subscription — display comfort only, never an access grant. Access to a
+	// published public KB already comes from rule 4 of kbaccess.EffectiveRole;
+	// the handler itself rejects private/unpublished KBs with 409.
+	kbSubsHandler := kbsubs.NewHandler(kbsubs.NewStore(rc.infra.db.Main))
+	rc.mux.Handle("PUT /api/kb/{id}/subscription", rc.kbViewChain(kbSubsHandler.Subscribe))
+	rc.mux.Handle("DELETE /api/kb/{id}/subscription", rc.kbViewChain(kbSubsHandler.Unsubscribe))
 
 	// Analytics
 	analyticsHandler := analytics.NewHandler(analytics.NewStore(rc.infra.db.Main))
