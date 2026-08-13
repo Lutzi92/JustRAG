@@ -51,6 +51,7 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/kbcategories"
 	"github.com/justrag/go-backend/internal/kbconfig"
 	"github.com/justrag/go-backend/internal/kbmembers"
 	"github.com/justrag/go-backend/internal/kbsubs"
@@ -687,6 +688,18 @@ func registerKBRoutes(rc *routeCtx) {
 	kbSubsHandler := kbsubs.NewHandler(kbsubs.NewStore(rc.infra.db.Main))
 	rc.mux.Handle("PUT /api/kb/{id}/subscription", rc.kbViewChain(kbSubsHandler.Subscribe))
 	rc.mux.Handle("DELETE /api/kb/{id}/subscription", rc.kbViewChain(kbSubsHandler.Unsubscribe))
+
+	// Catalog categories — a flat, system-admin curated taxonomy (adminChain
+	// on the CRUD routes: the list is shared across the whole deployment).
+	// Assigning a KB to categories is a per-KB decision (kbAdminChain);
+	// reading a KB's categories only needs kbViewChain.
+	kbCategoriesHandler := kbcategories.NewHandler(kbcategories.NewStore(rc.infra.db.Main))
+	rc.mux.Handle("GET /api/admin/kb-categories", rc.adminChain(kbCategoriesHandler.List))
+	rc.mux.Handle("POST /api/admin/kb-categories", rc.adminChain(kbCategoriesHandler.Create))
+	rc.mux.Handle("PATCH /api/admin/kb-categories/{catId}", rc.adminChain(kbCategoriesHandler.Update))
+	rc.mux.Handle("DELETE /api/admin/kb-categories/{catId}", rc.adminChain(kbCategoriesHandler.Delete))
+	rc.mux.Handle("GET /api/kb/{id}/categories", rc.kbViewChain(kbCategoriesHandler.ListKBCategories))
+	rc.mux.Handle("PUT /api/kb/{id}/categories", rc.kbAdminChain(kbCategoriesHandler.SetKBCategories))
 
 	// Analytics
 	analyticsHandler := analytics.NewHandler(analytics.NewStore(rc.infra.db.Main))
