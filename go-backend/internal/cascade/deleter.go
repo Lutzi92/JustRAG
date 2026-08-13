@@ -329,6 +329,6 @@ func (d *Deleter) deleteGlobalKBTransaction(ctx context.Context, kbID string) er
 		{`DELETE FROM files WHERE kb_id = $1`, []any{kbID}},
 		{`DELETE FROM chats WHERE kb_id = $1`, []any{kbID}},
 		{`DELETE FROM generated_content WHERE kb_id = $1`, []any{kbID}},
-		{`DELETE FROM knowledge_bases WHERE id = $1 AND is_global = true`, []any{kbID}},
+		{`DELETE FROM knowledge_bases WHERE id = $1 AND visibility = 'public'`, []any{kbID}},
 	})
 }

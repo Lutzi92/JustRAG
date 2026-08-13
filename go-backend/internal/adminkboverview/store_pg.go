@@ -42,7 +42,7 @@ func (s *PGStore) ListKBs(ctx context.Context) ([]KBBase, error) {
 		       COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), u.username) AS owner_name,
 		       kb.user_id::text                                                    AS owner_id,
 		       u.username                                                          AS owner_username,
-		       kb.is_global                                                        AS is_global,
+		       (kb.visibility = 'public')                                          AS is_global,
 		       kb.is_published                                                     AS is_published,
 		       to_char(kb.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
 		FROM knowledge_bases kb
@@ -135,7 +135,7 @@ func (s *PGStore) GetKBMeta(ctx context.Context, kbID string) (*KBMeta, error) {
 	const sql = `
 		SELECT id::text      AS id,
 		       name          AS name,
-		       is_global     AS is_global,
+		       (visibility = 'public') AS is_global,
 		       user_id::text AS owner_id
 		FROM knowledge_bases
 		WHERE id = $1::uuid`

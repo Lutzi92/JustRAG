@@ -131,7 +131,7 @@ func TestCreateKnowledgeBase_WritesOwnerKBMembersRow(t *testing.T) {
 	// which is the only list path a non-member can see a KB through.
 	otherUserID := insertUser(t, pool, "kb-create-other")
 	if _, err := pool.Exec(context.Background(),
-		`UPDATE knowledge_bases SET is_global = true, is_published = true WHERE id = $1::uuid`, row.ID,
+		`UPDATE knowledge_bases SET visibility = 'public', is_published = true WHERE id = $1::uuid`, row.ID,
 	); err != nil {
 		t.Fatalf("mark KB global: %v", err)
 	}
@@ -178,8 +178,8 @@ func TestListKnowledgeBases_ExcludesGlobalKBsWithMembership(t *testing.T) {
 	// produces (is_global = true, user_id = NULL).
 	var kbID string
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO knowledge_bases (name, description, is_global, is_published, user_id)
-		VALUES ('kb-global-membership-test', 'fixture', true, true, NULL)
+		INSERT INTO knowledge_bases (name, description, visibility, is_published, user_id)
+		VALUES ('kb-global-membership-test', 'fixture', 'public', true, NULL)
 		RETURNING id::text`).Scan(&kbID); err != nil {
 		t.Fatalf("insert global kb: %v", err)
 	}
@@ -234,8 +234,8 @@ func insertKBForPending(t *testing.T, pool *pgxpool.Pool, ownerID string) string
 	ctx := context.Background()
 	var id string
 	err := pool.QueryRow(ctx, `
-		INSERT INTO knowledge_bases (name, description, is_global, user_id)
-		VALUES ('kb-pending-invite-store-test', 'fixture', false, $1::uuid)
+		INSERT INTO knowledge_bases (name, description, visibility, user_id)
+		VALUES ('kb-pending-invite-store-test', 'fixture', 'private', $1::uuid)
 		RETURNING id::text`, ownerID).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert kb: %v", err)

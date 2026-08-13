@@ -39,7 +39,11 @@ type kbRow struct {
 
 // GetKBByID returns the knowledge base with the given ID, or nil if not found.
 func (s *PGStore) GetKBByID(ctx context.Context, id string) (*kbaccess.KnowledgeBase, error) {
-	const sql = `SELECT id, user_id, is_global, is_published FROM knowledge_bases WHERE id = $1`
+	// visibility ist seit Migration 0065 die Schreibwahrheit; is_global ist nur
+	// noch eine generierte Spiegelspalte und faellt im Cleanup-Release. Der
+	// Alias haelt kbRow.IsGlobal und damit EffectiveRole unveraendert.
+	const sql = `SELECT id, user_id, (visibility = 'public') AS is_global, is_published
+	             FROM knowledge_bases WHERE id = $1`
 
 	rows, err := pgxutil.QueryRows[kbRow](ctx, s.pool, sql, id)
 	if err != nil {

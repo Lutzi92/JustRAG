@@ -46,11 +46,14 @@ var (
 
 // kbFullRow is an internal struct with db tags for scanning full knowledge_bases rows.
 type kbFullRow struct {
-	ID             string          `db:"id"`
-	Name           string          `db:"name"`
-	UserID         *string         `db:"user_id"`
-	Description    *string         `db:"description"`
-	IsGlobal       bool            `db:"is_global"`
+	ID          string  `db:"id"`
+	Name        string  `db:"name"`
+	UserID      *string `db:"user_id"`
+	Description *string `db:"description"`
+	IsGlobal    bool    `db:"is_global"`
+	// Visibility ist die gespeicherte Wahrheit; IsGlobal daneben ist der aus
+	// ihr berechnete Alias, den bestehende Konsumenten weiter lesen.
+	Visibility     string          `db:"visibility"`
 	IsPublished    bool            `db:"is_published"`
 	Language       string          `db:"language"`
 	AIConfigID     *string         `db:"ai_config_id"`
@@ -73,7 +76,8 @@ type kbFullRow struct {
 	OwnerUsername  *string `db:"owner_username"`
 }
 
-const kbSelectCols = `kb.id, kb.name, kb.user_id, kb.description, kb.is_global, kb.is_published,
+const kbSelectCols = `kb.id, kb.name, kb.user_id, kb.description,
+       (kb.visibility = 'public') AS is_global, kb.visibility, kb.is_published,
        kb.language, kb.ai_config_id, kb.chat_model, kb.embedding_model, kb.rerank_model, kb.tts_model, kb.stt_model,
        kb.system_prompt, kb.header_text, kb.example_prompts, kb.studio_config,
        kb.chunk_size, kb.chunk_overlap, kb.created_at`
@@ -102,7 +106,8 @@ const kbStatsJoins = `
            FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.kb_id = kb.id
        ) ms ON true`
 
-const kbSelectColsNoAlias = `id, name, user_id, description, is_global, is_published,
+const kbSelectColsNoAlias = `id, name, user_id, description,
+       (visibility = 'public') AS is_global, visibility, is_published,
        language, ai_config_id, chat_model, embedding_model, rerank_model, tts_model, stt_model,
        system_prompt, header_text, example_prompts, studio_config, chunk_size, chunk_overlap, created_at,
        NULL::text AS owner_first_name, NULL::text AS owner_last_name, NULL::text AS owner_username`
@@ -131,6 +136,7 @@ func toKBRow(r kbFullRow) KBRow {
 		UserID:         r.UserID,
 		Description:    r.Description,
 		IsGlobal:       r.IsGlobal,
+		Visibility:     r.Visibility,
 		IsPublished:    r.IsPublished,
 		Language:       r.Language,
 		AIConfigID:     r.AIConfigID,
@@ -192,7 +198,7 @@ const listKnowledgeBasesMaxLimit = 1000
 // ListKnowledgeBases returns the user's personal KBs: every non-global KB they
 // hold a kb_members row for (owner, admin, edit or view).
 //
-// Global KBs are excluded by an explicit `kb.is_global = false`, because the
+// Global KBs are excluded by an explicit `kb.visibility = 'private'`, because the
 // frontend and API clients fetch those separately via
 // ListGlobalKnowledgeBases and rendering them from both sources shows the same
 // KB twice. The exclusion used to fall out of the old user_id/shares predicate
@@ -233,7 +239,7 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 		       u.username   AS owner_username` + kbStatsCols + kbMembershipCols("$1") + `
 		FROM knowledge_bases kb
 		LEFT JOIN users u ON kb.user_id = u.id` + kbStatsJoins + `
-		WHERE kb.is_global = false
+		WHERE kb.visibility = 'private'
 		  AND EXISTS (
 		    SELECT 1 FROM kb_members
 		    WHERE kb_id = kb.id AND user_id = $1
@@ -269,14 +275,14 @@ func (s *PGStore) ListGlobalKnowledgeBases(ctx context.Context, userID string, i
 		sql = `
 			SELECT ` + kbSelectColsNoAlias + kbStatsCols + kbMembershipCols("$1") + `
 			FROM knowledge_bases kb` + kbStatsJoins + `
-			WHERE is_global = true
+			WHERE visibility = 'public'
 			ORDER BY created_at DESC
 			LIMIT $2`
 	} else {
 		sql = `
 			SELECT ` + kbSelectColsNoAlias + kbStatsCols + kbMembershipCols("$1") + `
 			FROM knowledge_bases kb` + kbStatsJoins + `
-			WHERE is_global = true AND is_published = true
+			WHERE visibility = 'public' AND is_published = true
 			ORDER BY created_at DESC
 			LIMIT $2`
 	}

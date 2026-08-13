@@ -70,12 +70,12 @@ func toGlobalKBRow(r globalKBDBRow) GlobalKBRow {
 // CRUD methods
 // ---------------------------------------------------------------------------
 
-// ListGlobalKBs returns all knowledge bases with is_global = true ordered by created_at DESC.
+// ListGlobalKBs returns all knowledge bases with visibility = 'public' ordered by created_at DESC.
 func (s *PGStore) ListGlobalKBs(ctx context.Context) ([]GlobalKBRow, error) {
 	const sql = `
 		SELECT ` + globalKBSelectCols + `
 		FROM knowledge_bases
-		WHERE is_global = true
+		WHERE visibility = 'public'
 		ORDER BY created_at DESC`
 
 	rows, err := pgxutil.QueryRows[globalKBDBRow](ctx, s.pool, sql)
@@ -90,12 +90,12 @@ func (s *PGStore) ListGlobalKBs(ctx context.Context) ([]GlobalKBRow, error) {
 	return result, nil
 }
 
-// CreateGlobalKB inserts a new global knowledge base (is_global=true, user_id=NULL)
+// CreateGlobalKB inserts a new global knowledge base (visibility='public', user_id=NULL)
 // and returns the created row.
 func (s *PGStore) CreateGlobalKB(ctx context.Context, data GlobalKBCreate) (*GlobalKBRow, error) {
 	const sql = `
-		INSERT INTO knowledge_bases (name, description, language, is_global, user_id)
-		VALUES ($1, $2, $3, true, NULL)
+		INSERT INTO knowledge_bases (name, description, language, visibility, user_id)
+		VALUES ($1, $2, $3, 'public', NULL)
 		RETURNING ` + globalKBSelectCols
 
 	rows, err := pgxutil.QueryRows[globalKBDBRow](ctx, s.pool, sql, data.Name, data.Description, data.Language)
@@ -183,7 +183,7 @@ func (s *PGStore) UpdateGlobalKB(ctx context.Context, id string, data GlobalKBUp
 		// Nothing to update — return the current row unchanged.
 		rows, err := pgxutil.QueryRows[globalKBDBRow](ctx, s.pool,
 			`SELECT `+globalKBSelectCols+`
-			 FROM knowledge_bases WHERE id = $1 AND is_global = true`, id)
+			 FROM knowledge_bases WHERE id = $1 AND visibility = 'public'`, id)
 		if err != nil {
 			return nil, err
 		}
@@ -195,7 +195,7 @@ func (s *PGStore) UpdateGlobalKB(ctx context.Context, id string, data GlobalKBUp
 	}
 
 	updateSQL := fmt.Sprintf(
-		`UPDATE knowledge_bases SET %s WHERE id = $1 AND is_global = true
+		`UPDATE knowledge_bases SET %s WHERE id = $1 AND visibility = 'public'
 		 RETURNING `+globalKBSelectCols,
 		strings.Join(b.Clauses(), ", "),
 	)

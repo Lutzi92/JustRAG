@@ -16,6 +16,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/justrag/go-backend/internal/adminglobalkbs"
 )
 
 func visPool(t *testing.T) *pgxpool.Pool {
@@ -137,5 +139,33 @@ func TestSubscriptionStateConstraint(t *testing.T) {
 		VALUES ($1::uuid, $2::uuid, 'maybe')
 		ON CONFLICT (kb_id, user_id) DO UPDATE SET state = 'maybe'`, kbID, userID); err == nil {
 		t.Fatal("state='maybe' must violate the CHECK constraint")
+	}
+}
+
+// TestCreateGlobalKBWritesVisibility pins that the admin create path writes
+// the new column, not the generated one. Before this task it fails against
+// the 0065 schema — which is exactly why the write path cannot lag behind.
+func TestCreateGlobalKBWritesVisibility(t *testing.T) {
+	pool := visPool(t)
+	ctx := context.Background()
+
+	store := adminglobalkbs.NewStore(pool)
+	row, err := store.CreateGlobalKB(ctx, adminglobalkbs.GlobalKBCreate{Name: "mig0065-create"})
+	if err != nil {
+		t.Fatalf("CreateGlobalKB: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM knowledge_bases WHERE id = $1::uuid`, row.ID) //nolint:errcheck
+	})
+
+	var visibility string
+	var isGlobal bool
+	if err := pool.QueryRow(ctx,
+		`SELECT visibility, is_global FROM knowledge_bases WHERE id = $1::uuid`,
+		row.ID).Scan(&visibility, &isGlobal); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if visibility != "public" || !isGlobal {
+		t.Fatalf("want visibility=public/is_global=true, got %q/%v", visibility, isGlobal)
 	}
 }
