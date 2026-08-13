@@ -320,23 +320,34 @@ export function HomeView(props: HomeViewProps) {
         </section>
       )}
 
-      {globalKbs.length === 0 && (user?.role === 'admin' || user?.role === 'superadmin') && (
+      {globalKbs.length === 0 && (
         <section className="home-view__section">
           <div className="home-view__section-header">
             <Globe size={20} color="var(--accent-primary)" aria-hidden="true" />
             <h2 className="home-view__section-title">{t('globalKBs')}</h2>
-          </div>
-          <div className="home-view__grid">
             <button
               type="button"
-              className="source-card home-view__create-card home-view__create-card-btn"
-              onClick={onCreateGlobalKB}
-              aria-label={t('createGlobalKB')}
+              onClick={onOpenCatalog}
+              className="secondary-button"
+              style={{ marginInlineStart: 'auto', display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.8rem', fontSize: '0.85rem' }}
             >
-              <Plus size={32} aria-hidden="true" />
-              <span className="home-view__create-label">{t('createGlobalKB')}</span>
+              <Search size={14} aria-hidden="true" />
+              {t('discoverKbs')}
             </button>
           </div>
+          {(user?.role === 'admin' || user?.role === 'superadmin') && (
+            <div className="home-view__grid">
+              <button
+                type="button"
+                className="source-card home-view__create-card home-view__create-card-btn"
+                onClick={onCreateGlobalKB}
+                aria-label={t('createGlobalKB')}
+              >
+                <Plus size={32} aria-hidden="true" />
+                <span className="home-view__create-label">{t('createGlobalKB')}</span>
+              </button>
+            </div>
+          )}
         </section>
       )}
 

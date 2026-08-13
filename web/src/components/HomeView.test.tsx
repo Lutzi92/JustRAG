@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { KnowledgeBase } from '../types';
 import { HomeView } from './HomeView';
 import { translations } from '../translations';
@@ -102,5 +103,39 @@ describe('HomeView members-dialog trigger', () => {
     const kb: KnowledgeBase = { ...baseKb, myRole: 'view' };
     render(<HomeView kbs={[kb]} {...noopProps} />);
     expect(screen.queryByRole('button', { name: translations.share.en })).not.toBeInTheDocument();
+  });
+});
+
+// auto_subscribe defaults to false (Phase 2): a newly published global KB
+// shows up in the catalog but not in anyone's overview until they subscribe,
+// so "globalKbs: []" is the default state for every new user, not an edge
+// case. The Discover trigger must therefore be reachable from the
+// globalKbs.length === 0 branch too, for every authenticated user — not just
+// admins (the mocked useAuth user above has role: 'user').
+describe('HomeView catalog-discovery trigger', () => {
+  it('shows the trigger for a non-admin user with no global KBs and opens the catalog on click', async () => {
+    const onOpenCatalog = vi.fn();
+    render(<HomeView kbs={[]} {...noopProps} globalKbs={[]} onOpenCatalog={onOpenCatalog} />);
+
+    const trigger = screen.getByRole('button', { name: translations.discoverKbs.en });
+    expect(trigger).toBeInTheDocument();
+
+    await userEvent.click(trigger);
+    expect(onOpenCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not gate the empty-state Discover trigger behind admin/superadmin', () => {
+    // Same as above but spelled out against the admin-gated create-KB button
+    // in the same branch, to pin the distinction: create stays admin-only,
+    // discover does not.
+    render(<HomeView kbs={[]} {...noopProps} globalKbs={[]} />);
+    expect(screen.getByRole('button', { name: translations.discoverKbs.en })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: translations.createGlobalKB.en })).not.toBeInTheDocument();
+  });
+
+  it('shows exactly one trigger when the caller already has global KBs', () => {
+    const globalKb: KnowledgeBase = { ...baseKb, id: 'gkb-1', isGlobal: true };
+    render(<HomeView kbs={[]} {...noopProps} globalKbs={[globalKb]} />);
+    expect(screen.getAllByRole('button', { name: translations.discoverKbs.en })).toHaveLength(1);
   });
 });
