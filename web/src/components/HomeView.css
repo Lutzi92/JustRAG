@@ -261,7 +261,6 @@
   background: #fdecd6;
 }
 
-.home-view__badge--global,
 .home-view__badge--shared {
   color: var(--accent-primary);
   background: var(--tag-bg);

@@ -105,13 +105,19 @@ export function useKnowledgeBases({
     // request whose refetch happened to fail.
     setKbs(prev => prev.filter(k => k.id !== kb.id));
     setGlobalKbs(prev => prev.filter(k => k.id !== kb.id));
+    // Navigate before the refetch, not after. If the caller was viewing the KB
+    // they just removed, awaiting first would park them on a view whose KB no
+    // longer exists for the whole round trip — and fetchKBs never rejects (it
+    // swallows into console.error + a toast), so a hanging network would strand
+    // them there indefinitely. The splice above already happened, so leaving is
+    // safe immediately.
+    handleGoHome();
     // Then still reconcile with the server — an unsubscribe (or auto_subscribe)
     // can change what the public list returns in ways local state can't
     // infer; same reload path KbCatalogModal's onSubscriptionChange already
     // uses (Task 9). A failed refetch here degrades to "correct but slightly
     // stale" rather than the KB reappearing or staying stuck.
     await fetchKBs();
-    handleGoHome();
   }, [removeKb, handleGoHome, toast, t, fetchKBs]);
 
   const handleCreateGlobalKB = async () => {

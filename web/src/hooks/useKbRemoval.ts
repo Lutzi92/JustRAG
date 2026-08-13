@@ -44,6 +44,15 @@ export function useKbRemoval(): { removeKb: (kb: KnowledgeBase) => Promise<KbRem
       // Non-owner: look up how many of the caller's chats in this KB would
       // be destroyed by leaving, so the confirmation names the real number
       // instead of asking the user to delete chats blindly.
+      //
+      // A 200 here means "member", and the leave branch below is then correct
+      // even for a caller who is ALSO a subscriber (or covered by the KB's
+      // auto_subscribe): DELETE /membership severs both bonds server-side —
+      // kbmembers.LeaveKB drops the membership, the chats and writes an
+      // 'opted_out' subscription row in one transaction. Without that opt-out
+      // the tile would return on the very next fetch while the chats were
+      // already gone, which is why this branch does not need (and must not
+      // grow) a second subscription request of its own.
       let chatCount: number;
       try {
         const res = await axios.get(`${API_BASE_URL}/api/kb/${kb.id}/membership/impact`);
@@ -63,7 +72,13 @@ export function useKbRemoval(): { removeKb: (kb: KnowledgeBase) => Promise<KbRem
         return 'unsubscribed';
       }
 
-      const confirmed = await showConfirm(t('confirmLeaveKb').replace('{count}', String(chatCount)));
+      // Der Chat-Satz faellt weg, wenn es nichts zu verlieren gibt — sonst
+      // stuende dort "0 deiner Chats werden geloescht", was den Nutzer eine
+      // Warnung lesen laesst, die auf ihn nicht zutrifft.
+      const message = chatCount > 0
+        ? t('confirmLeaveKb').replace('{count}', String(chatCount))
+        : t('confirmLeaveKbNoChats');
+      const confirmed = await showConfirm(message);
       if (!confirmed) return 'cancelled';
       await axios.delete(`${API_BASE_URL}/api/kb/${kb.id}/membership`);
       return 'left';

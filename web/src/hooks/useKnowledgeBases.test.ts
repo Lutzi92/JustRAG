@@ -66,10 +66,12 @@ const subscribedGlobalKb: KnowledgeBase = {
   visibility: 'public',
 };
 
+const handleGoHome = vi.fn();
+
 function setup() {
   return renderHook(() => useKnowledgeBases({
     onKBSelected: vi.fn(),
-    handleGoHome: vi.fn(),
+    handleGoHome,
     setCurrentKb: vi.fn(),
     setIsPro: vi.fn(),
     setKbView: vi.fn(),
@@ -127,6 +129,28 @@ describe('useKnowledgeBases handleDeleteKB', () => {
 
     expect(result.current.globalKbs).toEqual([]);
     expect(mockedAxios.get).toHaveBeenCalled();
+  });
+
+  // Navigation must not wait on the network. Deleting the KB you are currently
+  // viewing used to await fetchKBs() first, parking the caller on the deleted
+  // KB's view for the whole round trip — and fetchKBs never rejects (it
+  // swallows into console.error + a toast), so a hanging network stranded them
+  // there indefinitely.
+  it('navigates home before the reconciling refetch resolves', async () => {
+    let resolveGet!: (v: { data: KnowledgeBase[] }) => void;
+    mockedAxios.get.mockImplementation(() => new Promise((resolve) => { resolveGet = resolve; }));
+    removeKb.mockResolvedValue('deleted');
+
+    const { result } = setup();
+    act(() => { result.current.setKbs([personalKb]); });
+
+    act(() => { void result.current.handleDeleteKB(personalKb, fakeEvent); });
+
+    await waitFor(() => expect(handleGoHome).toHaveBeenCalledTimes(1));
+    // Die GETs stehen zu diesem Zeitpunkt noch aus — genau das ist der Punkt.
+    expect(mockedAxios.get).toHaveBeenCalled();
+
+    await act(async () => { resolveGet({ data: [] }); await Promise.resolve(); });
   });
 
   it('leaves local state untouched when the removal is cancelled', async () => {

@@ -193,6 +193,13 @@ describe('HomeView catalog-discovery trigger', () => {
 
 // Three displayed states from two stored ones (visibility + memberCount).
 // memberCount counts the owner too, hence <= 1 rather than === 0.
+//
+// The fixtures have to respect where each state can actually come from, or the
+// test proves nothing about production. GET /api/kb hard-filters
+// `WHERE kb.visibility = 'private'`, so the `kbs` prop can never hold a public
+// KB; public ones arrive through GET /api/kb/global, i.e. the `globalKbs` prop.
+// The earlier version of this file passed `kbs: [{ visibility: 'public' }]` —
+// a shape the backend cannot produce — and so kept a dead badge branch green.
 describe('KB visibility badge', () => {
   it('shows "personal" for a private KB with only the owner', async () => {
     renderHomeView({ kbs: [{ ...baseKb, id: 'kb-1', name: 'Meine KB', visibility: 'private', memberCount: 1 }] });
@@ -204,9 +211,21 @@ describe('KB visibility badge', () => {
     expect(await screen.findByText(/geteilt \(4\)|shared \(4\)/i)).toBeInTheDocument();
   });
 
-  it('shows "public" regardless of member count', async () => {
-    renderHomeView({ kbs: [{ ...baseKb, id: 'kb-1', name: 'Katalog-KB', visibility: 'public', memberCount: 1 }] });
+  it('shows "public" on a public KB card, regardless of member count', async () => {
+    renderHomeView({
+      globalKbs: [{ ...baseKb, id: 'gkb-1', name: 'Katalog-KB', visibility: 'public', isPublished: true, memberCount: 1 }],
+    });
     expect(await screen.findByText(/öffentlich|public/i)).toBeInTheDocument();
+  });
+
+  // Vor dem Fix trug die oeffentliche Karte einen eigenen statischen
+  // "Global"-Chip, waehrend der 'public'-Zweig des Badges unerreichbar war.
+  it('renders the shared badge, not the old static global chip, on a public KB card', async () => {
+    renderHomeView({
+      globalKbs: [{ ...baseKb, id: 'gkb-1', name: 'Katalog-KB', visibility: 'public', isPublished: true }],
+    });
+    expect(await screen.findByText(translations.visibilityPublic.en)).toBeInTheDocument();
+    expect(screen.queryByText(translations.globalBadge.en)).not.toBeInTheDocument();
   });
 });
 

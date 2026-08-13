@@ -286,6 +286,9 @@ export const translations = {
     confirmDeleteContent: { de: 'Möchtest du diesen Inhalt wirklich löschen?', en: 'Do you really want to delete this content?' },
     confirmDeleteChat: { de: 'Bist du sicher, dass du diesen Chat-Verlauf löschen möchtest?', en: 'Are you sure you want to delete this chat history?' },
     confirmDeleteKB: { de: 'Bist du sicher, dass du diese Knowledge Base löschen möchtest?', en: 'Are you sure you want to delete this knowledge base?' },
+    // Zwei Varianten derselben Frage: die Chat-Warnung erscheint nur, wenn es
+    // wirklich Chats zu verlieren gibt (chatCount > 0 in useKbRemoval) — sonst
+    // stuende dort "0 deiner Chats werden geloescht".
     confirmLeaveKb: { de: 'Diese Knowledge Base verlassen? {count} deiner Chats darin werden dabei gelöscht.', en: 'Leave this knowledge base? {count} of your chats in it will be deleted.' },
     confirmLeaveKbNoChats: { de: 'Diese Knowledge Base verlassen?', en: 'Leave this knowledge base?' },
     // Subscriber (no kb_members row) removing a public KB tile: unlike
@@ -901,6 +904,23 @@ export const translations = {
     kbTransferSubmit: { de: 'Besitzer übertragen', en: 'Transfer ownership' },
     kbTransferFailed: { de: 'Übertragung fehlgeschlagen', en: 'Transfer failed' },
     kbTransferUsersLoadError: { de: 'Fehler beim Laden der Nutzenden', en: 'Error loading users' },
+    // KB Overview — publish (POST /api/admin/kb/{id}/publish). Only offered
+    // for private KBs; the reverse direction lives in the global-KB admin tab.
+    kbActionPublish: { de: 'Öffentlich machen', en: 'Make public' },
+    kbPublishTitle: { de: 'Knowledge Base öffentlich machen', en: 'Make knowledge base public' },
+    kbPublishWarning: {
+        de: 'Sobald sie veröffentlicht ist, kann JEDE angemeldete Person diese Knowledge Base lesen.',
+        en: 'Once it is published, EVERY authenticated user will be able to read this knowledge base.',
+    },
+    kbPublishStagedNote: {
+        de: 'Sie geht dabei noch nicht live: bis du sie im Tab „Globale KBs" veröffentlichst, sehen sie nur KB-Admins und Systemadmins.',
+        en: 'It does not go live yet: until you publish it in the “Global KBs” tab, only KB admins and system admins can see it.',
+    },
+    kbPublishOwnerNote: {
+        de: 'Öffentliche KBs haben keinen Besitzer — der bisherige Besitzer behält als KB-Admin vollen Zugriff.',
+        en: 'Public KBs have no owner — the previous owner keeps full access as a KB admin.',
+    },
+    kbPublishFailed: { de: 'Veröffentlichen fehlgeschlagen', en: 'Publishing failed' },
     queueWaiting: { de: 'Wartend', en: 'Waiting' },
     queueActive: { de: 'Aktiv', en: 'Active' },
     queueFailed: { de: 'Fehlgeschlagen', en: 'Failed' },

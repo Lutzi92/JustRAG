@@ -100,6 +100,24 @@ function visibilityBadge(kb: KnowledgeBase, t: (k: string) => string): string {
   return t('visibilityPersonal');
 }
 
+// VisibilityBadge renders the three-state badge on every KB card, personal and
+// public alike. It has to be shared: GET /api/kb hard-filters
+// `WHERE kb.visibility = 'private'`, so a public KB never reaches the personal
+// grid — and while the public grid rendered its own static "Global" chip, the
+// 'public' state of this badge was unreachable code and the spec's third state
+// shipped to nobody. One component, one branch, three reachable states.
+function VisibilityBadge({ kb, t }: { kb: KnowledgeBase; t: (k: string) => string }) {
+  const state = visibilityState(kb);
+  return (
+    <div className={`home-view__badge home-view__badge--${state}`}>
+      {state === 'public'
+        ? <Globe size={10} aria-hidden="true" />
+        : <User size={10} aria-hidden="true" />}
+      {visibilityBadge(kb, t)}
+    </div>
+  );
+}
+
 // canManageMembers gates the members-dialog trigger: admins and owners
 // manage membership, edit/view callers don't. Checking myRole (not the
 // legacy kb.userId === user.id owner comparison) is what makes the admin
@@ -290,10 +308,7 @@ export function HomeView(props: HomeViewProps) {
                       </div>
                     )}
 
-                    <div className="home-view__badge home-view__badge--global">
-                      <Globe size={10} aria-hidden="true" />
-                      {t('globalBadge')}
-                    </div>
+                    <VisibilityBadge kb={kb} t={t} />
 
                     {(user?.role === 'admin' || user?.role === 'superadmin') && (
                       <>
@@ -431,10 +446,7 @@ export function HomeView(props: HomeViewProps) {
             <div className="home-view__card-top">
               <BookOpen size={20} color="var(--text-secondary)" aria-hidden="true" />
               <div className="home-view__badge-row">
-                <div className={`home-view__badge home-view__badge--${visibilityState(kb)}`}>
-                  {visibilityState(kb) === 'public' ? <Globe size={10} aria-hidden="true" /> : <User size={10} aria-hidden="true" />}
-                  {visibilityBadge(kb, t)}
-                </div>
+                <VisibilityBadge kb={kb} t={t} />
 
                 {canManageMembers(kb) && (
                   <button
