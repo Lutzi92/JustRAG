@@ -80,6 +80,7 @@
 .wf-canvas__savebar-count { font-size: 0.82rem; color: var(--text-primary); }
 .wf-canvas__savebar-hint { margin: 0; font-size: 0.75rem; color: var(--text-secondary); }
 .wf-canvas__savebar-error { margin: 0; font-size: 0.8rem; color: var(--error-text); }
+.wf-canvas__savebar-warn { margin: 0; font-size: 0.7rem; color: var(--text-secondary); opacity: 0.8; }
 .wf-canvas__savebar-actions { display: flex; gap: 0.5rem; }
 
 .wf-canvas__savebar-save,

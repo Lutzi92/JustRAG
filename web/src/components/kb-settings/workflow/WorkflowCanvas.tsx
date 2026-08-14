@@ -118,9 +118,27 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   const [lane, setLane] = useState<WorkflowLane>('complex_reasoning');
   const [graph, setGraph] = useState<WorkflowGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<WorkflowNodeData | null>(null);
+  // The SELECTION is an id, not a snapshot node object. A snapshot taken at
+  // click time would go stale the moment `graph` is replaced by a refetch
+  // (save success, reset success) — NodeInspector would keep rendering the
+  // pre-save values/origin off the frozen object while the canvas nodes
+  // behind it correctly repainted from the server, making a successful save
+  // look like it reverted. Deriving `selected` from the CURRENT `graph` below
+  // means every graph swap self-heals the inspector for free.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const reducedMotion = useReducedMotion();
+  // Set true only when the NEXT `laid` push should also trigger a viewport
+  // fit — i.e. on the initial load and on an actual lane switch (new
+  // topology). Declared here, ahead of the lane-fetch effect below, which is
+  // now the one place that arms it. See the fitView effects further down.
+  const refitPendingRef = useRef(true);
+  // Mirrors `lane` for async code that closes over a specific lane at call
+  // time (refetchGraph) and needs to check, after an await, whether that
+  // lane is still the one on screen. A plain effect dependency can't do this
+  // because the callback's own closure is frozen at call time.
+  const laneRef = useRef(lane);
+  useEffect(() => { laneRef.current = lane; }, [lane]);
 
   // Unsaved edits, keyed by config key, spanning the WHOLE graph — not one
   // map per node. `ValidateConflicts` on the server judges a save as a batch,
@@ -145,7 +163,14 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
     let cancelled = false;
     setError(null);
     fetchWorkflow(kbId, lane)
-      .then((g) => { if (!cancelled) setGraph(g); })
+      .then((g) => {
+        if (cancelled) return;
+        // A genuinely new topology (first load or a real lane switch) is the
+        // only case that should re-fit the viewport — see refitPendingRef's
+        // declaration above and the fitView effects below.
+        refitPendingRef.current = true;
+        setGraph(g);
+      })
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
     // Stale-response guard: a lane switched away from while a slower request
     // is still in flight must not clobber a faster response for the lane the
@@ -157,8 +182,21 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   // cost estimate and the orchestrator candidates are all server-derived, so
   // a save/reset repaints the graph from a fresh fetch rather than guessing
   // the new state client-side.
+  //
+  // Deliberately does NOT arm `refitPendingRef` — same lane, same node set,
+  // so re-fitting here would only throw away a zoom/pan the admin set to read
+  // the very node they just edited (the harm the fitView effects below exist
+  // to prevent, on a second, easy-to-miss writer).
+  //
+  // Deliberately DOES guard against a stale lane: this call closes over the
+  // lane it was issued for (`requestedLane`), and if the user has since
+  // switched lanes, the lane effect above already fetched and rendered the
+  // new lane's graph — applying THIS response on top would silently show the
+  // old lane's data under the new lane's active pill.
   const refetchGraph = useCallback(async () => {
-    const fresh = await fetchWorkflow(kbId, lane);
+    const requestedLane = lane;
+    const fresh = await fetchWorkflow(kbId, requestedLane);
+    if (laneRef.current !== requestedLane) return;
     setGraph(fresh);
   }, [kbId, lane]);
 
@@ -173,8 +211,10 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
     // anything, and the settings UI would show `origin: kb` for a value the
     // admin never knowingly set. Refuse the write outright — an empty string
     // can never enter `draft` for a string-typed field — and point the user
-    // at Reset, the only real way to clear one.
-    if (field?.type === 'string' && value === '') {
+    // at Reset, the only real way to clear one. Trimmed, not just `=== ''`:
+    // a whitespace-only value is just as invisible once rendered and would
+    // slip the same bad override past a bare equality check.
+    if (field?.type === 'string' && value.trim() === '') {
       setEmptyStringNote(`${field.label}: Leerer Wert wird nicht übernommen — zum Löschen "Zurücksetzen" verwenden.`);
       return;
     }
@@ -198,6 +238,7 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
       // mutually-exclusive keys 400 on the first half.
       await saveKbSettings(kbId, draft);
       setDraft({});
+      setEmptyStringNote(null);
       await refetchGraph();
     } catch (e) {
       // Keep the draft on failure — the conflict 400 names both keys, and
@@ -259,16 +300,17 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   const [edges, setEdges, onEdgesChange] = useEdgesState(laid.edges);
   const { fitView } = useReactFlow();
 
-  // Set when a NEW graph has just been pushed into React Flow's controlled
-  // props, cleared by the fit that consumes it. See the two effects below.
-  const refitPendingRef = useRef(true);
-
   // useNodesState/useEdgesState seed their internal state ONLY from the value
-  // passed on first render. Without this effect, switching lanes refetches
-  // `graph` and recomputes `laid`, but the canvas keeps showing the previous
-  // lane's nodes — a repaint has to be pushed explicitly.
+  // passed on first render. Without this effect, switching lanes (or a
+  // save/reset refetch) recomputes `laid`, but the canvas keeps showing the
+  // previous nodes — a repaint has to be pushed explicitly EVERY time `laid`
+  // changes. This is deliberately separate from arming `refitPendingRef`
+  // (declared above, near the lane-fetch effect that owns it): pushing new
+  // node/edge data must happen on every graph swap so activation dimming and
+  // edges stay in sync, but only a genuinely new topology (first load, real
+  // lane switch) should also reset the viewport — see the lane-fetch effect
+  // and refetchGraph above for why a save/reset refetch must NOT re-arm it.
   useEffect(() => {
-    refitPendingRef.current = true;
     setNodes(laid.nodes);
     setEdges(laid.edges);
   }, [laid, setNodes, setEdges]);
@@ -287,8 +329,10 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   // triggerNodeChanges -> onNodesChange -> applyChanges, which ALWAYS returns
   // a new array. Firing fitView on that threw away the zoom the user had just
   // set in order to read the node they were clicking — on the one interaction
-  // this whole surface exists to support. So the latch above, set only where a
-  // new `laid` is pushed, decides; `nodes` merely times it.
+  // this whole surface exists to support. So `refitPendingRef` (armed only by
+  // the lane-fetch effect above, on a genuinely new topology — NOT by every
+  // push of `laid`, which also fires for a same-lane save/reset refetch)
+  // decides; `nodes` merely times it.
   useEffect(() => {
     if (!refitPendingRef.current) return;
     refitPendingRef.current = false;
@@ -305,12 +349,23 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
     [graph],
   );
 
+  // Derived, not stored: re-resolves against the CURRENT `graph` on every
+  // render, so a refetch (save/reset success) that changes this node's
+  // values/origins/activation is reflected immediately. If the id no longer
+  // exists in a fresh graph (topology changed under it), this simply
+  // resolves to null and NodeInspector renders nothing — closing quietly
+  // rather than showing stale content tied to a node that's gone.
+  const selected = useMemo(
+    () => (selectedId ? graph?.nodes.find((n) => n.id === selectedId) ?? null : null),
+    [selectedId, graph],
+  );
+
   // Closing the inspector unmounts the element that holds focus, which drops
   // focus to <body> — a keyboard user loses their place on the canvas entirely
   // and has to tab in from the top. Send it back to the node they opened.
   const closeInspector = useCallback(() => {
-    const id = selected?.id;
-    setSelected(null);
+    const id = selectedId;
+    setSelectedId(null);
     if (!id) return;
     // Matched by attribute read rather than an interpolated selector: node ids
     // come from the backend, and building a selector string out of them would
@@ -319,7 +374,7 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
       surfaceRef.current?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [],
     ).find((el) => el.getAttribute('data-id') === id);
     wrapper?.focus();
-  }, [selected]);
+  }, [selectedId]);
 
   // Click delegation: WorkflowNode renders no onClick of its own (it is a
   // frozen, presentation-only component), so the canvas owns click-to-inspect
@@ -327,7 +382,7 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   const onSurfaceClick = useCallback(
     (event: React.MouseEvent) => {
       const found = findGraphNode(event.target);
-      if (found) setSelected(found);
+      if (found) setSelectedId(found.id);
     },
     [findGraphNode],
   );
@@ -367,7 +422,7 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
       const found = findGraphNode(event.target);
       if (!found) return;
       event.preventDefault();
-      setSelected(found);
+      setSelectedId(found.id);
     },
     [findGraphNode, selected, closeInspector],
   );
@@ -388,7 +443,15 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
         <div className="wf-canvas__lanes">
           {LANES.map((l) => (
             <button key={l.id} type="button" className="wf-canvas__lane"
-                    aria-pressed={lane === l.id} onClick={() => { setLane(l.id); setSelected(null); }}>
+                    aria-pressed={lane === l.id}
+                    onClick={() => {
+                      setLane(l.id);
+                      setSelectedId(null);
+                      // A stale refusal hint or a stale op error from the
+                      // previous lane has no bearing on the lane just opened.
+                      setEmptyStringNote(null);
+                      setOpError(null);
+                    }}>
               {l.label}
             </button>
           ))}
@@ -452,7 +515,13 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
 
       {(draftCount > 0 || opError || emptyStringNote) && (
         <div className="wf-canvas__savebar">
-          {emptyStringNote && <p className="wf-canvas__savebar-hint">{emptyStringNote}</p>}
+          {emptyStringNote && (
+            // aria-live: this line replaces a keystroke the user just made
+            // with a refusal — without an explicit live region, a screen
+            // reader user gets a silently rejected input and a value that
+            // snaps back, with no announcement of why.
+            <p className="wf-canvas__savebar-hint" aria-live="polite">{emptyStringNote}</p>
+          )}
           {opError && <p className="wf-canvas__savebar-error" role="alert">{opError}</p>}
           {draftCount > 0 && (
             <div className="wf-canvas__savebar-row">
@@ -478,6 +547,16 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
                 </button>
               </div>
             </div>
+          )}
+          {draftCount > 0 && (
+            // KbSettingsPanel.tsx unmounts this component on a Settings
+            // sub-tab switch (out of this file's scope — see the beforeunload
+            // effect's comment above), which drops the draft silently. A
+            // confirm dialog on every tab click would be worse than that
+            // loss; this line is the mitigation that fits within scope.
+            <p className="wf-canvas__savebar-warn">
+              Nicht gespeicherte Änderungen gehen beim Tab-Wechsel verloren.
+            </p>
           )}
         </div>
       )}

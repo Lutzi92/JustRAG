@@ -29,10 +29,21 @@ vi.mock('../../../hooks/useReducedMotion', () => ({
   getMotionProps: () => ({}),
 }));
 
-vi.mock('./api', () => ({ fetchWorkflow: vi.fn() }));
-import { fetchWorkflow } from './api';
+// fieldFor stays real (via importOriginal), same treatment as the main
+// WorkflowCanvas.test.tsx mock: NodeInspector needs a genuine lookup for the
+// new save-path test below, which registers an editable field.
+vi.mock('./api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api')>();
+  return {
+    ...actual,
+    fetchWorkflow: vi.fn(),
+    saveKbSettings: vi.fn(),
+    resetKbSetting: vi.fn(),
+  };
+});
+import { fetchWorkflow, saveKbSettings } from './api';
 
-const graph = (lane: WorkflowGraph['lane']): WorkflowGraph => ({
+const graph = (lane: WorkflowGraph['lane'], over: Partial<WorkflowGraph> = {}): WorkflowGraph => ({
   lane,
   nodes: [
     { id: 'retrieve', label: 'Retrieval', group: 'Retrieval', help: '', keys: [], alwaysOn: true, llmCalls: 0, latencyMs: 400, activation: 'active', values: {}, origins: {}, editable: false },
@@ -43,11 +54,13 @@ const graph = (lane: WorkflowGraph['lane']): WorkflowGraph => ({
   estLlmCalls: 1,
   estLatencyMs: 1000,
   fields: {},
+  ...over,
 });
 
 describe('WorkflowCanvas viewport', () => {
   beforeEach(async () => {
     vi.mocked(fetchWorkflow).mockReset();
+    vi.mocked(saveKbSettings).mockReset();
     fitView.mockReset();
   });
 
@@ -102,5 +115,38 @@ describe('WorkflowCanvas viewport', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Nachschlagen' }));
 
     await waitFor(() => expect(fitView).toHaveBeenCalled());
+  });
+
+  // IMPORTANT 2 regression test: the `laid`-push effect used to arm the
+  // refit latch on EVERY graph change, including a same-lane save refetch.
+  // Node positions don't change on a save (same lane, same node set), so
+  // that re-fit was pure viewport disruption — an admin who zoomed in to
+  // read the node they were about to edit lost that zoom the instant the
+  // save that node's own edit triggered came back.
+  it('does NOT re-fit after a successful save — same lane, same node set', async () => {
+    const withField = graph('complex_reasoning', {
+      nodes: [
+        { id: 'retrieve', label: 'Retrieval', group: 'Retrieval', help: '', keys: [], alwaysOn: true, llmCalls: 0, latencyMs: 400, activation: 'active', values: {}, origins: {}, editable: false },
+        { id: 'crag_grade', label: 'CRAG-Bewertung', group: 'Korrektur', help: '', keys: ['crag_enabled'], alwaysOn: false, llmCalls: 1, latencyMs: 600, activation: 'active', values: { crag_enabled: 'true' }, origins: { crag_enabled: 'kb' }, editable: true },
+      ],
+      fields: {
+        crag_enabled: { key: 'crag_enabled', type: 'bool', group: 'Korrektur', label: 'CRAG aktiviert', help: '' },
+      },
+    });
+    vi.mocked(fetchWorkflow).mockResolvedValue(withField);
+    vi.mocked(saveKbSettings).mockResolvedValue(undefined);
+    render(<WorkflowCanvas kbId="kb-1" />);
+
+    const node = await screen.findByTestId('wf-node-crag_grade');
+    await waitFor(() => expect(fitView).toHaveBeenCalled());
+    fitView.mockClear();
+
+    fireEvent.click(node);
+    await screen.findByLabelText('Details zu CRAG-Bewertung');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+    await userEvent.click(screen.getByRole('button', { name: /speichern/i }));
+
+    await waitFor(() => expect(fetchWorkflow).toHaveBeenCalledTimes(2));
+    expect(fitView).not.toHaveBeenCalled();
   });
 });

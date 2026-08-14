@@ -54,6 +54,42 @@ describe('re-exports', () => {
   });
 });
 
+// resetKbSetting is a genuine re-export (not a mock) here, so this exercises
+// the real implementation in ../api.ts. DELETE /settings/{key} can 400 on a
+// conflict (clearing an override may fall the key back to a global value
+// that conflicts with another enabled key), and handler.go writes the
+// specific reason to body.error — the same shape saveKbSettings already read.
+// Before this fix, resetKbSetting only ever threw a bare "reset setting:
+// 400", discarding that reason.
+describe('resetKbSetting error handling', () => {
+  beforeEach(() => vi.mocked(authFetch).mockReset());
+  afterEach(() => vi.restoreAllMocks());
+
+  it('surfaces the server-provided reason on a 400, not just the status code', async () => {
+    vi.mocked(authFetch).mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        error: 'clearing crag_enabled would fall back to a global value that conflicts with chat_self_rag_enabled',
+      }),
+    } as unknown as Response);
+
+    await expect(resetKbSetting('kb-1', 'crag_enabled')).rejects.toThrow(
+      /chat_self_rag_enabled/,
+    );
+  });
+
+  it('falls back to the bare status when the body carries no error field', async () => {
+    vi.mocked(authFetch).mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => { throw new Error('not json'); },
+    } as unknown as Response);
+
+    await expect(resetKbSetting('kb-1', 'crag_enabled')).rejects.toThrow('500');
+  });
+});
+
 describe('fieldFor', () => {
   const graph: WorkflowGraph = {
     lane: 'lookup',
