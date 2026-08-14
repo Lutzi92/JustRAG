@@ -10,6 +10,53 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## v0.6.0 — 2026-08-14
+
+### ⚠ Upgrade notes
+
+- **No migration.** Schema level stays at `0065`. No `site_config` defaults
+  change, no re-ingest, no new env vars. Rollback by re-pointing the image
+  tag works.
+- **Behaviour change in the public-KB overview:** an explicit
+  `kb_subscriptions.state = 'opted_out'` row now hides a public KB from the
+  overview for **everyone**, including a caller who holds a `kb_members` row
+  on it. Previously membership bypassed the opt-out unconditionally. This is
+  what makes the star on a Favoriten card work for curators and for the
+  demoted ex-owner of a published KB. No data migration is involved — the
+  rows already existed, only the query changed. Operator-visible effect: a
+  KB admin who un-favorites their own KB no longer sees it in the overview
+  until they re-add it from "KBs entdecken"; their membership, permissions
+  and chats are untouched.
+- **`GET /api/kb/catalog` now also returns *staged* public KBs (`visibility =
+  'public' AND is_published = false`) to callers holding a `kb_members` row on
+  them.** It previously returned published KBs only. Nothing new is exposed:
+  staged KBs were already reachable by their members through
+  `GET /api/kb/global` and every `view`-gated route, and non-members still do
+  not see them in the catalog. This arm is what keeps un-favoriting a staged
+  KB reversible.
+- **`PUT` / `DELETE /api/kb/{id}/subscription` no longer answer `409` for a
+  staged public KB.** They still answer `409` for a private KB. Only a member
+  reaches the view-gated route for a staged KB, and their subscription row is
+  what the favorites toggle writes.
+- **New endpoint `GET /api/kb-categories`**, authentication-only, serving the
+  same flat taxonomy as the existing system-admin `GET
+  /api/admin/kb-categories` (same handler, read-only). The category list is
+  not sensitive — every catalog row already carries its `categoryIds` — and
+  behind the admin route the discovery filter was invisible to ordinary
+  users. The admin CRUD routes are unchanged and stay system-admin-only.
+- **Removing a public KB from Favoriten no longer deletes chats.** If you
+  relied on the star as a "leave this KB" action, that action now lives only
+  in the members dialog; the star is a favorites toggle and touches neither
+  membership nor chat history.
+
+### Features
+- Category tabs and a folded grid in KB discovery (7d86d49)
+
+
+### Fixes
+- Make removing a KB from Favoriten harmless and reversible (5b45d7c)
+- Label the chat source counter passively (3b78c8f)
+
 ## v0.5.0 — 2026-08-13
 
 ### ⚠ Upgrade notes
