@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
-import { SlidersHorizontal, FlaskConical, ChevronDown, ChevronRight, Search, Save, RotateCcw, Copy, Check } from 'lucide-react';
+import { SlidersHorizontal, FlaskConical, Workflow, ChevronDown, ChevronRight, Search, Save, RotateCcw, Copy, Check } from 'lucide-react';
 import type { KbConfigField, KbSettingsResponse } from '../../types';
 import { fetchKbSettings, saveKbSettings, resetKbSetting, reembedKb } from './api';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
 import { useModalContext } from '../../contexts/ModalContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import AdminEvalTab from '../admin/AdminEvalTab';
+import { WorkflowCanvas } from './workflow/WorkflowCanvas';
 
 interface Props {
   kbId: string;
@@ -15,6 +16,7 @@ interface Props {
 const TABS = [
   { id: 'settings', label: 'RAG Settings', Icon: SlidersHorizontal },
   { id: 'evals', label: 'Evals', Icon: FlaskConical },
+  { id: 'workflow', label: 'Workflow', Icon: Workflow },
 ] as const;
 
 const STORAGE_KEY = 'kb-settings-sections-open-v1';
@@ -24,7 +26,7 @@ const STORAGE_KEY = 'kb-settings-sections-open-v1';
 export function KbSettingsPanel({ kbId }: Props) {
   const reducedMotion = useReducedMotion();
   const { showConfirm, showAlert } = useModalContext();
-  const [tab, setTab] = useState<'settings' | 'evals'>('settings');
+  const [tab, setTab] = useState<'settings' | 'evals' | 'workflow'>('settings');
   const [data, setData] = useState<KbSettingsResponse | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -243,8 +245,10 @@ export function KbSettingsPanel({ kbId }: Props) {
             </button>
           </div>
         </>
-      ) : (
+      ) : tab === 'evals' ? (
         <AdminEvalTab basePath={`/api/kb/${kbId}/eval`} kbId={kbId} />
+      ) : (
+        <WorkflowCanvas kbId={kbId} />
       )}
     </div>
   );

@@ -1,12 +1,33 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vitest';
 import { KbSettingsPanel } from './KbSettingsPanel';
 import { API_BASE_URL } from '../../api';
+
+// The Workflow tab mounts the real (unmocked) React Flow canvas, whose
+// internal node-measuring hook requires ResizeObserver — absent in jsdom
+// (same gap, same fix as WorkflowCanvas.keyboard.test.tsx and
+// WorkflowNode.focus.test.tsx).
+beforeAll(() => {
+  class FakeResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
+});
 
 const showConfirm = vi.fn(async () => true);
 const showAlert = vi.fn(async () => {});
 vi.mock('../../contexts/ModalContext', () => ({
   useModalContext: () => ({ showConfirm, showAlert }),
+}));
+
+vi.mock('./workflow/api', () => ({
+  fetchWorkflow: vi.fn().mockResolvedValue({
+    lane: 'complex_reasoning', nodes: [], edges: [], orchestrators: [],
+    estLlmCalls: 0, estLatencyMs: 0,
+  }),
 }));
 
 const sample = {
@@ -125,5 +146,14 @@ describe('KbSettingsPanel', () => {
       );
     });
     await waitFor(() => expect(showAlert).toHaveBeenCalled());
+  });
+
+  it('shows the workflow tab and renders the canvas when selected', async () => {
+    render(<KbSettingsPanel kbId="kb-1" />);
+
+    const tab = await screen.findByRole('button', { name: /workflow/i });
+    await userEvent.click(tab);
+
+    expect(await screen.findByRole('button', { name: 'Komplexe Frage' })).toBeInTheDocument();
   });
 });
