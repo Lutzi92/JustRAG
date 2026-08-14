@@ -10,6 +10,41 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## v0.7.0 — 2026-08-14
+
+### ⚠ Upgrade notes
+
+No migration (schema level stays at `0065`), no `site_config` change, no
+re-ingest, no new env vars. Rollback by re-pointing the image tag works.
+
+- **Citation page labels get narrower, and that is the fix, not a regression.**
+  A citation now names the page of the chunk the retriever actually matched.
+  Previously neighbour expansion merged the page numbers of the surrounding
+  `context_window_size` chunks into the matched chunk's metadata, so at the
+  default window of 3 a hit on page 8 was labelled with all seven chunks'
+  pages — users saw `S. 8-16` for a passage living on one page. The stitched
+  neighbour text still reaches the answer model unchanged; only the page
+  attribution narrows. The source card's "open in document" jump now lands on
+  the matched page rather than the neighbourhood's first.
+- **No re-ingest.** The correct per-chunk page was always stored; only the read
+  path discarded it. This holds for Docling-parsed PDFs too, whose pages come
+  from item provenance through the same per-page split. The one exception is
+  data ingested by **pre-v0.1.0 builds**, which baked wrong page numbers into
+  chunk metadata before the Docling provenance fix — those PDFs still need a
+  re-ingest, and this release makes their labels narrower but no less wrong.
+- **The OpenAI-compat citation fields are purely additive.** `annotations[]`
+  and `context.citations[]` are omitted rather than emitted empty, and unknown
+  fields are ignored by OpenAI SDKs, so the ILIAS and OpenWebUI integrations
+  need no change. That endpoint runs no citation validator, so its annotations
+  reflect what the model claimed rather than what was verified — see `API.md`.
+
+### Features
+- Return retrieved sources as citations (b56e9d2)
+
+
+### Fixes
+- Cite the matched chunk's page, not the neighbourhood span (81c7cf6)
+
 ## v0.6.1 — 2026-08-14
 
 ### ⚠ Upgrade notes
