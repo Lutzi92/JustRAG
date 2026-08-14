@@ -98,7 +98,12 @@ export function NodeInspector({ node, onClose, fields, draft, onChange, onReset,
               const dirty = Object.prototype.hasOwnProperty.call(draft, k);
               const value = draft[k] ?? node.values[k];
               const canEdit = node.editable && field !== undefined && !readOnlyReason;
-              const canReset = origin === 'kb' && node.editable && !readOnlyReason;
+              // `DELETE /settings/{key}` 400s for a key outside the per-KB
+              // registry (handler.go: `!siteconfig.IsPerKB(key)`) — the exact
+              // same registry `fieldFor` checks. So a control-less key (no
+              // field) can never be reset server-side either; offering the
+              // button there would be a control that does nothing.
+              const canReset = origin === 'kb' && node.editable && field !== undefined && !readOnlyReason;
 
               return (
                 <li key={k} className="wf-inspector__key" data-dirty={dirty}>

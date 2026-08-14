@@ -197,6 +197,21 @@ describe('NodeInspector', () => {
     expect(onReset).toHaveBeenCalledWith('crag_enabled');
   });
 
+  it('withholds Reset for a kb-origin key that has no registry entry', () => {
+    // DELETE /api/kb/{id}/settings/{key} 400s for a key outside the per-KB
+    // registry (handler.go: `!siteconfig.IsPerKB(key)`) — the exact registry
+    // `fieldFor` checks. A key with origin 'kb' but no field entry would be
+    // an off-contract shape (kb overrides should only ever exist for
+    // per-KB-registrable keys), but if it occurred, a Reset button here would
+    // call a server endpoint that always rejects it — a control that does
+    // nothing. No field is registered for either key here.
+    renderInspector({
+      node: data({ origins: { crag_enabled: 'kb', crag_min_relevant_chunks: 'global' } }),
+      fields: {},
+    });
+    expect(screen.queryByRole('button', { name: /zurücksetzen/i })).not.toBeInTheDocument();
+  });
+
   it('renders no editing controls for a non-editable node, even when its keys are registered', () => {
     renderInspector({ node: data({ editable: false }), fields: bothFields() });
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
@@ -205,6 +220,35 @@ describe('NodeInspector', () => {
     // (the registered-but-locked improvement over today).
     expect(screen.getByText(boolField().label)).toBeInTheDocument();
     expect(screen.getByText(/nicht pro Knowledge Base einstellbar/i)).toBeInTheDocument();
+  });
+
+  it('renders a non-editable node with one registered and one unregistered key consistently: no controls, registered label, unregistered raw key, one note', () => {
+    // The two non-editable cases elsewhere in this file are both all-registered
+    // fixtures; the mixed fixture is otherwise only exercised on an editable
+    // node. This pins the combination that is actually the common production
+    // shape (node.editable derives from keys[0] alone) and is exactly where an
+    // inconsistent treatment between the two keys would show up.
+    renderInspector({
+      node: data({ editable: false }),
+      fields: { crag_enabled: boolField() },
+    });
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+
+    // Registered key: shows its label, not the raw key.
+    expect(screen.getByText(boolField().label)).toBeInTheDocument();
+    expect(screen.queryByText('crag_enabled')).not.toBeInTheDocument();
+    expect(screen.getByText('true')).toBeInTheDocument(); // its value
+    expect(screen.getByText('diese KB')).toBeInTheDocument(); // its origin
+
+    // Unregistered key: falls back to the raw key name.
+    expect(screen.getByText('crag_min_relevant_chunks')).toBeInTheDocument();
+    expect(screen.getByText('Standardwert')).toBeInTheDocument(); // unset -> default
+    expect(screen.getByText('Standard')).toBeInTheDocument(); // its origin
+
+    // One note, not one per key.
+    expect(screen.getAllByText(/nicht pro Knowledge Base einstellbar/i)).toHaveLength(1);
   });
 
   it('offers no Reset for a non-editable node even on a kb-origin key', () => {
