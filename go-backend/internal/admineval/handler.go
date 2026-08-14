@@ -180,6 +180,19 @@ var snapshotConfigKeys = []string{
 	"chat_self_rag_enabled",
 	"chat_factuality_gate_enabled",
 	"chat_sufficient_context_enabled",
+	// Retrieval/orchestrator registry keys (kb-workflow-editor Phase 2
+	// Task 3; cross-checked by snapshot_registry_test.go like the blocks
+	// above).
+	"query_cache_enabled",
+	"recency_boost_enabled",
+	"chat_feedback_boost_enabled",
+	"hype_search_enabled",
+	"chat_drift_enabled",
+	"chat_plan_execute_dag",
+	"chat_plan_execute_tool_aware",
+	"chat_agentic_max_hops",
+	"chat_kb_router_enabled",
+	"chat_answer_tools_enabled",
 }
 
 // ---------------------------------------------------------------------------
