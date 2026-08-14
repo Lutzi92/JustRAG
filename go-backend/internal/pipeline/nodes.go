@@ -58,14 +58,14 @@ const (
 // LLMCalls and LatencyMs are hand-tuned worst-case ESTIMATES used for the
 // cost badge. They are not measurements and the UI must label them as such.
 type NodeSpec struct {
-	ID        NodeID
-	Label     string
-	Group     string
-	Help      string
-	Keys      []string
-	AlwaysOn  bool
-	LLMCalls  int
-	LatencyMs int
+	ID        NodeID   `json:"id"`
+	Label     string   `json:"label"`
+	Group     string   `json:"group"`
+	Help      string   `json:"help"`
+	Keys      []string `json:"keys"`
+	AlwaysOn  bool     `json:"alwaysOn"`
+	LLMCalls  int      `json:"llmCalls"`
+	LatencyMs int      `json:"latencyMs"`
 }
 
 // nodes is the ordered vocabulary. Order is the canonical top-to-bottom

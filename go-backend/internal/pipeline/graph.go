@@ -7,11 +7,11 @@ package pipeline
 // a reader can see that CRAG re-searches at most once and that the refine gate
 // rewrites at most once.
 type EdgeSpec struct {
-	From          NodeID
-	To            NodeID
-	Label         string // German edge condition, "" for unconditional
-	Loop          bool
-	MaxIterations int // required when Loop is true
+	From          NodeID `json:"from"`
+	To            NodeID `json:"to"`
+	Label         string `json:"label"` // German edge condition, "" for unconditional
+	Loop          bool   `json:"loop"`
+	MaxIterations int    `json:"maxIterations"` // required when Loop is true
 }
 
 // edges is the hand-authored superset topology. Every edge that CAN exist is
