@@ -11,9 +11,14 @@ import type { WorkflowGraph } from '../../../types';
 // second mock to keep in sync with fixture `fields` maps across every test.
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>();
-  return { ...actual, fetchWorkflow: vi.fn() };
+  return {
+    ...actual,
+    fetchWorkflow: vi.fn(),
+    saveKbSettings: vi.fn(),
+    resetKbSetting: vi.fn(),
+  };
 });
-import { fetchWorkflow } from './api';
+import { fetchWorkflow, saveKbSettings, resetKbSetting } from './api';
 
 // WorkflowCanvas reads useReducedMotion, which calls window.matchMedia —
 // not available in jsdom by default (same treatment as Login.test.tsx).
@@ -84,7 +89,12 @@ describe('WorkflowCanvas', () => {
   // beforeEach + a rejected .then().catch() chain in the following test);
   // wrapping the hook in `async` (even with nothing to await) resolves it by
   // inserting a task boundary between the hook and the test body.
-  beforeEach(async () => { vi.mocked(fetchWorkflow).mockReset(); lastRfProps = null; });
+  beforeEach(async () => {
+    vi.mocked(fetchWorkflow).mockReset();
+    vi.mocked(saveKbSettings).mockReset();
+    vi.mocked(resetKbSetting).mockReset();
+    lastRfProps = null;
+  });
 
   it('loads the complex lane by default', async () => {
     vi.mocked(fetchWorkflow).mockResolvedValue(graph());
@@ -192,5 +202,161 @@ describe('WorkflowCanvas', () => {
     render(<WorkflowCanvas kbId="kb-1" />);
     expect(await screen.findByText('bedingt')).toBeInTheDocument();
     expect(screen.getByText('Bedingt')).toBeInTheDocument(); // the crag_grade badge
+  });
+
+  // --- Task 5: save, reset, refetch ---
+
+  // Two independently-editable nodes with distinct keys, both registered —
+  // the minimum shape that can exercise the batching guarantee (an edit on
+  // one node plus an edit on another must land in the SAME PUT).
+  const editableGraph = (): WorkflowGraph => graph({
+    nodes: [
+      { id: 'retrieve', label: 'Retrieval', group: 'Suche', help: 'Hybride Suche.', keys: [], alwaysOn: true, llmCalls: 0, latencyMs: 400, activation: 'active', values: {}, origins: {}, editable: false },
+      { id: 'crag_grade', label: 'CRAG-Bewertung', group: 'Korrektur', help: 'Bewertet Textstellen.', keys: ['crag_enabled'], alwaysOn: false, llmCalls: 1, latencyMs: 600, activation: 'conditional', reason: 'orchestrator_bypass', condition: 'Läuft hier nicht.', values: { crag_enabled: 'true' }, origins: { crag_enabled: 'kb' }, editable: true },
+      { id: 'self_rag', label: 'Self-RAG', group: 'Verifikation', help: 'Selbstprüfung der Antwort.', keys: ['chat_self_rag_enabled'], alwaysOn: false, llmCalls: 1, latencyMs: 300, activation: 'active', values: { chat_self_rag_enabled: 'false' }, origins: { chat_self_rag_enabled: 'global' }, editable: true },
+    ],
+    edges: [{ from: 'retrieve', to: 'crag_grade', label: '', loop: false, maxIterations: 0 }],
+    fields: {
+      crag_enabled: { key: 'crag_enabled', type: 'bool', group: 'Korrektur', label: 'CRAG aktiviert', help: '' },
+      chat_self_rag_enabled: { key: 'chat_self_rag_enabled', type: 'bool', group: 'Verifikation', label: 'Self-RAG aktiviert', help: '' },
+    },
+  });
+
+  const stringFieldGraph = (): WorkflowGraph => graph({
+    nodes: [
+      { id: 'retrieve', label: 'Retrieval', group: 'Suche', help: '', keys: [], alwaysOn: true, llmCalls: 0, latencyMs: 400, activation: 'active', values: {}, origins: {}, editable: false },
+      { id: 'tz_node', label: 'Zeitzone', group: 'Datum', help: '', keys: ['chat_date_timezone'], alwaysOn: false, llmCalls: 0, latencyMs: 0, activation: 'active', values: { chat_date_timezone: 'Europe/Berlin' }, origins: { chat_date_timezone: 'kb' }, editable: true },
+    ],
+    edges: [],
+    fields: {
+      chat_date_timezone: { key: 'chat_date_timezone', type: 'string', group: 'Datum', label: 'Zeitzone', help: '' },
+    },
+  });
+
+  describe('save / reset / refetch', () => {
+    it('shows the save bar with a count once a field is edited', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(editableGraph());
+      render(<WorkflowCanvas kbId="kb-1" />);
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+      expect(await screen.findByText(/1 Einstellung geändert/)).toBeInTheDocument();
+    });
+
+    // THE batching guarantee: two edits on two DIFFERENT nodes must land in
+    // one PUT with both keys, because ValidateConflicts judges the whole
+    // batch — saving per-toggle would 400 the first half of a legitimate move
+    // between chat_self_rag_enabled and chat_factuality_verifier_enabled and
+    // trap the user one flag short of the state they want.
+    it('saves every dirty key across the whole graph in a single call', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(editableGraph());
+      vi.mocked(saveKbSettings).mockResolvedValue(undefined);
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+
+      await userEvent.click(screen.getByTestId('wf-node-self_rag'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Self-RAG aktiviert' }), 'true');
+
+      expect(await screen.findByText(/2 Einstellungen geändert/)).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: /speichern/i }));
+
+      await waitFor(() => expect(saveKbSettings).toHaveBeenCalledTimes(1));
+      expect(saveKbSettings).toHaveBeenCalledWith('kb-1', {
+        crag_enabled: 'false',
+        chat_self_rag_enabled: 'true',
+      });
+    });
+
+    it('clears the draft and refetches the projection after a successful save', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(editableGraph());
+      vi.mocked(saveKbSettings).mockResolvedValue(undefined);
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+      await userEvent.click(screen.getByRole('button', { name: /speichern/i }));
+
+      await waitFor(() => expect(fetchWorkflow).toHaveBeenCalledTimes(2));
+      expect(fetchWorkflow).toHaveBeenNthCalledWith(2, 'kb-1', 'complex_reasoning');
+      await waitFor(() => expect(screen.queryByText(/geändert/)).not.toBeInTheDocument());
+    });
+
+    it('keeps the draft and surfaces the server message when save fails', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(editableGraph());
+      vi.mocked(saveKbSettings).mockRejectedValue(
+        new Error('chat_self_rag_enabled and chat_factuality_verifier_enabled cannot both be enabled'),
+      );
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+      await userEvent.click(screen.getByRole('button', { name: /speichern/i }));
+
+      expect(await screen.findByText(/cannot both be enabled/)).toBeInTheDocument();
+      // The draft is still there — the count row didn't disappear, and the
+      // save button is still there to retry.
+      expect(screen.getByText(/1 Einstellung geändert/)).toBeInTheDocument();
+      // No refetch was attempted off the back of a failed save.
+      expect(fetchWorkflow).toHaveBeenCalledTimes(1);
+    });
+
+    it('discard clears the draft without calling the API', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(editableGraph());
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+      await screen.findByText(/geändert/);
+
+      await userEvent.click(screen.getByRole('button', { name: /verwerfen/i }));
+
+      expect(screen.queryByText(/geändert/)).not.toBeInTheDocument();
+      expect(saveKbSettings).not.toHaveBeenCalled();
+    });
+
+    it('reset calls resetKbSetting and refetches the projection', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(editableGraph());
+      vi.mocked(resetKbSetting).mockResolvedValue(undefined);
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.click(screen.getByRole('button', { name: /CRAG aktiviert zurücksetzen/i }));
+
+      await waitFor(() => expect(resetKbSetting).toHaveBeenCalledWith('kb-1', 'crag_enabled'));
+      await waitFor(() => expect(fetchWorkflow).toHaveBeenCalledTimes(2));
+    });
+
+    // Phase 3's reset button shipped with no try/catch and silently swallowed
+    // exactly this: the DELETE can legitimately 400 because clearing an
+    // override may fall the key back to a conflicting global value.
+    it('surfaces the server message when reset fails', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(editableGraph());
+      vi.mocked(resetKbSetting).mockRejectedValue(new Error('reset setting: 400'));
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.click(screen.getByRole('button', { name: /CRAG aktiviert zurücksetzen/i }));
+
+      expect(await screen.findByText(/reset setting: 400/)).toBeInTheDocument();
+    });
+
+    // The FieldString guard: siteconfig.Validate accepts "" for a
+    // string-typed key, so an empty PUT would write a real kb-origin
+    // override with an invisible value rather than clearing anything.
+    it('never writes an empty value into the draft for a string-typed field, and points at Reset instead', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(stringFieldGraph());
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-tz_node'));
+      const input = screen.getByRole('textbox', { name: 'Zeitzone' });
+      await userEvent.clear(input);
+
+      // Never became dirty — no save bar count for it.
+      expect(screen.queryByText(/geändert/)).not.toBeInTheDocument();
+      expect(await screen.findByText(/Leerer Wert/i)).toBeInTheDocument();
+      expect(saveKbSettings).not.toHaveBeenCalled();
+    });
   });
 });

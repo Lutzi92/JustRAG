@@ -5,9 +5,10 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { Edge } from '@xyflow/react';
+import { Save, Undo2 } from 'lucide-react';
 import type { NodeActivation, WorkflowGraph, WorkflowLane, WorkflowNodeData } from '../../../types';
 import { useReducedMotion } from '../../../hooks/useReducedMotion';
-import { fetchWorkflow } from './api';
+import { fetchWorkflow, fieldFor, saveKbSettings, resetKbSetting } from './api';
 import { layoutWorkflow, MIN_ZOOM, type WorkflowRFNode } from './layout';
 import WorkflowNode from './WorkflowNode';
 import { NodeInspector } from './NodeInspector';
@@ -121,6 +122,25 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const reducedMotion = useReducedMotion();
 
+  // Unsaved edits, keyed by config key, spanning the WHOLE graph — not one
+  // map per node. `ValidateConflicts` on the server judges a save as a batch,
+  // and a mutually-exclusive pair (chat_self_rag_enabled vs
+  // chat_factuality_verifier_enabled) is a live example: a user moving from
+  // one to the other must flip both keys in the SAME PUT, or the first toggle
+  // alone 400s and traps them one flag short of the state they want. Per-node
+  // draft state would make that impossible to express.
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  // Surfaces both a rejected save and a rejected reset. Deliberately a
+  // separate state from `error` above: `error` is reserved for "the initial
+  // load failed" (renders instead of the canvas); a save/reset failure must
+  // leave the graph exactly as it was so the user can retry or adjust.
+  const [opError, setOpError] = useState<string | null>(null);
+  // Set only when onFieldChange refuses to write an empty string-field edit
+  // into `draft` (see onFieldChange below); cleared on the next accepted
+  // edit, a successful save, or Discard.
+  const [emptyStringNote, setEmptyStringNote] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     setError(null);
@@ -132,6 +152,101 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
     // user is now looking at.
     return () => { cancelled = true; };
   }, [kbId, lane]);
+
+  // Re-fetches the projection for the CURRENT lane. Activation, edges, the
+  // cost estimate and the orchestrator candidates are all server-derived, so
+  // a save/reset repaints the graph from a fresh fetch rather than guessing
+  // the new state client-side.
+  const refetchGraph = useCallback(async () => {
+    const fresh = await fetchWorkflow(kbId, lane);
+    setGraph(fresh);
+  }, [kbId, lane]);
+
+  const draftCount = Object.keys(draft).length;
+
+  const onFieldChange = useCallback((key: string, value: string) => {
+    const field = graph ? fieldFor(graph, key) : undefined;
+    // siteconfig.Validate's FieldString case accepts "" as a legitimate
+    // value — only numeric fields reject an empty string via parse failure.
+    // Sending "" for a string key would therefore write a real kb-origin
+    // override row with an invisible empty value instead of clearing
+    // anything, and the settings UI would show `origin: kb` for a value the
+    // admin never knowingly set. Refuse the write outright — an empty string
+    // can never enter `draft` for a string-typed field — and point the user
+    // at Reset, the only real way to clear one.
+    if (field?.type === 'string' && value === '') {
+      setEmptyStringNote(`${field.label}: Leerer Wert wird nicht übernommen — zum Löschen "Zurücksetzen" verwenden.`);
+      return;
+    }
+    setEmptyStringNote(null);
+    setDraft((d) => ({ ...d, [key]: value }));
+  }, [graph]);
+
+  const onDiscardDraft = useCallback(() => {
+    setDraft({});
+    setOpError(null);
+    setEmptyStringNote(null);
+  }, []);
+
+  const onSaveDraft = useCallback(async () => {
+    if (Object.keys(draft).length === 0) return;
+    setSaving(true);
+    setOpError(null);
+    try {
+      // ONE call with every dirty key across the whole graph — the batching
+      // guarantee. Saving per-toggle would let a legitimate move between two
+      // mutually-exclusive keys 400 on the first half.
+      await saveKbSettings(kbId, draft);
+      setDraft({});
+      await refetchGraph();
+    } catch (e) {
+      // Keep the draft on failure — the conflict 400 names both keys, and
+      // that message is the only thing telling the user why; losing their
+      // edits on top of that would mean re-doing work to even read the error.
+      setOpError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [kbId, draft, refetchGraph]);
+
+  const onResetKey = useCallback(async (key: string) => {
+    setOpError(null);
+    try {
+      await resetKbSetting(kbId, key);
+      await refetchGraph();
+      // Reset is "give up on this key and go back to the server's resolved
+      // value" — a pending local edit for the SAME key no longer applies.
+      // Phase 3's reset button shipped with no try/catch at all and silently
+      // swallowed exactly the failure this catch below now surfaces: the
+      // DELETE can legitimately 400 when clearing an override falls back to
+      // a conflicting global value.
+      setDraft((d) => {
+        if (!(key in d)) return d;
+        const next = { ...d };
+        delete next[key];
+        return next;
+      });
+    } catch (e) {
+      setOpError(e instanceof Error ? e.message : String(e));
+    }
+  }, [kbId, refetchGraph]);
+
+  // Warns only on an actual browser navigation away (reload, close, back to
+  // another origin) — that loss is unrecoverable from inside the app. It does
+  // NOT warn on switching the Settings sub-tab away from Workflow: that tab
+  // switch is same-page, one click to return, and a confirm dialog firing on
+  // every tab click would be worse than the (easily-redone) loss it prevents.
+  // KbSettingsPanel.tsx — which owns that tab switch — is also out of scope
+  // for this task.
+  useEffect(() => {
+    if (draftCount === 0) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [draftCount]);
 
   const laid = useMemo(
     () => (graph
@@ -327,15 +442,45 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
         <NodeInspector
           node={selected}
           onClose={closeInspector}
-          // Placeholder wiring: Task 5 replaces these with real draft state,
-          // a batched save and per-key reset. Required props rather than
-          // optional ones so that task cannot forget to connect them.
           fields={graph?.fields ?? {}}
-          draft={{}}
-          onChange={() => {}}
-          onReset={() => {}}
+          draft={draft}
+          onChange={onFieldChange}
+          onReset={onResetKey}
+          readOnlyReason={saving ? 'Wird gerade gespeichert.' : undefined}
         />
       </div>
+
+      {(draftCount > 0 || opError || emptyStringNote) && (
+        <div className="wf-canvas__savebar">
+          {emptyStringNote && <p className="wf-canvas__savebar-hint">{emptyStringNote}</p>}
+          {opError && <p className="wf-canvas__savebar-error" role="alert">{opError}</p>}
+          {draftCount > 0 && (
+            <div className="wf-canvas__savebar-row">
+              <span className="wf-canvas__savebar-count">
+                {`${draftCount} ${draftCount === 1 ? 'Einstellung' : 'Einstellungen'} geändert`}
+              </span>
+              <div className="wf-canvas__savebar-actions">
+                <button
+                  type="button"
+                  className="wf-canvas__savebar-discard"
+                  onClick={onDiscardDraft}
+                  disabled={saving}
+                >
+                  <Undo2 size={14} aria-hidden="true" /> Verwerfen
+                </button>
+                <button
+                  type="button"
+                  className="wf-canvas__savebar-save"
+                  onClick={onSaveDraft}
+                  disabled={saving}
+                >
+                  <Save size={14} aria-hidden="true" /> {saving ? 'Speichert…' : 'Speichern'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
