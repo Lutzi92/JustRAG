@@ -118,6 +118,14 @@ type ProjectedGraph struct {
 	// can derive that fallback itself from the bare key already on the wire
 	// in ProjectedNode.Keys, and from the owning node's own Label/Help/Group
 	// (NodeSpec, also already on the wire).
+	//
+	// ProjectedNode.Editable is derived from Keys[0] alone, so it says
+	// nothing about the node's other keys — resolve each key in
+	// ProjectedNode.Keys against Fields independently, regardless of the
+	// node's own Editable flag: NodeQueryCache is Editable:true
+	// (query_cache_enabled is registered) yet its sibling key
+	// query_cache_similarity_threshold has no registry row and therefore no
+	// Fields entry.
 	Fields map[string]siteconfig.KBConfigField `json:"fields"`
 }
 
