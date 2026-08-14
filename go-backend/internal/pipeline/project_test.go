@@ -185,6 +185,101 @@ func TestProjectMarksEditability(t *testing.T) {
 	}
 }
 
+// Adaptive routing skips CRAG on lookup and enumeration lanes even when
+// crag_enabled is true — the single most surprising behaviour in the
+// pipeline, per the code comment beside the branch in project.go.
+func TestProjectCRAGLaneSkippedOnLookupAndEnumeration(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"crag_enabled":             "true",
+		"adaptive_routing_enabled": "true",
+	}}
+
+	for _, lane := range []Lane{LaneLookup, LaneEnumeration} {
+		g, err := Project(context.Background(), r, lane)
+		if err != nil {
+			t.Fatalf("Project(%s): %v", lane, err)
+		}
+		for _, id := range []NodeID{NodeCRAGGrade, NodeCRAGRewrite} {
+			n := nodeByIDIn(g, id)
+			if n == nil {
+				t.Fatalf("lane %s: node %q missing from projection", lane, id)
+			}
+			if n.Activation != ActivationInactive {
+				t.Errorf("lane %s: node %q Activation = %q, want %q", lane, id, n.Activation, ActivationInactive)
+			}
+			if n.Reason != "lane_skipped" {
+				t.Errorf("lane %s: node %q Reason = %q, want %q", lane, id, n.Reason, "lane_skipped")
+			}
+		}
+	}
+}
+
+// On the complex-reasoning lane, adaptive routing does NOT skip CRAG. This is
+// the assertion that would catch an inverted lane check in the branch above.
+func TestProjectCRAGActiveOnComplexLaneUnderAdaptiveRouting(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"crag_enabled":             "true",
+		"adaptive_routing_enabled": "true",
+	}}
+
+	g, err := Project(context.Background(), r, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	for _, id := range []NodeID{NodeCRAGGrade, NodeCRAGRewrite} {
+		if n := nodeByIDIn(g, id); n.Activation != ActivationActive {
+			t.Errorf("node %q Activation = %q, want %q", id, n.Activation, ActivationActive)
+		}
+	}
+}
+
+// Without adaptive routing turned on, CRAG runs on every lane, including
+// lookup — catches the lane-skip branch firing unconditionally.
+func TestProjectCRAGActiveOnLookupWhenAdaptiveRoutingOff(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"crag_enabled":             "true",
+		"adaptive_routing_enabled": "false",
+	}}
+
+	g, err := Project(context.Background(), r, LaneLookup)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	for _, id := range []NodeID{NodeCRAGGrade, NodeCRAGRewrite} {
+		if n := nodeByIDIn(g, id); n.Activation != ActivationActive {
+			t.Errorf("node %q Activation = %q, want %q", id, n.Activation, ActivationActive)
+		}
+	}
+}
+
+// Self-RAG supersedes the factuality node even when factcheck_in_chat is
+// explicitly on — the fixture sets it explicitly so the test's intent (Self-RAG
+// wins even against an active factuality node) is unambiguous.
+func TestProjectFactualitySupersededBySelfRAG(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"factcheck_in_chat":     "true",
+		"chat_self_rag_enabled": "true",
+	}}
+
+	g, err := Project(context.Background(), r, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	n := nodeByIDIn(g, NodeFactuality)
+	if n == nil {
+		t.Fatal("factuality node missing from projection")
+	}
+	if n.Activation != ActivationInactive {
+		t.Fatalf("Activation = %q, want %q", n.Activation, ActivationInactive)
+	}
+	if n.Reason != "superseded_by:self_rag" {
+		t.Fatalf("Reason = %q, want %q", n.Reason, "superseded_by:self_rag")
+	}
+}
+
 func TestProjectRejectsUnknownLane(t *testing.T) {
 	if _, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, Lane("nonsense")); err == nil {
 		t.Fatal("Project accepted an unknown lane")
