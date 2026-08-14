@@ -46,6 +46,40 @@ func assertKeys(t *testing.T, what string, got map[string]bool, want []string) {
 	}
 }
 
+// TestApplyResultWireFormat pins the preset apply/preview response shape, in
+// both directions, the same way TestWireFormatIsCamelCase pins the projection.
+//
+// Without it the POST/GET body was only ever round-tripped through its own
+// struct, so renaming `overwrites` would break the confirmation dialog Task 5
+// builds on it while every test stayed green — and that field is the one an
+// admin's "N deiner Einstellungen werden überschrieben" warning is counted
+// from.
+//
+// Asserted on the live endpoint body rather than on a struct literal, so a
+// handler that wrapped or renamed the payload on its way out would be caught
+// too. The fixture sets crag_enabled against "Hohe Präzision" (which wants it
+// on) precisely so Overwrites is non-empty: an empty slice still marshals the
+// key, but a populated one also proves the field carries what it claims.
+func TestApplyResultWireFormat(t *testing.T) {
+	s := newRecordingStore(map[string]string{"crag_enabled": "false"})
+	rec := doPreview(t, newApplyHandler(s, map[string]string{}), "preset=high_precision")
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	assertKeys(t, "ApplyResult", keysOf(t, json.RawMessage(rec.Body.Bytes())),
+		[]string{"preset", "label", "overwrites"})
+
+	// The POST answers in the same shape — pinned here too, so the two cannot
+	// drift apart and leave Task 5 parsing one of them wrongly.
+	applied := doApply(t, newApplyHandler(newRecordingStore(nil), map[string]string{}), `{"preset":"high_precision"}`)
+	if applied.Code != 200 {
+		t.Fatalf("apply status = %d, want 200: %s", applied.Code, applied.Body.String())
+	}
+	assertKeys(t, "ApplyResult(POST)", keysOf(t, json.RawMessage(applied.Body.Bytes())),
+		[]string{"preset", "label", "overwrites"})
+}
+
 // TestWireFormatIsCamelCase pins the endpoint's JSON key set. The frontend types
 // against exactly these names; a casing change here silently breaks the canvas
 // with no compile error on either side.

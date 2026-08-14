@@ -183,20 +183,31 @@ func (h *Handler) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 // PreviewPreset handles GET /api/kb/{id}/workflow/preset?preset=<id>.
 //
 // It answers "what does applying this cost me?" without writing, so the UI can
-// warn before it destroys anything. Three reasons this is a separate GET
-// rather than a dryRun flag on the POST above:
+// warn before it destroys anything.
 //
-//   - A GET cannot write. A dry-run flag is one forgotten field away from a
-//     real apply, and the failure mode is silent data loss on someone's
-//     configuration.
-//   - The client cannot compute the count itself from data it already holds:
-//     ProjectedNode.Origins documents that a KB override which happens to
-//     equal the global value is reported as "global", so the canvas cannot
-//     tell a redundant override from an inherited value — exactly the
-//     distinction "how many of MY settings are overwritten" turns on.
-//   - It shares planApply with the POST, so a preview can never advertise an
-//     apply the server would reject: an apply that would conflict fails the
-//     preview with the same 400 and the same message.
+// A client COULD compute the overwrite count itself: GET /api/kb/{id}/settings
+// (same kbAdminChain) returns each key's raw `override` explicitly, and GET
+// /api/workflow/presets returns each preset's full Bundle, which is everything
+// Overwrites needs. Note this is NOT derivable from the workflow projection
+// alone — ProjectedNode.Origins collapses a KB override that happens to equal
+// the global value to "global", so the canvas by itself cannot tell a
+// redundant override from an inherited one. The endpoint exists for three
+// other reasons:
+//
+//   - It shares planApply with the POST, so the preview can never advertise an
+//     apply the server would then reject: an apply that would conflict fails
+//     the preview with the same 400 and the same message. A client-side count
+//     would answer "3 werden überschrieben" and then eat a 400 on confirm.
+//   - One definition of "overwritten", on the server, next to the apply that
+//     acts on it. A reimplementation in the frontend would have to re-derive
+//     the loose-boolean comparison and the NULL-row rule (see Overwrites), and
+//     would drift from them silently.
+//   - One round-trip, against two (settings + presets) plus a client-side
+//     join, on a dialog that opens on a click.
+//
+// Why a separate GET rather than a dryRun flag on the POST: a GET cannot
+// write. A dry-run flag is one forgotten field away from a real apply, and the
+// failure mode is silent destruction of an admin's configuration.
 func (h *Handler) PreviewPreset(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	kbID := r.PathValue("id")
