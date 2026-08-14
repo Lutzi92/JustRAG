@@ -1,34 +1,28 @@
 import { useEffect, useRef } from 'react';
-import { X } from 'lucide-react';
-import type { ValueOrigin, WorkflowNodeData } from '../../../types';
+import { RotateCcw, X } from 'lucide-react';
+import type { WorkflowConfigField, WorkflowNodeData } from '../../../types';
 import { reasonLabel } from './reasonLabel';
+import { fieldFor } from './api';
+import { NodeFieldInput } from './NodeFieldInput';
+import { ORIGIN_LABEL, UNKNOWN_ORIGIN_LABEL, DEFAULT_VALUE_LABEL } from './constants';
 import './NodeInspector.css';
-
-const ORIGIN_LABEL: Record<ValueOrigin, string> = {
-  kb: 'diese KB',
-  global: 'global',
-  default: 'Standard',
-};
-
-// An origin outside kb|global|default should never assert "Standard" — that
-// tells the user "deployment default" when the truth might be an override
-// from a layer this panel can't see. Fail visibly instead.
-const UNKNOWN_ORIGIN_LABEL = 'unbekannt';
-
-// What to print in the value slot for a key nobody has set anywhere.
-//
-// project.go:65-70 is explicit: Values holds ONLY explicitly-set keys, an unset
-// key is absent from the map and shows up in Origins as "default", and the UI
-// "must therefore not assume a missing key means an empty value". An em dash
-// did exactly that — on a deployment that has configured nothing, every row
-// read "key — Standard", i.e. "nothing is set". Worst on factcheck_in_chat,
-// which defaults to TRUE (project.go:179): the canvas drew "Faktencheck" as
-// active while its inspector row looked empty.
-const DEFAULT_VALUE_LABEL = 'Standardwert';
 
 interface Props {
   node: WorkflowNodeData | null;
   onClose: () => void;
+  /** Registry field metadata for every key any node references; a miss means
+   * the key is not per-KB configurable (see fieldFor's doc comment). */
+  fields: Record<string, WorkflowConfigField>;
+  /** Unsaved edits, keyed by config key. Presence of a key here — not its
+   * value — is what makes a row "dirty": typing the resolved value right
+   * back in still counts, because the user explicitly touched it. */
+  draft: Record<string, string>;
+  onChange: (key: string, value: string) => void;
+  onReset: (key: string) => void;
+  /** When set, every control renders read-only and Reset is withheld,
+   * regardless of the node's own editability — e.g. a save in flight. The
+   * reason is shown to the user, not just enforced silently. */
+  readOnlyReason?: string;
 }
 
 /**
@@ -44,8 +38,18 @@ interface Props {
  * focus restoration to the originating node are the canvas's job — it already
  * owns one delegated keydown listener over the whole surface, and it is the
  * side that knows which node id to send focus back to. See WorkflowCanvas.
+ *
+ * Editing (Task 4): `node.editable` says nothing about any key OTHER than
+ * `keys[0]` — it is derived from that key alone (project.go). An editable
+ * node routinely has keys with no registry entry (`fieldFor` returns
+ * undefined for the majority of them across the vocabulary), so each key is
+ * resolved independently: a control renders only where the key has a
+ * registry field AND the node is editable AND the panel isn't read-only;
+ * everything else keeps the original read-only row — now with the field's
+ * label instead of a bare key name whenever a field exists at all, which is
+ * strictly better than before even for a locked node.
  */
-export function NodeInspector({ node, onClose }: Props) {
+export function NodeInspector({ node, onClose, fields, draft, onChange, onReset, readOnlyReason }: Props) {
   const panelRef = useRef<HTMLElement | null>(null);
   const nodeId = node?.id;
 
@@ -86,18 +90,42 @@ export function NodeInspector({ node, onClose }: Props) {
       {node.keys.length > 0 && (
         <>
           <div className="wf-inspector__section">Einstellungen</div>
+          {readOnlyReason && <p className="wf-inspector__note">{readOnlyReason}</p>}
           <ul className="wf-inspector__keys">
             {node.keys.map((k) => {
-              const unset = node.origins[k] === 'default';
+              const field = fieldFor({ fields }, k);
+              const origin = node.origins[k];
+              const dirty = Object.prototype.hasOwnProperty.call(draft, k);
+              const value = draft[k] ?? node.values[k];
+              const canEdit = node.editable && field !== undefined && !readOnlyReason;
+              const canReset = origin === 'kb' && node.editable && !readOnlyReason;
+
               return (
-                <li key={k} className="wf-inspector__key">
-                  <span className="wf-inspector__key-name">{k}</span>
-                  <span className="wf-inspector__key-meta">
-                    <span className={unset ? 'wf-inspector__value wf-inspector__value--default' : 'wf-inspector__value'}>
-                      {unset ? DEFAULT_VALUE_LABEL : (node.values[k] ?? '—')}
-                    </span>
-                    <span className="wf-inspector__origin">{ORIGIN_LABEL[node.origins[k]] ?? UNKNOWN_ORIGIN_LABEL}</span>
-                  </span>
+                <li key={k} className="wf-inspector__key" data-dirty={dirty}>
+                  {field ? (
+                    <NodeFieldInput field={field} value={value} origin={origin} editable={canEdit} onChange={onChange} />
+                  ) : (
+                    <>
+                      <span className="wf-inspector__key-name">{k}</span>
+                      <span className="wf-inspector__key-meta">
+                        <span className={origin === 'default' ? 'wf-inspector__value wf-inspector__value--default' : 'wf-inspector__value'}>
+                          {origin === 'default' ? DEFAULT_VALUE_LABEL : (value ?? '—')}
+                        </span>
+                        <span className="wf-inspector__origin">{ORIGIN_LABEL[origin] ?? UNKNOWN_ORIGIN_LABEL}</span>
+                      </span>
+                    </>
+                  )}
+                  {canReset && (
+                    <button
+                      type="button"
+                      className="wf-inspector__reset"
+                      onClick={() => onReset(k)}
+                      aria-label={`${field?.label ?? k} zurücksetzen`}
+                      title="Auf globalen Wert zurücksetzen"
+                    >
+                      <RotateCcw size={12} aria-hidden="true" /> Zurücksetzen
+                    </button>
+                  )}
                 </li>
               );
             })}

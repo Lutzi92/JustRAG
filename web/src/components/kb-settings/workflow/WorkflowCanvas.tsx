@@ -324,7 +324,17 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
           <Background />
           <Controls showInteractive={false} />
         </ReactFlow>
-        <NodeInspector node={selected} onClose={closeInspector} />
+        <NodeInspector
+          node={selected}
+          onClose={closeInspector}
+          // Placeholder wiring: Task 5 replaces these with real draft state,
+          // a batched save and per-key reset. Required props rather than
+          // optional ones so that task cannot forget to connect them.
+          fields={graph?.fields ?? {}}
+          draft={{}}
+          onChange={() => {}}
+          onReset={() => {}}
+        />
       </div>
     </div>
   );

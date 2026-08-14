@@ -20,7 +20,13 @@ vi.mock('../../../hooks/useReducedMotion', () => ({
   getMotionProps: () => ({}),
 }));
 
-vi.mock('./api', () => ({ fetchWorkflow: vi.fn() }));
+// fieldFor is real (not a vi.fn()): NodeInspector, rendered inside this
+// canvas, imports it from the same module and needs a genuine lookup, not a
+// second mock to keep in sync with the fixture's `fields` map.
+vi.mock('./api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api')>();
+  return { ...actual, fetchWorkflow: vi.fn() };
+});
 import { fetchWorkflow } from './api';
 
 const graph: WorkflowGraph = {

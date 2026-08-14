@@ -1,20 +1,7 @@
 import type { ChangeEvent } from 'react';
 import type { ValueOrigin, WorkflowConfigField } from '../../../types';
+import { ORIGIN_LABEL, UNKNOWN_ORIGIN_LABEL, DEFAULT_VALUE_LABEL } from './constants';
 import './NodeFieldInput.css';
-
-// Same words as NodeInspector's ORIGIN_LABEL — kept in sync by hand since this
-// leaf has no import path back to that panel without creating a cycle risk.
-const ORIGIN_LABEL: Record<ValueOrigin, string> = {
-  kb: 'diese KB',
-  global: 'global',
-  default: 'Standard',
-};
-
-const UNKNOWN_ORIGIN_LABEL = 'unbekannt';
-
-// Matches NodeInspector's DEFAULT_VALUE_LABEL exactly: an unset key must read
-// as "the code default applies", never as an empty/cleared box.
-const DEFAULT_VALUE_LABEL = 'Standardwert';
 
 interface Props {
   field: WorkflowConfigField;
