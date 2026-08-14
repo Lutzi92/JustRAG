@@ -171,6 +171,15 @@ var snapshotConfigKeys = []string{
 	"chat_corpus_table_concurrency",
 	"chat_corpus_table_model",
 	"chat_corpus_table_router_llm_enabled",
+	// Verifikation / Korrektur registry keys (kb-workflow-editor Phase 2
+	// Task 2; cross-checked by snapshot_registry_test.go like the blocks
+	// above). "factcheck_in_chat" and "citation_validation_enabled" were
+	// already present above this block.
+	"chat_factuality_verifier_enabled",
+	"chat_factuality_verifier_always_run",
+	"chat_self_rag_enabled",
+	"chat_factuality_gate_enabled",
+	"chat_sufficient_context_enabled",
 }
 
 // ---------------------------------------------------------------------------
