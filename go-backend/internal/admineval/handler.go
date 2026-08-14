@@ -193,6 +193,7 @@ var snapshotConfigKeys = []string{
 	"chat_agentic_max_hops",
 	"chat_kb_router_enabled",
 	"chat_answer_tools_enabled",
+	"chat_answer_tools_max_rounds",
 }
 
 // ---------------------------------------------------------------------------
