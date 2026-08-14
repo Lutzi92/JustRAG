@@ -643,3 +643,97 @@ func TestProjectVerifierConditionalBehindCitationValidator(t *testing.T) {
 			n2.Activation, n2.Reason, ActivationInactive, "requires:citation_validation")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// End-to-end proof that Phase 2 achieved its purpose
+// ---------------------------------------------------------------------------
+
+// TestProjectPhase2NodesAreEditable proves the whole point of Phase 2: nodes
+// the canvas draws that used to project editable:false — because their
+// Keys[0] activation gate was missing from the per-KB registry — now project
+// editable:true.
+//
+// The expected node list below is HARDCODED, not derived from the registry.
+// Computing the expectation by re-reading siteconfig.IsPerKB would make this
+// test tautological: it would pass no matter what the registry contains,
+// including a registry edit that silently undid this phase, because it would
+// only ever be comparing the registry to itself. This list is the
+// specification Phase 2 was built against; kbConfigRegistry in
+// internal/siteconfig/registry.go is what is being tested against it.
+func TestProjectPhase2NodesAreEditable(t *testing.T) {
+	mustBeEditable := []struct {
+		id  NodeID
+		key string // Keys[0] — documented here so a failure names the exact registry row to check
+	}{
+		// Verification / correction cluster (Task 2).
+		{NodeFactuality, "factcheck_in_chat"},
+		{NodeFactVerifier, "chat_factuality_verifier_enabled"},
+		{NodeRefine, "chat_factuality_gate_enabled"},
+		{NodeSelfRAG, "chat_self_rag_enabled"},
+		{NodeCitationCheck, "citation_validation_enabled"},
+		{NodeSufficientCtx, "chat_sufficient_context_enabled"},
+		// Retrieval + orchestrator drift fixes (Task 3). Verified against git
+		// history (commit f40e634, "register the drifted retrieval and
+		// orchestrator keys"): both keys below appear as new `+` rows in that
+		// commit's diff of internal/siteconfig/registry.go, and both are the
+		// Keys[0] of their node — unlike chat_graph_routing_enabled or
+		// rerank_blend_alpha, which were already registered before that
+		// commit and so are not Task 3 evidence.
+		{NodeRecencyBoost, "recency_boost_enabled"},
+		{NodeFeedbackBoost, "chat_feedback_boost_enabled"},
+	}
+
+	empty := fakeReader{vals: map[string]string{}}
+	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	for _, want := range mustBeEditable {
+		n := nodeByIDIn(g, want.id)
+		if n == nil {
+			t.Fatalf("node %q missing from projection", want.id)
+		}
+		if len(n.Keys) == 0 || n.Keys[0] != want.key {
+			t.Fatalf("node %q Keys[0] = %v, want first key %q — test's key expectation is stale",
+				want.id, n.Keys, want.key)
+		}
+		if !n.Editable {
+			t.Errorf("node %q Editable = false, want true — Phase 2 was supposed to register "+
+				"%q in the per-KB registry (internal/siteconfig/registry.go)", want.id, want.key)
+		}
+	}
+}
+
+// TestProjectRetrievalThresholdNodeStaysNotEditable is the inverse control
+// for the test above. Without it, TestProjectPhase2NodesAreEditable cannot
+// distinguish "Phase 2 registered these specific nodes" from "IsPerKB now
+// returns true for everything" — a registry bug of that shape would pass
+// every assertion above and only this one would catch it.
+//
+// "retrieve" is the control: its Keys[0] is min_similarity_threshold, and by
+// inspection of every NodeSpec in nodes.go against kbConfigRegistry in
+// internal/siteconfig/registry.go, it is the ONLY node in the entire
+// vocabulary whose Keys[0] is not in the per-KB registry — every other
+// node's on/off gate is. It is a deliberately different shape of key, not an
+// oversight of this phase: NodeRetrieve is AlwaysOn (hybrid search always
+// runs, there is no on/off gate to register), so Keys[0] here is a tuning
+// threshold that IsPerKB is still consulted against, not an activation flag.
+func TestProjectRetrievalThresholdNodeStaysNotEditable(t *testing.T) {
+	empty := fakeReader{vals: map[string]string{}}
+	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	n := nodeByIDIn(g, NodeRetrieve)
+	if n == nil {
+		t.Fatal("retrieve node missing from projection")
+	}
+	if len(n.Keys) == 0 || n.Keys[0] != "min_similarity_threshold" {
+		t.Fatalf("retrieve node Keys[0] = %v, want first key %q — test's key expectation is stale", n.Keys, "min_similarity_threshold")
+	}
+	if n.Editable {
+		t.Error("retrieve node Editable = true, want false — min_similarity_threshold is not in the per-KB registry")
+	}
+}
