@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NodeFieldInput } from './NodeFieldInput';
 import type { WorkflowConfigField } from '../../../types';
@@ -97,6 +97,81 @@ describe('NodeFieldInput', () => {
     render(<NodeFieldInput field={field} value={undefined} origin="default" editable={false} onChange={vi.fn()} />);
 
     expect(screen.getByText('Standardwert')).toBeInTheDocument();
+  });
+
+  // siteconfig.Validate's FieldBool arm accepts "true"/"false"/"1"/"0". The
+  // select offered only the first two, so a stored "0" matched no option and
+  // the browser fell back to the first — rendering "Ein" for a flag that is
+  // OFF. The control reported the opposite of the truth.
+  it.each([
+    ['1', 'true'],
+    ['0', 'false'],
+    ['TRUE', 'true'],
+    [' false ', 'false'],
+  ])('renders the stored bool spelling %s as %s', (stored, expected) => {
+    const field = boolField();
+    render(<NodeFieldInput field={field} value={stored} origin="global" editable onChange={vi.fn()} />);
+
+    const control = screen.getByRole('combobox', { name: field.label }) as HTMLSelectElement;
+    expect(control.value).toBe(expected);
+  });
+
+  it('shows an uninterpretable stored bool verbatim instead of silently picking an option', () => {
+    const field = boolField();
+    render(<NodeFieldInput field={field} value="vielleicht" origin="global" editable onChange={vi.fn()} />);
+
+    const control = screen.getByRole('combobox', { name: field.label }) as HTMLSelectElement;
+    expect(control.value).not.toBe('true');
+    expect(control.value).not.toBe('false');
+    expect(screen.getByText('vielleicht')).toBeInTheDocument();
+  });
+
+  // IMPORTANT 5: the guard against writing an empty string override lives
+  // HERE, with the component that emits the value — not one component away in
+  // WorkflowCanvas. siteconfig.Validate's `case FieldString: return nil` means
+  // the server accepts "", so any reuse of this input without the guard would
+  // ship a phantom-override bug.
+  describe('empty value on a string-typed field', () => {
+    const stringField = (): WorkflowConfigField => ({
+      key: 'chat_date_timezone', type: 'string', group: 'Datum',
+      label: 'Zeitzone', help: 'Zeitzone für Datumsangaben.',
+    });
+
+    it('refuses to emit it, reporting through onRefuse instead of onChange', async () => {
+      const onChange = vi.fn();
+      const onRefuse = vi.fn();
+      render(<NodeFieldInput field={stringField()} value="Europe/Berlin" origin="kb" editable
+                             onChange={onChange} onRefuse={onRefuse} />);
+
+      await userEvent.clear(screen.getByRole('textbox', { name: 'Zeitzone' }));
+
+      expect(onChange).not.toHaveBeenCalled();
+      expect(onRefuse).toHaveBeenCalledWith('chat_date_timezone', expect.stringContaining('Leerer Wert'));
+    });
+
+    it('refuses a whitespace-only value the same way', () => {
+      const onChange = vi.fn();
+      const onRefuse = vi.fn();
+      render(<NodeFieldInput field={stringField()} value="Europe/Berlin" origin="kb" editable
+                             onChange={onChange} onRefuse={onRefuse} />);
+
+      fireEvent.change(screen.getByRole('textbox', { name: 'Zeitzone' }), { target: { value: '   ' } });
+
+      expect(onChange).not.toHaveBeenCalled();
+      expect(onRefuse).toHaveBeenCalled();
+    });
+
+    // The refusal is unconditional: without a callback it is silent, never
+    // permissive. A reuser who forgets onRefuse gets a quiet control, not a
+    // phantom override.
+    it('still refuses when no onRefuse callback is supplied', async () => {
+      const onChange = vi.fn();
+      render(<NodeFieldInput field={stringField()} value="Europe/Berlin" origin="kb" editable onChange={onChange} />);
+
+      await userEvent.clear(screen.getByRole('textbox', { name: 'Zeitzone' }));
+
+      expect(onChange).not.toHaveBeenCalled();
+    });
   });
 
   it('never emits a clearing signal when the control is emptied — always an explicit string through onChange', async () => {

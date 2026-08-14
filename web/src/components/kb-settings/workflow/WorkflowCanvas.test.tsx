@@ -558,5 +558,203 @@ describe('WorkflowCanvas', () => {
       expect(screen.getByText('Nur-Lookup')).toBeInTheDocument();
       expect(screen.queryByText('CRAG-Bewertung')).not.toBeInTheDocument();
     });
+
+    // IMPORTANT 3: the same collision the other way round. The refetch used to
+    // close over the lane captured when the callback was created, so a lane
+    // switch during the PUT sent the post-save refetch to the OLD lane, where
+    // the (correct) stale guard threw the response away — and nothing ever
+    // refetched the lane now on screen. The node vocabulary is lane-invariant,
+    // so the key just saved is visible in the new lane too, showing its
+    // pre-save value on a diagram that never self-corrects.
+    it('refetches the lane the user switched to during the save, not the one the save started on', async () => {
+      const complex = editableGraph();
+      const lookup = graph({
+        lane: 'lookup',
+        nodes: [
+          { id: 'only', label: 'Nur-Lookup', group: 'X', help: '', keys: [], alwaysOn: true, llmCalls: 0, latencyMs: 0, activation: 'active', values: {}, origins: {}, editable: false },
+        ],
+        edges: [],
+      });
+
+      let resolveSave: () => void = () => {};
+      const pendingSave = new Promise<void>((resolve) => { resolveSave = resolve; });
+
+      vi.mocked(fetchWorkflow)
+        .mockResolvedValueOnce(complex) // initial load
+        .mockResolvedValueOnce(lookup) // the lane switch's own fetch
+        .mockResolvedValueOnce(lookup); // the post-save refetch — must target lookup
+      vi.mocked(saveKbSettings).mockReturnValue(pendingSave);
+
+      render(<WorkflowCanvas kbId="kb-1" />);
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+      await userEvent.click(screen.getByRole('button', { name: /speichern/i }));
+
+      // Switch lanes WHILE the PUT is still in flight.
+      await userEvent.click(screen.getByRole('button', { name: 'Nachschlagen' }));
+      await screen.findByText('Nur-Lookup');
+
+      resolveSave();
+
+      await waitFor(() => expect(fetchWorkflow).toHaveBeenCalledTimes(3));
+      expect(fetchWorkflow).toHaveBeenNthCalledWith(3, 'kb-1', 'lookup');
+      expect(screen.getByText('Nur-Lookup')).toBeInTheDocument();
+    });
+  });
+
+  // IMPORTANT 1: the write and the repaint are two different operations with
+  // two different failure meanings. Sharing one try/catch let a refetch
+  // failure report a landed write as a failed one — the worst thing this UI
+  // can do, because the admin acts on what it says.
+  describe('a write that landed and a refetch that did not', () => {
+    it('reports a successful save whose refetch failed as saved, not as a failed save', async () => {
+      vi.mocked(fetchWorkflow)
+        .mockResolvedValueOnce(editableGraph())
+        .mockRejectedValueOnce(new Error('fetch workflow: 500'));
+      vi.mocked(saveKbSettings).mockResolvedValue(undefined);
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+      await userEvent.click(screen.getByRole('button', { name: /speichern/i }));
+
+      expect(await screen.findByText(/Gespeichert/)).toBeInTheDocument();
+      // The refetch's own text would read as a failed save; it must not appear.
+      expect(screen.queryByText(/fetch workflow: 500/)).not.toBeInTheDocument();
+      // The values are on the server, so the draft is correctly gone …
+      expect(screen.queryByText(/geändert/)).not.toBeInTheDocument();
+      // … and this is NOT the initial-load failure: the graph stays on screen.
+      expect(screen.getByTestId('wf-node-crag_grade')).toBeInTheDocument();
+    });
+
+    it('drops the now-obsolete pending edit when a reset lands but its refetch fails', async () => {
+      vi.mocked(fetchWorkflow)
+        .mockResolvedValueOnce(editableGraph())
+        .mockRejectedValueOnce(new Error('fetch workflow: 500'));
+      vi.mocked(resetKbSetting).mockResolvedValue(undefined);
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+      expect(await screen.findByText(/1 Einstellung geändert/)).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: /CRAG aktiviert zurücksetzen/i }));
+
+      // The DELETE landed, so the pending edit for that very key is obsolete —
+      // it used to survive (the cleanup sat AFTER the await) and could be
+      // saved straight back over the value just cleared.
+      await waitFor(() => expect(screen.queryByText(/geändert/)).not.toBeInTheDocument());
+      expect(await screen.findByText(/Zurückgesetzt/)).toBeInTheDocument();
+      expect(screen.queryByText(/fetch workflow: 500/)).not.toBeInTheDocument();
+    });
+  });
+
+  // IMPORTANT 2: the load-error branch used to `return` before the toolbar AND
+  // before the save bar, stranding a draft that was still in state — no Save,
+  // no Discard, no lane pill to get back to a lane that loads. The only exit
+  // was a reload, which fires the beforeunload warning for a draft the admin
+  // can no longer see.
+  describe('a lane fetch that fails', () => {
+    const failingLaneSwitch = async () => {
+      vi.mocked(fetchWorkflow)
+        .mockResolvedValueOnce(editableGraph())
+        .mockRejectedValueOnce(new Error('fetch workflow: 500'));
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+      expect(await screen.findByText(/1 Einstellung geändert/)).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Nachschlagen' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(/nicht geladen werden/);
+    };
+
+    it('keeps the draft saveable and the lanes reachable', async () => {
+      await failingLaneSwitch();
+
+      expect(screen.getByText(/1 Einstellung geändert/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /speichern/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /verwerfen/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Komplexe Frage' })).toBeInTheDocument();
+    });
+
+    it('hides the previous lane\'s orchestrators and cost estimate instead of attributing them to the new lane', async () => {
+      await failingLaneSwitch();
+
+      expect(screen.queryByText(/gesch(ä|ae)tzt/i)).not.toBeInTheDocument();
+      expect(screen.queryByText('Orchestrator:')).not.toBeInTheDocument();
+    });
+
+    it('recovers on the next lane that loads, without a reload', async () => {
+      await failingLaneSwitch();
+
+      vi.mocked(fetchWorkflow).mockResolvedValueOnce(editableGraph());
+      await userEvent.click(screen.getByRole('button', { name: 'Komplexe Frage' }));
+
+      expect(await screen.findByTestId('wf-node-crag_grade')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      // The draft survived the whole detour.
+      expect(screen.getByText(/1 Einstellung geändert/)).toBeInTheDocument();
+    });
+  });
+
+  describe('stale notes', () => {
+    // A refusal names a FIELD, never the node it sits on. Left standing while
+    // the admin walks to another stage, it reads as a complaint about the
+    // stage now in front of them.
+    it('clears the empty-value refusal hint when another node is selected', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(mixedGraph());
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-tz_node'));
+      await userEvent.clear(screen.getByRole('textbox', { name: 'Zeitzone' }));
+      expect(await screen.findByText(/Leerer Wert/i)).toBeInTheDocument();
+
+      await userEvent.click(screen.getByTestId('wf-node-crag_grade'));
+
+      expect(screen.queryByText(/Leerer Wert/i)).not.toBeInTheDocument();
+    });
+
+    it('clears a failed-save message when another node is selected', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(mixedGraph());
+      vi.mocked(saveKbSettings).mockRejectedValue(new Error('crag_enabled conflicts with something'));
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+      await userEvent.click(screen.getByRole('button', { name: /speichern/i }));
+      expect(await screen.findByText(/conflicts with something/)).toBeInTheDocument();
+
+      await userEvent.click(screen.getByTestId('wf-node-tz_node'));
+
+      expect(screen.queryByText(/conflicts with something/)).not.toBeInTheDocument();
+      // The draft itself spans the whole graph on purpose and must NOT be
+      // dropped just because the admin looked at another stage.
+      expect(screen.getByText(/1 Einstellung geändert/)).toBeInTheDocument();
+    });
+
+    // Asserts the invariant, not the mechanism: a repeated identical refusal
+    // must still leave the box showing the value the draft actually holds.
+    // The note being a fresh `{ key, msg }` object (never the bare message
+    // string, which would be Object.is-equal on a repeat and let React bail
+    // out of the render) is what guarantees that from OUR state — react-dom
+    // separately restores controlled inputs after a change event, so this test
+    // passes with the old string-valued note too. It is here to keep the
+    // behaviour pinned, not as proof of the state fix.
+    it('snaps the input back to the stored value on a repeated identical refusal', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(stringFieldGraph());
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-tz_node'));
+      const input = screen.getByRole('textbox', { name: 'Zeitzone' }) as HTMLInputElement;
+
+      fireEvent.change(input, { target: { value: '' } });
+      await screen.findByText(/Leerer Wert/i);
+      expect(input.value).toBe('Europe/Berlin');
+
+      fireEvent.change(input, { target: { value: '' } });
+      expect(input.value).toBe('Europe/Berlin');
+      expect(screen.queryByText(/geändert/)).not.toBeInTheDocument();
+    });
   });
 });

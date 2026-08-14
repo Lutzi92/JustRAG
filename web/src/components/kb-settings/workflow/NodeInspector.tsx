@@ -18,6 +18,11 @@ interface Props {
    * back in still counts, because the user explicitly touched it. */
   draft: Record<string, string>;
   onChange: (key: string, value: string) => void;
+  /** Forwarded to every control: called instead of onChange when the control
+   * itself refuses an edit (today: an empty value on a string-typed key, which
+   * the server would happily store — see NodeFieldInput's onRefuse doc). The
+   * message is ready to display. */
+  onRefuse?: (key: string, message: string) => void;
   onReset: (key: string) => void;
   /** When set, every control renders read-only and Reset is withheld,
    * regardless of the node's own editability — e.g. a save in flight. The
@@ -49,7 +54,7 @@ interface Props {
  * label instead of a bare key name whenever a field exists at all, which is
  * strictly better than before even for a locked node.
  */
-export function NodeInspector({ node, onClose, fields, draft, onChange, onReset, readOnlyReason }: Props) {
+export function NodeInspector({ node, onClose, fields, draft, onChange, onRefuse, onReset, readOnlyReason }: Props) {
   const panelRef = useRef<HTMLElement | null>(null);
   const nodeId = node?.id;
 
@@ -108,7 +113,7 @@ export function NodeInspector({ node, onClose, fields, draft, onChange, onReset,
               return (
                 <li key={k} className="wf-inspector__key" data-dirty={dirty}>
                   {field ? (
-                    <NodeFieldInput field={field} value={value} origin={origin} editable={canEdit} onChange={onChange} />
+                    <NodeFieldInput field={field} value={value} origin={origin} editable={canEdit} onChange={onChange} onRefuse={onRefuse} />
                   ) : (
                     <>
                       <span className="wf-inspector__key-name">{k}</span>

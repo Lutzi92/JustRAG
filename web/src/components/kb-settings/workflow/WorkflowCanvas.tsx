@@ -8,7 +8,7 @@ import type { Edge } from '@xyflow/react';
 import { Save, Undo2 } from 'lucide-react';
 import type { NodeActivation, WorkflowGraph, WorkflowLane, WorkflowNodeData } from '../../../types';
 import { useReducedMotion } from '../../../hooks/useReducedMotion';
-import { fetchWorkflow, fieldFor, saveKbSettings, resetKbSetting } from './api';
+import { fetchWorkflow, saveKbSettings, resetKbSetting } from './api';
 import { layoutWorkflow, MIN_ZOOM, type WorkflowRFNode } from './layout';
 import WorkflowNode from './WorkflowNode';
 import { NodeInspector } from './NodeInspector';
@@ -154,10 +154,25 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   // load failed" (renders instead of the canvas); a save/reset failure must
   // leave the graph exactly as it was so the user can retry or adjust.
   const [opError, setOpError] = useState<string | null>(null);
-  // Set only when onFieldChange refuses to write an empty string-field edit
-  // into `draft` (see onFieldChange below); cleared on the next accepted
-  // edit, a successful save, or Discard.
-  const [emptyStringNote, setEmptyStringNote] = useState<string | null>(null);
+  // Set only when a control refuses to emit an empty string-field edit (see
+  // NodeFieldInput's onRefuse and `onFieldRefused` below); cleared on the next
+  // accepted edit, a selection change, a lane switch, a successful save, or
+  // Discard.
+  //
+  // An OBJECT, never the bare string: refusing the same field twice in a row
+  // produces an identical message, and `setState` with an `Object.is`-equal
+  // value lets React bail out of the re-render. A fresh object per refusal can
+  // never be Object.is-equal, so the render that snaps the controlled input
+  // back to the value the draft actually holds always happens.
+  //
+  // (Measured caveat, so nobody "simplifies" this back and trusts a green
+  // suite: react-dom ALSO restores a controlled input's DOM value after every
+  // change event it processes, independently of rendering — so the emptied box
+  // snaps back either way and no test in this suite can tell the two apart.
+  // The object stays because the guarantee should come from our own state, not
+  // from an implementation detail of react-dom's event plugin, and because
+  // `key` makes the note self-describing.)
+  const [emptyStringNote, setEmptyStringNote] = useState<{ key: string; msg: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,39 +203,52 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   // the very node they just edited (the harm the fitView effects below exist
   // to prevent, on a second, easy-to-miss writer).
   //
-  // Deliberately DOES guard against a stale lane: this call closes over the
-  // lane it was issued for (`requestedLane`), and if the user has since
-  // switched lanes, the lane effect above already fetched and rendered the
-  // new lane's graph — applying THIS response on top would silently show the
-  // old lane's data under the new lane's active pill.
+  // Deliberately DOES guard against a stale lane: this call notes the lane it
+  // was issued for (`requestedLane`), and if the user has since switched
+  // lanes, the lane effect above already fetched and rendered the new lane's
+  // graph — applying THIS response on top would silently show the old lane's
+  // data under the new lane's active pill.
+  //
+  // `requestedLane` is read from `laneRef` AT CALL TIME, not closed over from
+  // the `lane` render value. A save that is in flight while the user switches
+  // lanes finishes holding the callback instance created for the OLD lane; a
+  // captured `lane` would issue the post-save refetch for that old lane, the
+  // guard below would (correctly) discard the response, and nothing would ever
+  // refetch the new one. Since the node vocabulary is lane-invariant, the key
+  // that was just saved is on screen in the new lane too — showing its
+  // pre-save value, on a diagram that self-corrects only on another lane
+  // switch. Reading the ref makes the refetch follow the user; the guard still
+  // protects a slow response landing after a LATER switch.
   const refetchGraph = useCallback(async () => {
-    const requestedLane = lane;
+    const requestedLane = laneRef.current;
     const fresh = await fetchWorkflow(kbId, requestedLane);
     if (laneRef.current !== requestedLane) return;
     setGraph(fresh);
-  }, [kbId, lane]);
+    // A successful fetch means the surface is loadable again: clearing a
+    // previous lane-fetch failure is what lets the canvas come back without a
+    // lane switch (the error branch below replaces the graph surface, so
+    // nothing else would ever retire that banner).
+    setError(null);
+  }, [kbId]);
 
   const draftCount = Object.keys(draft).length;
 
+  // Only ever called with a value the emitting control already vetted — the
+  // empty-string refusal for string-typed keys lives in NodeFieldInput, with
+  // the component that emits the value, so it travels with any reuse of that
+  // control instead of only protecting this one caller. See its `onRefuse`
+  // doc comment for why the server cannot be relied on there.
   const onFieldChange = useCallback((key: string, value: string) => {
-    const field = graph ? fieldFor(graph, key) : undefined;
-    // siteconfig.Validate's FieldString case accepts "" as a legitimate
-    // value — only numeric fields reject an empty string via parse failure.
-    // Sending "" for a string key would therefore write a real kb-origin
-    // override row with an invisible empty value instead of clearing
-    // anything, and the settings UI would show `origin: kb` for a value the
-    // admin never knowingly set. Refuse the write outright — an empty string
-    // can never enter `draft` for a string-typed field — and point the user
-    // at Reset, the only real way to clear one. Trimmed, not just `=== ''`:
-    // a whitespace-only value is just as invisible once rendered and would
-    // slip the same bad override past a bare equality check.
-    if (field?.type === 'string' && value.trim() === '') {
-      setEmptyStringNote(`${field.label}: Leerer Wert wird nicht übernommen — zum Löschen "Zurücksetzen" verwenden.`);
-      return;
-    }
     setEmptyStringNote(null);
     setDraft((d) => ({ ...d, [key]: value }));
-  }, [graph]);
+  }, []);
+
+  // The refusal side of the same channel. Always a FRESH object — see
+  // emptyStringNote's declaration for what an Object.is-equal repeat would do
+  // to the controlled input.
+  const onFieldRefused = useCallback((key: string, msg: string) => {
+    setEmptyStringNote({ key, msg });
+  }, []);
 
   const onDiscardDraft = useCallback(() => {
     setDraft({});
@@ -228,6 +256,13 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
     setEmptyStringNote(null);
   }, []);
 
+  // The WRITE and the REFETCH are two separate failures and must never be
+  // reported as one. They used to share a try: a save that landed, followed by
+  // a refetch that 500'd, cleared the draft (edits visibly gone) and then
+  // rendered the refetch's message — "fetch workflow: 500" — in the red
+  // role="alert". An admin reads that as "it failed" and does it again, or
+  // worse, undoes it. The write succeeded; only the picture is stale, and that
+  // is what the message has to say.
   const onSaveDraft = useCallback(async () => {
     if (Object.keys(draft).length === 0) return;
     setSaving(true);
@@ -237,14 +272,25 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
       // guarantee. Saving per-toggle would let a legitimate move between two
       // mutually-exclusive keys 400 on the first half.
       await saveKbSettings(kbId, draft);
-      setDraft({});
-      setEmptyStringNote(null);
-      await refetchGraph();
     } catch (e) {
       // Keep the draft on failure — the conflict 400 names both keys, and
       // that message is the only thing telling the user why; losing their
       // edits on top of that would mean re-doing work to even read the error.
       setOpError(e instanceof Error ? e.message : String(e));
+      setSaving(false);
+      return;
+    }
+    // Past this line the values ARE persisted. The draft has served its
+    // purpose and is dropped before anything else can fail.
+    setDraft({});
+    setEmptyStringNote(null);
+    try {
+      await refetchGraph();
+    } catch {
+      // Deliberately NOT the fetch error's own text: the operation the admin
+      // triggered succeeded, and the only honest thing to report is that the
+      // diagram they are looking at may no longer match it.
+      setOpError('Gespeichert — die Ansicht konnte nicht aktualisiert werden. Bitte Ansicht neu laden.');
     } finally {
       setSaving(false);
     }
@@ -253,22 +299,31 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   const onResetKey = useCallback(async (key: string) => {
     setOpError(null);
     try {
-      await resetKbSetting(kbId, key);
-      await refetchGraph();
-      // Reset is "give up on this key and go back to the server's resolved
-      // value" — a pending local edit for the SAME key no longer applies.
       // Phase 3's reset button shipped with no try/catch at all and silently
-      // swallowed exactly the failure this catch below now surfaces: the
-      // DELETE can legitimately 400 when clearing an override falls back to
-      // a conflicting global value.
-      setDraft((d) => {
-        if (!(key in d)) return d;
-        const next = { ...d };
-        delete next[key];
-        return next;
-      });
+      // swallowed exactly the failure this catch surfaces: the DELETE can
+      // legitimately 400 when clearing an override falls back to a conflicting
+      // global value.
+      await resetKbSetting(kbId, key);
     } catch (e) {
       setOpError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    // Reset is "give up on this key and go back to the server's resolved
+    // value" — a pending local edit for the SAME key no longer applies. Done
+    // immediately after the DELETE lands, NOT after the refetch: a successful
+    // reset whose refetch then failed used to leave the now-obsolete pending
+    // edit sitting in the draft, ready to be saved back over the value the
+    // admin just cleared.
+    setDraft((d) => {
+      if (!(key in d)) return d;
+      const next = { ...d };
+      delete next[key];
+      return next;
+    });
+    try {
+      await refetchGraph();
+    } catch {
+      setOpError('Zurückgesetzt — die Ansicht konnte nicht aktualisiert werden. Bitte Ansicht neu laden.');
     }
   }, [kbId, refetchGraph]);
 
@@ -376,15 +431,27 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
     wrapper?.focus();
   }, [selectedId]);
 
+  // The single entry point for opening a node, from either input path.
+  // Both notes it clears name a FIELD ("Zeitzone: Leerer Wert …", "crag_enabled
+  // and … cannot both be enabled") and neither says which node that field was
+  // on. Left standing while the admin walks to a different stage, they read as
+  // a complaint about the stage now in front of them. The draft itself is
+  // untouched — it spans the whole graph on purpose.
+  const selectNode = useCallback((id: string) => {
+    setSelectedId(id);
+    setEmptyStringNote(null);
+    setOpError(null);
+  }, []);
+
   // Click delegation: WorkflowNode renders no onClick of its own (it is a
   // frozen, presentation-only component), so the canvas owns click-to-inspect
   // via one delegated listener instead of per-node handlers.
   const onSurfaceClick = useCallback(
     (event: React.MouseEvent) => {
       const found = findGraphNode(event.target);
-      if (found) setSelectedId(found.id);
+      if (found) selectNode(found.id);
     },
-    [findGraphNode],
+    [findGraphNode, selectNode],
   );
 
   // Keyboard activation: React Flow puts the tab stop and role="group" on its
@@ -405,6 +472,16 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   // the same wrapper), and unconditionally preventing default there would
   // break their native Space-key activation.
   //
+  // This delegate is also why spec §6.1's "put the toggle on the node itself"
+  // is deliberately NOT implemented, and must not be reintroduced without
+  // reworking both halves below: (1) any focusable control rendered inside
+  // `.wf-node` resolves through findWfNodeId's `closest()` here, so Space on
+  // an on-node <select> would be preventDefault()ed and open the inspector
+  // instead of the dropdown — the control would be unusable by keyboard;
+  // (2) `readOnlyReason` covers the INSPECTOR only, so an on-node control
+  // would be the one input surface still live during a save, which is exactly
+  // the edit that can be lost between the PUT and its refetch.
+  //
   // Escape is handled here too, rather than on the panel itself: the panel is
   // rendered inside this surface, so an Escape pressed with focus in the panel
   // bubbles here — and this side is the one that knows which node to hand focus
@@ -422,21 +499,17 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
       const found = findGraphNode(event.target);
       if (!found) return;
       event.preventDefault();
-      setSelectedId(found.id);
+      selectNode(found.id);
     },
-    [findGraphNode, selected, closeInspector],
+    [findGraphNode, selected, closeInspector, selectNode],
   );
 
-  if (error) {
-    return (
-      <div className="wf-canvas">
-        <p className="wf-canvas__error" role="alert">
-          Der Workflow konnte nicht geladen werden ({error}).
-        </p>
-      </div>
-    );
-  }
-
+  // A load failure replaces THE GRAPH SURFACE — never the whole component.
+  // Returning early here used to take the lane pills and the save bar with it:
+  // a failed lane fetch after two edits left the draft alive in state with no
+  // Save button to commit it, no Discard to drop it, and no lane pill to get
+  // back to a lane that loads. The only exit was a reload, which fired the
+  // beforeunload warning for a draft the admin could no longer even see.
   return (
     <div className="wf-canvas">
       <div className="wf-canvas__bar">
@@ -461,7 +534,12 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
           <span><span className="wf-canvas__swatch wf-canvas__swatch--conditional" />{ACTIVATION_LABEL.conditional}</span>
           <span><span className="wf-canvas__swatch" style={{ opacity: 0.5 }} />{ACTIVATION_LABEL.inactive}</span>
         </div>
-        {graph && graph.orchestrators.length > 0 && (
+        {/* Lane-derived readouts, suppressed while a lane fetch is failing:
+            `graph` then still holds the PREVIOUS lane's projection, and
+            printing its orchestrators or its cost estimate under the newly
+            pressed lane pill would attribute one lane's numbers to another.
+            The lane pills and the legend are lane-independent and stay. */}
+        {!error && graph && graph.orchestrators.length > 0 && (
           <div className="wf-canvas__orchestrators">
             <span className="wf-canvas__orchestrators-label" id="wf-orchestrators-label">Orchestrator:</span>
             <ul className="wf-canvas__orchestrator-list" aria-labelledby="wf-orchestrators-label">
@@ -482,36 +560,45 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
             </ul>
           </div>
         )}
-        {graph && (
+        {!error && graph && (
           <span className="wf-canvas__meta">
             geschätzt {graph.estLlmCalls} LLM-Aufrufe · ~{(graph.estLatencyMs / 1000).toFixed(1)}s
           </span>
         )}
       </div>
 
-      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- event delegation only: each interactive descendant (React Flow's own node wrapper — tabIndex=0, role="group" — and the inspector's close button) already owns real keyboard/focus semantics; giving this wrapper its own role/tabIndex would add a second, redundant tab stop over the whole canvas */}
-      <div className="wf-canvas__surface" ref={surfaceRef} onClick={onSurfaceClick} onKeyDown={onSurfaceKeyDown}>
-        <ReactFlow
-          nodes={nodes} edges={edges}
-          onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
-          nodeTypes={nodeTypes}
-          nodesDraggable={false} nodesConnectable={false} elementsSelectable
-          minZoom={MIN_ZOOM}
-          fitView proOptions={{ hideAttribution: true }}
-        >
-          <Background />
-          <Controls showInteractive={false} />
-        </ReactFlow>
-        <NodeInspector
-          node={selected}
-          onClose={closeInspector}
-          fields={graph?.fields ?? {}}
-          draft={draft}
-          onChange={onFieldChange}
-          onReset={onResetKey}
-          readOnlyReason={saving ? 'Wird gerade gespeichert.' : undefined}
-        />
-      </div>
+      {error ? (
+        <p className="wf-canvas__error" role="alert">
+          Der Workflow konnte nicht geladen werden ({error}).
+        </p>
+      ) : (
+        <>
+          {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- event delegation only: each interactive descendant (React Flow's own node wrapper — tabIndex=0, role="group" — and the inspector's close button) already owns real keyboard/focus semantics; giving this wrapper its own role/tabIndex would add a second, redundant tab stop over the whole canvas */}
+          <div className="wf-canvas__surface" ref={surfaceRef} onClick={onSurfaceClick} onKeyDown={onSurfaceKeyDown}>
+            <ReactFlow
+              nodes={nodes} edges={edges}
+              onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+              nodeTypes={nodeTypes}
+              nodesDraggable={false} nodesConnectable={false} elementsSelectable
+              minZoom={MIN_ZOOM}
+              fitView proOptions={{ hideAttribution: true }}
+            >
+              <Background />
+              <Controls showInteractive={false} />
+            </ReactFlow>
+            <NodeInspector
+              node={selected}
+              onClose={closeInspector}
+              fields={graph?.fields ?? {}}
+              draft={draft}
+              onChange={onFieldChange}
+              onRefuse={onFieldRefused}
+              onReset={onResetKey}
+              readOnlyReason={saving ? 'Wird gerade gespeichert.' : undefined}
+            />
+          </div>
+        </>
+      )}
 
       {(draftCount > 0 || opError || emptyStringNote) && (
         <div className="wf-canvas__savebar">
@@ -520,7 +607,9 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
             // with a refusal — without an explicit live region, a screen
             // reader user gets a silently rejected input and a value that
             // snaps back, with no announcement of why.
-            <p className="wf-canvas__savebar-hint" aria-live="polite">{emptyStringNote}</p>
+            <p className="wf-canvas__savebar-hint" aria-live="polite" data-field={emptyStringNote.key}>
+              {emptyStringNote.msg}
+            </p>
           )}
           {opError && <p className="wf-canvas__savebar-error" role="alert">{opError}</p>}
           {draftCount > 0 && (

@@ -162,6 +162,27 @@ describe('NodeInspector', () => {
     expect(onChange).toHaveBeenCalledWith('crag_enabled', 'false');
   });
 
+  // The refusal channel has to reach the canvas, or the guard NodeFieldInput
+  // owns would be silent in the one place it actually runs.
+  it('forwards onRefuse to its controls, so a refused edit still reaches the canvas', async () => {
+    const onChange = vi.fn();
+    const onRefuse = vi.fn();
+    const tzField: WorkflowConfigField = {
+      key: 'chat_date_timezone', type: 'string', group: 'Datum', label: 'Zeitzone', help: '',
+    };
+    renderInspector({
+      node: data({ keys: ['chat_date_timezone'], values: { chat_date_timezone: 'Europe/Berlin' }, origins: { chat_date_timezone: 'kb' } }),
+      fields: { chat_date_timezone: tzField },
+      onChange,
+      onRefuse,
+    });
+
+    await userEvent.clear(screen.getByRole('textbox', { name: 'Zeitzone' }));
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onRefuse).toHaveBeenCalledWith('chat_date_timezone', expect.stringContaining('Leerer Wert'));
+  });
+
   it('shows the value already in draft immediately, without waiting for values', () => {
     renderInspector({ fields: bothFields(), draft: { crag_min_relevant_chunks: '7' } });
     const control = screen.getByRole('spinbutton', { name: intField().label });

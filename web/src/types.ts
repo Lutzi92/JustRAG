@@ -634,19 +634,21 @@ export interface OrchestratorCandidate {
   condition?: string;
 }
 
-export type WorkflowFieldType = 'bool' | 'int' | 'float' | 'string' | 'enum';
+// The workflow projection's `fields` map carries the SAME registry rows the
+// flat settings panel gets: both are serialised from siteconfig.KBConfigField
+// (go-backend/internal/siteconfig/registry.go), field for field, tag for tag.
+// These were two hand-maintained mirrors of one Go struct — adding a registry
+// field would have updated one and silently left the other stale, which is the
+// exact drift this whole surface exists to prevent. Aliases, not copies: there
+// is one shape, and it can only be described once.
+//
+// The workflow-local names are kept because the whole workflow/ directory
+// imports them, and because a future divergence (should the projection ever
+// send a narrower row) then has one obvious place to happen — replace the
+// alias with a real declaration and the comment explaining why.
+export type WorkflowFieldType = KbConfigFieldType;
 
-export interface WorkflowConfigField {
-  key: string;
-  type: WorkflowFieldType;
-  group: string;
-  label: string;
-  help: string;
-  min?: number;
-  max?: number;
-  enum?: string[];
-  requiresReingest?: boolean;
-}
+export type WorkflowConfigField = KbConfigField;
 
 export interface WorkflowGraph {
   lane: WorkflowLane;
