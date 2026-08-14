@@ -50,7 +50,11 @@ func assertKeys(t *testing.T, what string, got map[string]bool, want []string) {
 // against exactly these names; a casing change here silently breaks the canvas
 // with no compile error on either side.
 func TestWireFormatIsCamelCase(t *testing.T) {
-	r := fakeReader{vals: map[string]string{"crag_enabled": "true"}}
+	r := fakeReader{vals: map[string]string{
+		"crag_enabled":            "true",
+		"chat_drift_enabled":      "true",
+		"chat_supervisor_enabled": "true",
+	}}
 	g, err := Project(context.Background(), r, fakeReader{vals: map[string]string{}}, LaneComplex)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
@@ -62,21 +66,22 @@ func TestWireFormatIsCamelCase(t *testing.T) {
 	if len(g.Nodes) == 0 {
 		t.Fatal("projection returned no nodes")
 	}
-	// Pick a node that has keys, a reason and values populated so no field is
-	// omitted by omitempty and silently escapes the check.
+	// Pick a node that has keys, a reason, a condition and values populated so no field is
+	// omitted by omitempty and silently escapes the check. condition is operationally critical
+	// (orchestrator_bypass carries the most surprising explanation) so it must not drift.
 	var sample *ProjectedNode
 	for i := range g.Nodes {
-		if len(g.Nodes[i].Keys) > 0 && g.Nodes[i].Reason != "" {
+		if len(g.Nodes[i].Keys) > 0 && g.Nodes[i].Reason != "" && g.Nodes[i].Condition != "" {
 			sample = &g.Nodes[i]
 			break
 		}
 	}
 	if sample == nil {
-		t.Fatal("no node with both Keys and a Reason — adjust the fixture")
+		t.Fatal("no node with Keys, Reason, and Condition all non-empty — adjust the fixture")
 	}
 	assertKeys(t, "ProjectedNode", keysOf(t, sample),
 		[]string{"id", "label", "group", "help", "keys", "alwaysOn", "llmCalls",
-			"latencyMs", "activation", "reason", "values", "origins", "editable"})
+			"latencyMs", "activation", "reason", "condition", "values", "origins", "editable"})
 
 	if len(g.Edges) == 0 {
 		t.Fatal("projection returned no edges")
@@ -97,6 +102,23 @@ func TestWireFormatIsCamelCase(t *testing.T) {
 	if len(g.Orchestrators) == 0 {
 		t.Fatal("projection returned no orchestrator candidates")
 	}
-	assertKeys(t, "OrchestratorCandidate", keysOf(t, &g.Orchestrators[0]),
+	// Verify the fallback (active) candidate has no condition (omitempty elides the key).
+	fallback := &g.Orchestrators[len(g.Orchestrators)-1]
+	assertKeys(t, "OrchestratorCandidate(fallback)", keysOf(t, fallback),
 		[]string{"orchestrator", "activation"})
+
+	// Find a conditional candidate (drift, when supervisor is the fallback) to verify
+	// condition is present when non-empty.
+	var condCandidate *OrchestratorCandidate
+	for i := range g.Orchestrators {
+		if g.Orchestrators[i].Condition != "" {
+			condCandidate = &g.Orchestrators[i]
+			break
+		}
+	}
+	if condCandidate == nil {
+		t.Fatal("no orchestrator candidate with a Condition — adjust the fixture")
+	}
+	assertKeys(t, "OrchestratorCandidate(conditional)", keysOf(t, condCandidate),
+		[]string{"orchestrator", "activation", "condition"})
 }
