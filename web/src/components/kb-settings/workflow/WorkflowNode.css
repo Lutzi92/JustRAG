@@ -18,8 +18,15 @@
               box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.wf-node:hover { transform: translateY(-2px); box-shadow: 0 4px 6px rgba(0, 0, 0, 0.08); }
-.wf-node:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.wf-node:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+
+/* React Flow's own node wrapper (`.react-flow__node`) is the real tab stop —
+   it renders with tabIndex=0 and role="group" whenever `nodesFocusable` is
+   true (the default), and .wf-node itself carries no tabIndex of its own. So
+   the focus ring has to target the wrapper's :focus-visible state, not this
+   element's — a bare `.wf-node:focus-visible` rule here would be dead CSS,
+   since this element is never itself given focus. */
+.react-flow__node:focus-visible .wf-node { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 
 .wf-node[data-activation='active']      { border-color: var(--accent-primary); }
 .wf-node[data-activation='conditional'] { border-color: #b45309; }
