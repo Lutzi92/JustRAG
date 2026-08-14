@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ReactFlow, Background, Controls, useNodesState, useEdgesState } from '@xyflow/react';
+import {
+  ReactFlow, ReactFlowProvider, Background, Controls,
+  useNodesState, useEdgesState, useReactFlow,
+} from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { Edge } from '@xyflow/react';
 import type { WorkflowGraph, WorkflowLane, WorkflowNodeData } from '../../../types';
@@ -19,6 +22,11 @@ const nodeTypes = { workflow: WorkflowNode };
 
 const WF_NODE_TESTID_PREFIX = 'wf-node-';
 
+function idFromTestId(el: Element | null): string | null {
+  const testId = el?.getAttribute('data-testid');
+  return testId ? testId.slice(WF_NODE_TESTID_PREFIX.length) : null;
+}
+
 /**
  * findWfNodeId locates the workflow node id backing a DOM event, regardless
  * of whether the event originated as a mouse click (target is `.wf-node`
@@ -28,16 +36,48 @@ const WF_NODE_TESTID_PREFIX = 'wf-node-';
  * walk downward). Works identically whether React Flow is mocked (plain
  * `.wf-node` markup, no wrapper) or real (wrapper present) — both render
  * paths always carry the `wf-node-<id>` testid on WorkflowNode's own root.
+ *
+ * The downward walk MUST be anchored to a `.react-flow__node` wrapper found
+ * via `closest()` on the target itself — never run from the raw event target.
+ * `.react-flow__pane` (empty canvas) and React Flow's own `<Controls>`
+ * buttons are also ancestors of every node in the real, unmocked tree; an
+ * unanchored `target.querySelector(...)` from either would silently match
+ * the FIRST `.wf-node` in DOM order and open the inspector on the wrong
+ * stage for a click that hit neither a node nor a keyboard-focused node.
  */
 function findWfNodeId(target: EventTarget | null): string | null {
   if (!(target instanceof Element)) return null;
+
+  // Click path: target is `.wf-node` itself, or a descendant of it (e.g. its
+  // label span). Takes priority — this is the common case for both the
+  // mocked test render (no `.react-flow__node` wrapper exists at all) and a
+  // real click on a real node.
   const self = target.closest(`[data-testid^="${WF_NODE_TESTID_PREFIX}"]`);
-  const el = self ?? target.querySelector(`[data-testid^="${WF_NODE_TESTID_PREFIX}"]`);
-  const testId = el?.getAttribute('data-testid');
-  return testId ? testId.slice(WF_NODE_TESTID_PREFIX.length) : null;
+  if (self) return idFromTestId(self);
+
+  // Keyboard path only: target is the focused `.react-flow__node` wrapper
+  // itself. Search *within that exact wrapper*, not from `target` broadly —
+  // this is what keeps the pane and Controls buttons from ever matching.
+  const wrapper = target.closest('.react-flow__node');
+  if (!wrapper) return null;
+  return idFromTestId(wrapper.querySelector(`[data-testid^="${WF_NODE_TESTID_PREFIX}"]`));
 }
 
+// useReactFlow() only resolves inside a <ReactFlowProvider> ancestor — and
+// that ancestor must sit ABOVE the component calling the hook, not merely
+// inside the JSX it returns (a component can't consume the context its own
+// return value creates). So the exported component is a thin provider
+// wrapper; all the real logic — including the fitView-on-lane-switch effect
+// below, which needs the hook — lives in WorkflowCanvasInner.
 export function WorkflowCanvas({ kbId }: { kbId: string }) {
+  return (
+    <ReactFlowProvider>
+      <WorkflowCanvasInner kbId={kbId} />
+    </ReactFlowProvider>
+  );
+}
+
+function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   const [lane, setLane] = useState<WorkflowLane>('complex_reasoning');
   const [graph, setGraph] = useState<WorkflowGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +102,7 @@ export function WorkflowCanvas({ kbId }: { kbId: string }) {
 
   const [nodes, setNodes, onNodesChange] = useNodesState(laid.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(laid.edges);
+  const { fitView } = useReactFlow();
 
   // useNodesState/useEdgesState seed their internal state ONLY from the value
   // passed on first render. Without this effect, switching lanes refetches
@@ -71,6 +112,19 @@ export function WorkflowCanvas({ kbId }: { kbId: string }) {
     setNodes(laid.nodes);
     setEdges(laid.edges);
   }, [laid, setNodes, setEdges]);
+
+  // The `fitView` prop on <ReactFlow> below only re-fits once, on mount — RF
+  // only re-applies a prop whose value actually changed, and `fitView={true}`
+  // never changes. Without this, switching from a large lane to a small one
+  // (or vice versa) leaves the new graph at the previous lane's zoom/pan,
+  // potentially tucked in a corner or panned off-screen entirely — on a
+  // feature whose whole point is showing the lane switch. Keyed on `nodes`
+  // (the actual committed state, not `laid`) so it fires only once React Flow
+  // has had a render cycle to sync its internal store from the new
+  // controlled `nodes` prop.
+  useEffect(() => {
+    fitView();
+  }, [nodes, fitView]);
 
   const findGraphNode = useCallback(
     (target: EventTarget | null): WorkflowNodeData | null => {

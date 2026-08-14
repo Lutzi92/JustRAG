@@ -101,3 +101,47 @@ describe('WorkflowCanvas keyboard activation (real, unmocked React Flow)', () =>
     expect(await screen.findByText('Läuft hier nicht.')).toBeInTheDocument();
   });
 });
+
+describe('WorkflowCanvas click delegation (real, unmocked React Flow)', () => {
+  // findWfNodeId's downward querySelector exists for the keyboard path, where
+  // the event target is `.react-flow__node` (an ANCESTOR of `.wf-node`). But
+  // the same function is shared with the click delegate, and a click on empty
+  // canvas lands on `.react-flow__pane` — also an ancestor of every node — so
+  // an unanchored downward walk from the pane matches the FIRST `.wf-node` in
+  // DOM order and opens the inspector on the wrong stage. This test must be
+  // run against the fix in WorkflowCanvas.tsx; it is written first specifically
+  // to prove the bug exists before the fix lands.
+  it('leaves the inspector closed when clicking empty canvas (the pane)', async () => {
+    vi.mocked(fetchWorkflow).mockResolvedValue(graph);
+    render(<WorkflowCanvas kbId="kb-1" />);
+    await screen.findByTestId('wf-node-crag_grade');
+
+    const pane = document.querySelector('.react-flow__pane') as HTMLElement;
+    expect(pane).toBeTruthy();
+    fireEvent.click(pane);
+
+    expect(screen.queryByText('Läuft hier nicht.')).not.toBeInTheDocument();
+  });
+
+  it('leaves the inspector closed when clicking a React Flow Controls button', async () => {
+    vi.mocked(fetchWorkflow).mockResolvedValue(graph);
+    render(<WorkflowCanvas kbId="kb-1" />);
+    await screen.findByTestId('wf-node-crag_grade');
+
+    const controlsButton = document.querySelector('.react-flow__controls-button') as HTMLElement;
+    expect(controlsButton).toBeTruthy();
+    fireEvent.click(controlsButton);
+
+    expect(screen.queryByText('Läuft hier nicht.')).not.toBeInTheDocument();
+  });
+
+  it('still opens the inspector for the correct node on a real click', async () => {
+    vi.mocked(fetchWorkflow).mockResolvedValue(graph);
+    render(<WorkflowCanvas kbId="kb-1" />);
+    const node = await screen.findByTestId('wf-node-crag_grade');
+
+    fireEvent.click(node);
+
+    expect(await screen.findByText('Läuft hier nicht.')).toBeInTheDocument();
+  });
+});

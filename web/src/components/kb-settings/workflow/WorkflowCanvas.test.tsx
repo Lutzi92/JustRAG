@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactNode } from 'react';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import type { WorkflowGraph } from '../../../types';
 
@@ -24,6 +25,12 @@ vi.mock('@xyflow/react', () => ({
   Controls: () => null,
   Handle: () => null,
   Position: { Top: 'top', Bottom: 'bottom' },
+  // ReactFlowProvider/useReactFlow are needed only so WorkflowCanvas.tsx's
+  // fitView-on-lane-switch effect has something to call; this suite doesn't
+  // assert on viewport behaviour (that's covered by the real, unmocked
+  // WorkflowCanvas.keyboard.test.tsx), so a no-op passthrough is enough here.
+  ReactFlowProvider: ({ children }: { children: ReactNode }) => children,
+  useReactFlow: () => ({ fitView: vi.fn() }),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   useNodesState: (init: any) => [init, vi.fn(), vi.fn()],
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

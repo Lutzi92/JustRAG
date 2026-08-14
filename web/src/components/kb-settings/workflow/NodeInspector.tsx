@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
 import type { ValueOrigin, WorkflowNodeData } from '../../../types';
-import { reasonLabel } from './WorkflowNode';
+import { reasonLabel } from './reasonLabel';
 import './NodeInspector.css';
 
 const ORIGIN_LABEL: Record<ValueOrigin, string> = {

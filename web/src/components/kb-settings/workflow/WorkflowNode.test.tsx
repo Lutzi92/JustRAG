@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import WorkflowNode, { reasonLabel } from './WorkflowNode';
+import WorkflowNode from './WorkflowNode';
 import type { WorkflowNodeData } from '../../../types';
 
 vi.mock('@xyflow/react', () => ({
@@ -55,19 +55,5 @@ describe('WorkflowNode', () => {
   it('omits the cost chip entirely for a zero-cost node', () => {
     renderNode(data({ llmCalls: 0 }));
     expect(screen.queryByText(/LLM/)).not.toBeInTheDocument();
-  });
-});
-
-describe('reasonLabel', () => {
-  it('maps every known reason to short German', () => {
-    expect(reasonLabel('flag_off')).toBe('Deaktiviert');
-    expect(reasonLabel('lane_skipped')).toBe('Übersprungen');
-    expect(reasonLabel('orchestrator_bypass')).toBe('Übersprungen');
-    expect(reasonLabel('superseded_by:self_rag')).toBe('Ersetzt');
-  });
-
-  it('returns null for an unknown or absent reason rather than leaking the raw enum', () => {
-    expect(reasonLabel(undefined)).toBeNull();
-    expect(reasonLabel('something_new')).toBeNull();
   });
 });
