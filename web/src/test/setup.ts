@@ -8,7 +8,7 @@ afterEach(() => {
 
 // jsdom declares the ResizeObserver *type* but ships no runtime implementation.
 // Anything that measures a DOM box needs it — most visibly @xyflow/react, whose
-// internal node-measuring hook constructs one unconditionally. Four suites used
+// internal node-measuring hook constructs one unconditionally. Three suites used
 // to carry a byte-identical local copy of this class; it belongs here next to
 // the framer-motion stub, so a new suite that renders a canvas doesn't have to
 // rediscover the gap.

@@ -135,7 +135,6 @@ describe('layoutWorkflow edge state', () => {
     expect(byId('a', 'b').className).not.toContain('wf-edge--dimmed');
     expect(byId('b', 'c').className).toContain('wf-edge--dimmed');
     expect(byId('c', 'a').className).toContain('wf-edge--dimmed');
-    expect(byId('c', 'a').data!.dimmed).toBe(true);
   });
 
   it('does not animate a dimmed loop edge — a dead loop must not draw the eye', () => {

@@ -238,8 +238,8 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   // Escape is handled here too, rather than on the panel itself: the panel is
   // rendered inside this surface, so an Escape pressed with focus in the panel
   // bubbles here — and this side is the one that knows which node to hand focus
-  // back to. stopPropagation keeps it from also reaching React Flow's node
-  // wrapper, which binds Escape to "deselect".
+  // back to. stopPropagation prevents the Escape from bubbling further up the
+  // DOM tree to parent elements.
   const onSurfaceKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
       if (event.key === 'Escape') {

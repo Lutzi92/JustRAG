@@ -102,7 +102,6 @@ export function layoutWorkflow(
       // The class lands on React Flow's `.react-flow__edge` group, so the label
       // dims with the path instead of floating at full strength above it.
       className: dimmed ? 'wf-edge wf-edge--dimmed' : 'wf-edge',
-      data: { loop: e.loop, dimmed },
     };
   });
 
