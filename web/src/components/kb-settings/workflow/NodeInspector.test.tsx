@@ -41,6 +41,18 @@ describe('NodeInspector', () => {
     expect(screen.getByText('—')).toBeInTheDocument();
   });
 
+  it('shows a non-committal label for an origin outside the kb|global|default contract, never "Standard"', () => {
+    // The backend contract promises only kb|global|default, but the panel must
+    // not assert "Standard" (deployment default) for a value it can't place —
+    // that's a confident wrong answer. Cast needed: the type forbids this.
+    const node = data({
+      origins: { crag_enabled: 'kb', crag_min_relevant_chunks: 'agent' as WorkflowNodeData['origins'][string] },
+    });
+    render(<NodeInspector node={node} onClose={vi.fn()} />);
+    expect(screen.getByText('unbekannt')).toBeInTheDocument();
+    expect(screen.queryByText('Standard')).not.toBeInTheDocument();
+  });
+
   it('shows the long condition prose, which the node badge omits', () => {
     render(<NodeInspector node={data({
       activation: 'conditional',
@@ -48,6 +60,18 @@ describe('NodeInspector', () => {
       condition: 'Läuft bei komplexen Fragen im Chat nicht.',
     })} onClose={vi.fn()} />);
     expect(screen.getByText('Läuft bei komplexen Fragen im Chat nicht.')).toBeInTheDocument();
+  });
+
+  it('shows the reason badge for a disabled stage even with no condition prose', () => {
+    // flag_off (the most common inactive state) carries a Reason but no
+    // Condition on the backend — without this, the inspector showed nothing
+    // at all for the panel's single most common case.
+    render(<NodeInspector node={data({
+      activation: 'inactive',
+      reason: 'flag_off',
+      condition: undefined,
+    })} onClose={vi.fn()} />);
+    expect(screen.getByText('Deaktiviert')).toBeInTheDocument();
   });
 
   it('tells the user when a node is not editable per KB', () => {

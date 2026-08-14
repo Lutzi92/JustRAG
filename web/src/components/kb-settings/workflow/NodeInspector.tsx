@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
 import type { ValueOrigin, WorkflowNodeData } from '../../../types';
+import { reasonLabel } from './WorkflowNode';
 import './NodeInspector.css';
 
 const ORIGIN_LABEL: Record<ValueOrigin, string> = {
@@ -7,6 +8,11 @@ const ORIGIN_LABEL: Record<ValueOrigin, string> = {
   global: 'global',
   default: 'Standard',
 };
+
+// An origin outside kb|global|default should never assert "Standard" — that
+// tells the user "deployment default" when the truth might be an override
+// from a layer this panel can't see. Fail visibly instead.
+const UNKNOWN_ORIGIN_LABEL = 'unbekannt';
 
 interface Props {
   node: WorkflowNodeData | null;
@@ -22,6 +28,8 @@ interface Props {
 export function NodeInspector({ node, onClose }: Props) {
   if (!node) return null;
 
+  const badge = reasonLabel(node.reason);
+
   return (
     <aside className="wf-inspector" aria-label={`Details zu ${node.label}`}>
       <div className="wf-inspector__head">
@@ -36,6 +44,7 @@ export function NodeInspector({ node, onClose }: Props) {
       </div>
 
       {node.help && <p className="wf-inspector__help">{node.help}</p>}
+      {badge && <span className="wf-inspector__reason">{badge}</span>}
       {node.condition && <p className="wf-inspector__condition">{node.condition}</p>}
 
       {node.keys.length > 0 && (
@@ -47,7 +56,7 @@ export function NodeInspector({ node, onClose }: Props) {
                 <span className="wf-inspector__key-name">{k}</span>
                 <span className="wf-inspector__key-meta">
                   <span className="wf-inspector__value">{node.values[k] ?? '—'}</span>
-                  <span className="wf-inspector__origin">{ORIGIN_LABEL[node.origins[k]] ?? 'Standard'}</span>
+                  <span className="wf-inspector__origin">{ORIGIN_LABEL[node.origins[k]] ?? UNKNOWN_ORIGIN_LABEL}</span>
                 </span>
               </li>
             ))}
