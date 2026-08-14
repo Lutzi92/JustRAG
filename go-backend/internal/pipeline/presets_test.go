@@ -91,6 +91,29 @@ func TestPresetsMetadata(t *testing.T) {
 	}
 }
 
+// Every other test iterates whatever presets happen to exist, so deleting one
+// would fail nothing. Spec §6.3 names exactly these five; this pins them.
+func TestPresetsAreTheFiveSpecifiedOnes(t *testing.T) {
+	want := []string{PresetStandard, PresetHighPrecision, PresetFast, PresetResearch, PresetNews}
+
+	got := make([]string, 0, len(Presets()))
+	for _, p := range Presets() {
+		got = append(got, p.ID)
+	}
+	sortedGot := append([]string(nil), got...)
+	sortedWant := append([]string(nil), want...)
+	sort.Strings(sortedGot)
+	sort.Strings(sortedWant)
+	if strings.Join(sortedGot, ",") != strings.Join(sortedWant, ",") {
+		t.Fatalf("preset set = %v, want exactly %v", got, want)
+	}
+	for _, id := range want {
+		if _, ok := PresetByID(id); !ok {
+			t.Errorf("PresetByID(%q) is missing", id)
+		}
+	}
+}
+
 func TestPresetBundleKeysAreConfigurablePerKB(t *testing.T) {
 	for _, p := range Presets() {
 		for key, val := range p.Bundle {

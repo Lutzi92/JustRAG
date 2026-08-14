@@ -119,6 +119,7 @@ var presets = []Preset{
 			"chat_supervisor_enabled":             "false",
 			"chat_plan_execute_enabled":           "false",
 			"chat_plan_execute_dag":               "false",
+			"chat_plan_execute_tool_aware":        "false",
 			"chat_agentic_enabled":                "false",
 			"chat_corpus_table_enabled":           "false",
 			"chat_answer_tools_enabled":           "false",
@@ -168,11 +169,12 @@ var presets = []Preset{
 			// Der Supervisor ist der einzige Orchestrator, der die
 			// Kontext-Prüfung auf der komplexen Lane selbst mitführt
 			// (supervisor_chat.go:161) — sonst gälte sie dort nicht.
-			"chat_supervisor_enabled":   "true",
-			"chat_plan_execute_enabled": "false",
-			"chat_plan_execute_dag":     "false",
-			"chat_agentic_enabled":      "false",
-			"chat_corpus_table_enabled": "false",
+			"chat_supervisor_enabled":      "true",
+			"chat_plan_execute_enabled":    "false",
+			"chat_plan_execute_dag":        "false",
+			"chat_plan_execute_tool_aware": "false",
+			"chat_agentic_enabled":         "false",
+			"chat_corpus_table_enabled":    "false",
 			// Werkzeug-Ergebnisse stehen in keiner Belegstelle der KB und
 			// sind damit weder zitier- noch prüfbar.
 			"chat_answer_tools_enabled":   "false",
@@ -197,9 +199,10 @@ var presets = []Preset{
 		// compression 1, sufficiency 1, factcheck 1, verifier 1, refine 2.
 		ID:    PresetFast,
 		Label: "Schnell",
-		Description: "Für kurze Antwortzeiten und geringe Kosten: Wiederholungsfragen kommen " +
-			"aus dem Cache, alle zusätzlichen Prüf- und Korrekturstufen bleiben aus. " +
-			"Nur die Zitatprüfung läuft weiter, sie braucht kein Sprachmodell.",
+		Description: "Für kurze Antwortzeiten und geringe Kosten: alle zusätzlichen Prüf- und " +
+			"Korrekturstufen bleiben aus, nur die Zitatprüfung läuft weiter — sie braucht " +
+			"kein Sprachmodell. Wiederholungsfragen kommen zusätzlich aus dem Cache, " +
+			"sofern der Anfragen-Cache in dieser Installation nutzbar ist.",
 		Bundle: map[string]string{
 			// Ein Treffer spart Suche und Antwortaufruf komplett (registry
 			// Help). Passt die Embedder-Dimension nicht zur query_cache-Spalte,
@@ -219,11 +222,12 @@ var presets = []Preset{
 			// 1 Aufruf, ~600 ms.
 			"chat_sufficient_context_enabled": "false",
 			// Orchestrator-Zeile: alle aus ⇒ der Standardpfad antwortet.
-			"chat_drift_enabled":        "false",
-			"chat_supervisor_enabled":   "false",
-			"chat_plan_execute_enabled": "false",
-			"chat_plan_execute_dag":     "false",
-			"chat_agentic_enabled":      "false",
+			"chat_drift_enabled":           "false",
+			"chat_supervisor_enabled":      "false",
+			"chat_plan_execute_enabled":    "false",
+			"chat_plan_execute_dag":        "false",
+			"chat_plan_execute_tool_aware": "false",
+			"chat_agentic_enabled":         "false",
 			// 1 Fast-Tier-Aufruf pro betroffener Datei — der teuerste
 			// Einzelposten überhaupt.
 			"chat_corpus_table_enabled": "false",
@@ -273,11 +277,18 @@ var presets = []Preset{
 			"chat_plan_execute_enabled": "true",
 			// Plan mit Abhängigkeiten statt flacher Liste; laut registry Help
 			// kein zusätzlicher Modellaufruf gegenüber dem flachen Plan.
-			"chat_plan_execute_dag":     "true",
-			"chat_agentic_enabled":      "false",
-			"chat_corpus_table_enabled": "false",
-			"chat_answer_tools_enabled": "false",
-			"factcheck_in_chat":         "true",
+			"chat_plan_execute_dag": "true",
+			// Muss stehen, gerade WEIL der DAG-Modus an ist: der Schalter
+			// wird als `DAG && tool_aware` geprüft (http_send.go:755). Ein in
+			// der KB liegengebliebenes true würde hier still auf den
+			// werkzeugbewussten Planer umschalten — freie Argumentlisten je
+			// Werkzeug, der einzige Planungspfad ohne strikte
+			// Structured-Output-Prüfung. Der Planer soll Suchanfragen planen.
+			"chat_plan_execute_tool_aware": "false",
+			"chat_agentic_enabled":         "false",
+			"chat_corpus_table_enabled":    "false",
+			"chat_answer_tools_enabled":    "false",
+			"factcheck_in_chat":            "true",
 			// Ohne Zitatprüfung startet die Aussagenprüfung nie
 			// (post_response.go:234).
 			"citation_validation_enabled":         "true",
@@ -317,6 +328,7 @@ var presets = []Preset{
 			"chat_supervisor_enabled":             "false",
 			"chat_plan_execute_enabled":           "false",
 			"chat_plan_execute_dag":               "false",
+			"chat_plan_execute_tool_aware":        "false",
 			"chat_agentic_enabled":                "false",
 			"chat_corpus_table_enabled":           "false",
 			"chat_answer_tools_enabled":           "false",
