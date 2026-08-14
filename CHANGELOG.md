@@ -10,6 +10,38 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## v0.6.1 — 2026-08-14
+
+### ⚠ Upgrade notes
+
+Security-only release. No migration (schema level stays at `0065`), no
+`site_config` change, no re-ingest, no new env vars, no behaviour change —
+the only difference is the Go standard library the binaries are built against.
+Rollback by re-pointing the image tag works.
+
+- **Deploy this instead of v0.6.0.** `:v0.6.0` *was* published (unlike v0.4.0
+  — `docker-image.yml` carries no `needs:` on the CI workflow, and `ci.yml`
+  does not even trigger on tags, so a red CI run does not block the image),
+  but it was built with Go 1.26.5, whose standard library carries seven
+  advisories that `govulncheck` reports as reachable from called code:
+  `GO-2026-6218` (net/url), `GO-2026-6091` (html/template), `GO-2026-6090`
+  (crypto/tls), `GO-2026-6089` (net/http), `GO-2026-6088` (encoding/xml),
+  `GO-2026-5972` (encoding/asn1), `GO-2026-5026` (x/net/idna, vendored into
+  net/http). The `toolchain` floor in `go-backend/go.mod` moves to
+  `go1.26.6`; the `go` directive stays at the 1.26 language baseline.
+- **No dependency versions changed.** `govulncheck` still counts six uncalled
+  findings — excelize, go-ntlmssp, x/net, x/crypto, klauspost/compress,
+  quic-go — none of which our code reaches, so they do not gate CI. They are
+  left for a deliberate dependency round rather than folded into a security
+  patch.
+- **`golangci-lint` stays pinned at v2.12.2.** The go.mod comment's warning to
+  bump it alongside the toolchain is about the Go *minor*; a patch bump within
+  1.26 does not change how its staticcheck analyses the stdlib (verified
+  locally: 0 issues).
+
+### Fixes
+- Bump the Go toolchain floor to 1.26.6 for seven stdlib advisories (7c8bcfe)
+
 ## v0.6.0 — 2026-08-14
 
 ### ⚠ Upgrade notes
