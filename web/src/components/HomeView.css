@@ -469,6 +469,58 @@
   cursor: pointer;
 }
 
+/* Discovery panel — category tab strip.
+   A single-select filter with a permanent "Alle" tab, so it reads as tabs
+   rather than as a row of independent toggle chips. The strip scrolls
+   horizontally instead of wrapping: a deployment with a dozen categories
+   would otherwise push the results below the fold. */
+.kb-catalog__tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1.25rem;
+  margin-block-end: 1.25rem;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  border-bottom: 1px solid var(--border-color);
+  border-block-end: 1px solid var(--border-color);
+}
+
+.kb-catalog__tab {
+  flex: 0 0 auto;
+  padding: 0.5rem 0.9rem;
+  border: none;
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  /* The active marker is drawn on the element's own bottom border so the
+     inactive tabs reserve the same 2px and nothing shifts on selection. */
+  border-bottom: 2px solid transparent;
+  border-block-end: 2px solid transparent;
+  margin-bottom: -1px;
+  margin-block-end: -1px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.kb-catalog__tab:hover {
+  color: var(--text-primary);
+}
+
+.kb-catalog__tab--active {
+  color: var(--accent-primary);
+  border-bottom-color: var(--accent-primary);
+  border-block-end-color: var(--accent-primary);
+}
+
+.kb-catalog__more {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.25rem;
+  margin-block-start: 1.25rem;
+}
+
 .home-view__imprint {
   margin-top: 4rem;
   margin-block-start: 4rem;

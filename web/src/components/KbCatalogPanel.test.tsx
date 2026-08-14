@@ -28,7 +28,7 @@ describe('KbCatalogPanel', () => {
     beforeEach(() => {
         vi.resetAllMocks();
         mockedAxios.get.mockImplementation((url: string) => {
-            if (url.includes('/api/admin/kb-categories')) {
+            if (url.includes('/api/kb-categories')) {
                 return Promise.resolve({ data: [{ id: 'c1', name: 'IT', sortOrder: 1 }] });
             }
             return Promise.resolve({
@@ -123,5 +123,91 @@ describe('KbCatalogPanel', () => {
         const subscribed = screen.getByText('Rechtsfragen').closest('[data-testid="catalog-entry"]');
         expect(within(subscribed as HTMLElement).getByRole('button', { name: /abbestellen|unsubscribe/i }))
             .toHaveAttribute('aria-pressed', 'true');
+    });
+
+    // The taxonomy used to be fetched from /api/admin/kb-categories, which
+    // answers 403 for a non-admin — so the filter was invisible to exactly
+    // the users the catalog exists for.
+    it('reads the categories from the authentication-only endpoint', async () => {
+        renderPanel();
+        await waitFor(() => {
+            expect(mockedAxios.get).toHaveBeenCalledWith(expect.stringContaining('/api/kb-categories'));
+        });
+        expect(mockedAxios.get).not.toHaveBeenCalledWith(expect.stringContaining('/api/admin/'));
+    });
+
+    // Tabs, not toggle chips: the filter is single-select and always has one
+    // active value. aria-selected (not aria-pressed) is what carries that.
+    it('renders the categories as a tab strip with "All" leftmost and selected', async () => {
+        renderPanel();
+        const tabs = await screen.findAllByRole('tab');
+        expect(tabs.map(el => el.textContent)).toEqual(['catalogAllCategories', 'IT']);
+        expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
+        expect(tabs[1]).toHaveAttribute('aria-selected', 'false');
+    });
+
+    it('filters by the selected category tab and moves the selection to it', async () => {
+        renderPanel();
+        await userEvent.click(await screen.findByRole('tab', { name: 'IT' }));
+
+        await waitFor(() => {
+            expect(mockedAxios.get).toHaveBeenCalledWith(expect.stringContaining('category=c1'));
+        });
+        expect(screen.getByRole('tab', { name: 'IT' })).toHaveAttribute('aria-selected', 'true');
+        expect(screen.getByRole('tab', { name: 'catalogAllCategories' })).toHaveAttribute('aria-selected', 'false');
+    });
+});
+
+// A deployment can hold far more public KBs than fit above the fold; the
+// panel sits between the Favoriten section and the two below it, so an
+// unbounded grid buries them.
+describe('KbCatalogPanel result fold', () => {
+    function entries(n: number) {
+        return Array.from({ length: n }, (_, i) => ({
+            id: `kb-${i}`, name: `KB ${i}`, description: null, subscribed: false, categoryIds: [],
+        }));
+    }
+
+    function mockEntries(n: number) {
+        mockedAxios.get.mockImplementation((url: string) =>
+            Promise.resolve({ data: url.includes('/api/kb-categories') ? [] : entries(n) }));
+    }
+
+    beforeEach(() => { vi.resetAllMocks(); });
+
+    it('shows only the first eight and offers the rest behind a button', async () => {
+        mockEntries(11);
+        renderPanel();
+
+        expect(await screen.findByText('KB 0')).toBeInTheDocument();
+        expect(screen.getAllByTestId('catalog-entry')).toHaveLength(8);
+        expect(screen.queryByText('KB 8')).not.toBeInTheDocument();
+
+        // The button names the number actually hidden, not a page size.
+        await userEvent.click(screen.getByRole('button', { name: 'catalogShowMore' }));
+        expect(screen.getAllByTestId('catalog-entry')).toHaveLength(11);
+        expect(screen.getByText('KB 10')).toBeInTheDocument();
+    });
+
+    it('offers no expand button when everything already fits', async () => {
+        mockEntries(8);
+        renderPanel();
+
+        expect(await screen.findByText('KB 0')).toBeInTheDocument();
+        expect(screen.getAllByTestId('catalog-entry')).toHaveLength(8);
+        expect(screen.queryByRole('button', { name: 'catalogShowMore' })).not.toBeInTheDocument();
+    });
+
+    // Ohne das Zuruecksetzen bliebe jede spaetere Ergebnisliste aufgeklappt,
+    // weil `expanded` sonst ueber den Filterwechsel hinweg haengen bliebe.
+    it('folds the list again when the search changes', async () => {
+        mockEntries(11);
+        renderPanel();
+
+        await userEvent.click(await screen.findByRole('button', { name: 'catalogShowMore' }));
+        expect(screen.getAllByTestId('catalog-entry')).toHaveLength(11);
+
+        await userEvent.type(screen.getByLabelText('catalogSearchPlaceholder'), 'KB');
+        await waitFor(() => expect(screen.getAllByTestId('catalog-entry')).toHaveLength(8));
     });
 });

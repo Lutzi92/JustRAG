@@ -26,7 +26,8 @@ type categoryRequest struct {
 	SortOrder int    `json:"sortOrder"`
 }
 
-// List handles GET /api/admin/kb-categories.
+// List handles GET /api/admin/kb-categories and its authentication-only twin
+// GET /api/kb-categories (the discovery panel's filter tabs).
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	cats, err := h.store.List(ctx)

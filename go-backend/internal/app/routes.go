@@ -706,6 +706,11 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/admin/kb-categories", rc.adminChain(kbCategoriesHandler.Create))
 	rc.mux.Handle("PATCH /api/admin/kb-categories/{catId}", rc.adminChain(kbCategoriesHandler.Update))
 	rc.mux.Handle("DELETE /api/admin/kb-categories/{catId}", rc.adminChain(kbCategoriesHandler.Delete))
+	// Reading the taxonomy is authentication-only: the discovery panel renders
+	// it as its filter tabs, and it is the same list every catalog row already
+	// carries category ids into. Behind adminChain the tabs were invisible to
+	// exactly the ordinary users the catalog exists for.
+	rc.mux.Handle("GET /api/kb-categories", rc.authMw.Authenticate(http.HandlerFunc(kbCategoriesHandler.List)))
 	rc.mux.Handle("GET /api/kb/{id}/categories", rc.kbViewChain(kbCategoriesHandler.ListKBCategories))
 	rc.mux.Handle("PUT /api/kb/{id}/categories", rc.kbAdminChain(kbCategoriesHandler.SetKBCategories))
 
