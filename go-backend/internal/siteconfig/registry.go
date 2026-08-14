@@ -60,6 +60,7 @@ var kbConfigRegistry = []KBConfigField{
 	{Key: "adaptive_routing_enabled", Type: FieldBool, Group: "Corrective", Label: "Adaptive routing", Help: "Skip CRAG for lookup queries."},
 	{Key: "chat_context_compression_enabled", Type: FieldBool, Group: "Corrective", Label: "ECoRAG compression", Help: "Drop chunks lacking direct evidence (1 fast-tier LLM call)."},
 	{Key: "chat_context_compression_threshold", Type: FieldFloat, Group: "Corrective", Label: "Compression threshold", Help: "Drop chunks scoring below this.", Min: f(0), Max: f(1)},
+	{Key: "chat_sufficient_context_enabled", Type: FieldBool, Group: "Corrective", Label: "Kontext-Prüfung", Help: "Prüft vor der Antwortgenerierung per LLM-Aufruf, ob die gesammelten Textstellen als Ganzes überhaupt ausreichen — sonst wird die Antwort verweigert. Standardmäßig aus."},
 
 	// --- Orchestrator ---
 	{Key: "chat_supervisor_enabled", Type: FieldBool, Group: "Orchestrator", Label: "Supervisor orchestrator", Help: "One classification → specialist → answer."},
@@ -82,9 +83,8 @@ var kbConfigRegistry = []KBConfigField{
 	{Key: "chat_factuality_verifier_enabled", Type: FieldBool, Group: "Verifikation", Label: "Vertiefte Aussagenprüfung", Help: "Prüft einzelne Aussagen der Antwort gegen die Belegstellen, wenn die Zitatprüfung ein Zitat nicht bestätigen konnte (1 zusätzlicher LLM-Aufruf). Schließt sich mit Self-RAG gegenseitig aus. Standardmäßig aus."},
 	{Key: "chat_factuality_verifier_always_run", Type: FieldBool, Group: "Verifikation", Label: "Aussagenprüfung immer ausführen", Help: "Führt die vertiefte Aussagenprüfung bei jeder Antwort aus, auch ohne Verdachtsfall aus der Zitatprüfung (höherer LLM-Kostenaufwand). Wirkt nur, wenn die vertiefte Aussagenprüfung aktiv ist. Standardmäßig aus."},
 	{Key: "chat_self_rag_enabled", Type: FieldBool, Group: "Verifikation", Label: "Selbstprüfung (Self-RAG)", Help: "Vereinheitlichte Prüfung (Relevanz + Beleglage + Nützlichkeit) in einem LLM-Aufruf; ERSETZT die vertiefte Aussagenprüfung, sitzt hinter derselben Auslösebedingung. Standardmäßig aus."},
-	{Key: "chat_factuality_gate_enabled", Type: FieldBool, Group: "Verifikation", Label: "Korrektur-Schleife", Help: "Schreibt die Antwort neu (1 zusätzlicher LLM-Aufruf, ca. 1–3 s länger), wenn die vertiefte Aussagenprüfung oder Self-RAG nicht belegte Aussagen gefunden hat. Standardmäßig aus."},
+	{Key: "chat_factuality_gate_enabled", Type: FieldBool, Group: "Verifikation", Label: "Korrektur-Schleife", Help: "Schreibt die Antwort neu und prüft sie danach erneut (2 zusätzliche LLM-Aufrufe, ca. 1500 ms länger), wenn die vertiefte Aussagenprüfung oder Self-RAG nicht belegte Aussagen gefunden hat. Standardmäßig aus."},
 	{Key: "citation_validation_enabled", Type: FieldBool, Group: "Verifikation", Label: "Zitatprüfung", Help: "Prüft jede Quellenangabe deterministisch gegen den zitierten Text (kein LLM-Aufruf) und markiert unbelegte Zitate; ein Verdachtsfall löst die vertiefte Aussagenprüfung aus. Standardmäßig aktiv."},
-	{Key: "chat_sufficient_context_enabled", Type: FieldBool, Group: "Verifikation", Label: "Kontext-Prüfung", Help: "Prüft vor der Antwortgenerierung per LLM-Aufruf, ob die gesammelten Textstellen als Ganzes überhaupt ausreichen — sonst wird die Antwort verweigert. Standardmäßig aus."},
 
 	// --- Ingestion (re-ingest required) ---
 	{Key: "raptor_enabled", Type: FieldBool, Group: "Ingestion", Label: "RAPTOR indexing", Help: "Hierarchical summary trees. Mutually exclusive with parent-child.", RequiresReingest: true},

@@ -37,7 +37,7 @@ func detachedContext(parent context.Context, timeout time.Duration) (context.Con
 //
 // Both verification subsystems are independently gated by site config:
 //   - factcheck → site_config "factcheck_in_chat" (default on)
-//   - citation validator → site_config "citation_validation_enabled" (default off)
+//   - citation validator → site_config "citation_validation_enabled" (default on)
 //
 // Their outputs are merged into a single MessageVerification that is
 // persisted on the message and emitted to the frontend as the existing
