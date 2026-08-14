@@ -98,6 +98,27 @@ type ProjectedGraph struct {
 	Orchestrators []OrchestratorCandidate `json:"orchestrators"`
 	EstLLMCalls   int                     `json:"estLlmCalls"`
 	EstLatencyMs  int                     `json:"estLatencyMs"`
+
+	// Fields carries the registry metadata for every config key any node
+	// references AND that has a per-KB registry row — type, range, enum,
+	// German label and help. The canvas needs it to render an input at all:
+	// ProjectedNode.Keys is only strings.
+	//
+	// Keys a node references but that have NO registry row (e.g.
+	// min_similarity_threshold, chat_kb_router_enabled — see
+	// TestProjectKBRouterStaysNotEditable) are deliberately OMITTED rather
+	// than synthesised. siteconfig.KBConfigField.Type is not optional: it is
+	// what tells the canvas whether to draw a checkbox, a number input, or a
+	// dropdown. There is no source of truth for that outside the registry,
+	// so guessing it would ship metadata that actively lies about a field's
+	// domain — worse than shipping no metadata, and the same class of lie
+	// Phase 2 exists to eliminate (see the ProjectedNode.Editable doc
+	// comment and TestProjectKBRouterStaysNotEditable). A humanised
+	// key-name-as-label would not be a "real" label either — the frontend
+	// can derive that fallback itself from the bare key already on the wire
+	// in ProjectedNode.Keys, and from the owning node's own Label/Help/Group
+	// (NodeSpec, also already on the wire).
+	Fields map[string]siteconfig.KBConfigField `json:"fields"`
 }
 
 // allKeys collects every site_config key the vocabulary references, so the
@@ -111,6 +132,19 @@ func allKeys() []string {
 				seen[k] = true
 				out = append(out, k)
 			}
+		}
+	}
+	return out
+}
+
+// projectFields resolves keys (the deduplicated node vocabulary, from
+// allKeys) against the per-KB registry. Keys with no registry row are
+// omitted — see the doc comment on ProjectedGraph.Fields for why.
+func projectFields(keys []string) map[string]siteconfig.KBConfigField {
+	out := map[string]siteconfig.KBConfigField{}
+	for _, k := range keys {
+		if fld, ok := siteconfig.Field(k); ok {
+			out[k] = fld
 		}
 	}
 	return out
@@ -336,7 +370,7 @@ func Project(ctx context.Context, r, global siteconfig.BatchReader, lane Lane) (
 		return nil, fmt.Errorf("pipeline: read global site config: %w", err)
 	}
 
-	g := &ProjectedGraph{Lane: lane, Edges: Edges()}
+	g := &ProjectedGraph{Lane: lane, Edges: Edges(), Fields: projectFields(keys)}
 
 	// The orchestrator candidates are derived FIRST because the node rules
 	// below need the fallback winner (the orchestrator that takes the turn

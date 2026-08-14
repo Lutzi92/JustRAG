@@ -61,7 +61,7 @@ func TestWireFormatIsCamelCase(t *testing.T) {
 	}
 
 	assertKeys(t, "ProjectedGraph", keysOf(t, g),
-		[]string{"lane", "nodes", "edges", "orchestrators", "estLlmCalls", "estLatencyMs"})
+		[]string{"lane", "nodes", "edges", "orchestrators", "estLlmCalls", "estLatencyMs", "fields"})
 
 	if len(g.Nodes) == 0 {
 		t.Fatal("projection returned no nodes")

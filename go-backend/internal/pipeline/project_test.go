@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/justrag/go-backend/internal/chat"
+	"github.com/justrag/go-backend/internal/siteconfig"
 )
 
 // fakeReader is an in-memory siteconfig.BatchReader.
@@ -771,5 +772,100 @@ func TestProjectKBRouterStaysNotEditable(t *testing.T) {
 	if n.Editable {
 		t.Error("kb_router node Editable = true, want false — chat_kb_router_enabled must NOT be in the " +
 			"per-KB registry (it is read before the KB overlay exists, so a per-KB override is unreadable)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 1 (Phase 4): registry field metadata on the wire
+// ---------------------------------------------------------------------------
+
+// TestProjectFields proves graph.Fields is a PROJECTION of the per-KB
+// registry onto the node vocabulary — not a copy of either alone.
+//
+// Decision (see the doc comment on ProjectedGraph.Fields for the full
+// reasoning): keys a node references but that have NO registry row are
+// OMITTED, not synthesised. siteconfig.KBConfigField.Type is not optional —
+// it tells the canvas which control to draw — and there is no source of
+// truth for it outside the registry, so guessing would ship metadata that
+// actively lies about a field's domain.
+//
+// The vocabulary below is built by walking Nodes() directly, NOT by asking
+// siteconfig.All() what it thinks the per-KB surface is — comparing the
+// registry to itself would prove nothing. Only the "is this vocabulary key
+// registered" checks call into siteconfig, and only to decide the expected
+// PRESENCE of an entry already anchored by the Nodes()-derived vocabulary.
+func TestProjectFields(t *testing.T) {
+	empty := fakeReader{vals: map[string]string{}}
+	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	vocab := map[string]bool{}
+	for _, n := range Nodes() {
+		for _, k := range n.Keys {
+			vocab[k] = true
+		}
+	}
+	if len(vocab) == 0 {
+		t.Fatal("no keys in node vocabulary — adjust the fixture")
+	}
+
+	// No entry in Fields may fall outside the vocabulary (a registry dump
+	// would fail this) and every entry must be keyed by its own Key.
+	for key, fld := range g.Fields {
+		if !vocab[key] {
+			t.Errorf("Fields contains %q, which no node's Keys references — Fields must be a "+
+				"projection onto the vocabulary, not a registry dump", key)
+		}
+		if fld.Key != key {
+			t.Errorf("Fields[%q].Key = %q, want %q (map key and entry Key must agree)", key, fld.Key, key)
+		}
+	}
+
+	// Every vocabulary key that DOES have a registry row must be present.
+	for key := range vocab {
+		if _, ok := siteconfig.Field(key); ok {
+			if _, present := g.Fields[key]; !present {
+				t.Errorf("Fields missing registered vocabulary key %q", key)
+			}
+		}
+	}
+
+	// A known bool key.
+	crag, ok := g.Fields["crag_enabled"]
+	if !ok {
+		t.Fatal(`Fields["crag_enabled"] missing`)
+	}
+	if crag.Type != siteconfig.FieldBool {
+		t.Errorf("crag_enabled Type = %q, want %q", crag.Type, siteconfig.FieldBool)
+	}
+
+	// A known ranged int key.
+	topN, ok := g.Fields["top_n_lookup"]
+	if !ok {
+		t.Fatal(`Fields["top_n_lookup"] missing`)
+	}
+	if topN.Min == nil || topN.Max == nil {
+		t.Errorf("top_n_lookup Min/Max = %v/%v, want both non-nil", topN.Min, topN.Max)
+	}
+
+	// Two hardcoded, confirmed-unregistered vocabulary keys (pinned
+	// separately by TestProjectRetrieveNodeStaysNotEditable and
+	// TestProjectKBRouterStaysNotEditable via Editable==false) must be
+	// ABSENT from Fields under the omit decision above. Hardcoded rather
+	// than derived from a "not in siteconfig.Field" scan of the whole
+	// vocabulary, so a bug that omits a key it should include cannot hide
+	// behind this same loop finding it "correctly" absent.
+	for _, key := range []string{"min_similarity_threshold", "chat_kb_router_enabled"} {
+		if !vocab[key] {
+			t.Fatalf("fixture stale: %q is no longer in the node vocabulary", key)
+		}
+		if _, ok := siteconfig.Field(key); ok {
+			t.Fatalf("fixture stale: %q is now in the registry — pick a different unregistered example", key)
+		}
+		if _, present := g.Fields[key]; present {
+			t.Errorf("Fields contains unregistered key %q — decision was to omit, not synthesise", key)
+		}
 	}
 }
