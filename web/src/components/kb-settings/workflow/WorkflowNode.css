@@ -1,0 +1,58 @@
+/* Workflow canvas node. Colours come from theme tokens so the dark theme
+   ([data-theme='dark']) works without a second rule set. The only literal
+   colours are the amber "conditional" pair, which has no token in this app. */
+.wf-node {
+  width: 236px;
+  min-height: 84px;
+  box-sizing: border-box;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.wf-node:hover { transform: translateY(-2px); box-shadow: 0 4px 6px rgba(0, 0, 0, 0.08); }
+.wf-node:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+
+.wf-node[data-activation='active']      { border-color: var(--accent-primary); }
+.wf-node[data-activation='conditional'] { border-color: #b45309; }
+.wf-node[data-activation='inactive'] {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  opacity: 0.62;
+  box-shadow: none;
+}
+
+.wf-node__group {
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.wf-node__label { font-size: 0.85rem; font-weight: 600; line-height: 1.25; }
+
+.wf-node__meta { display: flex; align-items: center; gap: 0.4rem; margin-top: auto; flex-wrap: wrap; }
+
+.wf-node__badge {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+.wf-node__badge--conditional { background: #fef3c7; color: #b45309; }
+
+.wf-node__cost { font-size: 0.65rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.2rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wf-node { transition: none; }
+  .wf-node:hover { transform: none; }
+}
