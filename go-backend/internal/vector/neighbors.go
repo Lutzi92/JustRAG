@@ -15,9 +15,10 @@ type NeighborFetcher interface {
 }
 
 // ExpandNeighbors enriches each SearchChunk by fetching ±windowSize neighboring
-// chunks (by chunkIndex) from the same file and merging their content and page
-// metadata. If windowSize <= 0 or fetcher is nil the chunks are returned
-// unchanged (fail-open).
+// chunks (by chunkIndex) from the same file and merging their content. Page
+// metadata is left alone: the citation names the page the retriever actually
+// matched, not the span of the surrounding context. If windowSize <= 0 or
+// fetcher is nil the chunks are returned unchanged (fail-open).
 func ExpandNeighbors(
 	ctx context.Context,
 	chunks []SearchChunk,
@@ -70,7 +71,6 @@ func ExpandNeighbors(
 	type part struct {
 		index   int
 		content string
-		pages   []int
 	}
 	neighborParts := make(map[fileIdx]part)
 
@@ -142,7 +142,6 @@ func ExpandNeighbors(
 			neighborParts[fileIdx{fileID, ci}] = part{
 				index:   ci,
 				content: r.Content,
-				pages:   extractPages(meta),
 			}
 		}
 	}
@@ -174,21 +173,17 @@ func ExpandNeighbors(
 
 		// Collect parts in order.
 		var parts []string
-		var allPages []int
 		for idx := lo; idx <= hi; idx++ {
 			fi := fileIdx{c.FileID, idx}
 			if idx == ci {
 				// Use the matched chunk itself.
 				parts = append(parts, c.Content)
-				allPages = append(allPages, extractPages(c.Metadata)...)
 			} else if mc, ok := matched[fi]; ok {
 				// Another matched chunk from the same file.
 				parts = append(parts, mc.Content)
-				allPages = append(allPages, extractPages(mc.Metadata)...)
 			} else if np, ok := neighborParts[fi]; ok {
 				// Fetched neighbor.
 				parts = append(parts, np.content)
-				allPages = append(allPages, np.pages...)
 			}
 			// If not found, skip (don't leave gaps).
 		}
@@ -196,13 +191,12 @@ func ExpandNeighbors(
 		expanded := c // copy
 		expanded.Content = strings.Join(parts, "\n\n")
 
-		// Merge and deduplicate pages.
-		if len(allPages) > 0 {
-			allPages = sortedUnique(allPages)
-			expanded.Metadata = copyMetadata(c.Metadata)
-			delete(expanded.Metadata, "page")
-			expanded.Metadata["pages"] = intsToAny(allPages)
-		}
+		// Page metadata deliberately stays that of the matched chunk. The
+		// neighbours are reading context for the answer model, not evidence
+		// the retriever found — merging their pages in turned a hit on one
+		// page into a citation spanning the whole ±windowSize neighbourhood
+		// (at the default window of 3, up to seven chunks), which is what
+		// made citations read "S. 5-11" for a passage that lives on page 8.
 
 		result[i] = expanded
 	}
@@ -268,37 +262,4 @@ func parseMetadataJSON(raw json.RawMessage) map[string]any {
 		return map[string]any{}
 	}
 	return m
-}
-
-// sortedUnique returns a sorted, deduplicated copy of ints.
-func sortedUnique(ints []int) []int {
-	if len(ints) == 0 {
-		return nil
-	}
-	slices.Sort(ints)
-	result := []int{ints[0]}
-	for i := 1; i < len(ints); i++ {
-		if ints[i] != ints[i-1] {
-			result = append(result, ints[i])
-		}
-	}
-	return result
-}
-
-// copyMetadata returns a shallow copy of a metadata map.
-func copyMetadata(m map[string]any) map[string]any {
-	cp := make(map[string]any, len(m))
-	for k, v := range m {
-		cp[k] = v
-	}
-	return cp
-}
-
-// intsToAny converts []int to []any for JSON-compatible metadata storage.
-func intsToAny(ints []int) []any {
-	out := make([]any, len(ints))
-	for i, n := range ints {
-		out[i] = float64(n)
-	}
-	return out
 }

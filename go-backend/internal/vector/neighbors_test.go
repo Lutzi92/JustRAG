@@ -106,15 +106,47 @@ func TestExpandNeighbors_WithNeighbors(t *testing.T) {
 		t.Errorf("content mismatch:\nwant: %q\ngot:  %q", expected, result[0].Content)
 	}
 
-	// Check merged pages.
+	// The citable pages stay those of the matched chunk: the neighbours are
+	// reading context, not the passage that answered the query.
 	pages := extractPages(result[0].Metadata)
-	if len(pages) != 3 {
-		t.Fatalf("expected 3 pages, got %d: %v", len(pages), pages)
+	if len(pages) != 1 || pages[0] != 2 {
+		t.Fatalf("citable pages: want [2] (the matched chunk's own page), got %v", pages)
 	}
-	for i, want := range []int{1, 2, 3} {
-		if pages[i] != want {
-			t.Errorf("pages[%d]: want %d, got %d", i, want, pages[i])
+}
+
+// A wide neighbour window must not widen the citation. With windowSize=3 the
+// expanded content spans seven chunks — and before this was fixed the merged
+// page set turned a hit on page 8 into a "S. 5-11" citation, which is what
+// users saw as a page range far too broad to be useful.
+func TestExpandNeighbors_WideWindowKeepsSingleCitedPage(t *testing.T) {
+	t.Parallel()
+
+	chunks := []SearchChunk{{
+		ID:       "hit",
+		Content:  "matched",
+		FileID:   "f1",
+		Metadata: parseMetaMap(makeMetadata(7, 20, []int{8})),
+	}}
+
+	neighbors := map[int]rawRow{}
+	for idx := 4; idx <= 10; idx++ {
+		if idx == 7 {
+			continue
 		}
+		neighbors[idx] = rawRow{
+			ID:       "n",
+			Content:  "ctx",
+			FileID:   "f1",
+			Metadata: makeMetadata(idx, 20, []int{idx + 1}),
+		}
+	}
+	fetcher := &stubNeighborFetcher{chunks: map[string]map[int]rawRow{"f1": neighbors}}
+
+	result := ExpandNeighbors(context.Background(), chunks, 3, fetcher, "test_table", "kb1")
+
+	pages := extractPages(result[0].Metadata)
+	if len(pages) != 1 || pages[0] != 8 {
+		t.Fatalf("citable pages: want [8], got %v", pages)
 	}
 }
 
