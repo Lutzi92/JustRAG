@@ -68,3 +68,25 @@ func (h *Handler) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	httputil.WriteJSONCtx(ctx, w, http.StatusOK, g)
 }
+
+// ListPresets handles GET /api/workflow/presets.
+//
+// Mounted authenticated-only, WITHOUT a KB in the path: presets are curated,
+// deployment-wide starting points (internal/pipeline/presets.go), not a
+// per-KB resource, so kbAdminChain's RequireKBRole gate does not apply here —
+// there is no {id} to resolve a role against. Follows the same
+// "authenticated, no KB" pattern as GET /api/kb/catalog and GET
+// /api/kb-categories in routes.go (rc.authMw.Authenticate directly, no
+// kbaccess middleware).
+func (h *Handler) ListPresets(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	priced, err := PricePresets(ctx, h.global)
+	if err != nil {
+		logctx.From(ctx).Error("pipeline.workflow.list_presets", "error", err)
+		httputil.WriteInternalErrorCtx(ctx, w, err)
+		return
+	}
+
+	httputil.WriteJSONCtx(ctx, w, http.StatusOK, priced)
+}

@@ -669,6 +669,10 @@ func registerKBRoutes(rc *routeCtx) {
 	// Node edits go through PUT /api/kb/{id}/settings above, so validation
 	// stays in one place.
 	rc.mux.Handle("GET /api/kb/{id}/workflow", rc.kbAdminChain(rc.workflowHandler.GetWorkflow))
+	// Curated presets are deployment-wide, not per-KB — authenticated only,
+	// same "no KB in the path" pattern as GET /api/kb / GET /api/kb/global
+	// above (and GET /api/kb/catalog, GET /api/kb-categories below).
+	rc.mux.Handle("GET /api/workflow/presets", rc.authMw.Authenticate(http.HandlerFunc(rc.workflowHandler.ListPresets)))
 
 	// KB operations (need KB permission middleware)
 	rc.mux.Handle("PATCH /api/kb/{id}", rc.kbAdminChain(kbUpdateHandler.UpdateKB))
