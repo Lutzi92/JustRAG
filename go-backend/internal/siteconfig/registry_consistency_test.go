@@ -56,7 +56,23 @@ var keyShaped = regexp.MustCompile(`^[a-z][a-z0-9_]{3,}$`)
 // there — confirmed by grep, not assumed (see route 5 below, which exists
 // specifically because those two keys are read by neither the four helpers,
 // a "*Keys" slice, nor the siteConfigParsers map: internal/processor calls
-// reader.GetSiteConfigValue(ctx, "<literal>") directly).
+// reader.GetSiteConfigValue(ctx, "<literal>") directly). internal/pipeline
+// was added because it is a genuine registry-key reader too (the
+// workflow-canvas projection, project.go's Project): it resolves every
+// per-KB config key any node references. project.go's own read calls do
+// NOT literally match any of the five routes below — it reads keys through
+// its unexported boolVal(vals, "<literal>") helper and the batch
+// r.GetSiteConfigValues(ctx, keys) (plural, deliberately excluded from
+// route 5, see that route's doc comment), neither of which the walk
+// recognizes — so adding internal/pipeline alone left len(found) unchanged
+// (confirmed empirically at the time: still 185, every key project.go's
+// node vocabulary needs already had a recognized read site in
+// internal/chat or internal/vector). preset_base.go's PresetBaseFor is
+// different: it calls r.GetSiteConfigValue(ctx, "workflow_preset")
+// directly with the key as a string literal, deliberately in route-5 shape
+// (its own doc comment explains why), specifically so this guard would see
+// a real read site for workflow_preset instead of needing knownUnread. That
+// is the one new key the walk picks up now — see minExpectedKeys below.
 //
 // Each package directory is walked non-recursively (os.ReadDir, matching
 // the pipeline precedent): internal/processor/raptor and
@@ -68,6 +84,7 @@ var scannedPackages = []string{
 	filepath.Join("..", "chat"),
 	filepath.Join("..", "vector"),
 	filepath.Join("..", "processor"),
+	filepath.Join("..", "pipeline"),
 }
 
 // minExpectedKeys guards against a silently broken parse. If a refactor
@@ -77,8 +94,13 @@ var scannedPackages = []string{
 // vacuously — the exact failure mode this file exists to prevent.
 //
 // Measured 2026-08-14 via collectConfigKeys() across internal/chat +
-// internal/vector + internal/processor (all five routes, see the doc
-// comment on collectConfigKeys): 185 distinct keys. Floor set ~10% below.
+// internal/vector + internal/processor + internal/pipeline (all five
+// routes, see the doc comment on collectConfigKeys): 186 distinct keys —
+// 185 as originally measured for this four-package scan, plus workflow_preset
+// itself once preset_base.go's PresetBaseFor gave it a route-5-shaped read
+// site (see scannedPackages' doc comment). Floor stays 166 (~10.75% below
+// 186, still comfortably under the ~10% convention used elsewhere in this
+// file).
 const minExpectedKeys = 166
 
 // collectConfigKeys walks scannedPackages and returns every site_config key

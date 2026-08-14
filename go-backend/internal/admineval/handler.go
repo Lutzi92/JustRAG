@@ -198,6 +198,12 @@ var snapshotConfigKeys = []string{
 	// could exercise. See the comment in internal/siteconfig/registry.go.
 	"chat_answer_tools_enabled",
 	"chat_answer_tools_max_rounds",
+	// workflow_preset (kb-workflow-editor Phase 5 Task 2; cross-checked by
+	// snapshot_registry_test.go like the blocks above). A pure marker of
+	// which preset a KB was based on — no eval code branches on it — but the
+	// snapshot must still capture it so a snapshotted eval run reproduces a
+	// KB's exact per-KB config surface, marker included.
+	"workflow_preset",
 }
 
 // ---------------------------------------------------------------------------
