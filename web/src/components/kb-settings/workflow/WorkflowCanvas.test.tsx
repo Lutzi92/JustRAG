@@ -64,6 +64,7 @@ const graph = (over: Partial<WorkflowGraph> = {}): WorkflowGraph => ({
   orchestrators: [{ orchestrator: 'supervisor', activation: 'active' }],
   estLlmCalls: 4,
   estLatencyMs: 5200,
+  fields: {},
   ...over,
 });
 

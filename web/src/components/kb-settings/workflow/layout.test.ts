@@ -21,6 +21,7 @@ const graph: WorkflowGraph = {
   orchestrators: [],
   estLlmCalls: 0,
   estLatencyMs: 0,
+  fields: {},
 };
 
 describe('layoutWorkflow', () => {
@@ -85,6 +86,7 @@ describe('layoutWorkflow', () => {
       orchestrators: [],
       estLlmCalls: 0,
       estLatencyMs: 0,
+      fields: {},
     };
 
     const { nodes, edges } = layoutWorkflow(fan);
@@ -109,6 +111,7 @@ const liveLoop: WorkflowGraph = {
   orchestrators: [],
   estLlmCalls: 0,
   estLatencyMs: 0,
+  fields: {},
 };
 
 describe('layoutWorkflow edge state', () => {
@@ -160,6 +163,7 @@ describe('layoutWorkflow at production scale', () => {
     orchestrators: [],
     estLlmCalls: 0,
     estLatencyMs: 0,
+    fields: {},
   };
 
   const layoutHeight = () => {

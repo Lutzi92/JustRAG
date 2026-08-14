@@ -32,6 +32,7 @@ const graph: WorkflowGraph = {
   orchestrators: [],
   estLlmCalls: 1,
   estLatencyMs: 600,
+  fields: {},
 };
 
 function makeNode(): WorkflowNodeData {

@@ -634,6 +634,20 @@ export interface OrchestratorCandidate {
   condition?: string;
 }
 
+export type WorkflowFieldType = 'bool' | 'int' | 'float' | 'string' | 'enum';
+
+export interface WorkflowConfigField {
+  key: string;
+  type: WorkflowFieldType;
+  group: string;
+  label: string;
+  help: string;
+  min?: number;
+  max?: number;
+  enum?: string[];
+  requiresReingest?: boolean;
+}
+
 export interface WorkflowGraph {
   lane: WorkflowLane;
   nodes: WorkflowNodeData[];
@@ -641,4 +655,5 @@ export interface WorkflowGraph {
   orchestrators: OrchestratorCandidate[];
   estLlmCalls: number;
   estLatencyMs: number;
+  fields: Record<string, WorkflowConfigField>;
 }

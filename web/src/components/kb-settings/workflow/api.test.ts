@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fetchWorkflow } from './api';
+import { fetchWorkflow, saveKbSettings, resetKbSetting } from './api';
+import * as settingsApi from '../api';
 
 vi.mock('../../../api', () => ({
   API_BASE_URL: 'http://test.local',
@@ -39,5 +40,15 @@ describe('fetchWorkflow', () => {
     vi.mocked(authFetch).mockResolvedValue({ ok: false, status: 403 } as unknown as Response);
 
     await expect(fetchWorkflow('kb-1', 'complex_reasoning')).rejects.toThrow('403');
+  });
+});
+
+describe('re-exports', () => {
+  it('re-exports saveKbSettings and resetKbSetting as the same function objects', () => {
+    // Re-exported rather than reimplemented so error handling cannot drift
+    // between the workflow canvas and the flat settings panel (both surfaces
+    // use the same endpoints and read body.error on 4xx).
+    expect(saveKbSettings).toBe(settingsApi.saveKbSettings);
+    expect(resetKbSetting).toBe(settingsApi.resetKbSetting);
   });
 });

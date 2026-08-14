@@ -11,3 +11,10 @@ export async function fetchWorkflow(kbId: string, lane: WorkflowLane): Promise<W
   if (!res.ok) throw new Error(`fetch workflow: ${res.status}`);
   return res.json();
 }
+
+// Editing goes through the settings endpoints the flat panel already uses:
+// PUT validates types, ranges AND mutual-exclusion conflicts, DELETE clears one
+// override. Re-exported rather than reimplemented so error handling cannot drift
+// between the two surfaces (both read body.error on failure, including the new
+// 400 that names mutually-exclusive keys).
+export { saveKbSettings, resetKbSetting } from '../api';

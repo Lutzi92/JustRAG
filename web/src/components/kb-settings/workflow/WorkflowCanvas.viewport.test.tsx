@@ -42,6 +42,7 @@ const graph = (lane: WorkflowGraph['lane']): WorkflowGraph => ({
   orchestrators: [],
   estLlmCalls: 1,
   estLatencyMs: 1000,
+  fields: {},
 });
 
 describe('WorkflowCanvas viewport', () => {
