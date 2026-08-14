@@ -39,9 +39,12 @@ vi.mock('./api', async (importOriginal) => {
     fetchWorkflow: vi.fn(),
     saveKbSettings: vi.fn(),
     resetKbSetting: vi.fn(),
+    // PresetPicker (Task 5) fetches this on mount unconditionally; this
+    // suite is about viewport/fitView behaviour, not the picker itself.
+    fetchPresets: vi.fn(),
   };
 });
-import { fetchWorkflow, saveKbSettings } from './api';
+import { fetchWorkflow, saveKbSettings, fetchPresets } from './api';
 
 const graph = (lane: WorkflowGraph['lane'], over: Partial<WorkflowGraph> = {}): WorkflowGraph => ({
   lane,
@@ -54,6 +57,9 @@ const graph = (lane: WorkflowGraph['lane'], over: Partial<WorkflowGraph> = {}): 
   estLlmCalls: 1,
   estLatencyMs: 1000,
   fields: {},
+  presetBase: '',
+  presetBaseKnown: true,
+  deviations: [],
   ...over,
 });
 
@@ -61,6 +67,7 @@ describe('WorkflowCanvas viewport', () => {
   beforeEach(async () => {
     vi.mocked(fetchWorkflow).mockReset();
     vi.mocked(saveKbSettings).mockReset();
+    vi.mocked(fetchPresets).mockReset().mockResolvedValue([]);
     fitView.mockReset();
   });
 

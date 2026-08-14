@@ -12,6 +12,7 @@ import { fetchWorkflow, saveKbSettings, resetKbSetting } from './api';
 import { layoutWorkflow, MIN_ZOOM, type WorkflowRFNode } from './layout';
 import WorkflowNode from './WorkflowNode';
 import { NodeInspector } from './NodeInspector';
+import { PresetPicker } from './PresetPicker';
 import './WorkflowCanvas.css';
 
 const LANES: { id: WorkflowLane; label: string }[] = [
@@ -230,6 +231,22 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
     // nothing else would ever retire that banner).
     setError(null);
   }, [kbId]);
+
+  // PresetPicker's own refetch handoff — mirrors onSaveDraft/onResetKey's
+  // treatment of a post-write refetch failure: the WRITE already landed (the
+  // picker's own confirmation dialog is closed by the time this runs), so a
+  // refetch failure here must read as "repaint failed", never as "the apply
+  // failed" — that would send an admin to retry an apply that already
+  // succeeded, potentially re-confirming an overwrite that already happened.
+  const onPresetApplied = useCallback(async () => {
+    setOpError(null);
+    setEmptyStringNote(null);
+    try {
+      await refetchGraph();
+    } catch {
+      setOpError('Vorlage angewendet — die Ansicht konnte nicht aktualisiert werden. Bitte Ansicht neu laden.');
+    }
+  }, [refetchGraph]);
 
   const draftCount = Object.keys(draft).length;
 
@@ -512,6 +529,23 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   // beforeunload warning for a draft the admin could no longer even see.
   return (
     <div className="wf-canvas">
+      {/* Suppressed on a load failure, same rule as the orchestrator/cost
+          readouts below: `graph` would still hold the PREVIOUS successful
+          fetch (or be null on the very first load), and a presetBase/
+          deviations line built from stale data would misattribute it to
+          whatever the admin is looking at now. */}
+      {!error && (
+        <PresetPicker
+          kbId={kbId}
+          lane={lane}
+          presetBase={graph?.presetBase ?? ''}
+          presetBaseKnown={graph?.presetBaseKnown ?? true}
+          deviations={graph?.deviations ?? []}
+          draftPending={draftCount > 0}
+          onError={setOpError}
+          onApplied={onPresetApplied}
+        />
+      )}
       <div className="wf-canvas__bar">
         <div className="wf-canvas__lanes">
           {LANES.map((l) => (

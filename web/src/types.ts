@@ -658,4 +658,54 @@ export interface WorkflowGraph {
   estLlmCalls: number;
   estLatencyMs: number;
   fields: Record<string, WorkflowConfigField>;
+  /** The id recorded in the KB's `workflow_preset` marker, or "" if the KB
+   * was never set up from a preset. Meaningless on its own — see
+   * presetBaseKnown before reading it. */
+  presetBase: string;
+  /** False only when presetBase names a preset that no longer exists
+   * (renamed or removed) — true for BOTH "no base at all" (presetBase === "")
+   * and "based on a preset that still exists". A canvas that ignores this
+   * third state cannot tell "you conform" (0 deviations, real bundle behind
+   * it) from "there is nothing to conform to" (a stale id, no bundle at all)
+   * — see go-backend/internal/pipeline/project.go's PresetBaseKnown doc. */
+  presetBaseKnown: boolean;
+  /** Bundle keys whose per-KB override no longer matches presetBase's
+   * bundle. Only meaningful when presetBaseKnown is true and presetBase is
+   * non-empty; empty otherwise. */
+  deviations: string[];
+}
+
+// --- Workflow presets (GET /api/workflow/presets, POST/GET .../workflow/preset) ---
+
+/** One preset's projected cost on one lane. Mirrors go-backend's LaneCost. */
+export interface WorkflowLaneCost {
+  estLlmCalls: number;
+  estLatencyMs: number;
+}
+
+/**
+ * A curated preset plus its cost, per lane. Costs is keyed by lane rather
+ * than collapsed to one number because the lanes genuinely disagree on
+ * price — on the complex lane in particular, "research" and "standard"
+ * project the SAME total (NodeOrchestrator is a flat cost regardless of
+ * which orchestrator wins), so a single number would make "Recherche" look
+ * no more expensive than "Standard" for the one lane it exists for. See
+ * go-backend/internal/pipeline/presets_cost.go's PricedPreset doc.
+ */
+export interface WorkflowPreset {
+  id: string;
+  label: string;
+  description: string;
+  bundle: Record<string, string>;
+  costs: Record<WorkflowLane, WorkflowLaneCost>;
+}
+
+/** The result of applying (or previewing) a preset. `overwrites` lists the
+ * bundle keys the KB explicitly set to a value the apply would change —
+ * exactly what would be lost, computed server-side (see
+ * go-backend/internal/pipeline/preset_apply.go's Overwrites). */
+export interface WorkflowPresetApplyResult {
+  preset: string;
+  label: string;
+  overwrites: string[];
 }

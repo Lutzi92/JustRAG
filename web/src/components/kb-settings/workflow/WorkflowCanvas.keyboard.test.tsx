@@ -25,7 +25,13 @@ vi.mock('../../../hooks/useReducedMotion', () => ({
 // second mock to keep in sync with the fixture's `fields` map.
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>();
-  return { ...actual, fetchWorkflow: vi.fn() };
+  return {
+    ...actual,
+    fetchWorkflow: vi.fn(),
+    // PresetPicker (Task 5) fetches this on mount unconditionally; this
+    // suite is about keyboard delegation, not the picker itself.
+    fetchPresets: vi.fn().mockResolvedValue([]),
+  };
 });
 import { fetchWorkflow } from './api';
 
@@ -39,6 +45,9 @@ const graph: WorkflowGraph = {
   estLlmCalls: 1,
   estLatencyMs: 600,
   fields: {},
+  presetBase: '',
+  presetBaseKnown: true,
+  deviations: [],
 };
 
 function makeNode(): WorkflowNodeData {

@@ -17,8 +17,12 @@ vi.mock('../../contexts/ModalContext', () => ({
 vi.mock('./workflow/api', () => ({
   fetchWorkflow: vi.fn().mockResolvedValue({
     lane: 'complex_reasoning', nodes: [], edges: [], orchestrators: [],
-    estLlmCalls: 0, estLatencyMs: 0,
+    estLlmCalls: 0, estLatencyMs: 0, presetBase: '', presetBaseKnown: true, deviations: [],
   }),
+  // PresetPicker (Task 5) fetches this on mount, unconditionally, once the
+  // Workflow tab renders — this suite doesn't exercise the picker itself
+  // (see PresetPicker.test.tsx), so an empty list keeps it present but inert.
+  fetchPresets: vi.fn().mockResolvedValue([]),
 }));
 
 const sample = {

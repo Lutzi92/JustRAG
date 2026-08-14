@@ -107,6 +107,9 @@ describe('fieldFor', () => {
         help: 'Cache beschreibung',
       },
     },
+    presetBase: '',
+    presetBaseKnown: true,
+    deviations: [],
   };
 
   it('returns the field entry for a registered key', () => {

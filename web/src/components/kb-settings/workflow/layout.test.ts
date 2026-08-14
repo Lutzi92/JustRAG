@@ -22,6 +22,9 @@ const graph: WorkflowGraph = {
   estLlmCalls: 0,
   estLatencyMs: 0,
   fields: {},
+  presetBase: '',
+  presetBaseKnown: true,
+  deviations: [],
 };
 
 describe('layoutWorkflow', () => {
@@ -87,6 +90,9 @@ describe('layoutWorkflow', () => {
       estLlmCalls: 0,
       estLatencyMs: 0,
       fields: {},
+      presetBase: '',
+      presetBaseKnown: true,
+      deviations: [],
     };
 
     const { nodes, edges } = layoutWorkflow(fan);
@@ -112,6 +118,9 @@ const liveLoop: WorkflowGraph = {
   estLlmCalls: 0,
   estLatencyMs: 0,
   fields: {},
+  presetBase: '',
+  presetBaseKnown: true,
+  deviations: [],
 };
 
 describe('layoutWorkflow edge state', () => {
@@ -164,6 +173,9 @@ describe('layoutWorkflow at production scale', () => {
     estLlmCalls: 0,
     estLatencyMs: 0,
     fields: {},
+    presetBase: '',
+    presetBaseKnown: true,
+    deviations: [],
   };
 
   const layoutHeight = () => {

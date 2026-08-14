@@ -1,4 +1,6 @@
-import type { WorkflowConfigField, WorkflowGraph, WorkflowLane } from '../../../types';
+import type {
+  WorkflowConfigField, WorkflowGraph, WorkflowLane, WorkflowPreset, WorkflowPresetApplyResult,
+} from '../../../types';
 import { API_BASE_URL, authFetch } from '../../../api';
 
 // authFetch injects the Bearer token from localStorage and fires the logout
@@ -9,6 +11,50 @@ export async function fetchWorkflow(kbId: string, lane: WorkflowLane): Promise<W
     `${API_BASE_URL}/api/kb/${encodeURIComponent(kbId)}/workflow?lane=${lane}`,
   );
   if (!res.ok) throw new Error(`fetch workflow: ${res.status}`);
+  return res.json();
+}
+
+// GET /api/workflow/presets — global, not KB-scoped: costs are computed from
+// the SAME projection the canvas renders (see PricePresets in
+// presets_cost.go), so the picker's badges cannot disagree with the graph.
+export async function fetchPresets(): Promise<WorkflowPreset[]> {
+  const res = await authFetch(`${API_BASE_URL}/api/workflow/presets`);
+  if (!res.ok) throw new Error(`fetch presets: ${res.status}`);
+  return res.json();
+}
+
+// GET /api/kb/{id}/workflow/preset?preset=<id> — a PREVIEW: runs the exact
+// same validation/conflict plan the POST below would, but writes nothing.
+// This is what the confirmation dialog reads its overwrite count from —
+// never computed client-side, so the dialog can never advertise an apply the
+// server would then reject (see planApply in preset_apply.go).
+export async function previewPreset(kbId: string, presetId: string): Promise<WorkflowPresetApplyResult> {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/kb/${encodeURIComponent(kbId)}/workflow/preset?preset=${encodeURIComponent(presetId)}`,
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `preview preset: ${res.status}`);
+  }
+  return res.json();
+}
+
+// POST /api/kb/{id}/workflow/preset — applies the preset: overwrites every
+// bundle key, including ones the admin set by hand. Destructive; the caller
+// (PresetPicker) must confirm first, using previewPreset's own count.
+export async function applyPreset(kbId: string, presetId: string): Promise<WorkflowPresetApplyResult> {
+  const res = await authFetch(
+    `${API_BASE_URL}/api/kb/${encodeURIComponent(kbId)}/workflow/preset`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preset: presetId }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `apply preset: ${res.status}`);
+  }
   return res.json();
 }
 

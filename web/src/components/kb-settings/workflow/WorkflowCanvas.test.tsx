@@ -16,9 +16,13 @@ vi.mock('./api', async (importOriginal) => {
     fetchWorkflow: vi.fn(),
     saveKbSettings: vi.fn(),
     resetKbSetting: vi.fn(),
+    // PresetPicker (Task 5) fetches this on mount unconditionally. This
+    // suite doesn't exercise the picker itself (see PresetPicker.test.tsx) —
+    // an empty list keeps it present but inert.
+    fetchPresets: vi.fn(),
   };
 });
-import { fetchWorkflow, saveKbSettings, resetKbSetting } from './api';
+import { fetchWorkflow, saveKbSettings, resetKbSetting, fetchPresets } from './api';
 
 // WorkflowCanvas reads useReducedMotion, which calls window.matchMedia —
 // not available in jsdom by default (same treatment as Login.test.tsx).
@@ -76,6 +80,9 @@ const graph = (over: Partial<WorkflowGraph> = {}): WorkflowGraph => ({
   estLlmCalls: 4,
   estLatencyMs: 5200,
   fields: {},
+  presetBase: '',
+  presetBaseKnown: true,
+  deviations: [],
   ...over,
 });
 
@@ -93,6 +100,7 @@ describe('WorkflowCanvas', () => {
     vi.mocked(fetchWorkflow).mockReset();
     vi.mocked(saveKbSettings).mockReset();
     vi.mocked(resetKbSetting).mockReset();
+    vi.mocked(fetchPresets).mockReset().mockResolvedValue([]);
     lastRfProps = null;
   });
 
