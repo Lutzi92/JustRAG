@@ -90,6 +90,42 @@ type putRequest struct {
 	Configs map[string]string `json:"configs"`
 }
 
+// conflictState fetches the data ValidateConflicts needs to judge a per-KB
+// change: existing is the pre-change EFFECTIVE view for every registry key —
+// the KB's own override where set, else the global value — and globals is the
+// plain global map (needed separately by DeleteSetting, which must know what
+// a key falls back TO once its override is removed).
+//
+// existing is effective rather than raw-override-only because that is what
+// KBOverlayReader (internal/siteconfig/overlay.go) actually resolves at
+// answer time: a KB that overrides only one half of a conflicting pair while
+// the other half is enabled globally is a real, reachable incoherent runtime
+// state, not a false positive — so the conflict check must see it.
+func (h *Handler) conflictState(ctx context.Context, kbID string) (existing, globals map[string]*string, err error) {
+	overrides, err := h.store.ListKBOverrides(ctx, kbID)
+	if err != nil {
+		return nil, nil, err
+	}
+	fields := siteconfig.All()
+	keys := make([]string, 0, len(fields))
+	for _, f := range fields {
+		keys = append(keys, f.Key)
+	}
+	globals, err = h.global.GetSiteConfigValues(ctx, keys)
+	if err != nil {
+		return nil, nil, err
+	}
+	existing = make(map[string]*string, len(keys))
+	for _, k := range keys {
+		if ov, ok := overrides[k]; ok {
+			existing[k] = ov
+		} else {
+			existing[k] = globals[k]
+		}
+	}
+	return existing, globals, nil
+}
+
 // PutSettings handles PUT /api/kb/{id}/settings.
 func (h *Handler) PutSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -116,6 +152,24 @@ func (h *Handler) PutSettings(w http.ResponseWriter, r *http.Request) {
 		kv[k] = &val
 	}
 
+	// Reject a batch that would leave both halves of a documented mutually-
+	// exclusive flag pair enabled (raptor vs parent-child, Self-RAG vs the
+	// legacy factuality verifier) — see conflictState for why the check runs
+	// against the effective view. On a read failure, fall through to the save
+	// rather than blocking config writes on it, mirroring the same tradeoff
+	// the global admin path makes (siteconfig.UpdateSiteConfig): the runtime
+	// skip logic still guards against the incoherent combination either way.
+	if existing, _, err := h.conflictState(ctx, kbID); err == nil {
+		updates := make([]siteconfig.KeyValue, 0, len(kv))
+		for k, v := range kv {
+			updates = append(updates, siteconfig.KeyValue{Key: k, Value: v})
+		}
+		if err := siteconfig.ValidateConflicts(existing, updates); err != nil {
+			httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, httputil.SanitizeError(err))
+			return
+		}
+	}
+
 	if err := h.store.UpsertBatch(ctx, kbID, kv); err != nil {
 		logctx.From(ctx).Error("kbconfig.put.upsert", "error", err, "kb_id", kbID)
 		httputil.WriteInternalErrorCtx(ctx, w, err)
@@ -134,6 +188,22 @@ func (h *Handler) DeleteSetting(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "not a per-KB configurable key")
 		return
 	}
+
+	// Clearing an override can ALSO create a conflict: the key doesn't go to
+	// "off", it falls through to whatever the global value currently is
+	// (KBOverlayReader semantics), which may be the enabled half of a pair
+	// this KB was relying on the override to keep disabled. Model that as a
+	// one-key update whose new value is the global value, against the
+	// pre-change effective view (see conflictState). Same fetch-failure
+	// fallback as PutSettings.
+	if existing, globals, err := h.conflictState(ctx, kbID); err == nil {
+		updates := []siteconfig.KeyValue{{Key: key, Value: globals[key]}}
+		if err := siteconfig.ValidateConflicts(existing, updates); err != nil {
+			httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, httputil.SanitizeError(err))
+			return
+		}
+	}
+
 	if _, err := h.store.DeleteKey(ctx, kbID, key); err != nil {
 		logctx.From(ctx).Error("kbconfig.delete", "error", err, "kb_id", kbID, "key", key)
 		httputil.WriteInternalErrorCtx(ctx, w, err)
