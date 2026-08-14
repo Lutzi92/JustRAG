@@ -268,6 +268,12 @@ var nodes = []NodeSpec{
 			"chat_corpus_table_max_files",
 			"chat_corpus_table_router_llm_enabled",
 		},
+		// AlwaysOn: an orchestrator always runs — Keys[0]
+		// (chat_supervisor_enabled) defaults OFF, but when every orchestrator
+		// flag is off the standard PrepareChatContext path is the fallback
+		// orchestrator, not "no orchestrator". Without this the projection
+		// would render this node inactive on every default deployment.
+		AlwaysOn: true,
 		LLMCalls: 2, LatencyMs: 1500,
 	},
 	{
