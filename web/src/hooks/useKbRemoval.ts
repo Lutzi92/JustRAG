@@ -29,9 +29,24 @@ export function useKbRemoval(): { removeKb: (kb: KnowledgeBase) => Promise<KbRem
     removingRef.current = true;
     setRemoving(true);
     try {
-      // Exactly one decision point. The default is deliberately 'leave': an
-      // absent myRole (an implicit viewer on a published global KB with no
-      // kb_members row) must never reach the delete branch.
+      // Public KBs first, ahead of the owner check. Their only remove action
+      // is the star on the Favoriten card, and a favorites toggle must never
+      // destroy anything: it writes an opt-out, keeps the caller's chats and
+      // — for a curator — their kb_members row, and the KB stays reachable
+      // under "KBs entdecken" (the catalog lists staged KBs to their members
+      // for exactly this case). Deleting the KB outright stays the separate,
+      // system-admin-only trash button on the same card, and dropping a
+      // curator's membership belongs in the members dialog. Putting this
+      // branch first is what guarantees neither can be reached from the star.
+      if (kb.visibility === 'public' || kb.isGlobal) {
+        const confirmed = await showConfirm(t('confirmRemoveFavorite'));
+        if (!confirmed) return 'cancelled';
+        await axios.delete(`${API_BASE_URL}/api/kb/${kb.id}/subscription`);
+        return 'unsubscribed';
+      }
+
+      // Private KBs: exactly one decision point. The default is deliberately
+      // 'leave' — an absent myRole must never reach the delete branch.
       const isOwner = kb.myRole === 'owner';
 
       if (isOwner) {
@@ -61,11 +76,11 @@ export function useKbRemoval(): { removeKb: (kb: KnowledgeBase) => Promise<KbRem
         const status = (err as { response?: { status?: number } } | null)?.response?.status;
         if (status !== 404) throw err;
 
-        // 404 auf /membership/impact heisst: keine kb_members-Zeile, also
-        // Abonnent. Abbestellen loescht bewusst KEINE Chats — der Zugriff
-        // besteht ueber Regel 4 der Zugriffsaufloesung weiter, und ein
-        // Admin, der auto_subscribe setzt, darf niemandem durch das
-        // Wegraeumen einer aufgedraengten Kachel den Verlauf kosten.
+        // 404 auf /membership/impact heisst: keine kb_members-Zeile. Auf
+        // einer privaten KB ist das ein Grenzfall (die Liste kommt aus der
+        // Mitgliedschaft) — er faellt trotzdem auf Abbestellen zurueck statt
+        // auf Verlassen, weil ohne Mitgliedschaft nichts zu verlassen ist und
+        // Abbestellen bewusst KEINE Chats loescht.
         const confirmed = await showConfirm(t('confirmUnsubscribeKb'));
         if (!confirmed) return 'cancelled';
         await axios.delete(`${API_BASE_URL}/api/kb/${kb.id}/subscription`);

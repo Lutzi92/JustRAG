@@ -96,10 +96,17 @@ func byID(entries []kbsubs.CatalogEntry) map[string]kbsubs.CatalogEntry {
 	return m
 }
 
+// insertMember gives the user a kb_members row on the KB.
+func insertMember(t *testing.T, pool *pgxpool.Pool, kbID, userID, role string) {
+	t.Helper()
+	mustExec(t, pool, `INSERT INTO kb_members (kb_id, user_id, role)
+	                   VALUES ($1::uuid, $2::uuid, $3)`, kbID, userID, role)
+}
+
 // TestCatalog_ListsOnlyPublishedPublicKBs pins the WHERE clause: the catalog is
 // the discovery surface for KBs that are live, so a private KB and a public one
 // still staged (is_published = false, the state kbvisibility.Publish leaves
-// behind) must both stay out of it.
+// behind) must both stay out of it — for a caller with no membership on them.
 func TestCatalog_ListsOnlyPublishedPublicKBs(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -266,5 +273,133 @@ func TestCatalog_CategoryFilterAndIDs(t *testing.T) {
 	}
 	if len(filtered) != 1 || filtered[0].ID != taggedKB {
 		t.Fatalf("category filter returned %+v, want only %s", filtered, taggedKB)
+	}
+}
+
+// TestCatalog_StagedKBIsVisibleToItsMembers pins the second WHERE arm. The
+// Favoriten star writes an opt-out and nothing else, so a curator who takes
+// their own KB out of Favoriten needs it back here — and a staged KB (public,
+// not yet published) has no other surface at all. Without this arm that click
+// would be irreversible from the UI.
+func TestCatalog_StagedKBIsVisibleToItsMembers(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbsubs.NewStore(pool)
+
+	member := insertUser(t, pool, "kbsubs-staged-member")
+	stranger := insertUser(t, pool, "kbsubs-staged-stranger")
+	staged := insertKB(t, pool, "kbsubs-staged-kb", "", "public", false, false)
+	insertMember(t, pool, staged, member, "admin")
+
+	forMember, err := store.Catalog(ctx, member, "kbsubs-staged-", nil)
+	if err != nil {
+		t.Fatalf("Catalog(member): %v", err)
+	}
+	entry, ok := byID(forMember)[staged]
+	if !ok {
+		t.Fatal("a staged public KB must appear in its own member's catalog")
+	}
+	// Ohne Abo-Zeile steht die KB fuer ein Mitglied in den Favoriten — der
+	// Stern muss also gefuellt sein, sonst widerspraeche der Katalog der
+	// Uebersicht.
+	if !entry.Subscribed {
+		t.Error("subscribed = false, want true (a member sees the KB in their overview)")
+	}
+
+	forStranger, err := store.Catalog(ctx, stranger, "kbsubs-staged-", nil)
+	if err != nil {
+		t.Fatalf("Catalog(stranger): %v", err)
+	}
+	if _, ok := byID(forStranger)[staged]; ok {
+		t.Error("a staged public KB must stay out of a non-member's catalog")
+	}
+}
+
+// TestCatalog_MemberOptOutFlipsTheStar is the round trip the Favoriten star
+// depends on: an opt-out beats membership in both the overview query and here,
+// so the KB leaves Favoriten, stays listed in the catalog, and comes back on
+// the next click. Membership (and with it the caller's chats) is untouched.
+func TestCatalog_MemberOptOutFlipsTheStar(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbsubs.NewStore(pool)
+
+	user := insertUser(t, pool, "kbsubs-optout-member")
+	kbID := insertKB(t, pool, "kbsubs-optout-kb", "", "public", true, false)
+	insertMember(t, pool, kbID, user, "admin")
+
+	if err := store.SetState(ctx, kbID, user, kbsubs.StateOptedOut); err != nil {
+		t.Fatalf("SetState(opted_out): %v", err)
+	}
+	entries, err := store.Catalog(ctx, user, "kbsubs-optout-", nil)
+	if err != nil {
+		t.Fatalf("Catalog after opt-out: %v", err)
+	}
+	entry, ok := byID(entries)[kbID]
+	if !ok {
+		t.Fatal("an un-favorited KB must stay in the catalog")
+	}
+	if entry.Subscribed {
+		t.Error("subscribed = true after opting out, want false")
+	}
+
+	if err := store.SetState(ctx, kbID, user, kbsubs.StateSubscribed); err != nil {
+		t.Fatalf("SetState(subscribed): %v", err)
+	}
+	entries, err = store.Catalog(ctx, user, "kbsubs-optout-", nil)
+	if err != nil {
+		t.Fatalf("Catalog after re-subscribe: %v", err)
+	}
+	if !byID(entries)[kbID].Subscribed {
+		t.Error("subscribed = false after re-subscribing, want true")
+	}
+
+	var members int
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*)::int FROM kb_members WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
+		kbID, user).Scan(&members); err != nil {
+		t.Fatalf("count members: %v", err)
+	}
+	if members != 1 {
+		t.Errorf("kb_members rows = %d, want 1 — the star must not touch membership", members)
+	}
+}
+
+// TestCatalog_HeaderTextIsSearchedAndDisplayed covers the third ILIKE arm and
+// the description fallback. knowledge_bases.description has no editor in the
+// UI; header_text is the blurb an admin actually writes, so a catalog that
+// ignored it looked like a broken search over the very text on the cards.
+func TestCatalog_HeaderTextIsSearchedAndDisplayed(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbsubs.NewStore(pool)
+
+	user := insertUser(t, pool, "kbsubs-header-user")
+	headerOnly := insertKB(t, pool, "kbsubs-header-one", "", "public", true, false)
+	mustExec(t, pool, `UPDATE knowledge_bases SET header_text = $2 WHERE id = $1::uuid`,
+		headerOnly, "alles zum Thema Luftschiff")
+	// description gewinnt, wenn beide gesetzt sind.
+	both := insertKB(t, pool, "kbsubs-header-two", "aus der Beschreibung", "public", true, false)
+	mustExec(t, pool, `UPDATE knowledge_bases SET header_text = $2 WHERE id = $1::uuid`,
+		both, "aus dem Kopftext")
+
+	hits, err := store.Catalog(ctx, user, "luftschiff", nil)
+	if err != nil {
+		t.Fatalf("Catalog(luftschiff): %v", err)
+	}
+	entry, ok := byID(hits)[headerOnly]
+	if !ok {
+		t.Fatal("a header_text match is missing from the search results")
+	}
+	if entry.Description == nil || *entry.Description != "alles zum Thema Luftschiff" {
+		t.Errorf("description = %v, want the header_text fallback", entry.Description)
+	}
+
+	all, err := store.Catalog(ctx, user, "kbsubs-header-", nil)
+	if err != nil {
+		t.Fatalf("Catalog(all): %v", err)
+	}
+	if d := byID(all)[both].Description; d == nil || *d != "aus der Beschreibung" {
+		t.Errorf("description = %v, want the explicit description to win over header_text", d)
 	}
 }

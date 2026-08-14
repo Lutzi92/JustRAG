@@ -319,37 +319,35 @@ describe('KB visibility badge', () => {
   });
 });
 
-// Phase 1 built the contextual remove button for members and explicitly
-// deferred the subscriber case: a 404 on /membership/impact means there is
-// no kb_members row at all, i.e. the caller reaches this KB through a
-// subscription (or auto_subscribe), not membership. Leaving a membership
-// deletes the caller's chats in that KB; unsubscribing from a public KB does
-// not — access survives via rule 4 of EffectiveRole — so the dialog and the
-// request must differ.
-describe('remove action for a subscriber', () => {
+// The star on a Favoriten card is a favorites toggle and nothing else. It
+// must never drop a membership or delete chats — not for a plain subscriber
+// and not for a curator who happens to hold a kb_members row on the same
+// public KB — and the confirmation has to say so, including that the KB stays
+// findable under "KBs entdecken".
+describe('remove action on a Favoriten card', () => {
   beforeEach(() => {
     mockedAxios.get.mockReset();
     mockedAxios.delete.mockReset();
   });
 
-  // Kein kb_members-Eintrag (myRole undefined) auf einer oeffentlichen KB:
-  // der Nutzer ist Abonnent, nicht Mitglied.
   it('unsubscribes instead of leaving, and does not warn about chats', async () => {
-    mockedAxios.get.mockRejectedValueOnce({ response: { status: 404 } }); // /membership/impact
     mockedAxios.delete.mockResolvedValue({ status: 204 });
 
     renderHomeView({
       globalKbs: [{ ...baseKb, id: 'kb-1', name: 'Katalog-KB', visibility: 'public', isPublished: true }],
     });
 
-    await userEvent.click(await screen.findByRole('button', { name: /entfernen|remove/i }));
+    await userEvent.click(await screen.findByRole('button', { name: translations.removeFromFavorites.en }));
 
     // Wait for the confirmation dialog to actually mount before asserting on
     // its content.
-    await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('dialog');
 
-    // Kein Chat-Verlust in dieser Variante — die Warnung darf nicht erscheinen.
-    expect(screen.queryByText(/chat/i)).not.toBeInTheDocument();
+    // Die Zusage im Dialog: Chats bleiben, die KB bleibt auffindbar. (Auf
+    // "Discover KBs" muss im Dialog geprueft werden — der Accordion-Header
+    // traegt denselben Text.)
+    expect(dialog).toHaveTextContent(/your chats are kept/i);
+    expect(dialog).toHaveTextContent(/discover kbs/i);
     await userEvent.click(screen.getByRole('button', { name: /bestätigen|confirm/i }));
 
     await waitFor(() => {
@@ -360,5 +358,28 @@ describe('remove action for a subscriber', () => {
     expect(mockedAxios.delete).not.toHaveBeenCalledWith(
       expect.stringContaining('/membership')
     );
+  });
+
+  // Der Regressionsfall: derselbe Klick lief fuer einen Kurator frueher in
+  // den Leave-Zweig und nahm dessen Chats mit.
+  it('does not leave the KB when the caller is a curator (myRole=admin)', async () => {
+    mockedAxios.delete.mockResolvedValue({ status: 204 });
+
+    renderHomeView({
+      globalKbs: [{ ...baseKb, id: 'kb-1', name: 'Katalog-KB', visibility: 'public', isPublished: true, myRole: 'admin' }],
+    });
+
+    await userEvent.click(await screen.findByRole('button', { name: translations.removeFromFavorites.en }));
+    await screen.findByRole('dialog');
+    await userEvent.click(screen.getByRole('button', { name: /bestätigen|confirm/i }));
+
+    await waitFor(() => {
+      expect(mockedAxios.delete).toHaveBeenCalledWith(
+        expect.stringContaining('/api/kb/kb-1/subscription')
+      );
+    });
+    expect(mockedAxios.delete).not.toHaveBeenCalledWith(expect.stringContaining('/membership'));
+    // Kein /membership/impact-Lookup: es gibt nichts abzuwaegen.
+    expect(mockedAxios.get).not.toHaveBeenCalledWith(expect.stringContaining('/membership/impact'));
   });
 });

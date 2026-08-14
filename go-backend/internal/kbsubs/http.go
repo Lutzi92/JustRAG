@@ -50,11 +50,18 @@ func (h *Handler) setState(w http.ResponseWriter, r *http.Request, state string)
 		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("kbsubs: missing KB access result"))
 		return
 	}
-	if !access.KB.IsGlobal || !access.KB.IsPublished {
-		// Private und unveroeffentlichte KBs kennen kein Abo: dort entscheidet
-		// die Mitgliedschaft. Eine Zeile hier waere tote Daten.
+	if !access.KB.IsGlobal {
+		// Private KBs kennen kein Abo: dort entscheidet die Mitgliedschaft.
+		// Eine Zeile hier waere tote Daten.
+		//
+		// Unveroeffentlichte (staged) oeffentliche KBs sind bewusst erlaubt:
+		// die Route haengt an kbViewChain, dorthin kommt bei einer staged KB
+		// ohnehin nur ein Mitglied — und genau dessen Abo-Zeile ist es, die
+		// die Favoriten-Kachel steuert (kb.ListGlobalKnowledgeBases wertet
+		// 'opted_out' auch fuer Mitglieder aus). Ohne diesen Zweig liesse
+		// sich eine staged KB nicht aus den Favoriten nehmen.
 		httputil.WriteErrorCtx(ctx, w, http.StatusConflict,
-			"only published public knowledge bases can be subscribed to")
+			"only public knowledge bases can be subscribed to")
 		return
 	}
 

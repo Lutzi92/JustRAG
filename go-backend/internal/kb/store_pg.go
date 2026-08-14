@@ -270,8 +270,9 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 // not to the general public). (2) Absent membership, the KB must additionally
 // be published, and then reaches the overview via either an explicit
 // kb_subscriptions row with state='subscribed', or the KB's auto_subscribe
-// flag with no state='opted_out' row. An ordinary subscriber therefore never
-// sees a staged KB — only route (1) can bypass is_published. This mirrors
+// flag. An ordinary subscriber therefore never sees a staged KB — only route
+// (1) can bypass is_published. An explicit state='opted_out' row suppresses
+// the KB on both routes, membership included. This mirrors
 // GET /api/kb's private-KB list plus the caller's public-KB subscriptions,
 // kept as two separate queries rather than one combined query so each stays
 // simple and a KB cannot appear in both lists.
@@ -303,6 +304,16 @@ func (s *PGStore) ListGlobalKnowledgeBases(ctx context.Context, userID string, i
 			SELECT ` + kbSelectColsNoAlias + kbStatsCols + kbMembershipCols("$1") + `
 			FROM knowledge_bases kb` + kbStatsJoins + `
 			WHERE visibility = 'public'
+			  -- An explicit opt-out hides the tile for everyone, members
+			  -- included. The Favoriten star is a pure favorites toggle: it
+			  -- writes this row and touches neither membership nor chats, so
+			  -- it has to win over both arms below — otherwise a curator (or
+			  -- the demoted ex-owner of a freshly published KB) could never
+			  -- take their own KB out of Favoriten. They find it again in the
+			  -- catalog, which lists staged KBs to their members for exactly
+			  -- this reason (kbsubs.PGStore.Catalog).
+			  AND NOT EXISTS (SELECT 1 FROM kb_subscriptions s
+			                  WHERE s.kb_id = kb.id AND s.user_id = $1 AND s.state = 'opted_out')
 			  AND (
 			        -- Members (incl. curators and the ex-owner of a freshly
 			        -- published KB) see the KB even while it is staged, i.e.
@@ -315,9 +326,7 @@ func (s *PGStore) ListGlobalKnowledgeBases(ctx context.Context, userID string, i
 			         AND (
 			               EXISTS (SELECT 1 FROM kb_subscriptions s
 			                       WHERE s.kb_id = kb.id AND s.user_id = $1 AND s.state = 'subscribed')
-			            OR (kb.auto_subscribe
-			                AND NOT EXISTS (SELECT 1 FROM kb_subscriptions s
-			                                WHERE s.kb_id = kb.id AND s.user_id = $1 AND s.state = 'opted_out'))
+			            OR kb.auto_subscribe
 			             )
 			        )
 			      )

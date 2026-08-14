@@ -228,22 +228,20 @@ function PublicKbCard({
             </>
           )}
 
-          {/* Removal is offered to everyone, system admins included. It used
-              to be hidden from them because their overview query was
-              unfiltered by subscription, so the KB reappeared on the next
-              fetch whatever they clicked. That query is now the same one
+          {/* A favorites toggle, and nothing more. It is offered to everyone,
+              system admins included — their overview query is the same one
               everybody else gets (kb.Handler.ListGlobalKnowledgeBases passes
-              isAdmin=false), so the action sticks. It is never the admin's
-              outright delete — that is the Trash2 above, gated on
-              isSystemAdmin. onDeleteKB (useKbRemoval) picks the branch from
-              myRole: a curator's 'admin' means leaving the KB, an absent role
-              means a subscriber and lands in the unsubscribe branch. */}
+              isAdmin=false), so the action sticks. removeKb (useKbRemoval)
+              routes every public KB through the unsubscribe branch regardless
+              of myRole: no membership is dropped, no chats are deleted, and
+              the KB stays listed under "KBs entdecken". Deleting the KB
+              outright is the separate Trash2 above, gated on isSystemAdmin. */}
           <button
             onClick={(e) => onDeleteKB(kb, e)}
             className="home-view__mini-icon"
             disabled={removingKb}
-            title={t('removeFromMyView')}
-            aria-label={t('removeFromMyView')}
+            title={t('removeFromFavorites')}
+            aria-label={t('removeFromFavorites')}
           >
             <Star size={16} aria-hidden="true" fill="currentColor" />
           </button>

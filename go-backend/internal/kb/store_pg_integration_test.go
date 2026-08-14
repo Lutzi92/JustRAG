@@ -231,6 +231,37 @@ func TestListKnowledgeBases_ExcludesGlobalKBsWithMembership(t *testing.T) {
 	if found.MyRole == nil || *found.MyRole != "admin" {
 		t.Fatalf("ListGlobalKnowledgeBases: myRole = %v, want admin", found.MyRole)
 	}
+
+	// An explicit opt-out beats membership. The Favoriten star writes exactly
+	// this row and nothing else — no membership change, no chat deletion — so
+	// if the membership arm still won, the tile would be un-removable for the
+	// people most likely to want it gone (curators, and the demoted ex-owner
+	// of a freshly published KB). The membership itself must survive: the
+	// caller keeps their admin rights and their chats.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO kb_subscriptions (kb_id, user_id, state) VALUES ($1::uuid, $2::uuid, 'opted_out')`,
+		kbID, curator); err != nil {
+		t.Fatalf("insert opted_out subscription: %v", err)
+	}
+	afterOptOut, err := store.ListGlobalKnowledgeBases(ctx, curator, false)
+	if err != nil {
+		t.Fatalf("ListGlobalKnowledgeBases after opt-out: %v", err)
+	}
+	for i := range afterOptOut {
+		if afterOptOut[i].ID == kbID {
+			t.Fatalf("ListGlobalKnowledgeBases(%s) still returned KB %s after an opt-out — "+
+				"a member could never take it out of Favoriten", curator, kbID)
+		}
+	}
+	var members int
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*)::int FROM kb_members WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
+		kbID, curator).Scan(&members); err != nil {
+		t.Fatalf("count members: %v", err)
+	}
+	if members != 1 {
+		t.Fatalf("kb_members rows = %d, want 1 — opting out must not drop the membership", members)
+	}
 }
 
 // insertKBForPending inserts a bare personal KB and returns its id.

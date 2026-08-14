@@ -63,34 +63,57 @@ func (s *PGStore) SetState(ctx context.Context, kbID, userID, state string) erro
 	return nil
 }
 
-// Catalog lists every published public KB, annotated with whether this user
-// currently sees it in their overview. Filtering happens in SQL rather than in
-// Go so the LIMIT applies to the filtered set.
+// Catalog lists the public KBs this user may discover, annotated with whether
+// they currently see each one in their overview. Filtering happens in SQL
+// rather than in Go so the LIMIT applies to the filtered set.
 //
-// `subscribed` mirrors the same three-way rule as ListGlobalKnowledgeBases —
-// explicit subscription, or auto_subscribe without an opt-out — so the toggle
-// in the popup shows the state the overview actually has. The membership arm
-// is deliberately absent here: a curator's tile is not something they can
-// unsubscribe from, and showing the toggle as "on" would imply it is.
+// Rows are the published public KBs plus any *staged* one the caller holds a
+// kb_members row on. That second arm is what makes the Favoriten star
+// reversible: the star writes an opt-out (never a membership change), and
+// without the arm a curator who un-favorited their own staged KB would have
+// no surface left to find it on.
+//
+// `subscribed` mirrors ListGlobalKnowledgeBases exactly — opt-out loses to
+// nothing, and absent one it is membership, an explicit subscription, or
+// auto_subscribe — so the star in the catalog shows the state the overview
+// actually has, and toggling it moves the KB between the two sections.
+//
+// The displayed description falls back to header_text: knowledge_bases.description
+// has no editor in the UI, while header_text is the blurb an admin actually
+// writes and the Favoriten card already renders. The search predicate spans
+// all three columns for the same reason — searching a field nobody can fill
+// looks like a broken search.
 func (s *PGStore) Catalog(ctx context.Context, userID, query string, categoryIDs []string) ([]CatalogEntry, error) {
 	const catalogLimit = 200
 
 	sql := `
-		SELECT kb.id::text, kb.name, kb.description,
+		SELECT kb.id::text, kb.name,
+		       COALESCE(NULLIF(kb.description, ''), NULLIF(kb.header_text, '')) AS description,
 		       (
-		         EXISTS (SELECT 1 FROM kb_subscriptions s
-		                 WHERE s.kb_id = kb.id AND s.user_id = $1::uuid AND s.state = 'subscribed')
-		         OR (kb.auto_subscribe
-		             AND NOT EXISTS (SELECT 1 FROM kb_subscriptions s
-		                             WHERE s.kb_id = kb.id AND s.user_id = $1::uuid AND s.state = 'opted_out'))
+		         NOT EXISTS (SELECT 1 FROM kb_subscriptions s
+		                     WHERE s.kb_id = kb.id AND s.user_id = $1::uuid AND s.state = 'opted_out')
+		         AND (
+		               EXISTS (SELECT 1 FROM kb_members m
+		                       WHERE m.kb_id = kb.id AND m.user_id = $1::uuid)
+		            OR (kb.is_published AND (
+		                  EXISTS (SELECT 1 FROM kb_subscriptions s
+		                          WHERE s.kb_id = kb.id AND s.user_id = $1::uuid AND s.state = 'subscribed')
+		                  OR kb.auto_subscribe
+		               ))
+		             )
 		       ) AS subscribed,
 		       COALESCE(
 		         (SELECT array_agg(l.category_id::text) FROM kb_category_links l WHERE l.kb_id = kb.id),
 		         ARRAY[]::text[]
 		       ) AS category_ids
 		FROM knowledge_bases kb
-		WHERE kb.visibility = 'public' AND kb.is_published = true
-		  AND ($2 = '' OR kb.name ILIKE '%' || $2 || '%' OR COALESCE(kb.description, '') ILIKE '%' || $2 || '%')
+		WHERE kb.visibility = 'public'
+		  AND (kb.is_published = true OR EXISTS (
+		        SELECT 1 FROM kb_members m WHERE m.kb_id = kb.id AND m.user_id = $1::uuid
+		      ))
+		  AND ($2 = '' OR kb.name ILIKE '%' || $2 || '%'
+		       OR COALESCE(kb.description, '') ILIKE '%' || $2 || '%'
+		       OR COALESCE(kb.header_text, '') ILIKE '%' || $2 || '%')
 		  AND (cardinality($3::uuid[]) = 0 OR EXISTS (
 		        SELECT 1 FROM kb_category_links l
 		        WHERE l.kb_id = kb.id AND l.category_id = ANY($3::uuid[])

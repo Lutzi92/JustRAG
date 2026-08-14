@@ -138,17 +138,22 @@ func TestCatalogEmptyReturnsArray(t *testing.T) {
 	}
 }
 
-func TestSubscribeOnUnpublishedKBIsRejected(t *testing.T) {
+// A staged public KB (public, not yet published) does accept subscription
+// writes. Only a member reaches the view-gated route for one, and their
+// opt-out row is what takes the tile out of Favoriten — the star writes
+// nothing else, so rejecting this would make a staged KB impossible to
+// un-favorite. Access itself never depended on the row.
+func TestSubscribeOnStagedPublicKBIsAllowed(t *testing.T) {
 	store := &fakeStore{}
 	h := kbsubs.NewHandler(store)
 
 	rec := httptest.NewRecorder()
-	h.Subscribe(rec, withAccess(t, http.MethodPut, "kb-1", true, false))
+	h.Unsubscribe(rec, withAccess(t, http.MethodDelete, "kb-1", true, false))
 
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409", rec.Code)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body: %s)", rec.Code, rec.Body)
 	}
-	if store.calls != 0 {
-		t.Fatalf("store called %d times, want 0", store.calls)
+	if store.gotState != kbsubs.StateOptedOut {
+		t.Fatalf("state = %q, want %q", store.gotState, kbsubs.StateOptedOut)
 	}
 }
