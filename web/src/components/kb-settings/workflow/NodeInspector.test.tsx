@@ -36,8 +36,21 @@ describe('NodeInspector', () => {
     expect(screen.getByText('Standard')).toBeInTheDocument();
   });
 
-  it('shows an em dash for a key that is unset everywhere', () => {
+  it('says the code default applies for a key that is unset everywhere, not "nothing"', () => {
+    // project.go:65-70 is explicit that Values holds only explicitly-set keys
+    // and that a missing key must NOT be read as an empty value. An em dash
+    // read as "nothing is set" — most damagingly on factcheck_in_chat, which
+    // defaults to true (project.go:179): the canvas drew "Faktencheck" as
+    // ACTIVE while its inspector row looked blank.
     render(<NodeInspector node={data()} onClose={vi.fn()} />);
+    expect(screen.getByText('Standardwert')).toBeInTheDocument();
+    expect(screen.queryByText('—')).not.toBeInTheDocument();
+  });
+
+  it('still shows an em dash when the origin is not "default" but the value is missing', () => {
+    // Off-contract (the backend always ships a value for a kb/global origin),
+    // so it must not be dressed up as "the code default applies".
+    render(<NodeInspector node={data({ values: {}, origins: { crag_enabled: 'kb' }, keys: ['crag_enabled'] })} onClose={vi.fn()} />);
     expect(screen.getByText('—')).toBeInTheDocument();
   });
 

@@ -376,6 +376,8 @@ export const translations = {
     editSettings: { de: 'Einstellungen bearbeiten', en: 'Edit settings' },
     globalKbSettings: { de: 'Globale KB-Einstellungen', en: 'Global KB Settings' },
     openKb: { de: 'Knowledge Base öffnen', en: 'Open Knowledge Base' },
+    // Entry point for KbSettingsPanel (RAG-Einstellungen / Evals / Workflow).
+    kbAdvancedSettings: { de: 'RAG-Einstellungen und Workflow', en: 'RAG settings and workflow' },
 
     // KB Catalog Modal
     discoverKbs: { de: 'KBs entdecken', en: 'Discover KBs' },

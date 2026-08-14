@@ -11,7 +11,7 @@ interface Props {
 }
 
 export default function WorkflowNode({ data: { data: n } }: Props) {
-  const badge = reasonLabel(n.reason);
+  const badge = reasonLabel(n.activation, n.reason);
   const showCost = n.activation !== 'inactive' && n.llmCalls > 0;
 
   return (

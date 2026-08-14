@@ -6,6 +6,19 @@ afterEach(() => {
   cleanup();
 });
 
+// jsdom declares the ResizeObserver *type* but ships no runtime implementation.
+// Anything that measures a DOM box needs it — most visibly @xyflow/react, whose
+// internal node-measuring hook constructs one unconditionally. Four suites used
+// to carry a byte-identical local copy of this class; it belongs here next to
+// the framer-motion stub, so a new suite that renders a canvas doesn't have to
+// rediscover the gap.
+class NoopResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+globalThis.ResizeObserver ??= NoopResizeObserver as unknown as typeof ResizeObserver;
+
 // Mock framer-motion to avoid jsdom issues with animations
 vi.mock('framer-motion', async () => {
   const { forwardRef, createElement } = await vi.importActual<typeof import('react')>('react');

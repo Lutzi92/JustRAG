@@ -1,7 +1,8 @@
 import { lazy, Suspense, useMemo } from 'react';
 import {
   BookOpen, Settings, Sun, Moon, User, LogOut, Copy, Check, Plus,
-  Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, Loader2, Bot, Search, Star, Users
+  Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, Loader2, Bot, Search, Star, Users,
+  SlidersHorizontal
 } from 'lucide-react';
 import type { KnowledgeBase, SafeAIConfig, KbAssignableRole } from '../types';
 import { API_BASE_URL } from '../api';
@@ -37,6 +38,8 @@ export interface HomeViewProps {
   onOpenKbById: (id: string) => void;
   onDeleteGlobalKB: (id: string, e: React.MouseEvent) => void;
   onOpenGlobalKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
+  /** Opens KbSettingsPanel (RAG settings / evals / workflow) for a KB the caller administers. */
+  onOpenKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onOpenShare: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onUpdateKBSettings: (data: Record<string, unknown>) => void;
   showShareModal: boolean;
@@ -276,6 +279,7 @@ interface PrivateKbCardProps {
   t: (k: string) => string;
   onSelectKB: (kb: KnowledgeBase) => void;
   onOpenShare: (kb: KnowledgeBase, e: React.MouseEvent) => void;
+  onOpenKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onDeleteKB: (kb: KnowledgeBase, e: React.MouseEvent) => void;
 }
 
@@ -283,7 +287,7 @@ interface PrivateKbCardProps {
 // card in both, since the only difference between the sections is the
 // caller's own role, which the card already reads off myRole.
 function PrivateKbCard({
-  kb, currentUserId, removingKb, rtf, t, onSelectKB, onOpenShare, onDeleteKB,
+  kb, currentUserId, removingKb, rtf, t, onSelectKB, onOpenShare, onOpenKbSettings, onDeleteKB,
 }: PrivateKbCardProps) {
   return (
     // Card-level click is a mouse convenience (role="presentation"); the
@@ -307,6 +311,20 @@ function PrivateKbCard({
               aria-label={t('share')}
             >
               <UserPlus size={16} aria-hidden="true" />
+            </button>
+          )}
+
+          {/* RAG settings / evals / workflow (KbSettingsPanel). Same gate as
+              the members button: every endpoint the panel calls is
+              kbAdminChain, so admins and owners only. */}
+          {canManageMembers(kb) && (
+            <button
+              onClick={(e) => onOpenKbSettings(kb, e)}
+              className="home-view__mini-icon"
+              title={t('kbAdvancedSettings')}
+              aria-label={t('kbAdvancedSettings')}
+            >
+              <SlidersHorizontal size={16} aria-hidden="true" />
             </button>
           )}
 
@@ -372,7 +390,7 @@ export function HomeView(props: HomeViewProps) {
     kbs, globalKbs, currentKb, availableConfigs,
     copySuccess, onCopyUserId, onLogout, onViewProfile, onViewAdmin, onViewAgents,
     onCreateKB, onSelectKB, onDeleteKB, removingKb, onCreateGlobalKB, onSubscriptionChange, onOpenKbById, onDeleteGlobalKB,
-    onOpenGlobalKbSettings, onOpenShare, onUpdateKBSettings,
+    onOpenGlobalKbSettings, onOpenKbSettings, onOpenShare, onUpdateKBSettings,
     showShareModal, setShowShareModal, sharingKb, shareUserId, setShareUserId,
     shareTargetUser, shareLoading, sharePermission, setSharePermission,
     onLookupUser, onConfirmShare, notFoundUsername, onPendingInvited,
@@ -551,6 +569,7 @@ export function HomeView(props: HomeViewProps) {
                 t={t}
                 onSelectKB={onSelectKB}
                 onOpenShare={onOpenShare}
+                onOpenKbSettings={onOpenKbSettings}
                 onDeleteKB={onDeleteKB}
               />
             ))}
@@ -588,6 +607,7 @@ export function HomeView(props: HomeViewProps) {
               t={t}
               onSelectKB={onSelectKB}
               onOpenShare={onOpenShare}
+              onOpenKbSettings={onOpenKbSettings}
               onDeleteKB={onDeleteKB}
             />
           ))}

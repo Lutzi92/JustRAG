@@ -38,8 +38,22 @@ describe('WorkflowNode', () => {
       reason: 'orchestrator_bypass',
       condition: 'Läuft bei komplexen Fragen im Chat nicht: dort beantwortet der Orchestrator die Frage direkt und überspringt diese Stufe des Standard-Ablaufs.',
     }));
-    expect(screen.getByText('Übersprungen')).toBeInTheDocument();
+    // "Bedingt", not "Übersprungen": project.go deliberately projects an
+    // orchestrator-bypassed stage as conditional because it still runs on the
+    // non-streaming, MCP and eval paths. See reasonLabel.ts.
+    expect(screen.getByText('Bedingt')).toBeInTheDocument();
+    expect(screen.queryByText('Übersprungen')).not.toBeInTheDocument();
     expect(screen.queryByText(/Standard-Ablaufs/)).not.toBeInTheDocument();
+  });
+
+  it('badges a genuinely inactive, lane-skipped stage "Übersprungen"', () => {
+    renderNode(data({ activation: 'inactive', reason: 'lane_skipped' }));
+    expect(screen.getByText('Übersprungen')).toBeInTheDocument();
+  });
+
+  it('badges a stage whose prerequisite is off, instead of rendering it silent', () => {
+    renderNode(data({ activation: 'inactive', reason: 'requires:citation_validation' }));
+    expect(screen.getByText('Voraussetzung fehlt')).toBeInTheDocument();
   });
 
   it('shows the LLM-call cost only when the node actually runs', () => {

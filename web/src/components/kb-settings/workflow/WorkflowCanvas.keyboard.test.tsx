@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeAll } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import WorkflowNode from './WorkflowNode';
@@ -9,16 +10,15 @@ import type { WorkflowGraph, WorkflowNodeData } from '../../../types';
 // WorkflowCanvas.test.tsx): it exists to empirically settle whether real
 // React Flow fires onNodeClick (or any usable event) when a focused node is
 // activated with Enter/Space, which only a real <ReactFlow> render can
-// answer. jsdom has no ResizeObserver, which React Flow's internal
-// node-measuring hook requires (same setup as WorkflowNode.focus.test.tsx).
-beforeAll(() => {
-  class FakeResizeObserver {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-  globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
-});
+// answer. React Flow's internal node-measuring hook needs ResizeObserver,
+// which jsdom lacks — stubbed once globally in src/test/setup.ts.
+
+// WorkflowCanvas reads useReducedMotion, which calls window.matchMedia —
+// not available in jsdom by default (same treatment as Login.test.tsx).
+vi.mock('../../../hooks/useReducedMotion', () => ({
+  useReducedMotion: () => false,
+  getMotionProps: () => ({}),
+}));
 
 vi.mock('./api', () => ({ fetchWorkflow: vi.fn() }));
 import { fetchWorkflow } from './api';
@@ -99,6 +99,58 @@ describe('WorkflowCanvas keyboard activation (real, unmocked React Flow)', () =>
     fireEvent.keyDown(rfNode, { key: ' ' });
 
     expect(await screen.findByText('Läuft hier nicht.')).toBeInTheDocument();
+  });
+});
+
+describe('WorkflowCanvas inspector focus journey (real, unmocked React Flow)', () => {
+  // Opening the inspector used to be completely invisible to a keyboard or
+  // screen-reader user: Enter opened the panel but focus stayed on the node,
+  // there was no live region and no announcement, reaching the panel meant
+  // tabbing through every remaining node plus React Flow's Controls, closing
+  // dropped focus to <body>, and there was no Escape.
+  const openViaKeyboard = async () => {
+    vi.mocked(fetchWorkflow).mockResolvedValue(graph);
+    render(<WorkflowCanvas kbId="kb-1" />);
+    const node = await screen.findByTestId('wf-node-crag_grade');
+    const rfNode = node.closest('.react-flow__node') as HTMLElement;
+    rfNode.focus();
+    fireEvent.keyDown(rfNode, { key: 'Enter' });
+    const panel = await screen.findByLabelText('Details zu CRAG-Bewertung');
+    return { rfNode, panel };
+  };
+
+  it('moves focus into the panel when it opens', async () => {
+    const { panel } = await openViaKeyboard();
+    await waitFor(() => expect(document.activeElement).toBe(panel));
+  });
+
+  it('closes on Escape and hands focus back to the node it was opened from', async () => {
+    const { rfNode, panel } = await openViaKeyboard();
+    await waitFor(() => expect(document.activeElement).toBe(panel));
+
+    fireEvent.keyDown(panel, { key: 'Escape' });
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Details zu CRAG-Bewertung')).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(rfNode);
+  });
+
+  it('hands focus back to the node when closed with the close button', async () => {
+    const { rfNode } = await openViaKeyboard();
+    await userEvent.click(screen.getByRole('button', { name: /schließen/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Details zu CRAG-Bewertung')).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(rfNode);
+  });
+
+  it('keeps the panel out of the tab order — focus is moved to it, not tabbed to', () => {
+    // tabIndex=-1: programmatically focusable, never a tab stop of its own.
+    // A tabbable <aside> would add a stop to a canvas that already has one per
+    // node plus the Controls buttons.
+    return openViaKeyboard().then(({ panel }) => {
+      expect(panel.getAttribute('tabindex')).toBe('-1');
+    });
   });
 });
 

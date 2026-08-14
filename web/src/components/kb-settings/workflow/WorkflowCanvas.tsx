@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, Controls,
   useNodesState, useEdgesState, useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { Edge } from '@xyflow/react';
-import type { WorkflowGraph, WorkflowLane, WorkflowNodeData } from '../../../types';
+import type { NodeActivation, WorkflowGraph, WorkflowLane, WorkflowNodeData } from '../../../types';
+import { useReducedMotion } from '../../../hooks/useReducedMotion';
 import { fetchWorkflow } from './api';
-import { layoutWorkflow, type WorkflowRFNode } from './layout';
+import { layoutWorkflow, MIN_ZOOM, type WorkflowRFNode } from './layout';
 import WorkflowNode from './WorkflowNode';
 import { NodeInspector } from './NodeInspector';
 import './WorkflowCanvas.css';
@@ -17,6 +18,41 @@ const LANES: { id: WorkflowLane; label: string }[] = [
   { id: 'enumeration', label: 'Aufzählung' },
   { id: 'complex_reasoning', label: 'Komplexe Frage' },
 ];
+
+/**
+ * ACTIVATION_LABEL is the single German wording for the three activation
+ * states, used by the legend AND by the orchestrator chips. It matches the node
+ * badge for the conditional state ("Bedingt" / "bedingt"), which is the state
+ * operators actually stumble over — the legend used to say "bedingt" while the
+ * node badge said "Übersprungen", so one state read as two different things.
+ */
+const ACTIVATION_LABEL: Record<NodeActivation, string> = {
+  active: 'läuft',
+  conditional: 'bedingt',
+  inactive: 'inaktiv',
+};
+
+/**
+ * ORCHESTRATOR_LABEL mirrors `orchestratorLabels` in
+ * go-backend/internal/pipeline/project.go:232-241. Those German names are
+ * deliberately kept OFF the wire (the contract stays the bare
+ * chat.Orchestrator string), so owning the mapping is the frontend's job — and
+ * until now the frontend never did it, printing `plan_execute` and
+ * `corpus_table` verbatim to a German-speaking librarian.
+ *
+ * An unmapped id falls back to the raw string rather than being hidden: a new
+ * backend orchestrator should look untranslated, not disappear.
+ */
+const ORCHESTRATOR_LABEL: Record<string, string> = {
+  comparison: 'Dokumentenvergleich',
+  team: 'Agenten-Team',
+  corpus_table: 'Korpus-Vergleichstabelle',
+  drift: 'DRIFT',
+  supervisor: 'Supervisor',
+  plan_execute: 'Plan-and-Execute',
+  agentic: 'Agentische Suche',
+  standard: 'Zwei-Schritt-Recherche',
+};
 
 const nodeTypes = { workflow: WorkflowNode };
 
@@ -82,6 +118,8 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   const [graph, setGraph] = useState<WorkflowGraph | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<WorkflowNodeData | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
     let cancelled = false;
@@ -96,19 +134,26 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   }, [kbId, lane]);
 
   const laid = useMemo(
-    () => (graph ? layoutWorkflow(graph) : { nodes: [] as WorkflowRFNode[], edges: [] as Edge[] }),
-    [graph],
+    () => (graph
+      ? layoutWorkflow(graph, { reducedMotion })
+      : { nodes: [] as WorkflowRFNode[], edges: [] as Edge[] }),
+    [graph, reducedMotion],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(laid.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(laid.edges);
   const { fitView } = useReactFlow();
 
+  // Set when a NEW graph has just been pushed into React Flow's controlled
+  // props, cleared by the fit that consumes it. See the two effects below.
+  const refitPendingRef = useRef(true);
+
   // useNodesState/useEdgesState seed their internal state ONLY from the value
   // passed on first render. Without this effect, switching lanes refetches
   // `graph` and recomputes `laid`, but the canvas keeps showing the previous
   // lane's nodes — a repaint has to be pushed explicitly.
   useEffect(() => {
+    refitPendingRef.current = true;
     setNodes(laid.nodes);
     setEdges(laid.edges);
   }, [laid, setNodes, setEdges]);
@@ -117,12 +162,21 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   // only re-applies a prop whose value actually changed, and `fitView={true}`
   // never changes. Without this, switching from a large lane to a small one
   // (or vice versa) leaves the new graph at the previous lane's zoom/pan,
-  // potentially tucked in a corner or panned off-screen entirely — on a
-  // feature whose whole point is showing the lane switch. Keyed on `nodes`
-  // (the actual committed state, not `laid`) so it fires only once React Flow
-  // has had a render cycle to sync its internal store from the new
-  // controlled `nodes` prop.
+  // potentially tucked in a corner or panned off-screen entirely.
+  //
+  // The dependency has to be `nodes` — the COMMITTED state, not `laid` — so
+  // the fit runs only once React Flow has had a render cycle to sync its
+  // internal store from the new controlled prop. But `nodes` changes for
+  // reasons that are not a new lane: `elementsSelectable` is on, so clicking
+  // (or Enter/Space-ing) a node runs RF's own onSelectNodeHandler ->
+  // triggerNodeChanges -> onNodesChange -> applyChanges, which ALWAYS returns
+  // a new array. Firing fitView on that threw away the zoom the user had just
+  // set in order to read the node they were clicking — on the one interaction
+  // this whole surface exists to support. So the latch above, set only where a
+  // new `laid` is pushed, decides; `nodes` merely times it.
   useEffect(() => {
+    if (!refitPendingRef.current) return;
+    refitPendingRef.current = false;
     fitView();
   }, [nodes, fitView]);
 
@@ -135,6 +189,22 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
     },
     [graph],
   );
+
+  // Closing the inspector unmounts the element that holds focus, which drops
+  // focus to <body> — a keyboard user loses their place on the canvas entirely
+  // and has to tab in from the top. Send it back to the node they opened.
+  const closeInspector = useCallback(() => {
+    const id = selected?.id;
+    setSelected(null);
+    if (!id) return;
+    // Matched by attribute read rather than an interpolated selector: node ids
+    // come from the backend, and building a selector string out of them would
+    // need escaping to stay correct.
+    const wrapper = Array.from(
+      surfaceRef.current?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [],
+    ).find((el) => el.getAttribute('data-id') === id);
+    wrapper?.focus();
+  }, [selected]);
 
   // Click delegation: WorkflowNode renders no onClick of its own (it is a
   // frozen, presentation-only component), so the canvas owns click-to-inspect
@@ -164,15 +234,27 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   // <Controls> buttons (zoom, fit view — real <button> elements further down
   // the same wrapper), and unconditionally preventing default there would
   // break their native Space-key activation.
+  //
+  // Escape is handled here too, rather than on the panel itself: the panel is
+  // rendered inside this surface, so an Escape pressed with focus in the panel
+  // bubbles here — and this side is the one that knows which node to hand focus
+  // back to. stopPropagation keeps it from also reaching React Flow's node
+  // wrapper, which binds Escape to "deselect".
   const onSurfaceKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (!selected) return;
+        event.stopPropagation();
+        closeInspector();
+        return;
+      }
       if (event.key !== 'Enter' && event.key !== ' ') return;
       const found = findGraphNode(event.target);
       if (!found) return;
       event.preventDefault();
       setSelected(found);
     },
-    [findGraphNode],
+    [findGraphNode, selected, closeInspector],
   );
 
   if (error) {
@@ -197,18 +279,30 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
           ))}
         </div>
         <div className="wf-canvas__legend">
-          <span><span className="wf-canvas__swatch" style={{ borderColor: 'var(--accent-primary)' }} />läuft</span>
-          <span><span className="wf-canvas__swatch" style={{ borderColor: '#b45309' }} />bedingt</span>
-          <span><span className="wf-canvas__swatch" style={{ opacity: 0.5 }} />inaktiv</span>
+          <span><span className="wf-canvas__swatch" style={{ borderColor: 'var(--accent-primary)' }} />{ACTIVATION_LABEL.active}</span>
+          <span><span className="wf-canvas__swatch wf-canvas__swatch--conditional" />{ACTIVATION_LABEL.conditional}</span>
+          <span><span className="wf-canvas__swatch" style={{ opacity: 0.5 }} />{ACTIVATION_LABEL.inactive}</span>
         </div>
         {graph && graph.orchestrators.length > 0 && (
-          <ul className="wf-canvas__orchestrators">
-            {graph.orchestrators.map((o) => (
-              <li key={o.orchestrator} className="wf-canvas__orchestrator" data-activation={o.activation}>
-                {o.orchestrator}
-              </li>
-            ))}
-          </ul>
+          <div className="wf-canvas__orchestrators">
+            <span className="wf-canvas__orchestrators-label" id="wf-orchestrators-label">Orchestrator:</span>
+            <ul className="wf-canvas__orchestrator-list" aria-labelledby="wf-orchestrators-label">
+              {graph.orchestrators.map((o) => (
+                <li key={o.orchestrator} className="wf-canvas__orchestrator" data-activation={o.activation}>
+                  <span className="wf-canvas__orchestrator-name">
+                    {ORCHESTRATOR_LABEL[o.orchestrator] ?? o.orchestrator}
+                  </span>
+                  {/* The state is carried as TEXT, not only as hue+opacity:
+                      three chips differing only in colour tell a screen reader
+                      nothing and fail for anyone who can't separate the hues. */}
+                  <span className="wf-canvas__orchestrator-state">{ACTIVATION_LABEL[o.activation]}</span>
+                  {o.condition && (
+                    <span className="wf-canvas__orchestrator-condition">{o.condition}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
         {graph && (
           <span className="wf-canvas__meta">
@@ -218,18 +312,19 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
       </div>
 
       {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- event delegation only: each interactive descendant (React Flow's own node wrapper — tabIndex=0, role="group" — and the inspector's close button) already owns real keyboard/focus semantics; giving this wrapper its own role/tabIndex would add a second, redundant tab stop over the whole canvas */}
-      <div className="wf-canvas__surface" onClick={onSurfaceClick} onKeyDown={onSurfaceKeyDown}>
+      <div className="wf-canvas__surface" ref={surfaceRef} onClick={onSurfaceClick} onKeyDown={onSurfaceKeyDown}>
         <ReactFlow
           nodes={nodes} edges={edges}
           onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
           nodesDraggable={false} nodesConnectable={false} elementsSelectable
+          minZoom={MIN_ZOOM}
           fitView proOptions={{ hideAttribution: true }}
         >
           <Background />
           <Controls showInteractive={false} />
         </ReactFlow>
-        <NodeInspector node={selected} onClose={() => setSelected(null)} />
+        <NodeInspector node={selected} onClose={closeInspector} />
       </div>
     </div>
   );

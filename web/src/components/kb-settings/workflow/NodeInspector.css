@@ -46,5 +46,7 @@
 .wf-inspector__key-name { font-family: var(--font-mono, monospace); font-size: 0.72rem; word-break: break-all; }
 .wf-inspector__key-meta { display: flex; gap: 0.4rem; align-items: center; font-size: 0.72rem; flex-wrap: wrap; }
 .wf-inspector__value { font-family: var(--font-mono, monospace); word-break: break-all; min-width: 0; }
+/* "Standardwert" is prose, not a value — don't set it in the mono value face. */
+.wf-inspector__value--default { font-family: inherit; font-style: italic; color: var(--text-secondary); }
 .wf-inspector__origin { font-size: 0.65rem; padding: 0.05rem 0.35rem; border-radius: 999px; background: var(--bg-secondary); color: var(--text-secondary); }
 .wf-inspector__note { margin-top: 1rem; font-size: 0.75rem; color: var(--text-secondary); }

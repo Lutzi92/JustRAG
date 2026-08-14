@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 import WorkflowNode from './WorkflowNode';
@@ -6,17 +6,9 @@ import type { WorkflowNodeData } from '../../../types';
 
 // This file deliberately does NOT mock '@xyflow/react' (unlike WorkflowNode.test.tsx):
 // it exists to pin which DOM element owns the keyboard tab stop for a workflow
-// node, which only a real <ReactFlow> render can answer. jsdom has no
-// ResizeObserver, which React Flow's internal node-measuring hook requires.
-beforeAll(() => {
-  class FakeResizeObserver {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-  // jsdom declares the ResizeObserver type but has no runtime implementation.
-  globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
-});
+// node, which only a real <ReactFlow> render can answer. React Flow's internal
+// node-measuring hook needs ResizeObserver, which jsdom lacks — stubbed once
+// globally in src/test/setup.ts.
 
 function makeNode(): WorkflowNodeData {
   return {

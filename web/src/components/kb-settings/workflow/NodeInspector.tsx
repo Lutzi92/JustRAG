@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import type { ValueOrigin, WorkflowNodeData } from '../../../types';
 import { reasonLabel } from './reasonLabel';
@@ -14,6 +15,17 @@ const ORIGIN_LABEL: Record<ValueOrigin, string> = {
 // from a layer this panel can't see. Fail visibly instead.
 const UNKNOWN_ORIGIN_LABEL = 'unbekannt';
 
+// What to print in the value slot for a key nobody has set anywhere.
+//
+// project.go:65-70 is explicit: Values holds ONLY explicitly-set keys, an unset
+// key is absent from the map and shows up in Origins as "default", and the UI
+// "must therefore not assume a missing key means an empty value". An em dash
+// did exactly that — on a deployment that has configured nothing, every row
+// read "key — Standard", i.e. "nothing is set". Worst on factcheck_in_chat,
+// which defaults to TRUE (project.go:179): the canvas drew "Faktencheck" as
+// active while its inspector row looked empty.
+const DEFAULT_VALUE_LABEL = 'Standardwert';
+
 interface Props {
   node: WorkflowNodeData | null;
   onClose: () => void;
@@ -24,14 +36,38 @@ interface Props {
  * any), and every config key it owns with the key's value AND where that value
  * came from. The origin column is the point: with global, per-KB and per-agent
  * layers, "why does this KB behave like this" is otherwise unanswerable.
+ *
+ * The panel takes focus when it opens. Without that, a keyboard user pressing
+ * Enter on a node got no signal at all that anything had happened — focus
+ * stayed on the node, and reaching the panel meant tabbing forward through
+ * every remaining node plus React Flow's own Controls. Escape-to-close and
+ * focus restoration to the originating node are the canvas's job — it already
+ * owns one delegated keydown listener over the whole surface, and it is the
+ * side that knows which node id to send focus back to. See WorkflowCanvas.
  */
 export function NodeInspector({ node, onClose }: Props) {
+  const panelRef = useRef<HTMLElement | null>(null);
+  const nodeId = node?.id;
+
+  // Keyed on the node id, not the object: re-selecting the same node must not
+  // yank focus back out of the panel a user has already tabbed into, but
+  // switching to a different node must move focus to the new content.
+  useEffect(() => {
+    if (nodeId) panelRef.current?.focus();
+  }, [nodeId]);
+
   if (!node) return null;
 
-  const badge = reasonLabel(node.reason);
+  const badge = reasonLabel(node.activation, node.reason);
 
   return (
-    <aside className="wf-inspector" aria-label={`Details zu ${node.label}`}>
+    <aside
+      ref={panelRef}
+      className="wf-inspector"
+      // -1: programmatically focusable, but never a tab stop of its own.
+      tabIndex={-1}
+      aria-label={`Details zu ${node.label}`}
+    >
       <div className="wf-inspector__head">
         <div>
           <span className="wf-inspector__group">{node.group}</span>
@@ -51,15 +87,20 @@ export function NodeInspector({ node, onClose }: Props) {
         <>
           <div className="wf-inspector__section">Einstellungen</div>
           <ul className="wf-inspector__keys">
-            {node.keys.map((k) => (
-              <li key={k} className="wf-inspector__key">
-                <span className="wf-inspector__key-name">{k}</span>
-                <span className="wf-inspector__key-meta">
-                  <span className="wf-inspector__value">{node.values[k] ?? '—'}</span>
-                  <span className="wf-inspector__origin">{ORIGIN_LABEL[node.origins[k]] ?? UNKNOWN_ORIGIN_LABEL}</span>
-                </span>
-              </li>
-            ))}
+            {node.keys.map((k) => {
+              const unset = node.origins[k] === 'default';
+              return (
+                <li key={k} className="wf-inspector__key">
+                  <span className="wf-inspector__key-name">{k}</span>
+                  <span className="wf-inspector__key-meta">
+                    <span className={unset ? 'wf-inspector__value wf-inspector__value--default' : 'wf-inspector__value'}>
+                      {unset ? DEFAULT_VALUE_LABEL : (node.values[k] ?? '—')}
+                    </span>
+                    <span className="wf-inspector__origin">{ORIGIN_LABEL[node.origins[k]] ?? UNKNOWN_ORIGIN_LABEL}</span>
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </>
       )}

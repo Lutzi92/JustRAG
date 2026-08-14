@@ -1,21 +1,12 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { KbSettingsPanel } from './KbSettingsPanel';
 import { API_BASE_URL } from '../../api';
 
-// The Workflow tab mounts the real (unmocked) React Flow canvas, whose
-// internal node-measuring hook requires ResizeObserver — absent in jsdom
-// (same gap, same fix as WorkflowCanvas.keyboard.test.tsx and
-// WorkflowNode.focus.test.tsx).
-beforeAll(() => {
-  class FakeResizeObserver {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-  globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
-});
+// The Workflow tab mounts the real (unmocked) React Flow canvas, whose internal
+// node-measuring hook requires ResizeObserver — absent in jsdom, stubbed once
+// globally in src/test/setup.ts.
 
 const showConfirm = vi.fn(async () => true);
 const showAlert = vi.fn(async () => {});
