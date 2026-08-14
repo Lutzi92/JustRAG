@@ -590,3 +590,55 @@ export interface KbCategory {
     name: string;
     sortOrder: number;
 }
+
+// --- KB workflow canvas (GET /api/kb/{id}/workflow) ---
+
+export type WorkflowLane = 'lookup' | 'enumeration' | 'complex_reasoning';
+
+/** Three-state, because some stages depend on query CONTENT, not query type. */
+export type NodeActivation = 'active' | 'conditional' | 'inactive';
+
+/** Where a resolved config value came from. */
+export type ValueOrigin = 'kb' | 'global' | 'default';
+
+export interface WorkflowNodeData {
+  id: string;
+  label: string;
+  group: string;
+  help: string;
+  keys: string[];
+  alwaysOn: boolean;
+  llmCalls: number;
+  latencyMs: number;
+  activation: NodeActivation;
+  /** 'flag_off' | 'lane_skipped' | 'orchestrator_bypass' | 'superseded_by:self_rag' */
+  reason?: string;
+  /** Long German prose explaining a conditional/inactive state. May be a paragraph. */
+  condition?: string;
+  values: Record<string, string>;
+  origins: Record<string, ValueOrigin>;
+  editable: boolean;
+}
+
+export interface WorkflowEdge {
+  from: string;
+  to: string;
+  label: string;
+  loop: boolean;
+  maxIterations: number;
+}
+
+export interface OrchestratorCandidate {
+  orchestrator: string;
+  activation: NodeActivation;
+  condition?: string;
+}
+
+export interface WorkflowGraph {
+  lane: WorkflowLane;
+  nodes: WorkflowNodeData[];
+  edges: WorkflowEdge[];
+  orchestrators: OrchestratorCandidate[];
+  estLlmCalls: number;
+  estLatencyMs: number;
+}
