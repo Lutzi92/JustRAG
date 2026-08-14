@@ -98,6 +98,21 @@ func (h *Handler) validateAgent(ctx context.Context, req *agentUpsertRequest) st
 	case len(req.SystemPrompt) > maxPromptLen:
 		return "systemPrompt too long (max 8000 chars)"
 	}
+	// Type/range only — deliberately NOT siteconfig.ValidateConflicts. An
+	// agent's config isn't judged against a single effective view: agent_kb_links
+	// is many-to-many (store_pg.go), an agent can be created before it is
+	// attached to any KB, and each attached KB has its own effective config —
+	// so a config coherent on one KB can conflict on another, and there is no
+	// single "existing" to validate this save against. Save-time rejection
+	// would therefore both block coherent agents and miss conflicts introduced
+	// later by a new attach or a KB config change. Honest closures, if this
+	// ever needs one, are attach-time validation (per KB, at the
+	// agent_kb_links write) or surfacing the incoherence at runtime instead of
+	// at save time. Muted impact today: when both chat_self_rag_enabled and
+	// chat_factuality_verifier_enabled resolve true for a turn, Self-RAG wins
+	// the if/else at chat/post_response.go:280-301 and the verifier is
+	// silently skipped — no doubled LLM cost, no wrong answer, just a saved
+	// config that reads as incoherent.
 	if err := siteconfig.ValidateAgentConfig(req.Config); err != nil {
 		return httputil.SanitizeError(err)
 	}
