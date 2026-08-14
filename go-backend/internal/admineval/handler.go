@@ -191,7 +191,11 @@ var snapshotConfigKeys = []string{
 	"chat_plan_execute_dag",
 	"chat_plan_execute_tool_aware",
 	"chat_agentic_max_hops",
-	"chat_kb_router_enabled",
+	// chat_kb_router_enabled was here while it was (wrongly) a per-KB
+	// registry key. It is structurally global — the router picks WHICH KB
+	// answers, and it runs before the KB overlay exists — and an eval run
+	// addresses a fixed KB, so snapshotting it captured nothing an eval
+	// could exercise. See the comment in internal/siteconfig/registry.go.
 	"chat_answer_tools_enabled",
 	"chat_answer_tools_max_rounds",
 }

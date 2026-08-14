@@ -102,15 +102,26 @@ export function KbSettingsPanel({ kbId }: Props) {
     }
   };
 
+  // Mirrors onSave's try/catch. resetKbSetting throws on !res.ok, and the
+  // DELETE can now legitimately fail with 400: clearing an override makes the
+  // key fall back to the global value, which may be the enabled half of a
+  // mutually-exclusive pair (kbconfig.DeleteSetting -> ValidateConflicts).
+  // Without this, the reject would surface only as an unhandled promise and
+  // the admin would see the button do nothing, with no explanation.
   const onReset = async (key: string) => {
-    await resetKbSetting(kbId, key);
-    const fresh = await fetchKbSettings(kbId);
-    setData(fresh);
-    setDraft((d) => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { [key]: _removed, ...rest } = d;
-      return rest;
-    });
+    setError(null);
+    try {
+      await resetKbSetting(kbId, key);
+      const fresh = await fetchKbSettings(kbId);
+      setData(fresh);
+      setDraft((d) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { [key]: _removed, ...rest } = d;
+        return rest;
+      });
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   const header = (

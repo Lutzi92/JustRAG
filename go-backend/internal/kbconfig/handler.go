@@ -159,7 +159,15 @@ func (h *Handler) PutSettings(w http.ResponseWriter, r *http.Request) {
 	// rather than blocking config writes on it, mirroring the same tradeoff
 	// the global admin path makes (siteconfig.UpdateSiteConfig): the runtime
 	// skip logic still guards against the incoherent combination either way.
-	if existing, _, err := h.conflictState(ctx, kbID); err == nil {
+	existing, _, cErr := h.conflictState(ctx, kbID)
+	if cErr != nil {
+		// Fail-open (see above), but never silently: without this line an
+		// operator has no way to tell "no conflict" from "the check could
+		// not run", and the save looks fully validated either way.
+		logctx.From(ctx).Warn("kbconfig.put.conflict_state: conflict check skipped, saving anyway",
+			"error", cErr, "kb_id", kbID)
+	}
+	if cErr == nil {
 		updates := make([]siteconfig.KeyValue, 0, len(kv))
 		for k, v := range kv {
 			updates = append(updates, siteconfig.KeyValue{Key: k, Value: v})
@@ -196,7 +204,14 @@ func (h *Handler) DeleteSetting(w http.ResponseWriter, r *http.Request) {
 	// one-key update whose new value is the global value, against the
 	// pre-change effective view (see conflictState). Same fetch-failure
 	// fallback as PutSettings.
-	if existing, globals, err := h.conflictState(ctx, kbID); err == nil {
+	existing, globals, cErr := h.conflictState(ctx, kbID)
+	if cErr != nil {
+		// Fail-open like PutSettings, but logged — the reset still goes
+		// through, and an operator can see the check degraded.
+		logctx.From(ctx).Warn("kbconfig.delete.conflict_state: conflict check skipped, deleting anyway",
+			"error", cErr, "kb_id", kbID, "key", key)
+	}
+	if cErr == nil {
 		updates := []siteconfig.KeyValue{{Key: key, Value: globals[key]}}
 		if err := siteconfig.ValidateConflicts(existing, updates); err != nil {
 			httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, httputil.SanitizeError(err))

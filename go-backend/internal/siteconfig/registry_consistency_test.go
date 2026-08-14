@@ -263,6 +263,12 @@ func stringLit(e ast.Expr) (string, bool) {
 // does not remove them; removal is a call for whoever owns the registry
 // surface (the next two tasks add 17 more keys on top of this file, so this
 // map should be empty or shrinking, not growing).
+//
+// An entry here is checked in BOTH directions by TestEveryRegistryKeyIsRead:
+// a key with no read site stays silent (logged), but a key that IS found by
+// the walk while still listed here FAILS the test. Otherwise an exemption
+// added for a real gap keeps silencing the guard for that key long after the
+// gap closed — a stale exemption re-arms silently.
 var knownUnread = map[string]string{}
 
 // TestEveryRegistryKeyIsRead is the anti-phantom-key guard. Every key in
@@ -287,6 +293,18 @@ func TestEveryRegistryKeyIsRead(t *testing.T) {
 
 	for _, fld := range All() {
 		if found[fld.Key] {
+			// Staleness check: an exemption that is no longer needed must
+			// fail, not quietly re-arm. A knownUnread entry silences the
+			// phantom-key guard for that key forever; if the walk can now
+			// see a read site (a route was added, or the key genuinely
+			// gained one), the exemption is dead weight that would also
+			// mask a LATER regression for the same key.
+			if reason, ok := knownUnread[fld.Key]; ok {
+				t.Errorf("registry key %q IS read in %v, but is still listed in knownUnread "+
+					"(%q) — delete the knownUnread entry; a stale exemption silences this "+
+					"guard for that key permanently.",
+					fld.Key, scannedPackages, reason)
+			}
 			continue
 		}
 		if reason, ok := knownUnread[fld.Key]; ok {
@@ -294,11 +312,14 @@ func TestEveryRegistryKeyIsRead(t *testing.T) {
 				fld.Key, scannedPackages, reason)
 			continue
 		}
-		t.Errorf("registry key %q (group %q) is not read anywhere in %v — either "+
-			"collectConfigKeys is missing a read route, or this is a phantom "+
-			"registry entry (a control a KB admin can set that does nothing). "+
-			"If it's genuinely unread, add it to knownUnread with a reason "+
-			"instead of silently deleting the row.",
+		t.Errorf("registry key %q (group %q) is not read anywhere in %v — one of three "+
+			"causes, in the order worth checking: (1) collectConfigKeys is missing a "+
+			"read route (see the five documented routes on that function); (2) the key "+
+			"is read from a package not listed in scannedPackages, in which case add "+
+			"that package to scannedPackages rather than exempting the key; (3) this is "+
+			"a genuine phantom registry entry (a control a KB admin can set that does "+
+			"nothing). Only for (3) add it to knownUnread with grep evidence — "+
+			"knownUnread is the escape hatch of last resort, not the cheap fix.",
 			fld.Key, fld.Group, scannedPackages)
 	}
 }

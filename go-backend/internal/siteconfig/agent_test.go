@@ -51,12 +51,35 @@ func TestValidateAgentConfig(t *testing.T) {
 // TestVerificationKeysAreAgentOverridable pins spec §6.2: expanding the
 // per-KB registry (Tasks 2-3) deliberately widens the per-agent surface too,
 // because IsPerAgent is defined as the per-KB registry minus RequiresReingest
-// keys. A user-created agent may therefore switch its own verification
-// stages (factcheck, Self-RAG, ...) on or off, and those keys appear in the
-// agent form. These are tuning keys, not operational or security keys --
-// chat.RestrictedDispatcher still gates privileged tools (code_exec,
-// sql_query, web_search) independently of anything a config overlay
-// resolves.
+// keys. So these keys pass ValidateAgentConfig, persist on the agent record,
+// and are rendered by AgentFields() in the agent form.
+//
+// WHAT THAT DOES *NOT* MEAN, as of this phase: a user-created agent CANNOT
+// actually switch its own verification stages (factcheck, Self-RAG, the
+// citation validator, the refine gate, ...) on or off. The agent overlay is
+// built only inside params.SearcherForAgent and applied only via
+// ss.CloneWithSiteConfigReader (internal/chat/http_send.go:660-671; same
+// shape in internal/eval/team_adapter.go:122-132). h.siteConfigReader is
+// never re-wrapped for an agent, so only keys read through
+// internal/vector's SearchService resolve per-agent -- of the 18 keys this
+// phase added, exactly three do: query_cache_enabled, recency_boost_enabled,
+// chat_feedback_boost_enabled. The other 15, every verification stage among
+// them, are read from the KB-overlaid reader in internal/chat and ignore
+// agent config entirely.
+//
+// Consequence to be honest about: the agent form currently advertises ~15
+// controls that are inert for agents. Closing that is a follow-up, not this
+// wave, and there are exactly two honest closures -- wrap the agent's reader
+// for the whole turn (h.siteConfigReader included), or narrow AgentFields()
+// to the keys internal/vector actually reads. Until one lands, this test
+// asserts only what is true: membership in the per-agent surface, i.e. that
+// the key validates and persists, NOT that it takes effect.
+//
+// The security half of the original claim does hold and was independently
+// confirmed: these are tuning keys, not operational or security keys --
+// chat.RestrictedDispatcher gates privileged tools (code_exec, sql_query,
+// web_search) independently of anything a config overlay resolves, and
+// agents_allow_privileged_tools is not in the registry at all.
 //
 // If this test ever needs to fail, the fix is a third predicate (an explicit
 // agentExcluded set), NOT unregistering the key per-KB -- that would also
@@ -78,7 +101,9 @@ func TestVerificationKeysAreAgentOverridable(t *testing.T) {
 			t.Fatalf("%s is marked RequiresReingest; this test no longer exercises the intended (non-reingest) case", key)
 		}
 		if !IsPerAgent(key) {
-			t.Fatalf("%s: verification-stage keys are deliberately per-agent overridable per spec §6.2 (tuning, not operational/security)", key)
+			t.Fatalf("%s: verification-stage keys are deliberately part of the per-agent surface per spec §6.2 "+
+				"(tuning, not operational/security) — they validate and persist on an agent, even though "+
+				"only the internal/vector-read keys currently take effect at answer time", key)
 		}
 	}
 

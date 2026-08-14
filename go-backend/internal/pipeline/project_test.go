@@ -713,12 +713,16 @@ func TestProjectPhase2NodesAreEditable(t *testing.T) {
 //
 // "retrieve" is the control: its Keys[0] is min_similarity_threshold, and by
 // inspection of every NodeSpec in nodes.go against kbConfigRegistry in
-// internal/siteconfig/registry.go, it is the ONLY node in the entire
-// vocabulary whose Keys[0] is not in the per-KB registry — every other
-// node's on/off gate is. It is a deliberately different shape of key, not an
-// oversight of this phase: NodeRetrieve is AlwaysOn (hybrid search always
-// runs, there is no on/off gate to register), so Keys[0] here is a tuning
-// threshold that IsPerKB is still consulted against, not an activation flag.
+// internal/siteconfig/registry.go it is one of exactly two nodes whose
+// Keys[0] is not in the per-KB registry — every other node's on/off gate is.
+// It is a deliberately different shape of key, not an oversight of this
+// phase: NodeRetrieve is AlwaysOn (hybrid search always runs, there is no
+// on/off gate to register), so Keys[0] here is a tuning threshold that
+// IsPerKB is still consulted against, not an activation flag.
+//
+// The second such node is NodeKBRouter (chat_kb_router_enabled), which is
+// covered by TestProjectKBRouterStaysNotEditable below for a different
+// reason: that key is structurally global, not a tuning threshold.
 func TestProjectRetrievalThresholdNodeStaysNotEditable(t *testing.T) {
 	empty := fakeReader{vals: map[string]string{}}
 	g, err := Project(context.Background(), empty, empty, LaneComplex)
@@ -735,5 +739,37 @@ func TestProjectRetrievalThresholdNodeStaysNotEditable(t *testing.T) {
 	}
 	if n.Editable {
 		t.Error("retrieve node Editable = true, want false — min_similarity_threshold is not in the per-KB registry")
+	}
+}
+
+// TestProjectKBRouterStaysNotEditable pins the one key Phase 2 registered and
+// then had to un-register. chat_kb_router_enabled is read by maybeRouteKB
+// (internal/chat/http_send.go:198) BEFORE h.forKB installs the KB overlay
+// (:203), so a per-KB override of it can never be read — the global value
+// always wins. Registering it did not make the stage per-KB tunable; it only
+// made this node claim to be, which is precisely the class of lie the
+// workflow editor exists to eliminate.
+//
+// Reading it after forKB is not the missing fix either: "KB A's override
+// decides whether we may route away from KB A" is incoherent. The key is
+// structurally global, so the node must project editable:false.
+func TestProjectKBRouterStaysNotEditable(t *testing.T) {
+	empty := fakeReader{vals: map[string]string{}}
+	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	n := nodeByIDIn(g, NodeKBRouter)
+	if n == nil {
+		t.Fatal("kb_router node missing from projection")
+	}
+	if len(n.Keys) == 0 || n.Keys[0] != "chat_kb_router_enabled" {
+		t.Fatalf("kb_router node Keys[0] = %v, want first key %q — test's key expectation is stale",
+			n.Keys, "chat_kb_router_enabled")
+	}
+	if n.Editable {
+		t.Error("kb_router node Editable = true, want false — chat_kb_router_enabled must NOT be in the " +
+			"per-KB registry (it is read before the KB overlay exists, so a per-KB override is unreadable)")
 	}
 }
