@@ -1,4 +1,4 @@
-import type { WorkflowGraph, WorkflowLane } from '../../../types';
+import type { WorkflowConfigField, WorkflowGraph, WorkflowLane } from '../../../types';
 import { API_BASE_URL, authFetch } from '../../../api';
 
 // authFetch injects the Bearer token from localStorage and fires the logout
@@ -18,3 +18,22 @@ export async function fetchWorkflow(kbId: string, lane: WorkflowLane): Promise<W
 // between the two surfaces (both read body.error on failure, including the new
 // 400 that names mutually-exclusive keys).
 export { saveKbSettings, resetKbSetting } from '../api';
+
+/**
+ * fieldFor resolves a config key's registry metadata, or undefined when the key
+ * has no registry row.
+ *
+ * Only 45 of the 100 keys the node vocabulary references are per-KB configurable.
+ * A miss is the common case, not an edge case. This helper exists because
+ * `graph.fields[key]` type-checks cleanly under this project's tsconfig
+ * (noUncheckedIndexedAccess is off) and would throw at runtime on accessing
+ * `.type` — callers must handle the undefined explicitly.
+ *
+ * Tasks 3–5 will use this to safely look up field metadata for each node's keys.
+ */
+export function fieldFor(
+  graph: Pick<WorkflowGraph, 'fields'>,
+  key: string,
+): WorkflowConfigField | undefined {
+  return graph.fields[key];
+}
