@@ -88,10 +88,21 @@ type completionRequest struct {
 	Stream   bool          `json:"stream"`
 }
 
+// responseMessage is the assistant message we emit. It is deliberately a
+// separate type from the request-side chatMessage: only responses carry
+// citation data, and folding it into chatMessage would make those fields
+// look like something a client may send.
+type responseMessage struct {
+	Role        string          `json:"role"`
+	Content     string          `json:"content"`
+	Annotations []annotation    `json:"annotations,omitempty"`
+	Context     *messageContext `json:"context,omitempty"`
+}
+
 type completionChoice struct {
-	Index        int         `json:"index"`
-	Message      chatMessage `json:"message"`
-	FinishReason string      `json:"finish_reason"`
+	Index        int             `json:"index"`
+	Message      responseMessage `json:"message"`
+	FinishReason string          `json:"finish_reason"`
 }
 
 type completionUsage struct {
@@ -112,8 +123,10 @@ type completionResponse struct {
 // Streaming chunk types.
 
 type chunkDelta struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role        string          `json:"role,omitempty"`
+	Content     string          `json:"content,omitempty"`
+	Annotations []annotation    `json:"annotations,omitempty"`
+	Context     *messageContext `json:"context,omitempty"`
 }
 
 type chunkChoice struct {
@@ -439,11 +452,11 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	answerHistory := capAnswerHistory(history)
 
 	if body.Stream {
-		h.streamResponse(w, ctx, answerHistory, lastUserMessage, chatCtx.SystemPrompt, kbID, body.Model, completionID, created)
+		h.streamResponse(w, ctx, answerHistory, lastUserMessage, chatCtx.SystemPrompt, kbID, body.Model, completionID, created, chatCtx.Sources)
 		return
 	}
 
-	h.nonStreamResponse(w, ctx, answerHistory, lastUserMessage, chatCtx.SystemPrompt, kbID, body.Model, completionID, created)
+	h.nonStreamResponse(w, ctx, answerHistory, lastUserMessage, chatCtx.SystemPrompt, kbID, body.Model, completionID, created, chatCtx.Sources)
 }
 
 // capAnswerHistory bounds the client-supplied history before it reaches the
@@ -479,6 +492,7 @@ func (h *Handler) nonStreamResponse(
 	history []ai.ChatHistoryEntry,
 	prompt, systemPrompt, kbID, model, completionID string,
 	created int64,
+	sources []chat.ChatSource,
 ) {
 	result, err := ai.GenerateCompletionWithHistory(ctx, h.aiResolver, history, prompt, systemPrompt, kbID, false)
 	if err != nil {
@@ -486,23 +500,7 @@ func (h *Handler) nonStreamResponse(
 		return
 	}
 
-	resp := completionResponse{
-		ID:      completionID,
-		Object:  "chat.completion",
-		Created: created,
-		Model:   model,
-		Choices: []completionChoice{
-			{
-				Index: 0,
-				Message: chatMessage{
-					Role:    "assistant",
-					Content: result.Content,
-				},
-				FinishReason: "stop",
-			},
-		},
-		Usage: completionUsage{},
-	}
+	resp := buildCompletionResponse(completionID, model, created, result.Content, sources)
 
 	httputil.WriteJSONCtx(ctx, w, http.StatusOK, resp)
 }
@@ -536,23 +534,14 @@ func (h *Handler) streamResponse(
 	history []ai.ChatHistoryEntry,
 	prompt, systemPrompt, kbID, model, completionID string,
 	created int64,
+	sources []chat.ChatSource,
 ) {
 	httputil.EnableSSE(w)
 
-	// Initial chunk with role.
-	writeSSEChunk(w, completionChunk{
-		ID:      completionID,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   model,
-		Choices: []chunkChoice{
-			{
-				Index:        0,
-				Delta:        chunkDelta{Role: "assistant"},
-				FinishReason: nil,
-			},
-		},
-	})
+	// Initial chunk with role, plus the retrieved sources: retrieval has
+	// already finished, so clients can render source cards before the first
+	// token lands.
+	writeSSEChunk(w, initialChunk(completionID, model, created, sources))
 
 	events, err := ai.StreamCompletionWithHistory(ctx, h.aiResolver, history, prompt, systemPrompt, kbID, "", ai.DefaultAnswerTemperature)
 	if err != nil {
@@ -577,6 +566,9 @@ func (h *Handler) streamResponse(
 		return
 	}
 
+	// Accumulate the answer so the closing chunk can carry citation
+	// annotations, whose indices are offsets into the finished text.
+	var fullResponse strings.Builder
 	var streamErr error
 	for event := range events {
 		if event.Done {
@@ -584,6 +576,7 @@ func (h *Handler) streamResponse(
 			break
 		}
 		if event.Content != "" {
+			fullResponse.WriteString(event.Content)
 			writeSSEChunk(w, completionChunk{
 				ID:      completionID,
 				Object:  "chat.completion.chunk",
@@ -621,21 +614,8 @@ func (h *Handler) streamResponse(
 		return
 	}
 
-	// Final chunk with finish_reason.
-	stopReason := "stop"
-	writeSSEChunk(w, completionChunk{
-		ID:      completionID,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   model,
-		Choices: []chunkChoice{
-			{
-				Index:        0,
-				Delta:        chunkDelta{},
-				FinishReason: &stopReason,
-			},
-		},
-	})
+	// Final chunk with finish_reason and the citation annotations.
+	writeSSEChunk(w, finalChunk(completionID, model, created, fullResponse.String(), sources))
 
 	writeSSEDone(w)
 }

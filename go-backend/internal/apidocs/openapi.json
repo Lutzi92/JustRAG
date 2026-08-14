@@ -822,7 +822,7 @@
                   "type": "integer"
                 },
                 "message": {
-                  "$ref": "#/components/schemas/ChatCompletionMessage"
+                  "$ref": "#/components/schemas/ChatCompletionResponseMessage"
                 },
                 "finish_reason": {
                   "type": "string",
@@ -887,6 +887,21 @@
                     },
                     "content": {
                       "type": "string"
+                    },
+                    "annotations": {
+                      "type": "array",
+                      "description": "Present on the final chunk (alongside finish_reason): offsets require the assembled answer.",
+                      "items": {
+                        "$ref": "#/components/schemas/FileCitationAnnotation"
+                      }
+                    },
+                    "context": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/MessageContext"
+                        }
+                      ],
+                      "description": "Present on the first chunk (alongside the role delta): retrieval completes before the first token."
                     }
                   }
                 },
@@ -925,6 +940,104 @@
                 ]
               }
             }
+          }
+        }
+      },
+      "FileCitationAnnotation": {
+        "type": "object",
+        "description": "Inline citation anchored to a [n] marker in the answer, following OpenAI's annotation shape.",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "file_citation"
+            ]
+          },
+          "file_citation": {
+            "type": "object",
+            "properties": {
+              "file_id": {
+                "type": "string"
+              },
+              "filename": {
+                "type": "string"
+              },
+              "index": {
+                "type": "integer",
+                "description": "Character (rune) offset of the citation marker within message.content. Not a byte offset."
+              }
+            }
+          }
+        }
+      },
+      "RetrievedCitation": {
+        "type": "object",
+        "description": "One retrieved chunk that fed the answer. Shaped like Azure OpenAI \"On Your Data\".",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "filepath": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "chunk_id": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          },
+          "pages": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "MessageContext": {
+        "type": "object",
+        "description": "Retrieved chunk bodies. Omitted entirely when retrieval returned nothing.",
+        "properties": {
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetrievedCitation"
+            }
+          }
+        }
+      },
+      "ChatCompletionResponseMessage": {
+        "type": "object",
+        "description": "Assistant message. Carries source attribution in addition to the standard OpenAI fields; both citation keys are omitted (never empty) when there is nothing to report.",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "assistant"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "annotations": {
+            "type": "array",
+            "description": "One entry per [n] marker occurrence; a multi-cite marker yields one entry per source.",
+            "items": {
+              "$ref": "#/components/schemas/FileCitationAnnotation"
+            }
+          },
+          "context": {
+            "$ref": "#/components/schemas/MessageContext"
           }
         }
       }

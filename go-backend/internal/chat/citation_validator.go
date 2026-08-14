@@ -214,8 +214,8 @@ func isSpace(b byte) bool       { return b == ' ' || b == '\t' || b == '\n' || b
 // Returns nil when the answer has no citation markers — the caller should
 // treat that as "nothing to validate", not as an error.
 func ValidateCitations(answer string, sources []ChatSource) []CitationStatus {
-	matches := citationMarkerRe.FindAllStringSubmatchIndex(answer, -1)
-	if len(matches) == 0 {
+	spans := ExtractCitationSpans(answer)
+	if len(spans) == 0 {
 		return nil
 	}
 
@@ -224,16 +224,11 @@ func ValidateCitations(answer string, sources []ChatSource) []CitationStatus {
 		windowTokens []string
 	}
 
-	pending := make([]pendingMarker, 0, len(matches))
-	for _, m := range matches {
-		// m[0]/m[1] = full marker bounds; m[2]/m[3] = inner number group.
-		nums := parseCitationNumbers(answer[m[2]:m[3]])
-		if len(nums) == 0 {
-			continue
-		}
-		window := sentenceWithMarker(answer, m[0])
+	pending := make([]pendingMarker, 0, len(spans))
+	for _, s := range spans {
+		window := sentenceWithMarker(answer, s.Start)
 		pending = append(pending, pendingMarker{
-			ns:           nums,
+			ns:           s.Numbers,
 			windowTokens: tokenize(window),
 		})
 	}
