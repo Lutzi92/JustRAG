@@ -3,12 +3,14 @@ module github.com/justrag/go-backend
 go 1.26
 
 // Pin the build toolchain to a stdlib release that carries the crypto/x509,
-// crypto/tls, net/http, html/template, and net/textproto security fixes
-// (govulncheck GO-2026-4865 … GO-2026-5039, GO-2026-5856). The `go` directive stays at the
-// 1.26 language baseline; only the toolchain floor moves. Bump this as new
-// stdlib advisories land — CI runs `govulncheck ./...` and will fail if it
-// falls behind.
-toolchain go1.26.5
+// crypto/tls, net/http, net/url, html/template, net/textproto, encoding/xml,
+// and encoding/asn1 security fixes (govulncheck GO-2026-4865 … GO-2026-5039,
+// GO-2026-5856, and GO-2026-5026/5972/6088/6089/6090/6091/6218 — the seven
+// that 1.26.6 closes). The `go` directive stays at the 1.26 language
+// baseline; only the toolchain floor moves. Bump this as new stdlib
+// advisories land — CI runs `govulncheck ./...` and will fail if it falls
+// behind. Every entry above was *called* code, not a latent import.
+toolchain go1.26.6
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
