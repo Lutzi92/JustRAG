@@ -58,6 +58,17 @@ type ProjectedNode struct {
 	Condition  string            `json:"condition,omitempty"` // German, when Activation is conditional
 	Values     map[string]string `json:"values"`              // resolved key -> value
 	Editable   bool              `json:"editable"`            // on/off key is in the per-KB registry
+
+	// Origins maps each resolved key to where its value came from:
+	// "kb" (a kb_site_configs override), "global" (the deployment default row),
+	// or "default" (unset everywhere; the code default applies).
+	//
+	// Known limitation: when a KB override happens to equal the global value,
+	// this reports "global" — it cannot tell a redundant override from an
+	// inherited value without reading kb_site_configs directly rather than
+	// through the overlay. The UI consequence is benign (a redundant override
+	// displays as inherited), so it is not worth a second store dependency here.
+	Origins map[string]string `json:"origins"`
 }
 
 // OrchestratorCandidate is one orchestrator that can win on this lane.
@@ -154,15 +165,22 @@ var defaultOn = map[string]bool{
 //
 // r is expected to be a siteconfig.KBOverlayReader so per-KB overrides are
 // visible; a bare global reader also works and yields the deployment defaults.
-func Project(ctx context.Context, r siteconfig.BatchReader, lane Lane) (*ProjectedGraph, error) {
+// global is the deployment-wide (non-overlaid) reader, read separately so each
+// resolved key's Origins can be attributed to "kb", "global", or "default".
+func Project(ctx context.Context, r, global siteconfig.BatchReader, lane Lane) (*ProjectedGraph, error) {
 	qt, ok := lane.queryType()
 	if !ok {
 		return nil, fmt.Errorf("pipeline: unknown lane %q", lane)
 	}
 
-	vals, err := r.GetSiteConfigValues(ctx, allKeys())
+	keys := allKeys()
+	vals, err := r.GetSiteConfigValues(ctx, keys)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: read site config: %w", err)
+	}
+	globals, err := global.GetSiteConfigValues(ctx, keys)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline: read global site config: %w", err)
 	}
 
 	g := &ProjectedGraph{Lane: lane, Edges: Edges()}
@@ -170,9 +188,20 @@ func Project(ctx context.Context, r siteconfig.BatchReader, lane Lane) (*Project
 	for _, spec := range Nodes() {
 		pn := ProjectedNode{NodeSpec: spec, Values: map[string]string{}}
 
+		pn.Origins = map[string]string{}
 		for _, k := range spec.Keys {
-			if v, ok := vals[k]; ok && v != nil {
-				pn.Values[k] = *v
+			effective, hasEffective := vals[k]
+			globalVal, hasGlobal := globals[k]
+
+			switch {
+			case !hasEffective || effective == nil:
+				pn.Origins[k] = "default"
+			case hasGlobal && globalVal != nil && *globalVal == *effective:
+				pn.Values[k] = *effective
+				pn.Origins[k] = "global"
+			default:
+				pn.Values[k] = *effective
+				pn.Origins[k] = "kb"
 			}
 		}
 

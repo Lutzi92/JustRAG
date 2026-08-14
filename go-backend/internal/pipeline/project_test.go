@@ -47,7 +47,7 @@ func TestProjectMarksDisabledNodeInactive(t *testing.T) {
 	// comment).
 	r := fakeReader{vals: map[string]string{"factcheck_in_chat": "false"}}
 
-	g, err := Project(context.Background(), r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestProjectMarksDisabledNodeInactive(t *testing.T) {
 func TestProjectMarksEnabledNodeActive(t *testing.T) {
 	r := fakeReader{vals: map[string]string{"factcheck_in_chat": "true"}}
 
-	g, err := Project(context.Background(), r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestProjectMarksEnabledNodeActive(t *testing.T) {
 
 // Nodes with no keys are unconditional stages and must always be active.
 func TestProjectKeylessNodesAreAlwaysActive(t *testing.T) {
-	g, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, LaneLookup)
+	g, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, fakeReader{vals: map[string]string{}}, LaneLookup)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestProjectLookupLaneYieldsStandardOnly(t *testing.T) {
 		"chat_drift_enabled":      "true",
 	}}
 
-	g, err := Project(context.Background(), r, LaneLookup)
+	g, err := Project(context.Background(), r, r, LaneLookup)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestProjectComplexLaneListsConditionalDrift(t *testing.T) {
 		"chat_supervisor_enabled": "true",
 	}}
 
-	g, err := Project(context.Background(), r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -157,11 +157,11 @@ func TestProjectCostEstimateExcludesInactiveNodes(t *testing.T) {
 	off := fakeReader{vals: map[string]string{"factcheck_in_chat": "false"}}
 	on := fakeReader{vals: map[string]string{"factcheck_in_chat": "true"}}
 
-	gOff, err := Project(context.Background(), off, LaneComplex)
+	gOff, err := Project(context.Background(), off, off, LaneComplex)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
-	gOn, err := Project(context.Background(), on, LaneComplex)
+	gOn, err := Project(context.Background(), on, on, LaneComplex)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestProjectCostEstimateExcludesInactiveNodes(t *testing.T) {
 
 // Registry membership decides whether the UI may offer an editor.
 func TestProjectMarksEditability(t *testing.T) {
-	g, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, LaneComplex)
+	g, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, fakeReader{vals: map[string]string{}}, LaneComplex)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestProjectCRAGLaneSkippedOnLookupAndEnumeration(t *testing.T) {
 	}}
 
 	for _, lane := range []Lane{LaneLookup, LaneEnumeration} {
-		g, err := Project(context.Background(), r, lane)
+		g, err := Project(context.Background(), r, r, lane)
 		if err != nil {
 			t.Fatalf("Project(%s): %v", lane, err)
 		}
@@ -222,7 +222,7 @@ func TestProjectCRAGActiveOnComplexLaneUnderAdaptiveRouting(t *testing.T) {
 		"adaptive_routing_enabled": "true",
 	}}
 
-	g, err := Project(context.Background(), r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestProjectCRAGActiveOnLookupWhenAdaptiveRoutingOff(t *testing.T) {
 		"adaptive_routing_enabled": "false",
 	}}
 
-	g, err := Project(context.Background(), r, LaneLookup)
+	g, err := Project(context.Background(), r, r, LaneLookup)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestProjectFactualitySupersededBySelfRAG(t *testing.T) {
 		"chat_self_rag_enabled": "true",
 	}}
 
-	g, err := Project(context.Background(), r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex)
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -281,7 +281,50 @@ func TestProjectFactualitySupersededBySelfRAG(t *testing.T) {
 }
 
 func TestProjectRejectsUnknownLane(t *testing.T) {
-	if _, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, Lane("nonsense")); err == nil {
+	if _, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, fakeReader{vals: map[string]string{}}, Lane("nonsense")); err == nil {
 		t.Fatal("Project accepted an unknown lane")
+	}
+}
+
+func TestProjectReportsValueOrigins(t *testing.T) {
+	global := fakeReader{vals: map[string]string{"crag_enabled": "false"}}
+	overlaid := fakeReader{vals: map[string]string{"crag_enabled": "true"}}
+
+	g, err := Project(context.Background(), overlaid, global, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	n := nodeByIDIn(g, NodeCRAGGrade)
+	if got := n.Origins["crag_enabled"]; got != "kb" {
+		t.Fatalf("Origins[crag_enabled] = %q, want %q", got, "kb")
+	}
+}
+
+func TestProjectReportsGlobalOrigin(t *testing.T) {
+	global := fakeReader{vals: map[string]string{"crag_enabled": "true"}}
+
+	g, err := Project(context.Background(), global, global, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	n := nodeByIDIn(g, NodeCRAGGrade)
+	if got := n.Origins["crag_enabled"]; got != "global" {
+		t.Fatalf("Origins[crag_enabled] = %q, want %q", got, "global")
+	}
+}
+
+func TestProjectReportsDefaultOrigin(t *testing.T) {
+	empty := fakeReader{vals: map[string]string{}}
+
+	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	n := nodeByIDIn(g, NodeCRAGGrade)
+	if got := n.Origins["crag_enabled"]; got != "default" {
+		t.Fatalf("Origins[crag_enabled] = %q, want %q", got, "default")
 	}
 }
