@@ -99,6 +99,37 @@ type ProjectedGraph struct {
 	EstLLMCalls   int                     `json:"estLlmCalls"`
 	EstLatencyMs  int                     `json:"estLatencyMs"`
 
+	// PresetBase is the id recorded in the KB's workflow_preset marker — the
+	// curated preset this configuration was last applied from — or "" when the
+	// KB was assembled freehand. Project itself never fills it: it has no KB
+	// and no raw-override map (see Deviations below). The handler sets it from
+	// PresetBaseFor over the KB overlay.
+	PresetBase string `json:"presetBase"`
+
+	// PresetBaseKnown is PresetBaseFor's third state on the wire: false only
+	// when PresetBase names a preset that no longer exists (renamed, removed,
+	// or hand-edited into the row). It is deliberately NOT folded into an
+	// empty PresetBase — the KB genuinely was set up from a preset once, and
+	// reporting that as "freeform" would misstate its history.
+	//
+	// It also tells the canvas whether Deviations means anything: with an
+	// unresolvable base there is no bundle to compare against, so Deviations
+	// is empty for a reason that has nothing to do with the KB conforming.
+	// Rendering „0 Abweichungen" there would be a number with nothing behind
+	// it. true for a live preset AND for "no base at all" (both are states the
+	// UI can render honestly).
+	PresetBaseKnown bool `json:"presetBaseKnown"`
+
+	// Deviations lists the bundle keys whose per-KB override no longer matches
+	// the base preset, sorted — what the canvas renders as
+	// „Basis: Hohe Präzision · 3 Abweichungen".
+	//
+	// Computed against the KB's OWN overrides, not the effective values: the
+	// sentence is "you started here and changed three things", a statement
+	// about what this KB sets. See the handler for the full argument. Empty
+	// (never nil) whenever there is no resolvable base.
+	Deviations []string `json:"deviations"`
+
 	// Fields carries the registry metadata for every config key any node
 	// references AND that has a per-KB registry row — type, range, enum,
 	// German label and help. The canvas needs it to render an input at all:
@@ -378,7 +409,15 @@ func Project(ctx context.Context, r, global siteconfig.BatchReader, lane Lane) (
 		return nil, fmt.Errorf("pipeline: read global site config: %w", err)
 	}
 
-	g := &ProjectedGraph{Lane: lane, Edges: Edges(), Fields: projectFields(keys)}
+	// Deviations starts as an empty slice, not nil, so a graph that never
+	// passes through the handler still marshals `"deviations": []` rather than
+	// `null` — the frontend types it as string[]. PresetBaseKnown starts true:
+	// "no base" is a known state (see the field's doc comment), and only the
+	// handler can discover the one case that is not.
+	g := &ProjectedGraph{
+		Lane: lane, Edges: Edges(), Fields: projectFields(keys),
+		PresetBaseKnown: true, Deviations: []string{},
+	}
 
 	// The orchestrator candidates are derived FIRST because the node rules
 	// below need the fallback winner (the orchestrator that takes the turn

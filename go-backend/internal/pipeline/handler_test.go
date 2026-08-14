@@ -17,6 +17,12 @@ func (f fakeStore) ListKBOverrides(ctx context.Context, kbID string) (map[string
 	return f.overrides, f.err
 }
 
+// The read-only tests below never write; recordingStore (preset_apply_test.go)
+// is the fake that actually records an apply.
+func (f fakeStore) UpsertBatch(ctx context.Context, kbID string, kv map[string]*string) error {
+	return nil
+}
+
 func newTestHandler(overrides map[string]*string, globals map[string]string) *Handler {
 	return NewHandler(fakeStore{overrides: overrides}, fakeReader{vals: globals})
 }

@@ -115,15 +115,37 @@ func (h *Handler) conflictState(ctx context.Context, kbID string) (existing, glo
 	if err != nil {
 		return nil, nil, err
 	}
-	existing = make(map[string]*string, len(keys))
-	for _, k := range keys {
-		if ov, ok := overrides[k]; ok {
-			existing[k] = ov
+	return EffectiveState(overrides, globals), globals, nil
+}
+
+// EffectiveState merges a KB's raw overrides over the deployment-global values
+// for every per-KB registry key, producing the pre-change view
+// siteconfig.ValidateConflicts must judge a per-KB write against.
+//
+// Exported because internal/pipeline's preset apply performs the same
+// pre-write conflict check and must reach the same verdict: a preset is not
+// privileged, and two implementations of "what does this KB currently
+// resolve to" would eventually disagree about which of them is. See
+// conflictState above for why the view is effective rather than
+// raw-override-only — it is what siteconfig.KBOverlayReader actually resolves
+// at answer time, so a KB that overrides one half of a conflicting pair while
+// the other half is enabled globally is a reachable incoherent runtime state,
+// not a false positive.
+//
+// Iterating the registry rather than the caller's maps is load-bearing: a
+// conflict pair whose keys this KB has never touched must still be visible to
+// the validator through the global values.
+func EffectiveState(overrides, globals map[string]*string) map[string]*string {
+	fields := siteconfig.All()
+	out := make(map[string]*string, len(fields))
+	for _, f := range fields {
+		if ov, ok := overrides[f.Key]; ok {
+			out[f.Key] = ov
 		} else {
-			existing[k] = globals[k]
+			out[f.Key] = globals[f.Key]
 		}
 	}
-	return existing, globals, nil
+	return out
 }
 
 // PutSettings handles PUT /api/kb/{id}/settings.

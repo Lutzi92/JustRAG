@@ -61,7 +61,13 @@ func TestWireFormatIsCamelCase(t *testing.T) {
 	}
 
 	assertKeys(t, "ProjectedGraph", keysOf(t, g),
-		[]string{"lane", "nodes", "edges", "orchestrators", "estLlmCalls", "estLatencyMs", "fields"})
+		[]string{"lane", "nodes", "edges", "orchestrators", "estLlmCalls", "estLatencyMs", "fields",
+			// Preset provenance (Phase 5 Task 4). presetBaseKnown is the wire
+			// form of PresetBaseFor's third state: it says whether
+			// `deviations` is a number with a preset behind it, so the canvas
+			// cannot render "0 Abweichungen" against a base that no longer
+			// exists.
+			"presetBase", "presetBaseKnown", "deviations"})
 
 	if len(g.Nodes) == 0 {
 		t.Fatal("projection returned no nodes")

@@ -669,6 +669,14 @@ func registerKBRoutes(rc *routeCtx) {
 	// Node edits go through PUT /api/kb/{id}/settings above, so validation
 	// stays in one place.
 	rc.mux.Handle("GET /api/kb/{id}/workflow", rc.kbAdminChain(rc.workflowHandler.GetWorkflow))
+	// Applying a curated preset. POST writes the preset's bundle plus the
+	// workflow_preset provenance marker in one statement; GET on the same path
+	// (?preset=<id>) previews the same apply without writing, so the UI can
+	// warn "this overwrites N of your settings" before destroying any. Same
+	// kbAdminChain as the projection above — a preset rewrites how the KB
+	// answers, which the four-role model puts on admin, not edit.
+	rc.mux.Handle("GET /api/kb/{id}/workflow/preset", rc.kbAdminChain(rc.workflowHandler.PreviewPreset))
+	rc.mux.Handle("POST /api/kb/{id}/workflow/preset", rc.kbAdminChain(rc.workflowHandler.ApplyPreset))
 	// Curated presets are deployment-wide, not per-KB — authenticated only,
 	// same "no KB in the path" pattern as GET /api/kb / GET /api/kb/global
 	// above (and GET /api/kb/catalog, GET /api/kb-categories below).

@@ -399,15 +399,56 @@ func Deviations(bundle map[string]string, overrides map[string]*string) []string
 	return out
 }
 
+// Overwrites reports the bundle keys this KB EXPLICITLY overrides today to a
+// value applying the bundle would change, sorted. It is the honest answer to
+// "how many of my own settings does this preset take away from me?", which a
+// confirmation dialog must be able to state before the write happens — an
+// apply overwrites all of the vocabulary, hand-set keys included.
+//
+// It is deliberately NOT Deviations with the arguments swapped. Deviations
+// counts a key the KB does not override at all when the code default differs
+// from the bundle, because "the KB no longer pins what the preset pinned" is a
+// real drift. Nothing is LOST there, though: the admin set nothing, so the
+// admin loses nothing. Counting those would inflate the warning with keys
+// whose change costs the admin no decision, and a dialog that overstates is
+// one an admin learns to click through.
+//
+// A row stored with a NULL value counts as not-set, matching
+// ListKBOverrides' own nil semantics. Keys outside the bundle are never
+// reported — an apply never touches them (see applyPayload).
+func Overwrites(bundle map[string]string, overrides map[string]*string) []string {
+	out := []string{}
+	for key, want := range bundle {
+		got, ok := overrides[key]
+		if !ok || got == nil {
+			continue
+		}
+		if !sameStoredValue(want, *got) {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func matchesBundleValue(key, want string, got *string) bool {
-	wantBool, wantIsBool := looseBool(want)
 	if got == nil {
+		wantBool, wantIsBool := looseBool(want)
 		return wantIsBool && wantBool == defaultOn[key]
 	}
-	if gotBool, gotIsBool := looseBool(*got); wantIsBool && gotIsBool {
-		return wantBool == gotBool
+	return sameStoredValue(want, *got)
+}
+
+// sameStoredValue compares a bundle value against a value that is actually
+// stored, comparing booleans semantically ("0" == "false") and everything else
+// as trimmed text.
+func sameStoredValue(want, got string) bool {
+	if wantBool, wantIsBool := looseBool(want); wantIsBool {
+		if gotBool, gotIsBool := looseBool(got); gotIsBool {
+			return wantBool == gotBool
+		}
 	}
-	return strings.TrimSpace(*got) == strings.TrimSpace(want)
+	return strings.TrimSpace(got) == strings.TrimSpace(want)
 }
 
 // looseBool mirrors project.go's boolVal parsing so a bundle's "false" and a
