@@ -69,4 +69,29 @@ describe('layoutWorkflow', () => {
     expect(NODE_W).toBeGreaterThan(0);
     expect(NODE_H).toBeGreaterThan(0);
   });
+
+  it('excludes loop edges from ranking: siblings stay on the same rank', () => {
+    // a fans out to b and c, so b and c share a rank.
+    // The c -> b LOOP edge, if fed to dagre, would force c above b and split
+    // the rank. Excluding it keeps them level — which is the property under test.
+    const fan: WorkflowGraph = {
+      lane: 'complex_reasoning',
+      nodes: [node('a'), node('b'), node('c')],
+      edges: [
+        { from: 'a', to: 'b', label: '', loop: false, maxIterations: 0 },
+        { from: 'a', to: 'c', label: '', loop: false, maxIterations: 0 },
+        { from: 'c', to: 'b', label: 'zurück', loop: true, maxIterations: 1 },
+      ],
+      orchestrators: [],
+      estLlmCalls: 0,
+      estLatencyMs: 0,
+    };
+
+    const { nodes, edges } = layoutWorkflow(fan);
+    const y = (id: string) => nodes.find((n) => n.id === id)!.position.y;
+
+    expect(y('b')).toBe(y('c'));       // same rank — fails if the loop edge ranked
+    expect(y('a')).toBeLessThan(y('b'));
+    expect(edges).toHaveLength(3);      // and the loop edge is still drawn
+  });
 });
