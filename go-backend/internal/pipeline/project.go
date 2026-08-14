@@ -53,11 +53,23 @@ const (
 // ProjectedNode is one node resolved against a KB's configuration.
 type ProjectedNode struct {
 	NodeSpec
-	Activation Activation        `json:"activation"`
-	Reason     string            `json:"reason,omitempty"`    // "flag_off" | "lane_skipped"
-	Condition  string            `json:"condition,omitempty"` // German, when Activation is conditional
-	Values     map[string]string `json:"values"`              // resolved key -> value
-	Editable   bool              `json:"editable"`            // on/off key is in the per-KB registry
+	Activation Activation `json:"activation"`
+	// Reason is the machine-readable "why not plainly active" tag:
+	// "flag_off" | "lane_skipped" | "orchestrator_bypass" |
+	// "superseded_by:self_rag" | "requires:citation_validation".
+	Reason string `json:"reason,omitempty"`
+	// Condition is the German explanation shown to the operator. Set
+	// whenever Activation is conditional, and also on the inactive states
+	// whose Reason alone would not tell an operator what to change.
+	Condition string `json:"condition,omitempty"`
+	// Values maps only the keys that are EXPLICITLY set somewhere in the
+	// overlay chain (KB or global) to their resolved value. A key that is
+	// unset everywhere — the code default applies — is absent from this map
+	// and appears in Origins as "default". The UI must therefore fall back
+	// to the registry's default when rendering an editor, not assume a
+	// missing key means an empty value.
+	Values   map[string]string `json:"values"`
+	Editable bool              `json:"editable"` // on/off key is in the per-KB registry
 
 	// Origins maps each resolved key to where its value came from:
 	// "kb" (a kb_site_configs override), "global" (the deployment default row),
@@ -135,9 +147,15 @@ func boolVal(vals map[string]*string, key string) bool {
 //	chat_sufficient_context_enabled   false (siteconfig.go:691)
 //	chat_answer_tools_enabled         false (siteconfig.go:1075)
 //	factcheck_in_chat                 TRUE  (siteconfig.go:224)
+//	chat_factuality_verifier_enabled  false (siteconfig.go:373)
 //	chat_self_rag_enabled             false (siteconfig.go:484)
 //	chat_factuality_gate_enabled      false (siteconfig.go:408)
 //	citation_validation_enabled       TRUE  (siteconfig.go:235)
+//
+// The list above is no longer maintained by hand alone:
+// TestDefaultOnMatchesReadBoolDefaults (defaults_test.go) re-derives each of
+// these defaults from the AST of the real call site and fails when this map
+// and the code disagree in either direction.
 //
 // Only factcheck_in_chat and citation_validation_enabled are actually
 // default-on among the node activation keys; the remaining entries below
@@ -159,6 +177,141 @@ var defaultOn = map[string]bool{
 	// factchecking as disabled on every deployment that has not explicitly
 	// set the key, undoing the nodes.go Keys[0] fix from Task 4.
 	"factcheck_in_chat": true,
+}
+
+// prepareChatContextOwned lists the nodes whose stage is implemented ONLY
+// inside chat.PrepareChatContext (internal/chat/service.go:833):
+//
+//	step_back        service.go:877  (opts.StepBack)
+//	decompose        service.go:968  (maybeDecomposeQuery)
+//	crag_grade       service.go:878  (opts.Grade)
+//	crag_rewrite     service.go:976  (runCRAG → cragRewrite branch)
+//	compression      service.go:1004 (applyEvidentialityCompression)
+//	sufficient_ctx   service.go:1048 (ai.JudgeContextSufficiency)
+//
+// This matters because SendMessage routes every STREAMING complex_reasoning
+// turn into tryDeepChat (http_send.go:299), and every branch of that
+// orchestrator switch bypasses PrepareChatContext — including OrchStandard,
+// which dispatches RunDeepChat (deep_chat.go:74), a two-step search that sets
+// neither Grade nor StepBack and calls neither the compression nor the
+// sufficiency helper. Verified: PrepareChatContext has exactly one chat-path
+// call site, http_send.go:355, inside SendMessage's NON-complex branch.
+//
+// So on the complex lane these stages do not run for the streaming chat a KB
+// admin is looking at, no matter how their flag is set. They are not dead,
+// though — see complexBypassCondition.
+var prepareChatContextOwned = map[NodeID]bool{
+	NodeStepBack:      true,
+	NodeDecompose:     true,
+	NodeCRAGGrade:     true,
+	NodeCRAGRewrite:   true,
+	NodeCompression:   true,
+	NodeSufficientCtx: true,
+}
+
+// complexReasoningOnly lists nodes whose stage additionally refuses to run for
+// anything but a complex_reasoning query, INSIDE PrepareChatContext:
+//
+//   - step_back: vector.stepBackOutcome (search_helpers.go:199) returns
+//     "skipped_route" for every query type but complex_reasoning.
+//   - decompose: maybeDecomposeQuery (service.go:769) returns early with
+//     "skipped_route" for every query type but complex_reasoning.
+//
+// Combined with prepareChatContextOwned this means both stages are inert on
+// the streaming chat path on EVERY lane — bypassed on complex, route-skipped
+// on lookup and enumeration. Drawing either as plainly "aktiv" anywhere was
+// the same class of lie as the complex-lane bypass.
+var complexReasoningOnly = map[NodeID]bool{
+	NodeStepBack:  true,
+	NodeDecompose: true,
+}
+
+// orchestratorLabels are German display names for the condition texts. Kept
+// here rather than on OrchestratorCandidate so the wire contract stays the
+// bare chat.Orchestrator string.
+var orchestratorLabels = map[chat.Orchestrator]string{
+	chat.OrchComparison:  "Dokumentenvergleich",
+	chat.OrchTeam:        "Agenten-Team",
+	chat.OrchCorpusTable: "Korpus-Vergleichstabelle",
+	chat.OrchDrift:       "DRIFT",
+	chat.OrchSupervisor:  "Supervisor",
+	chat.OrchPlanExecute: "Plan-and-Execute",
+	chat.OrchAgentic:     "Agentische Suche",
+	chat.OrchStandard:    "Zwei-Schritt-Recherche",
+}
+
+func orchestratorLabel(o chat.Orchestrator) string {
+	if l, ok := orchestratorLabels[o]; ok {
+		return l
+	}
+	return string(o)
+}
+
+// complexBypassCondition explains, in German, why a PrepareChatContext-owned
+// stage is only conditional on the complex lane.
+//
+// ActivationConditional rather than ActivationInactive is deliberate: the
+// stage is dead for the streaming chat, but it is NOT universally dead. It
+// still runs for the same KB when the turn arrives without ?stream=true
+// (http_send.go:166 + :299), when an orchestrator errors and SendMessage
+// falls through to the standard path (http_send.go:302), and on the
+// non-streaming surfaces that call PrepareChatContext directly —
+// internal/mcpserver and the eval harness with a site-config reader.
+// "Inaktiv" would be an equally wrong diagram in the other direction.
+func complexBypassCondition(fallback chat.Orchestrator) string {
+	return fmt.Sprintf(
+		"Läuft bei komplexen Fragen im Chat nicht: dort beantwortet der Orchestrator "+
+			"„%s“ die Frage direkt und überspringt diese Stufe des Standard-Ablaufs. "+
+			"Sie greift hier nur, wenn die Frage ohne Streaming gestellt wird "+
+			"(API-, MCP- und Auswertungspfade) oder der Orchestrator ausfällt.",
+		orchestratorLabel(fallback))
+}
+
+// applyVerifierGate resolves the launch + cost gate that the claim-level
+// verifier and Self-RAG BOTH sit behind (internal/chat/post_response.go):
+//
+//   - :234 the goroutine starts only if citation_validation_enabled OR
+//     chat_factuality_verifier_enabled. chat_self_rag_enabled alone starts
+//     nothing.
+//   - :288 inside it, the call is skipped unless the citation validator
+//     raised at least one unverified marker, OR
+//     chat_factuality_verifier_always_run is set.
+//
+// Note that siteconfig.ValidateConflicts (conflicts.go:23) rejects
+// chat_self_rag_enabled together with chat_factuality_verifier_enabled, so on
+// a config saved through the settings endpoint the only launch path for
+// Self-RAG is the citation validator. Legacy rows may still carry both, which
+// is why the verifier flag is honoured here rather than assumed off.
+func applyVerifierGate(pn *ProjectedNode, vals map[string]*string) {
+	validator := boolVal(vals, "citation_validation_enabled")
+	verifier := boolVal(vals, "chat_factuality_verifier_enabled")
+	alwaysRun := boolVal(vals, "chat_factuality_verifier_always_run")
+
+	// Nothing launches the goroutine at all.
+	if !validator && !verifier {
+		pn.Activation = ActivationInactive
+		pn.Reason = "requires:citation_validation"
+		pn.Condition = "Kann nicht laufen: diese Prüfung wird nur zusammen mit der " +
+			"Zitatprüfung angestoßen. Zitatprüfung einschalten."
+		return
+	}
+	if alwaysRun {
+		// The cost gate is switched off — the check runs on every turn.
+		return
+	}
+	if !validator {
+		// The goroutine starts (the verifier flag is on), but the suspect
+		// signal it gates on can never appear without the validator.
+		pn.Activation = ActivationInactive
+		pn.Reason = "requires:citation_validation"
+		pn.Condition = "Kann nicht laufen: ohne aktive Zitatprüfung gibt es keinen " +
+			"Verdachtsfall, der diese Prüfung auslöst. Zitatprüfung einschalten " +
+			"oder „immer prüfen“ aktivieren."
+		return
+	}
+	pn.Activation = ActivationConditional
+	pn.Condition = "Läuft nur, wenn die Zitatprüfung mindestens eine Quellenangabe " +
+		"nicht belegen konnte. „Immer prüfen“ schaltet diese Bedingung ab."
 }
 
 // Project resolves the static vocabulary against one KB's configuration.
@@ -184,6 +337,13 @@ func Project(ctx context.Context, r, global siteconfig.BatchReader, lane Lane) (
 	}
 
 	g := &ProjectedGraph{Lane: lane, Edges: Edges()}
+
+	// The orchestrator candidates are derived FIRST because the node rules
+	// below need the fallback winner (the orchestrator that takes the turn
+	// when no content predicate fires). Nothing re-derives precedence: it is
+	// computed once, in chat.SelectOrchestrator, via orchestratorCandidates.
+	candidates, fallback := orchestratorCandidates(vals, qt)
+	g.Orchestrators = candidates
 
 	for _, spec := range Nodes() {
 		pn := ProjectedNode{NodeSpec: spec, Values: map[string]string{}}
@@ -217,24 +377,77 @@ func Project(ctx context.Context, r, global siteconfig.BatchReader, lane Lane) (
 			pn.Reason = "flag_off"
 		}
 
-		// Adaptive routing disables CRAG for lookup and enumeration lanes even
-		// when crag_enabled is true. This is the single most surprising
-		// behaviour in the pipeline and the main reason the lane view exists.
-		if spec.ID == NodeCRAGGrade || spec.ID == NodeCRAGRewrite {
-			if pn.Activation == ActivationActive &&
-				boolVal(vals, "adaptive_routing_enabled") &&
-				(lane == LaneLookup || lane == LaneEnumeration) {
+		// ---------------------------------------------------------------
+		// Lane rules. Everything below only ever DOWNGRADES a node that the
+		// flags said was active — a node whose own flag is off stays
+		// "flag_off", because a stage that is switched off runs on no lane.
+		//
+		// The two lane rules are disjoint by construction and must stay so:
+		// the adaptive-routing skip fires only on lookup/enumeration (the
+		// lanes that actually reach PrepareChatContext), the orchestrator
+		// bypass only on complex (the lane that never does). Neither can
+		// contradict the other on the same lane.
+		// ---------------------------------------------------------------
+		if pn.Activation == ActivationActive {
+			switch {
+			// Adaptive routing disables CRAG for lookup and enumeration
+			// lanes even when crag_enabled is true. This is the single most
+			// surprising behaviour in the pipeline and one of the two
+			// reasons the lane view exists.
+			case (spec.ID == NodeCRAGGrade || spec.ID == NodeCRAGRewrite) &&
+				(lane == LaneLookup || lane == LaneEnumeration) &&
+				boolVal(vals, "adaptive_routing_enabled"):
 				pn.Activation = ActivationInactive
 				pn.Reason = "lane_skipped"
 				pn.Condition = "Adaptive Routing überspringt CRAG bei Lookup- und Aufzählungsfragen."
+
+			// Stages that refuse anything but a complex_reasoning query,
+			// inside PrepareChatContext itself.
+			case complexReasoningOnly[spec.ID] && lane != LaneComplex:
+				pn.Activation = ActivationInactive
+				pn.Reason = "lane_skipped"
+				pn.Condition = "Greift nur bei komplexen Fragen; bei Lookup- und " +
+					"Aufzählungsfragen überspringt die Suche diese Stufe."
+
+			// The big one: on the complex lane the orchestrator answers
+			// directly and PrepareChatContext — which owns this stage — is
+			// never reached by the streaming chat.
+			//
+			// One exception, the trailing clause: the supervisor carries the
+			// sufficient-context gate itself (http_send.go:720 passes
+			// SufficientContextEnabled into SupervisorChatParams;
+			// supervisor_chat.go:161 runs it). When the supervisor is the
+			// fallback winner that gate really does run on this lane.
+			case prepareChatContextOwned[spec.ID] && lane == LaneComplex &&
+				!(spec.ID == NodeSufficientCtx && fallback == chat.OrchSupervisor):
+				pn.Activation = ActivationConditional
+				pn.Reason = "orchestrator_bypass"
+				pn.Condition = complexBypassCondition(fallback)
 			}
 		}
 
-		// Self-RAG replaces the factuality verifier when both are on.
-		if spec.ID == NodeFactuality && boolVal(vals, "chat_self_rag_enabled") {
-			pn.Activation = ActivationInactive
-			pn.Reason = "superseded_by:self_rag"
-			pn.Condition = "Wird von der Selbstprüfung (Self-RAG) ersetzt."
+		// Post-answer verification gates. Self-RAG REPLACES the claim-level
+		// verifier (post_response.go:301 picks ai.VerifySelfRAG over
+		// ai.VerifyFactuality inside one branch); it does NOT replace the
+		// factchecker gated by factcheck_in_chat, which runs in its own
+		// goroutine at post_response.go:134-140 regardless. Marking
+		// NodeFactuality inactive here was wrong on both counts — the
+		// factchecker kept firing and EstLLMCalls under-counted by one.
+		switch spec.ID {
+		case NodeFactVerifier:
+			if pn.Activation == ActivationActive {
+				if boolVal(vals, "chat_self_rag_enabled") {
+					pn.Activation = ActivationInactive
+					pn.Reason = "superseded_by:self_rag"
+					pn.Condition = "Wird von der Selbstprüfung (Self-RAG) ersetzt."
+				} else {
+					applyVerifierGate(&pn, vals)
+				}
+			}
+		case NodeSelfRAG:
+			if pn.Activation == ActivationActive {
+				applyVerifierGate(&pn, vals)
+			}
 		}
 
 		if len(spec.Keys) > 0 {
@@ -249,7 +462,6 @@ func Project(ctx context.Context, r, global siteconfig.BatchReader, lane Lane) (
 		g.Nodes = append(g.Nodes, pn)
 	}
 
-	g.Orchestrators = orchestratorCandidates(vals, qt)
 	return g, nil
 }
 
@@ -261,13 +473,15 @@ type contentPredicate struct {
 }
 
 // orchestratorCandidates derives, in precedence order, the orchestrators that
-// can win on this lane.
+// can win on this lane, and returns the fallback winner separately — the
+// orchestrator that takes the turn when no content predicate fires. The node
+// rules in Project consume that winner; they never re-derive it.
 //
 // It does NOT re-encode precedence — it calls chat.SelectOrchestrator once with
 // every content predicate false (the "otherwise" winner) and once per content
 // predicate. Precedence therefore has exactly one implementation, and this
 // function cannot drift from what actually runs.
-func orchestratorCandidates(vals map[string]*string, queryType string) []OrchestratorCandidate {
+func orchestratorCandidates(vals map[string]*string, queryType string) ([]OrchestratorCandidate, chat.Orchestrator) {
 	base := chat.OrchestratorInputs{
 		QueryType:             queryType,
 		CorpusTableEnabled:    boolVal(vals, "chat_corpus_table_enabled"),
@@ -278,9 +492,13 @@ func orchestratorCandidates(vals map[string]*string, queryType string) []Orchest
 		PlanExecuteEnabled:    boolVal(vals, "chat_plan_execute_enabled"),
 		AgenticEnabled:        boolVal(vals, "chat_agentic_enabled"),
 	}
-	neverConfirm := func() bool { return true }
+	// The projection cannot make an LLM call, so the corpus-table
+	// confirmation is answered optimistically: "yes, the LLM router would
+	// confirm". That keeps corpus_table visible as a CANDIDATE rather than
+	// silently dropping it. Named for what it returns.
+	alwaysConfirm := func() bool { return true }
 
-	fallback := chat.SelectOrchestrator(base, neverConfirm)
+	fallback := chat.SelectOrchestrator(base, alwaysConfirm)
 
 	out := []OrchestratorCandidate{}
 	seen := map[chat.Orchestrator]bool{}
@@ -300,7 +518,7 @@ func orchestratorCandidates(vals map[string]*string, queryType string) []Orchest
 	for _, p := range predicates {
 		in := base
 		p.apply(&in)
-		got := chat.SelectOrchestrator(in, neverConfirm)
+		got := chat.SelectOrchestrator(in, alwaysConfirm)
 		if got == fallback || seen[got] {
 			continue
 		}
@@ -317,5 +535,5 @@ func orchestratorCandidates(vals map[string]*string, queryType string) []Orchest
 		Activation:   ActivationActive,
 		Condition:    "",
 	})
-	return out
+	return out, fallback
 }

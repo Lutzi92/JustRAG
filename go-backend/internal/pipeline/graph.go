@@ -15,7 +15,9 @@ type EdgeSpec struct {
 }
 
 // edges is the hand-authored superset topology. Every edge that CAN exist is
-// listed; the projection dims the ones whose endpoints are inactive.
+// listed. Project returns Edges() verbatim — it neither prunes nor annotates
+// them; deciding how to render an edge whose endpoints are inactive is the
+// client's job, using the endpoints' Activation from the same payload.
 var edges = []EdgeSpec{
 	{From: NodeClassify, To: NodeKBRouter},
 	{From: NodeKBRouter, To: NodeQueryCache},
@@ -40,18 +42,26 @@ var edges = []EdgeSpec{
 	{From: NodeOrchestrator, To: NodeAnswerTools},
 	{From: NodeAnswerTools, To: NodeAnswer},
 
-	// Multi-hop orchestrators loop back into retrieval. The bound is
-	// chat_agentic_max_hops (default 3) — the projection overwrites
-	// MaxIterations with the KB's resolved value.
+	// Multi-hop orchestrators loop back into retrieval. MaxIterations is the
+	// static default of chat_agentic_max_hops (3); the projection does not
+	// resolve the KB's value into the edge.
 	{From: NodeOrchestrator, To: NodeRetrieve, Label: "weitere Suchrunde", Loop: true, MaxIterations: 3},
 
+	// Post-answer verification. The factchecker and the citation validator
+	// start in parallel; the claim-level verifier (or Self-RAG, which
+	// replaces it) runs only DOWNSTREAM of the citation validator, because
+	// its cost gate is "did the validator raise a suspect?"
+	// (internal/chat/post_response.go:234, 288). Only the verifier's flagged
+	// claims reach the refine loop — the factchecker's result is a badge on
+	// the answer and loops nowhere.
 	{From: NodeAnswer, To: NodeFactuality},
-	{From: NodeAnswer, To: NodeSelfRAG},
-	{From: NodeFactuality, To: NodeRefine, Label: "Aussagen ohne Beleg"},
+	{From: NodeAnswer, To: NodeCitationCheck},
+	{From: NodeCitationCheck, To: NodeFactVerifier, Label: "Zitat nicht belegbar"},
+	{From: NodeCitationCheck, To: NodeSelfRAG, Label: "Zitat nicht belegbar"},
+	{From: NodeFactVerifier, To: NodeRefine, Label: "Aussagen ohne Beleg"},
+	{From: NodeSelfRAG, To: NodeRefine, Label: "Aussagen ohne Beleg"},
 	// The refine loop: rewrite the answer, at most once.
 	{From: NodeRefine, To: NodeAnswer, Label: "Antwort korrigieren", Loop: true, MaxIterations: 1},
-	{From: NodeFactuality, To: NodeCitationCheck, Label: "sauber"},
-	{From: NodeSelfRAG, To: NodeCitationCheck},
 }
 
 // Edges returns the superset topology.

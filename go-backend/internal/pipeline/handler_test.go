@@ -102,7 +102,12 @@ func TestGetWorkflowAppliesKBOverride(t *testing.T) {
 		map[string]string{"crag_enabled": "false"},
 	)
 
-	rec := doGet(t, h, "/api/kb/kb-1/workflow")
+	// lane=lookup, not the default complex lane: on complex, CRAG projects
+	// ActivationConditional regardless of its flag because the orchestrator
+	// bypasses PrepareChatContext entirely (see prepareChatContextOwned), so
+	// the complex lane cannot distinguish "override applied" from "override
+	// lost". Lookup is where crag_enabled=true still means "runs".
+	rec := doGet(t, h, "/api/kb/kb-1/workflow?lane=lookup")
 
 	var g ProjectedGraph
 	if err := json.Unmarshal(rec.Body.Bytes(), &g); err != nil {

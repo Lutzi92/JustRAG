@@ -37,9 +37,10 @@ const (
 	NodeAnswerTools   NodeID = "answer_tools"
 	NodeAnswer        NodeID = "answer"
 	NodeFactuality    NodeID = "factuality"
+	NodeCitationCheck NodeID = "citation_validate"
+	NodeFactVerifier  NodeID = "factuality_verifier"
 	NodeSelfRAG       NodeID = "self_rag"
 	NodeRefine        NodeID = "refine"
-	NodeCitationCheck NodeID = "citation_validate"
 )
 
 // NodeSpec is the static description of one pipeline stage.
@@ -289,39 +290,52 @@ var nodes = []NodeSpec{
 		LLMCalls: 1, LatencyMs: 2000,
 	},
 	{
-		// factcheck_in_chat (default TRUE) is the actual master toggle for
-		// whether ANY factchecking runs post-response — it was previously
-		// undrawn while a narrower, default-OFF escalation flag
-		// (chat_factuality_verifier_enabled, the "agent-as-judge" verifier
-		// that only fires when the citation validator raises a suspect
-		// marker) sat alone in Keys[0]. Found during Task 4's coverage run:
-		// a fresh KB runs factchecking by default, but the pre-existing
-		// Keys[0] would have projected this node as inactive by default.
-		// factcheck_in_chat is now Keys[0] so activation matches reality;
-		// the verifier escalation and its always-run override are
-		// additional tuning keys on the same node.
+		// factcheck_in_chat (default TRUE) is the master toggle for the
+		// default-path factchecker: ai.CheckFacts in its own goroutine
+		// (internal/chat/post_response.go:134-140), one LLM call per turn,
+		// gated by NOTHING else. It was previously undrawn while a
+		// narrower, default-OFF escalation flag sat alone in Keys[0].
+		//
+		// The claim-level verifier (chat_factuality_verifier_enabled) is a
+		// SEPARATE mechanism with a separate gate and a separate consumer
+		// (the refine loop) — it lives in NodeFactVerifier below. Bundling
+		// the two here made the Self-RAG supersession rule mark this whole
+		// node inactive while ai.CheckFacts kept firing every turn.
 		ID: NodeFactuality, Label: "Faktencheck", Group: "Prüfung",
-		Help:     "Prüft die fertige Antwort auf nicht belegte oder widersprochene Aussagen.",
-		Keys:     []string{"factcheck_in_chat", "chat_factuality_verifier_enabled", "chat_factuality_verifier_always_run"},
+		Help:     "Prüft die fertige Antwort als Ganzes auf nicht belegte oder widersprochene Aussagen und hängt das Ergebnis als Prüf-Badge an die Antwort.",
+		Keys:     []string{"factcheck_in_chat"},
+		LLMCalls: 1, LatencyMs: 800,
+	},
+	{
+		ID: NodeCitationCheck, Label: "Zitatprüfung", Group: "Prüfung",
+		Help:     "Prüft jede Quellenangabe gegen den zitierten Text und markiert unbelegte Zitate. Ein Verdachtsfall löst die vertiefte Aussagenprüfung aus.",
+		Keys:     []string{"citation_validation_enabled", "citation_validation_semantic_threshold"},
+		LLMCalls: 0, LatencyMs: 120,
+	},
+	{
+		// The claim-level verifier (ai.VerifyFactuality). Distinct from
+		// NodeFactuality above in every respect that matters to a reader:
+		// it runs only after the citation validator raised a suspect (or
+		// chat_factuality_verifier_always_run is set), it is the mechanism
+		// Self-RAG replaces, and its flagged claims — not the
+		// factchecker's — are what feeds the refine loop
+		// (post_response.go:288-330, 366-380).
+		ID: NodeFactVerifier, Label: "Vertiefte Aussagenprüfung", Group: "Prüfung",
+		Help:     "Prüft einzelne Aussagen der Antwort gegen die Belegstellen, wenn die Zitatprüfung ein Zitat nicht bestätigen konnte. Liefert die Grundlage für die Korrektur-Schleife.",
+		Keys:     []string{"chat_factuality_verifier_enabled", "chat_factuality_verifier_always_run"},
 		LLMCalls: 1, LatencyMs: 800,
 	},
 	{
 		ID: NodeSelfRAG, Label: "Selbstprüfung (Self-RAG)", Group: "Prüfung",
-		Help:     "Vereinheitlichte Prüfung (Relevanz + Beleglage + Nützlichkeit). ERSETZT den Faktencheck.",
+		Help:     "Vereinheitlichte Prüfung (Relevanz + Beleglage + Nützlichkeit) in einem Durchgang. ERSETZT die vertiefte Aussagenprüfung — nicht den Faktencheck — und sitzt hinter derselben Bedingung.",
 		Keys:     []string{"chat_self_rag_enabled"},
 		LLMCalls: 1, LatencyMs: 900,
 	},
 	{
 		ID: NodeRefine, Label: "Korrektur-Schleife", Group: "Prüfung",
-		Help:     "Schreibt die Antwort neu, wenn der Faktencheck nicht belegte Aussagen gefunden hat.",
+		Help:     "Schreibt die Antwort neu, wenn die vertiefte Aussagenprüfung bzw. Self-RAG nicht belegte Aussagen gefunden hat.",
 		Keys:     []string{"chat_factuality_gate_enabled", "chat_factuality_gate_max_refines"},
 		LLMCalls: 2, LatencyMs: 1500,
-	},
-	{
-		ID: NodeCitationCheck, Label: "Zitatprüfung", Group: "Prüfung",
-		Help:     "Prüft jede Quellenangabe gegen den zitierten Text und markiert unbelegte Zitate.",
-		Keys:     []string{"citation_validation_enabled", "citation_validation_semantic_threshold"},
-		LLMCalls: 0, LatencyMs: 120,
 	},
 }
 

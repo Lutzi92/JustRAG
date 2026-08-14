@@ -49,3 +49,20 @@ func TestNodeByIDMissing(t *testing.T) {
 		t.Fatal("NodeByID returned ok for an unknown id")
 	}
 }
+
+// A node nobody can reach is a node the canvas draws floating in space. This
+// caught nothing when written, but the post-answer verification block was
+// rewired in the same change that added NodeFactVerifier, and an orphan there
+// would have been invisible until Phase 3 rendered it.
+func TestEveryNodeIsWiredIntoTheGraph(t *testing.T) {
+	wired := map[NodeID]bool{}
+	for _, e := range Edges() {
+		wired[e.From] = true
+		wired[e.To] = true
+	}
+	for _, n := range Nodes() {
+		if !wired[n.ID] {
+			t.Errorf("node %q has no edge in either direction", n.ID)
+		}
+	}
+}

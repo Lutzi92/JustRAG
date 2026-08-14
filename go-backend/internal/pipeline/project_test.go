@@ -40,11 +40,10 @@ func nodeByIDIn(g *ProjectedGraph, id NodeID) *ProjectedNode {
 }
 
 func TestProjectMarksDisabledNodeInactive(t *testing.T) {
-	// factcheck_in_chat, not chat_factuality_verifier_enabled: Task 4's
-	// coverage run made factcheck_in_chat NodeFactuality's Keys[0] (the real
-	// master toggle; chat_factuality_verifier_enabled is a narrower,
-	// separately-gated escalation path — see nodes.go's NodeFactuality
-	// comment).
+	// factcheck_in_chat, not chat_factuality_verifier_enabled: it is the real
+	// master toggle for the default-path factchecker and NodeFactuality's
+	// only key. The claim-level verifier is a narrower, separately-gated
+	// escalation and lives in its own node (NodeFactVerifier).
 	r := fakeReader{vals: map[string]string{"factcheck_in_chat": "false"}}
 
 	g, err := Project(context.Background(), r, r, LaneComplex)
@@ -167,7 +166,7 @@ func TestProjectCostEstimateExcludesInactiveNodes(t *testing.T) {
 	}
 
 	if gOn.EstLLMCalls <= gOff.EstLLMCalls {
-		t.Fatalf("enabling the factuality verifier did not raise EstLLMCalls (%d vs %d)",
+		t.Fatalf("enabling the factchecker did not raise EstLLMCalls (%d vs %d)",
 			gOn.EstLLMCalls, gOff.EstLLMCalls)
 	}
 }
@@ -214,9 +213,12 @@ func TestProjectCRAGLaneSkippedOnLookupAndEnumeration(t *testing.T) {
 	}
 }
 
-// On the complex-reasoning lane, adaptive routing does NOT skip CRAG. This is
-// the assertion that would catch an inverted lane check in the branch above.
-func TestProjectCRAGActiveOnComplexLaneUnderAdaptiveRouting(t *testing.T) {
+// On the complex-reasoning lane the adaptive-routing skip must NOT fire — that
+// branch belongs to lookup/enumeration only. The complex lane has its own,
+// disjoint reason for CRAG not running plainly (the orchestrator bypass), so
+// the assertion here is on the Reason: seeing "lane_skipped" on complex would
+// mean the adaptive-routing lane check had been inverted.
+func TestProjectCRAGNotLaneSkippedOnComplexLaneUnderAdaptiveRouting(t *testing.T) {
 	r := fakeReader{vals: map[string]string{
 		"crag_enabled":             "true",
 		"adaptive_routing_enabled": "true",
@@ -228,8 +230,14 @@ func TestProjectCRAGActiveOnComplexLaneUnderAdaptiveRouting(t *testing.T) {
 	}
 
 	for _, id := range []NodeID{NodeCRAGGrade, NodeCRAGRewrite} {
-		if n := nodeByIDIn(g, id); n.Activation != ActivationActive {
-			t.Errorf("node %q Activation = %q, want %q", id, n.Activation, ActivationActive)
+		n := nodeByIDIn(g, id)
+		if n.Reason == "lane_skipped" {
+			t.Errorf("node %q: adaptive routing skipped CRAG on the complex lane, "+
+				"where it does not apply", id)
+		}
+		if n.Activation != ActivationConditional || n.Reason != "orchestrator_bypass" {
+			t.Errorf("node %q: Activation/Reason = %q/%q, want %q/%q",
+				id, n.Activation, n.Reason, ActivationConditional, "orchestrator_bypass")
 		}
 	}
 }
@@ -254,10 +262,40 @@ func TestProjectCRAGActiveOnLookupWhenAdaptiveRoutingOff(t *testing.T) {
 	}
 }
 
-// Self-RAG supersedes the factuality node even when factcheck_in_chat is
-// explicitly on — the fixture sets it explicitly so the test's intent (Self-RAG
-// wins even against an active factuality node) is unambiguous.
-func TestProjectFactualitySupersededBySelfRAG(t *testing.T) {
+// Self-RAG supersedes the CLAIM-LEVEL VERIFIER (ai.VerifyFactuality), which is
+// the only thing internal/chat/post_response.go:301 swaps out. It does not
+// supersede the factchecker behind factcheck_in_chat: that runs in its own
+// goroutine (post_response.go:134-140) whatever Self-RAG is doing.
+//
+// The previous version of this test asserted the opposite for NodeFactuality
+// and so enshrined a diagram that told operators "Faktencheck — wird von
+// Self-RAG ersetzt" while ai.CheckFacts fired an LLM call on every turn.
+func TestProjectVerifierSupersededBySelfRAG(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"factcheck_in_chat":                "true",
+		"chat_factuality_verifier_enabled": "true",
+		"chat_self_rag_enabled":            "true",
+	}}
+
+	g, err := Project(context.Background(), r, r, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	v := nodeByIDIn(g, NodeFactVerifier)
+	if v == nil {
+		t.Fatal("factuality_verifier node missing from projection")
+	}
+	if v.Activation != ActivationInactive {
+		t.Fatalf("verifier Activation = %q, want %q", v.Activation, ActivationInactive)
+	}
+	if v.Reason != "superseded_by:self_rag" {
+		t.Fatalf("verifier Reason = %q, want %q", v.Reason, "superseded_by:self_rag")
+	}
+}
+
+// The regression guard for the bug above: the factchecker keeps running.
+func TestProjectFactcheckSurvivesSelfRAG(t *testing.T) {
 	r := fakeReader{vals: map[string]string{
 		"factcheck_in_chat":     "true",
 		"chat_self_rag_enabled": "true",
@@ -272,11 +310,12 @@ func TestProjectFactualitySupersededBySelfRAG(t *testing.T) {
 	if n == nil {
 		t.Fatal("factuality node missing from projection")
 	}
-	if n.Activation != ActivationInactive {
-		t.Fatalf("Activation = %q, want %q", n.Activation, ActivationInactive)
+	if n.Activation != ActivationActive {
+		t.Fatalf("Activation = %q, want %q — ai.CheckFacts runs regardless of Self-RAG",
+			n.Activation, ActivationActive)
 	}
-	if n.Reason != "superseded_by:self_rag" {
-		t.Fatalf("Reason = %q, want %q", n.Reason, "superseded_by:self_rag")
+	if n.Reason != "" {
+		t.Fatalf("Reason = %q, want empty", n.Reason)
 	}
 }
 
@@ -326,5 +365,281 @@ func TestProjectReportsDefaultOrigin(t *testing.T) {
 	n := nodeByIDIn(g, NodeCRAGGrade)
 	if got := n.Origins["crag_enabled"]; got != "default" {
 		t.Fatalf("Origins[crag_enabled] = %q, want %q", got, "default")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator bypass on the complex lane (the endpoint's DEFAULT lane)
+// ---------------------------------------------------------------------------
+
+// Every stage that lives only inside chat.PrepareChatContext must NOT project
+// as plainly active on the complex lane: SendMessage routes every streaming
+// complex_reasoning turn into tryDeepChat, and no branch of that switch calls
+// PrepareChatContext.
+func TestProjectPrepareChatContextStagesAreConditionalOnComplexLane(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"crag_enabled":                     "true",
+		"adaptive_routing_enabled":         "false",
+		"step_back_enabled":                "true",
+		"query_decompose_enabled":          "true",
+		"chat_context_compression_enabled": "true",
+		"chat_sufficient_context_enabled":  "true",
+	}}
+
+	g, err := Project(context.Background(), r, r, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	for id := range prepareChatContextOwned {
+		n := nodeByIDIn(g, id)
+		if n == nil {
+			t.Fatalf("node %q missing from projection", id)
+		}
+		if n.Activation == ActivationActive {
+			t.Errorf("node %q projects active on the complex lane, but the "+
+				"orchestrator bypasses PrepareChatContext there", id)
+		}
+		if n.Reason != "orchestrator_bypass" {
+			t.Errorf("node %q Reason = %q, want %q", id, n.Reason, "orchestrator_bypass")
+		}
+		if n.Condition == "" {
+			t.Errorf("node %q has no German Condition explaining the bypass", id)
+		}
+	}
+}
+
+// Negative control for the rule above: on the lookup lane PrepareChatContext
+// really does run, so these stages must still project ACTIVE. Step-back and
+// decompose are excluded — they are complex-reasoning-only inside
+// PrepareChatContext itself and get their own assertion below.
+func TestProjectPrepareChatContextStagesActiveOnLookupLane(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"crag_enabled":                     "true",
+		"adaptive_routing_enabled":         "false",
+		"chat_context_compression_enabled": "true",
+		"chat_sufficient_context_enabled":  "true",
+	}}
+
+	g, err := Project(context.Background(), r, r, LaneLookup)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	for _, id := range []NodeID{NodeCRAGGrade, NodeCRAGRewrite, NodeCompression, NodeSufficientCtx} {
+		n := nodeByIDIn(g, id)
+		if n == nil {
+			t.Fatalf("node %q missing from projection", id)
+		}
+		if n.Activation != ActivationActive {
+			t.Errorf("node %q Activation = %q, want %q (lookup reaches PrepareChatContext)",
+				id, n.Activation, ActivationActive)
+		}
+		if n.Reason != "" {
+			t.Errorf("node %q Reason = %q, want empty", id, n.Reason)
+		}
+	}
+}
+
+// The supervisor carries the sufficient-context gate itself, so on the complex
+// lane it is the one PrepareChatContext-owned stage that really does run.
+func TestProjectSufficientContextActiveUnderSupervisor(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"chat_supervisor_enabled":         "true",
+		"chat_sufficient_context_enabled": "true",
+	}}
+
+	g, err := Project(context.Background(), r, r, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	n := nodeByIDIn(g, NodeSufficientCtx)
+	if n.Activation != ActivationActive {
+		t.Fatalf("Activation = %q, want %q — RunSupervisorChat calls "+
+			"ai.JudgeContextSufficiency itself", n.Activation, ActivationActive)
+	}
+
+	// …and with any other orchestrator winning the lane, it does not.
+	r2 := fakeReader{vals: map[string]string{
+		"chat_agentic_enabled":            "true",
+		"chat_sufficient_context_enabled": "true",
+	}}
+	g2, err := Project(context.Background(), r2, r2, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	if n2 := nodeByIDIn(g2, NodeSufficientCtx); n2.Activation != ActivationConditional {
+		t.Fatalf("agentic lane: Activation = %q, want %q", n2.Activation, ActivationConditional)
+	}
+}
+
+// A stage whose own flag is off stays "flag_off" on every lane — the bypass
+// rule must only ever downgrade an otherwise-active node.
+func TestProjectBypassDoesNotMaskFlagOff(t *testing.T) {
+	empty := fakeReader{vals: map[string]string{}}
+
+	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	for id := range prepareChatContextOwned {
+		n := nodeByIDIn(g, id)
+		if n.Activation != ActivationInactive || n.Reason != "flag_off" {
+			t.Errorf("node %q Activation/Reason = %q/%q, want %q/%q",
+				id, n.Activation, n.Reason, ActivationInactive, "flag_off")
+		}
+	}
+}
+
+// Step-back and decompose refuse anything but a complex_reasoning query inside
+// PrepareChatContext, so on lookup/enumeration they are lane-skipped even
+// though the standard path runs there.
+func TestProjectComplexOnlyStagesLaneSkippedOnLookup(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"step_back_enabled":       "true",
+		"query_decompose_enabled": "true",
+	}}
+
+	for _, lane := range []Lane{LaneLookup, LaneEnumeration} {
+		g, err := Project(context.Background(), r, r, lane)
+		if err != nil {
+			t.Fatalf("Project(%s): %v", lane, err)
+		}
+		for id := range complexReasoningOnly {
+			n := nodeByIDIn(g, id)
+			if n.Activation != ActivationInactive {
+				t.Errorf("lane %s: node %q Activation = %q, want %q",
+					lane, id, n.Activation, ActivationInactive)
+			}
+			if n.Reason != "lane_skipped" {
+				t.Errorf("lane %s: node %q Reason = %q, want %q",
+					lane, id, n.Reason, "lane_skipped")
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Self-RAG / verifier launch gate
+// ---------------------------------------------------------------------------
+
+// Self-RAG's goroutine starts only when the citation validator or the legacy
+// verifier is on. With both off it can never fire, no matter what
+// chat_self_rag_enabled says.
+func TestProjectSelfRAGInactiveWithoutCitationValidation(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"chat_self_rag_enabled":       "true",
+		"citation_validation_enabled": "false",
+	}}
+
+	g, err := Project(context.Background(), r, r, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	n := nodeByIDIn(g, NodeSelfRAG)
+	if n.Activation != ActivationInactive {
+		t.Fatalf("Activation = %q, want %q", n.Activation, ActivationInactive)
+	}
+	if n.Reason != "requires:citation_validation" {
+		t.Fatalf("Reason = %q, want %q", n.Reason, "requires:citation_validation")
+	}
+	if n.Condition == "" {
+		t.Error("no German Condition telling the operator what to switch on")
+	}
+}
+
+// always_run alone does not help: without the validator (and without the
+// legacy verifier) the goroutine that would call Self-RAG never starts.
+func TestProjectSelfRAGInactiveWithAlwaysRunButNoLaunch(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"chat_self_rag_enabled":               "true",
+		"citation_validation_enabled":         "false",
+		"chat_factuality_verifier_always_run": "true",
+	}}
+
+	g, err := Project(context.Background(), r, r, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	if n := nodeByIDIn(g, NodeSelfRAG); n.Activation != ActivationInactive {
+		t.Fatalf("Activation = %q, want %q", n.Activation, ActivationInactive)
+	}
+}
+
+// With the validator on but no always-run override, Self-RAG only fires when
+// the validator raised a suspect — conditional, with an explanation.
+func TestProjectSelfRAGConditionalBehindCitationValidator(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"chat_self_rag_enabled":       "true",
+		"citation_validation_enabled": "true",
+	}}
+
+	g, err := Project(context.Background(), r, r, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	n := nodeByIDIn(g, NodeSelfRAG)
+	if n.Activation != ActivationConditional {
+		t.Fatalf("Activation = %q, want %q", n.Activation, ActivationConditional)
+	}
+	if n.Condition == "" {
+		t.Error("conditional Self-RAG node carries no German Condition")
+	}
+}
+
+// always_run switches the cost gate off: Self-RAG then runs on every turn.
+func TestProjectSelfRAGActiveWithAlwaysRun(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"chat_self_rag_enabled":               "true",
+		"citation_validation_enabled":         "true",
+		"chat_factuality_verifier_always_run": "true",
+	}}
+
+	g, err := Project(context.Background(), r, r, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	if n := nodeByIDIn(g, NodeSelfRAG); n.Activation != ActivationActive {
+		t.Fatalf("Activation = %q, want %q", n.Activation, ActivationActive)
+	}
+}
+
+// The claim-level verifier sits behind the same gate as Self-RAG.
+func TestProjectVerifierConditionalBehindCitationValidator(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"chat_factuality_verifier_enabled": "true",
+		"citation_validation_enabled":      "true",
+	}}
+
+	g, err := Project(context.Background(), r, r, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	n := nodeByIDIn(g, NodeFactVerifier)
+	if n.Activation != ActivationConditional {
+		t.Fatalf("Activation = %q, want %q", n.Activation, ActivationConditional)
+	}
+
+	// Validator off, always_run off: the verifier's own flag starts the
+	// goroutine but no suspect can ever appear, so it cannot fire.
+	r2 := fakeReader{vals: map[string]string{
+		"chat_factuality_verifier_enabled": "true",
+		"citation_validation_enabled":      "false",
+	}}
+	g2, err := Project(context.Background(), r2, r2, LaneComplex)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	n2 := nodeByIDIn(g2, NodeFactVerifier)
+	if n2.Activation != ActivationInactive || n2.Reason != "requires:citation_validation" {
+		t.Fatalf("Activation/Reason = %q/%q, want %q/%q",
+			n2.Activation, n2.Reason, ActivationInactive, "requires:citation_validation")
 	}
 }
