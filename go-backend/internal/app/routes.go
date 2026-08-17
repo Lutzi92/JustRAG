@@ -1232,6 +1232,7 @@ func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 
 	publicHandler := publicapi.NewHandler(&publicAPIDeps{PGStore: rc.chatStore, kbStore: rc.kbStore}, rc.aiResolver, rc.searchService)
 	publicHandler.SetResearchDeps(rc.chatStore, rc.infra.rdb.Client)
+	publicHandler.SetUsageRecorder(usage.NewRecorder(rc.infra.db.Main))
 
 	rc.mux.Handle("GET /api/v1/kb", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(publicHandler.ListKBs))))
 	rc.mux.Handle("GET /api/v1/kb/{id}/chats", apiRL.Middleware(apiKeyAuth.Authenticate(
