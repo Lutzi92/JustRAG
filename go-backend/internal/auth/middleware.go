@@ -20,6 +20,27 @@ func WithUser(ctx context.Context, claims *Claims) context.Context {
 	return context.WithValue(ctx, userKey{}, claims)
 }
 
+// apiKeyIDKey carries the id of the API key a request authenticated with.
+type apiKeyIDKey struct{}
+
+// WithAPIKeyID records which API key authenticated this request. Set by
+// apikeyauth.Middleware; absent on JWT-authenticated (web) requests.
+func WithAPIKeyID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, apiKeyIDKey{}, id)
+}
+
+// APIKeyIDFromContext returns the authenticating API key's id, or nil when the
+// request was not API-key authenticated. The pointer return is deliberate: it
+// maps straight onto the nullable usage_events.api_key_id column, so a web turn
+// stores SQL NULL rather than the empty string.
+func APIKeyIDFromContext(ctx context.Context) *string {
+	id, ok := ctx.Value(apiKeyIDKey{}).(string)
+	if !ok || id == "" {
+		return nil
+	}
+	return &id
+}
+
 type Middleware struct {
 	secret    string
 	blacklist *Blacklist

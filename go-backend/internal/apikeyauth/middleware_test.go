@@ -70,11 +70,12 @@ func doRequest(handler http.Handler, authHeader string) *httptest.ResponseRecord
 	return rec
 }
 
-// ---------------------------------------------------------------------------
-// tests
-// ---------------------------------------------------------------------------
-
-func TestAuthenticate_ValidKey(t *testing.T) {
+// newTestMiddlewareWithKey builds a Middleware backed by a mock store with one
+// valid, non-expiring API key, plus the bearer token that authenticates as it
+// and the id of that key. Shared by every test that just needs "a valid
+// request came in via API key" rather than a specific failure mode.
+func newTestMiddlewareWithKey(t *testing.T) (mw *apikeyauth.Middleware, token string, keyID string) {
+	t.Helper()
 	hash := makeHash(testToken)
 	expires := time.Now().Add(time.Hour)
 
@@ -84,10 +85,18 @@ func TestAuthenticate_ValidKey(t *testing.T) {
 		},
 		user: &apikeyauth.UserInfo{ID: "user-1", Username: "alice", Role: "admin"},
 	}
-	mw := apikeyauth.NewMiddleware(store)
+	return apikeyauth.NewMiddleware(store), testToken, "key-1"
+}
+
+// ---------------------------------------------------------------------------
+// tests
+// ---------------------------------------------------------------------------
+
+func TestAuthenticate_ValidKey(t *testing.T) {
+	mw, token, _ := newTestMiddlewareWithKey(t)
 
 	var gotUser *auth.Claims
-	rec := doRequest(newHandler(mw, &gotUser), "Bearer "+testToken)
+	rec := doRequest(newHandler(mw, &gotUser), "Bearer "+token)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -192,5 +201,42 @@ func TestAuthenticate_NoExpiry(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200 for non-expiring key, got %d", rec.Code)
+	}
+}
+
+// TestAuthenticate_ExposesAPIKeyID pins that the authenticated key's id reaches
+// the handler. Before this, Authenticate injected only auth.Claims and the key
+// id never left the middleware, which made usage_events.api_key_id unfillable.
+func TestAuthenticate_ExposesAPIKeyID(t *testing.T) {
+	// Reuse whatever fixture helper the existing tests in this file use to
+	// build a Middleware with one valid key; name the key id below to match.
+	mw, token, wantKeyID := newTestMiddlewareWithKey(t)
+
+	var gotKeyID *string
+	handler := mw.Authenticate(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		gotKeyID = auth.APIKeyIDFromContext(r.Context())
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/kb", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", rec.Code)
+	}
+	if gotKeyID == nil {
+		t.Fatal("api key id missing from context")
+	}
+	if *gotKeyID != wantKeyID {
+		t.Errorf("api key id: got %q, want %q", *gotKeyID, wantKeyID)
+	}
+}
+
+// TestAPIKeyIDFromContext_NilWithoutAPIKeyAuth pins the web case: a JWT request
+// has no key id, and usage_events.api_key_id must end up NULL rather than "".
+func TestAPIKeyIDFromContext_NilWithoutAPIKeyAuth(t *testing.T) {
+	if got := auth.APIKeyIDFromContext(context.Background()); got != nil {
+		t.Errorf("got %v, want nil", got)
 	}
 }
