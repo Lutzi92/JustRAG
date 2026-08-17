@@ -10,7 +10,7 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
-## Unreleased
+## v0.8.0 — 2026-08-17
 
 ### ⚠ Upgrade notes
 
@@ -88,7 +88,89 @@ one-step rollback** (`cmd/migrate` is up-only).
   which is empty), „Verbessern"-turns, and any non-streaming request. The
   workflow canvas draws exactly this: on a bound KB those stages render
   *bedingt* — conditional, not off — rather than *aktiv*, on every lane.
-- No migration, no `site_config` change, no re-ingest, no new env vars.
+- **The KB settings surface now requires an operator system role.** Reaching
+  `KbSettingsPanel` — RAG Settings, Agenten & Teams, Evals, Workflow — used to
+  need only KB role `admin`, which every KB owner has. Since every ordinary
+  user who creates a KB owns it, that made all of them operators of the 52-key
+  per-KB `site_config` registry (three of whose keys force a full re-ingest),
+  of eval runs, and of the workflow presets that rewrite how a KB answers. The
+  new `kbAdvancedChain` requires a system role in **`api-user`, `admin` or
+  `superadmin`** *in addition to* KB role `admin`, on 22 routes: settings
+  read/write/delete, workflow projection, preset preview and apply, the eval
+  routes, agent/team attach/detach, and `POST /api/kb/{id}/reembed`.
+  **Who loses access:** any user with system role `user`, including on KBs
+  they own — they keep the KB, its files, its chats, sharing and member
+  management, and lose only the tuning surface. If someone in your deployment
+  legitimately tunes their own KB, promote them to `api-user`, which exists for
+  exactly this and grants no admin UI. `kbaccess.EffectiveRole` and the KB-role
+  ladder are unchanged; this is layered on top. `GET /api/kb/{id}/agents` stays
+  on the view chain so the chat agent picker keeps working for everyone.
+- **`package.json` and the k8s worker image pins were stale and are corrected
+  here.** Both sat at `0.6.1` through the v0.7.0 tag — runbook steps 4 and 5
+  were missed when that release was cut, so `git checkout v0.7.0 && kubectl
+  apply -f k8s/` deploys **v0.6.1** workers. The tag is immutable, so v0.7.0
+  cannot be repaired; deploy the workers from `v0.8.0` (or pass the image
+  explicitly) if you are on that path.
+- No migration (schema level stays at `0065`), no `site_config` default
+  change, no re-ingest, no new env vars.
+
+
+### Documentation
+- Clarify that Editable says nothing about a node's other keys (940686a)
+- Explain why agent configs are not conflict-checked at save time (8a59352)
+
+
+### Features
+- Bind a KB's default agent/team from the canvas, and confirm presets honestly (3afc517)
+- Project the KB's default agent/team, and stop overstating a preset apply (b647f11)
+- Add the preset picker with an honest overwrite confirmation (add623b)
+- Apply presets atomically, preview overwrites, report deviations (e44ed6c)
+- Price presets by projecting their own bundles (db75f68)
+- Register workflow_preset and ship its reader alongside it (95447cf)
+- Add curated workflow presets with a validity guard (cb7d602)
+- Save, reset and refetch from the workflow canvas (dfde2f9)
+- Make the workflow node inspector editable (cec36c7)
+- Add the workflow node field control (afd2e1c)
+- Add a safe field lookup helper for the mostly-unregistered key space (ea6b6e5)
+- Add workflow field metadata types and re-export the settings writers (74da7c3)
+- Ship registry field metadata with the workflow projection (ea4e89e)
+- Register the drifted retrieval and orchestrator keys (f40e634)
+- Make the verification and correction stages per-KB configurable (2f974e1)
+- Add the Workflow tab to KB settings (ef6b141)
+- Add the read-only workflow canvas with keyboard-accessible node activation (907b50f)
+- Add the workflow node inspector panel (4466f50)
+- Add the workflow canvas node component (c1e34f9)
+- Add dagre layout for the workflow canvas (6976d56)
+- Add workflow graph types and API client (8691bf0)
+- Expose GET /api/kb/{id}/workflow (ea36218)
+- Report per-key value origin (kb vs global vs default) (258c7c7)
+- Project the node vocabulary against a KB's resolved config (e98cfcc)
+- Add node vocabulary and static topology (3a984f6)
+
+
+### Fixes
+- Require an operator system role for the KB advanced-settings surface (a1303ee)
+- Seed the tester user from TESTER_PASSWORD (5fa3edf)
+- Hedge the cache claim and pin the tool-aware planner off (8ce5743)
+- Honest error paths, reachable draft on load failure, single field-type mirror (0068e47)
+- Derive the inspector from the live graph so a save no longer appears to revert (35395ea)
+- Withhold Reset where the server would reject the DELETE (4cf350d)
+- Narrow the citation-validation exclusivity claim to Self-RAG (d3311a9)
+- Drop the structurally-global router key and correct three cost/gating claims (e3cb503)
+- Enforce mutual-exclusion conflicts on the per-KB save path (1c03f03)
+- Disclose the tool-aware DAG dependency and register the answer-tool round cap (6ea41d7)
+- Correct the refine cost and regroup the context gate (0929aa4)
+- Make the workflow canvas usable, accurate and reachable (b0d3093)
+- Anchor node lookup to the RF wrapper, refit on lane switch, split reasonLabel (87a719b)
+- Explain disabled stages, fail visibly on unknown origin, wrap long values (360ddb0)
+- Use the shadow token and retarget the node focus ring to React Flow's wrapper (8b5eec7)
+- Model orchestrator bypass, split factuality verifier, guard defaultOn (9472573)
+
+
+### Refactoring
+- Make the workflow endpoint's JSON camelCase throughout (3220f16)
+- Dispatch through SelectOrchestrator instead of the inline ladder (5081b35)
+- Extract orchestrator precedence into SelectOrchestrator (19e34ec)
 
 ## v0.7.0 — 2026-08-14
 
