@@ -22,6 +22,7 @@ import (
 	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/sessionmem"
 	"github.com/justrag/go-backend/internal/store"
+	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -77,7 +78,8 @@ type Handler struct {
 	// teamLoader loads user-created agent-team/agent selections at chat
 	// time. Optional — when nil, TeamID/AgentID on the request are
 	// ignored (feature not wired).
-	teamLoader TeamLoader
+	teamLoader    TeamLoader
+	usageRecorder usage.Recorder // optional, per-turn usage ledger (internal/usage)
 }
 
 // TeamLoader loads user-created agent-team selections at chat time,
@@ -162,6 +164,15 @@ func WithAsynqClient(c *asynq.Client) HandlerOption {
 func WithDecisionRecorder(r DecisionRecorder) HandlerOption {
 	return func(h *Handler) {
 		h.decisionRecorder = r
+	}
+}
+
+// WithUsageRecorder attaches the usage ledger so each accepted web turn writes
+// one usage_events row. Optional — when absent the recording call
+// short-circuits, so eval and test paths pay nothing.
+func WithUsageRecorder(r usage.Recorder) HandlerOption {
+	return func(h *Handler) {
+		h.usageRecorder = r
 	}
 }
 

@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/auth"
+	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -24,6 +27,10 @@ var _ Store = (*mockStore)(nil)
 type mockStore struct {
 	chats    map[string]*ChatRow
 	messages []MessageRow
+	// createChatErr, when set, makes CreateChat return this error instead of
+	// creating a chat. Opt-in (nil by default) so every existing test that
+	// relies on CreateChat succeeding is unaffected.
+	createChatErr error
 }
 
 func newMockStore() *mockStore {
@@ -43,6 +50,9 @@ func (m *mockStore) GetChatByID(_ context.Context, chatID string) (*ChatRow, err
 }
 
 func (m *mockStore) CreateChat(_ context.Context, kbID, userID, title string) (*ChatRow, error) {
+	if m.createChatErr != nil {
+		return nil, m.createChatErr
+	}
 	c := &ChatRow{
 		ID:        "new-chat-id",
 		KbID:      kbID,
@@ -314,5 +324,119 @@ func TestDeepChat_SiteConfigReaderPropagates(t *testing.T) {
 	// Confirm the gate evaluates to false through the same field tryDeepChat uses.
 	if FactcheckEnabled(context.Background(), h.siteConfigReader) {
 		t.Error("expected FactcheckEnabled(h.siteConfigReader) to return false in tryDeepChat context")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Usage ledger (Task 4): one usage_events row per accepted web turn.
+//
+// A full successful SendMessage turn cannot be driven in this file's unit
+// harness — newTestHandler wires nil aiResolver/searchService, and reaching
+// the RAG pipeline would panic on those nil dependencies. So these tests pin
+// the same "one event per accepted turn" property via the two paths that ARE
+// reachable here: a turn that is accepted (passes validation, reaches
+// resolveOrCreateChat) but then fails for an unrelated reason, and a turn
+// that is rejected by validation before the Record call.
+// ---------------------------------------------------------------------------
+
+// fakeUsageRecorder captures usage events for assertions.
+type fakeUsageRecorder struct {
+	mu     sync.Mutex
+	events []usage.Event
+}
+
+func (f *fakeUsageRecorder) Record(_ context.Context, e usage.Event) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, e)
+}
+
+func (f *fakeUsageRecorder) snapshot() []usage.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]usage.Event(nil), f.events...)
+}
+
+// TestSendMessage_AcceptedTurnRecordsOneUsageEventEvenOnLaterFailure pins the
+// property the whole design rests on: a turn that is ACCEPTED (valid body,
+// KB resolved) writes exactly one usage event, tagged web, with no API key —
+// even when the turn subsequently fails for an unrelated reason.
+//
+// Why assert on a failing turn: usage.Event's package doc defines a turn as
+// counted the moment it is ACCEPTED, before the answer is produced, "so the
+// numbers are comparable with the LLM gateway's own usage view" — a turn
+// that fails downstream still spent model budget getting there. The Record
+// call sits after parseAndValidateMessage + h.forKB but before
+// resolveOrCreateChat, so forcing CreateChat to error (via the mockStore's
+// createChatErr) makes the handler return 500 without ever touching the nil
+// aiResolver/searchService — letting this test reach a genuinely ACCEPTED
+// turn without panicking on the unit harness's nil AI dependencies. This is
+// intentional, not a workaround: it exercises the exact ordering the guard
+// is meant to enforce.
+func TestSendMessage_AcceptedTurnRecordsOneUsageEventEvenOnLaterFailure(t *testing.T) {
+	rec := &fakeUsageRecorder{}
+	store := newMockStore()
+	store.createChatErr = errors.New("boom")
+	h := &Handler{
+		store:         store,
+		aiResolver:    nil,
+		searchService: nil,
+		usageRecorder: rec,
+	}
+
+	body := `{"message": "hello"}`
+	r := httptest.NewRequest(http.MethodPost, "/api/kb/kb1/chat", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = injectUser(r, "user1")
+	r.SetPathValue("id", "kb1")
+
+	w := httptest.NewRecorder()
+	h.SendMessage(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 (proving the turn failed after being accepted), got %d", w.Code)
+	}
+
+	events := rec.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("usage events: got %d, want 1", len(events))
+	}
+	if events[0].Surface != usage.SurfaceWeb {
+		t.Errorf("surface: got %q, want web", events[0].Surface)
+	}
+	if events[0].APIKeyID != nil {
+		t.Errorf("api key id: got %q, want nil for a web turn", *events[0].APIKeyID)
+	}
+	if events[0].KbID == "" || events[0].UserID == "" {
+		t.Errorf("kb_id / user_id must be populated, got %+v", events[0])
+	}
+}
+
+// TestSendMessage_RejectedBodyRecordsNoUsageEvent pins that validation failures
+// are not counted — if someone moves the Record call above
+// parseAndValidateMessage, this goes red.
+func TestSendMessage_RejectedBodyRecordsNoUsageEvent(t *testing.T) {
+	rec := &fakeUsageRecorder{}
+	h := &Handler{
+		store:         newMockStore(),
+		aiResolver:    nil,
+		searchService: nil,
+		usageRecorder: rec,
+	}
+
+	body := `{"message": ""}`
+	r := httptest.NewRequest(http.MethodPost, "/api/kb/kb1/chat", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = injectUser(r, "user1")
+	r.SetPathValue("id", "kb1")
+
+	w := httptest.NewRecorder()
+	h.SendMessage(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	if got := len(rec.snapshot()); got != 0 {
+		t.Errorf("usage events on a rejected request: got %d, want 0", got)
 	}
 }

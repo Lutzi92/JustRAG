@@ -22,6 +22,7 @@ import (
 	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/siteconfig"
+	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -201,6 +202,18 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// reader + SearchService overlay this KB's kb_site_configs overrides. No-op
 	// (returns h) when the KB has no overrides.
 	h = h.forKB(ctx, kbID)
+
+	// Usage ledger: one row per accepted turn. Placed after maybeRouteKB so the
+	// event names the KB actually answered from, and after
+	// parseAndValidateMessage so a malformed body records nothing.
+	if h.usageRecorder != nil {
+		h.usageRecorder.Record(ctx, usage.Event{
+			KbID:     kbID,
+			UserID:   user.ID,
+			APIKeyID: auth.APIKeyIDFromContext(ctx),
+			Surface:  usage.SurfaceWeb,
+		})
+	}
 
 	chatID, ok := h.resolveOrCreateChat(ctx, w, body.ChatID, kbID, user.ID, body.Message)
 	if !ok {

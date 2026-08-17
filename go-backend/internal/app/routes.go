@@ -80,6 +80,7 @@ import (
 	"github.com/justrag/go-backend/internal/sserelay"
 	"github.com/justrag/go-backend/internal/systemhealth"
 	"github.com/justrag/go-backend/internal/tabular"
+	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/users"
 	"github.com/justrag/go-backend/internal/vector"
 	"github.com/justrag/go-backend/internal/websearch"
@@ -1016,6 +1017,7 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 			store: builtin.NewPgxRecentDocsStore(rc.infra.db.Main),
 		}),
 		chat.WithTeamLoader(rc.agentTeamsStore),
+		chat.WithUsageRecorder(usage.NewRecorder(rc.infra.db.Main)),
 	}
 	if rc.agentDecisionStore != nil {
 		chatOpts = append(chatOpts, chat.WithDecisionRecorder(&decisionRecorderAdapter{store: rc.agentDecisionStore}))
