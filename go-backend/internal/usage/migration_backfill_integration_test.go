@@ -145,10 +145,11 @@ func TestBackfill_IsIdempotent(t *testing.T) {
 	}
 
 	var count int
-	if err := tx.QueryRow(ctx, `SELECT COUNT(*)::int FROM usage_events`).Scan(&count); err != nil {
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*)::int FROM usage_events WHERE kb_id = $1::uuid`, kbID).Scan(&count); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if count != 1 {
-		t.Errorf("rows after two runs: got %d, want 1", count)
+		t.Errorf("fixture rows after two runs: got %d, want 1 (the NOT EXISTS guard must make run 2 a no-op)", count)
 	}
 }
