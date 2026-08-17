@@ -1251,6 +1251,7 @@ func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 	// chain as the public chat endpoint.
 	mcpAnswerer := mcpserver.NewPipelineAnswerer(rc.aiResolver, rc.searchService, rc.chatStore, rc.chatStore)
 	mcpKBHandler := mcpserver.NewHandler(mcpAnswerer, rc.chatStore)
+	mcpKBHandler.SetUsageRecorder(usage.NewRecorder(rc.infra.db.Main))
 	rc.mux.Handle("POST /api/v1/kb/{id}/mcp", apiRL.Middleware(apiKeyAuth.Authenticate(
 		rc.kbMw.RequireKBRole(kbaccess.RoleView)(http.HandlerFunc(mcpKBHandler.ServeHTTP)))))
 }

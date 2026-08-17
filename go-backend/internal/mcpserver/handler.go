@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+
+	"github.com/justrag/go-backend/internal/auth"
+	"github.com/justrag/go-backend/internal/usage"
 )
 
 const protocolVersion = "2025-06-18"
@@ -20,10 +23,19 @@ type ConfigReader interface {
 type Handler struct {
 	answerer Answerer
 	cfg      ConfigReader
+
+	// usageRecorder writes one usage_events row per accepted turn. Optional.
+	usageRecorder usage.Recorder
 }
 
 func NewHandler(answerer Answerer, cfg ConfigReader) *Handler {
 	return &Handler{answerer: answerer, cfg: cfg}
+}
+
+// SetUsageRecorder injects the usage ledger. Optional — when unset, turns on
+// this surface are not counted.
+func (h *Handler) SetUsageRecorder(r usage.Recorder) {
+	h.usageRecorder = r
 }
 
 func (h *Handler) enabled(ctx context.Context) bool {
@@ -87,6 +99,23 @@ func (h *Handler) handleToolsCall(ctx context.Context, w http.ResponseWriter, kb
 		writeRPCError(w, req.ID, codeMethodNotFound, "unknown tool: "+params.Name)
 		return
 	}
+
+	// Usage ledger (internal/usage). Only tools/call is a turn; initialize and
+	// tools/list are handshakes and are deliberately not counted.
+	if h.usageRecorder != nil {
+		user := auth.UserFromContext(ctx)
+		userID := ""
+		if user != nil {
+			userID = user.ID
+		}
+		h.usageRecorder.Record(ctx, usage.Event{
+			KbID:     kbID,
+			UserID:   userID,
+			APIKeyID: auth.APIKeyIDFromContext(ctx),
+			Surface:  usage.SurfaceMCP,
+		})
+	}
+
 	res, err := runAskKB(ctx, h.answerer, kbID, params.Arguments)
 	if err != nil {
 		writeRPCError(w, req.ID, codeInvalidParams, err.Error())
