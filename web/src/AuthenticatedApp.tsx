@@ -302,7 +302,7 @@ function AuthenticatedAppInner() {
           </div>
           <div style={{ padding: '1.25rem 1.5rem 2rem' }}>
             <Suspense fallback={<LoadingFallback />}>
-              <KbSettingsPanel kbId={currentKb.id} />
+              <KbSettingsPanel kbId={currentKb.id} onCreateAgent={() => setView('agents')} />
             </Suspense>
           </div>
         </div>

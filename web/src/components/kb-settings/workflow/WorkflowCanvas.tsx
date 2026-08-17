@@ -6,13 +6,16 @@ import {
 import '@xyflow/react/dist/style.css';
 import type { Edge } from '@xyflow/react';
 import { Save, Undo2 } from 'lucide-react';
-import type { NodeActivation, WorkflowGraph, WorkflowLane, WorkflowNodeData } from '../../../types';
+import type {
+  AgentBindingOption, NodeActivation, WorkflowGraph, WorkflowLane, WorkflowNodeData,
+} from '../../../types';
 import { useReducedMotion } from '../../../hooks/useReducedMotion';
-import { fetchWorkflow, saveKbSettings, resetKbSetting } from './api';
+import { fetchWorkflow, saveKbSettings, resetKbSetting, setKbDefaultBinding } from './api';
 import { layoutWorkflow, MIN_ZOOM, type WorkflowRFNode } from './layout';
 import WorkflowNode from './WorkflowNode';
 import { NodeInspector } from './NodeInspector';
 import { PresetPicker } from './PresetPicker';
+import { WF_NODE_AGENT_BINDING } from './constants';
 import './WorkflowCanvas.css';
 
 const LANES: { id: WorkflowLane; label: string }[] = [
@@ -47,7 +50,12 @@ const ACTIVATION_LABEL: Record<NodeActivation, string> = {
  */
 const ORCHESTRATOR_LABEL: Record<string, string> = {
   comparison: 'Dokumentenvergleich',
-  team: 'Agenten-Team',
+  // „Agent oder Team", not „Agenten-Team": this one orchestrator serves both
+  // kinds of binding — a lone agent runs through it as a one-member team — and
+  // naming it after the team half told a librarian who had bound an AGENT that
+  // a team they never created answers their questions. Mirrors the backend's
+  // own rename in orchestratorLabels.
+  team: 'Agent oder Team',
   corpus_table: 'Korpus-Vergleichstabelle',
   drift: 'DRIFT',
   supervisor: 'Supervisor',
@@ -150,6 +158,11 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   // draft state would make that impossible to express.
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  // The KB default agent/team write in flight. Its own flag, not `saving`:
+  // `saving` drives the savebar's buttons and NodeInspector's readOnlyReason,
+  // and this write is not a settings save — it does not go through the savebar
+  // at all (see onBindingChange below).
+  const [bindingSaving, setBindingSaving] = useState(false);
   // Surfaces both a rejected save and a rejected reset. Deliberately a
   // separate state from `error` above: `error` is reserved for "the initial
   // load failed" (renders instead of the canvas); a save/reset failure must
@@ -344,6 +357,73 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
     }
   }, [kbId, refetchGraph]);
 
+  // Why the KB-default dropdown is currently not operable, or undefined when
+  // it is. ONE expression, read by both the control (which shows it and greys
+  // itself out) and by onBindingChange's own re-check below — so the enforced
+  // gate and the displayed gate cannot drift apart.
+  //
+  // The pending-draft arm is the same rule PresetPicker follows, for the same
+  // reason: this write lands immediately and the draft does not, so allowing
+  // both to be in flight against one KB means an admin cannot tell which of
+  // their two pending intentions actually took effect.
+  const bindingDisabledReason = saving
+    ? 'Wird gerade gespeichert.'
+    : draftCount > 0
+      ? 'Speichere oder verwirf deine Änderungen, bevor du die Vorgabe änderst.'
+      : bindingSaving
+        ? 'Vorgabe wird gespeichert…'
+        : undefined;
+
+  // The KB's default agent/team, written to the ATTACH endpoint on change —
+  // deliberately not through the savebar (see setKbDefaultBinding in api.ts:
+  // different endpoint, different payload, and one Save button covering both
+  // would produce a partial failure nobody can recover from).
+  //
+  // Clearing addresses the CURRENTLY BOUND link with isDefault:false, because
+  // that is what the server's ON CONFLICT DO UPDATE actually clears; there is
+  // no "unset the KB's default" endpoint to call instead. With nothing bound
+  // there is nothing to clear, and the call is skipped rather than guessed at.
+  //
+  // The write and the refetch are two separate failures, reported separately —
+  // the same split onSaveDraft/onResetKey make, for the same reason: an admin
+  // who reads "failed" after a write that landed will do it again.
+  const onBindingChange = useCallback(async (next: AgentBindingOption | null) => {
+    // Re-checked here, not only in the control: the canvas behind the panel
+    // stays live, so a draft (or another write) can appear between render and
+    // change event.
+    if (bindingDisabledReason) return;
+    const current = graph?.agentBinding;
+    let write: Promise<unknown>;
+    if (next) {
+      write = setKbDefaultBinding(kbId, next.kind, next.id, true);
+    } else if (current && (current.kind === 'agent' || current.kind === 'team') && current.id) {
+      write = setKbDefaultBinding(kbId, current.kind, current.id, false);
+    } else {
+      // Already "keine Vorgabe" — or a binding the server could not resolve,
+      // whose link we cannot name. Nothing to write either way.
+      return;
+    }
+    setOpError(null);
+    setBindingSaving(true);
+    try {
+      await write;
+    } catch (e) {
+      setOpError(`Die Vorgabe konnte nicht gespeichert werden (${e instanceof Error ? e.message : String(e)}).`);
+      setBindingSaving(false);
+      return;
+    }
+    try {
+      // Refetched, never guessed: the binding changes this node's activation
+      // AND whether chat.OrchTeam is a projected orchestrator candidate, and
+      // only the server knows the resulting projection.
+      await refetchGraph();
+    } catch {
+      setOpError('Vorgabe gespeichert — die Ansicht konnte nicht aktualisiert werden. Bitte Ansicht neu laden.');
+    } finally {
+      setBindingSaving(false);
+    }
+  }, [bindingDisabledReason, graph, kbId, refetchGraph]);
+
   // Warns only on an actual browser navigation away (reload, close, back to
   // another origin) — that loss is unrecoverable from inside the app. It does
   // NOT warn on switching the Settings sub-tab away from Workflow: that tab
@@ -528,8 +608,28 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
   // back to a lane that loads. The only exit was a reload, which fired the
   // beforeunload warning for a draft the admin could no longer even see.
   return (
-    <div className="wf-canvas">
-      {/* Suppressed on a load failure, same rule as the orchestrator/cost
+    <>
+      {/* Rendered as a SIBLING ABOVE `.wf-canvas`, deliberately outside it.
+          `.wf-canvas` is `height: clamp(420px, 78vh, 900px); overflow: hidden`
+          with the graph surface at `flex: 1 1 auto`, so anything that grows
+          inside it shrinks the surface. The picker starts near-empty and grows
+          ~200-300px when `fetchPresets` resolves — a slow request (15
+          server-side Project() calls) that usually lands AFTER the workflow
+          fetch that armed the one-shot fitView(). The fit was therefore
+          computed against a taller surface than the graph ended up in, and
+          nothing re-fits; at the 420px floor the surface could be squeezed to
+          ~110px.
+
+          Chosen over arming `refitPendingRef` when the preset list first
+          renders because that ref has exactly one writer on purpose (the
+          lane-fetch effect — a second writer is the bug the fitView effects
+          were rewritten to prevent), and because re-fitting would still leave
+          the graph in a surface shortened by the picker. Moving the picker out
+          removes the coupling instead of compensating for it. No test could
+          see the old behaviour — all three canvas suites stub fetchPresets to
+          [] — so this is verified by the layout itself, not by a suite.
+
+          Suppressed on a load failure, same rule as the orchestrator/cost
           readouts below: `graph` would still hold the PREVIOUS successful
           fetch (or be null on the very first load), and a presetBase/
           deviations line built from stale data would misattribute it to
@@ -541,148 +641,160 @@ function WorkflowCanvasInner({ kbId }: { kbId: string }) {
           presetBase={graph?.presetBase ?? ''}
           presetBaseKnown={graph?.presetBaseKnown ?? true}
           deviations={graph?.deviations ?? []}
+          // "" is the no-base state AND the not-yet-loaded state; only the
+          // canvas can tell them apart, so it says which one this is.
+          presetBaseLoading={graph === null}
           draftPending={draftCount > 0}
           onError={setOpError}
           onApplied={onPresetApplied}
         />
       )}
-      <div className="wf-canvas__bar">
-        <div className="wf-canvas__lanes">
-          {LANES.map((l) => (
-            <button key={l.id} type="button" className="wf-canvas__lane"
-                    aria-pressed={lane === l.id}
-                    onClick={() => {
-                      setLane(l.id);
-                      setSelectedId(null);
-                      // A stale refusal hint or a stale op error from the
-                      // previous lane has no bearing on the lane just opened.
-                      setEmptyStringNote(null);
-                      setOpError(null);
-                    }}>
-              {l.label}
-            </button>
-          ))}
-        </div>
-        <div className="wf-canvas__legend">
-          <span><span className="wf-canvas__swatch" style={{ borderColor: 'var(--accent-primary)' }} />{ACTIVATION_LABEL.active}</span>
-          <span><span className="wf-canvas__swatch wf-canvas__swatch--conditional" />{ACTIVATION_LABEL.conditional}</span>
-          <span><span className="wf-canvas__swatch" style={{ opacity: 0.5 }} />{ACTIVATION_LABEL.inactive}</span>
-        </div>
-        {/* Lane-derived readouts, suppressed while a lane fetch is failing:
-            `graph` then still holds the PREVIOUS lane's projection, and
-            printing its orchestrators or its cost estimate under the newly
-            pressed lane pill would attribute one lane's numbers to another.
-            The lane pills and the legend are lane-independent and stay. */}
-        {!error && graph && graph.orchestrators.length > 0 && (
-          <div className="wf-canvas__orchestrators">
-            <span className="wf-canvas__orchestrators-label" id="wf-orchestrators-label">Orchestrator:</span>
-            <ul className="wf-canvas__orchestrator-list" aria-labelledby="wf-orchestrators-label">
-              {graph.orchestrators.map((o) => (
-                <li key={o.orchestrator} className="wf-canvas__orchestrator" data-activation={o.activation}>
-                  <span className="wf-canvas__orchestrator-name">
-                    {ORCHESTRATOR_LABEL[o.orchestrator] ?? o.orchestrator}
-                  </span>
-                  {/* The state is carried as TEXT, not only as hue+opacity:
-                      three chips differing only in colour tell a screen reader
-                      nothing and fail for anyone who can't separate the hues. */}
-                  <span className="wf-canvas__orchestrator-state">{ACTIVATION_LABEL[o.activation]}</span>
-                  {o.condition && (
-                    <span className="wf-canvas__orchestrator-condition">{o.condition}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
+      <div className="wf-canvas">
+        <div className="wf-canvas__bar">
+          <div className="wf-canvas__lanes">
+            {LANES.map((l) => (
+              <button key={l.id} type="button" className="wf-canvas__lane"
+                      aria-pressed={lane === l.id}
+                      onClick={() => {
+                        setLane(l.id);
+                        setSelectedId(null);
+                        // A stale refusal hint or a stale op error from the
+                        // previous lane has no bearing on the lane just opened.
+                        setEmptyStringNote(null);
+                        setOpError(null);
+                      }}>
+                {l.label}
+              </button>
+            ))}
           </div>
-        )}
-        {!error && graph && (
-          <span className="wf-canvas__meta">
-            geschätzt {graph.estLlmCalls} LLM-Aufrufe · ~{(graph.estLatencyMs / 1000).toFixed(1)}s
-          </span>
-        )}
-      </div>
-
-      {error ? (
-        <p className="wf-canvas__error" role="alert">
-          Der Workflow konnte nicht geladen werden ({error}).
-        </p>
-      ) : (
-        <>
-          {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- event delegation only: each interactive descendant (React Flow's own node wrapper — tabIndex=0, role="group" — and the inspector's close button) already owns real keyboard/focus semantics; giving this wrapper its own role/tabIndex would add a second, redundant tab stop over the whole canvas */}
-          <div className="wf-canvas__surface" ref={surfaceRef} onClick={onSurfaceClick} onKeyDown={onSurfaceKeyDown}>
-            <ReactFlow
-              nodes={nodes} edges={edges}
-              onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
-              nodeTypes={nodeTypes}
-              nodesDraggable={false} nodesConnectable={false} elementsSelectable
-              minZoom={MIN_ZOOM}
-              fitView proOptions={{ hideAttribution: true }}
-            >
-              <Background />
-              <Controls showInteractive={false} />
-            </ReactFlow>
-            <NodeInspector
-              node={selected}
-              onClose={closeInspector}
-              fields={graph?.fields ?? {}}
-              draft={draft}
-              onChange={onFieldChange}
-              onRefuse={onFieldRefused}
-              onReset={onResetKey}
-              readOnlyReason={saving ? 'Wird gerade gespeichert.' : undefined}
-            />
+          <div className="wf-canvas__legend">
+            <span><span className="wf-canvas__swatch" style={{ borderColor: 'var(--accent-primary)' }} />{ACTIVATION_LABEL.active}</span>
+            <span><span className="wf-canvas__swatch wf-canvas__swatch--conditional" />{ACTIVATION_LABEL.conditional}</span>
+            <span><span className="wf-canvas__swatch" style={{ opacity: 0.5 }} />{ACTIVATION_LABEL.inactive}</span>
           </div>
-        </>
-      )}
-
-      {(draftCount > 0 || opError || emptyStringNote) && (
-        <div className="wf-canvas__savebar">
-          {emptyStringNote && (
-            // aria-live: this line replaces a keystroke the user just made
-            // with a refusal — without an explicit live region, a screen
-            // reader user gets a silently rejected input and a value that
-            // snaps back, with no announcement of why.
-            <p className="wf-canvas__savebar-hint" aria-live="polite" data-field={emptyStringNote.key}>
-              {emptyStringNote.msg}
-            </p>
-          )}
-          {opError && <p className="wf-canvas__savebar-error" role="alert">{opError}</p>}
-          {draftCount > 0 && (
-            <div className="wf-canvas__savebar-row">
-              <span className="wf-canvas__savebar-count">
-                {`${draftCount} ${draftCount === 1 ? 'Einstellung' : 'Einstellungen'} geändert`}
-              </span>
-              <div className="wf-canvas__savebar-actions">
-                <button
-                  type="button"
-                  className="wf-canvas__savebar-discard"
-                  onClick={onDiscardDraft}
-                  disabled={saving}
-                >
-                  <Undo2 size={14} aria-hidden="true" /> Verwerfen
-                </button>
-                <button
-                  type="button"
-                  className="wf-canvas__savebar-save"
-                  onClick={onSaveDraft}
-                  disabled={saving}
-                >
-                  <Save size={14} aria-hidden="true" /> {saving ? 'Speichert…' : 'Speichern'}
-                </button>
-              </div>
+          {/* Lane-derived readouts, suppressed while a lane fetch is failing:
+              `graph` then still holds the PREVIOUS lane's projection, and
+              printing its orchestrators or its cost estimate under the newly
+              pressed lane pill would attribute one lane's numbers to another.
+              The lane pills and the legend are lane-independent and stay. */}
+          {!error && graph && graph.orchestrators.length > 0 && (
+            <div className="wf-canvas__orchestrators">
+              <span className="wf-canvas__orchestrators-label" id="wf-orchestrators-label">Orchestrator:</span>
+              <ul className="wf-canvas__orchestrator-list" aria-labelledby="wf-orchestrators-label">
+                {graph.orchestrators.map((o) => (
+                  <li key={o.orchestrator} className="wf-canvas__orchestrator" data-activation={o.activation}>
+                    <span className="wf-canvas__orchestrator-name">
+                      {ORCHESTRATOR_LABEL[o.orchestrator] ?? o.orchestrator}
+                    </span>
+                    {/* The state is carried as TEXT, not only as hue+opacity:
+                        three chips differing only in colour tell a screen reader
+                        nothing and fail for anyone who can't separate the hues. */}
+                    <span className="wf-canvas__orchestrator-state">{ACTIVATION_LABEL[o.activation]}</span>
+                    {o.condition && (
+                      <span className="wf-canvas__orchestrator-condition">{o.condition}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
-          {draftCount > 0 && (
-            // KbSettingsPanel.tsx unmounts this component on a Settings
-            // sub-tab switch (out of this file's scope — see the beforeunload
-            // effect's comment above), which drops the draft silently. A
-            // confirm dialog on every tab click would be worse than that
-            // loss; this line is the mitigation that fits within scope.
-            <p className="wf-canvas__savebar-warn">
-              Nicht gespeicherte Änderungen gehen beim Tab-Wechsel verloren.
-            </p>
+          {!error && graph && (
+            <span className="wf-canvas__meta">
+              geschätzt {graph.estLlmCalls} LLM-Aufrufe · ~{(graph.estLatencyMs / 1000).toFixed(1)}s
+            </span>
           )}
         </div>
-      )}
-    </div>
+
+        {error ? (
+          <p className="wf-canvas__error" role="alert">
+            Der Workflow konnte nicht geladen werden ({error}).
+          </p>
+        ) : (
+          <>
+            {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- event delegation only: each interactive descendant (React Flow's own node wrapper — tabIndex=0, role="group" — and the inspector's close button) already owns real keyboard/focus semantics; giving this wrapper its own role/tabIndex would add a second, redundant tab stop over the whole canvas */}
+            <div className="wf-canvas__surface" ref={surfaceRef} onClick={onSurfaceClick} onKeyDown={onSurfaceKeyDown}>
+              <ReactFlow
+                nodes={nodes} edges={edges}
+                onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+                nodeTypes={nodeTypes}
+                nodesDraggable={false} nodesConnectable={false} elementsSelectable
+                minZoom={MIN_ZOOM}
+                fitView proOptions={{ hideAttribution: true }}
+              >
+                <Background />
+                <Controls showInteractive={false} />
+              </ReactFlow>
+              <NodeInspector
+                node={selected}
+                onClose={closeInspector}
+                fields={graph?.fields ?? {}}
+                draft={draft}
+                onChange={onFieldChange}
+                onRefuse={onFieldRefused}
+                onReset={onResetKey}
+                readOnlyReason={saving ? 'Wird gerade gespeichert.' : undefined}
+                // Handed over ONLY for the node that owns the binding — that
+                // is what selects the non-registry control path. `binding` is
+                // read off the graph the selection was derived from, so a
+                // refetch repaints both together.
+                binding={selected?.id === WF_NODE_AGENT_BINDING ? graph?.agentBinding : undefined}
+                onBindingChange={onBindingChange}
+                bindingDisabledReason={bindingDisabledReason}
+              />
+            </div>
+          </>
+        )}
+
+        {(draftCount > 0 || opError || emptyStringNote) && (
+          <div className="wf-canvas__savebar">
+            {emptyStringNote && (
+              // aria-live: this line replaces a keystroke the user just made
+              // with a refusal — without an explicit live region, a screen
+              // reader user gets a silently rejected input and a value that
+              // snaps back, with no announcement of why.
+              <p className="wf-canvas__savebar-hint" aria-live="polite" data-field={emptyStringNote.key}>
+                {emptyStringNote.msg}
+              </p>
+            )}
+            {opError && <p className="wf-canvas__savebar-error" role="alert">{opError}</p>}
+            {draftCount > 0 && (
+              <div className="wf-canvas__savebar-row">
+                <span className="wf-canvas__savebar-count">
+                  {`${draftCount} ${draftCount === 1 ? 'Einstellung' : 'Einstellungen'} geändert`}
+                </span>
+                <div className="wf-canvas__savebar-actions">
+                  <button
+                    type="button"
+                    className="wf-canvas__savebar-discard"
+                    onClick={onDiscardDraft}
+                    disabled={saving}
+                  >
+                    <Undo2 size={14} aria-hidden="true" /> Verwerfen
+                  </button>
+                  <button
+                    type="button"
+                    className="wf-canvas__savebar-save"
+                    onClick={onSaveDraft}
+                    disabled={saving}
+                  >
+                    <Save size={14} aria-hidden="true" /> {saving ? 'Speichert…' : 'Speichern'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {draftCount > 0 && (
+              // KbSettingsPanel.tsx unmounts this component on a Settings
+              // sub-tab switch (out of this file's scope — see the beforeunload
+              // effect's comment above), which drops the draft silently. A
+              // confirm dialog on every tab click would be worse than that
+              // loss; this line is the mitigation that fits within scope.
+              <p className="wf-canvas__savebar-warn">
+                Nicht gespeicherte Änderungen gehen beim Tab-Wechsel verloren.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </>
   );
 }

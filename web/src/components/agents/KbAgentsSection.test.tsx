@@ -19,14 +19,16 @@ vi.mock('../../contexts/ToastContext', () => ({
 const listAgents = vi.fn();
 const listTeams = vi.fn();
 const fetchKbAgents = vi.fn();
+const attachAgentToKb = vi.fn();
+const detachAgentFromKb = vi.fn();
 
 vi.mock('./api', () => ({
   listAgents: (...a: unknown[]) => listAgents(...a),
   listTeams: (...a: unknown[]) => listTeams(...a),
   fetchKbAgents: (...a: unknown[]) => fetchKbAgents(...a),
-  attachAgentToKb: vi.fn(),
+  attachAgentToKb: (...a: unknown[]) => attachAgentToKb(...a),
   attachTeamToKb: vi.fn(),
-  detachAgentFromKb: vi.fn(),
+  detachAgentFromKb: (...a: unknown[]) => detachAgentFromKb(...a),
   detachTeamFromKb: vi.fn(),
 }));
 
@@ -128,6 +130,72 @@ describe('KbAgentsSection', () => {
       expect(screen.getByRole('button', { name: translations.kbAgentsCreateFirst.en }))
         .toBeInTheDocument());
     expect(screen.queryByRole('button', { name: translations.agentsTabTeams.en })).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------
+  // Agents attached to this KB but created by someone ELSE.
+  //
+  // The section used to render `myAgents`/`myTeams` only, so a KB whose default
+  // is a co-admin's agent showed NO row for it: no default selected, no way to
+  // detach — while the Workflow tab, one click away in the same panel, named it.
+  // Binding is a KB-admin decision rather than an owner one, so foreign-owned
+  // attachments are the expected case, not a curiosity.
+  // ---------------------------------------------------------------------
+
+  const foreignAttached = { id: 'x9', name: 'Fremder Agent', description: '', icon: '', isDefault: true };
+
+  it('lists an agent attached to this KB that the caller does not own', async () => {
+    listAgents.mockResolvedValue([]);
+    fetchKbAgents.mockResolvedValue({ agents: [foreignAttached], teams: [] });
+    render(<KbAgentsSection kbId="kb1" onCreateAgent={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('Fremder Agent')).toBeInTheDocument());
+    // …and it carries the actions an admin needs: the default radio (checked,
+    // because it IS the default) and a detach button.
+    expect(screen.getByRole('radio')).toBeChecked();
+    expect(screen.getByRole('button', { name: translations.kbAgentsDetach.en }))
+      .toBeInTheDocument();
+  });
+
+  // The empty state is counted over the merged list too. An admin who owns
+  // nothing but whose KB has a co-admin's agent attached used to fall through
+  // to „no agents yet" and see no rows at all.
+  it('does not fall into the empty state when the only entry is foreign', async () => {
+    fetchKbAgents.mockResolvedValue({ agents: [foreignAttached], teams: [] });
+    render(<KbAgentsSection kbId="kb1" onCreateAgent={() => {}} />);
+    await waitFor(() => expect(screen.getByText('Fremder Agent')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: translations.agentsTabTeams.en }))
+      .toBeInTheDocument();
+  });
+
+  // Legible, not loud: a muted line on the row itself. The row stays fully
+  // operable — attach/detach/default all work on a foreign entry — so the note
+  // says what is DIFFERENT (it cannot be edited here), not that it is blocked.
+  it('marks a foreign entry as not editable, and only the foreign one', async () => {
+    listAgents.mockResolvedValue([anAgent]);
+    fetchKbAgents.mockResolvedValue({ agents: [foreignAttached], teams: [] });
+    render(<KbAgentsSection kbId="kb1" onCreateAgent={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('Fremder Agent')).toBeInTheDocument());
+    expect(screen.getAllByText(translations.kbAgentsForeign.en)).toHaveLength(1);
+    // The caller's own agent is on screen at the same time and carries no note,
+    // so the assertion above cannot be passing by labelling everything.
+    expect(screen.getByText('Netz')).toBeInTheDocument();
+  });
+
+  // The caller's own agent that is ALSO attached must not be duplicated, and
+  // must not be mislabelled as someone else's.
+  it('merges an owned agent with its attached row instead of listing it twice', async () => {
+    listAgents.mockResolvedValue([anAgent]);
+    fetchKbAgents.mockResolvedValue({
+      agents: [{ id: 'a1', name: 'Netz', description: '', icon: '', isDefault: true }],
+      teams: [],
+    });
+    render(<KbAgentsSection kbId="kb1" onCreateAgent={() => {}} />);
+
+    await waitFor(() => expect(screen.getAllByText('Netz')).toHaveLength(1));
+    expect(screen.queryByText(translations.kbAgentsForeign.en)).toBeNull();
+    expect(screen.getByRole('radio')).toBeChecked();
   });
 
   // The bug: SettingsModal is reachable from HomeView with currentKb === null.

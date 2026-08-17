@@ -41,6 +41,9 @@
 .wf-presets__card-cost { font-size: 0.7rem; color: var(--text-secondary); margin-top: 0.15rem; }
 
 .wf-presets__hint { margin: 0; font-size: 0.75rem; color: var(--text-secondary); }
+/* Says WHICH configuration the per-card cost badge describes — the deployment
+   defaults, not this KB. See PresetPicker's `lane` prop comment. */
+.wf-presets__note { margin: 0; font-size: 0.72rem; color: var(--text-secondary); max-width: 60ch; }
 .wf-presets__error { margin: 0; font-size: 0.8rem; color: var(--error-text); }
 
 .wf-presets__base {
@@ -56,8 +59,16 @@
 .wf-presets__reset:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); }
 .wf-presets__reset:disabled { opacity: 0.6; cursor: default; }
 
+.wf-presets__base--loading { opacity: 0.7; }
+
 .wf-presets__confirm-desc { color: var(--text-secondary); font-size: 0.85rem; margin: 0 0 0.5rem; }
 .wf-presets__confirm-count { font-weight: 600; font-size: 0.85rem; margin: 0 0 0.4rem; }
+.wf-presets__confirm-own { font-size: 0.8rem; color: var(--text-secondary); margin: 0 0 0.3rem; }
+.wf-presets__confirm-own-tag { color: var(--text-secondary); }
+/* The pinning sentence is the fact the old dialog omitted entirely; it is not
+   an aside, so it keeps body-text colour rather than the muted secondary. */
+.wf-presets__confirm-pinned { font-size: 0.8rem; color: var(--text-primary); margin: 0.5rem 0 0; }
+.wf-presets__confirm:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 .wf-presets__confirm-loading { color: var(--text-secondary); font-size: 0.85rem; }
 .wf-presets__confirm-keys {
   margin: 0 0 0.75rem; padding-left: 1.1rem; font-size: 0.78rem;

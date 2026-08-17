@@ -10,6 +10,86 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## Unreleased
+
+### ⚠ Upgrade notes
+
+- **A KB admin can now bind an agent or team they did not create — provided
+  it is already attached to that KB.** `PUT /api/kb/{id}/agents/{agentId}` and
+  `PUT /api/kb/{id}/teams/{teamId}` have always been on `kbAdminChain`, but the
+  handlers additionally required the caller to *own* the agent and answered 404
+  otherwise. A KB admin who had not created it therefore could not bind it —
+  and, because clearing a default goes through the same endpoint with
+  `isDefault:false`, could not remove one someone else had bound either. The
+  new rule is: **the caller owns the agent/team, OR it is already attached to
+  this KB.** Three answers, in order — 404 if it does not exist, 403 if it
+  exists but is neither yours nor attached here, otherwise the write.
+  **What this deliberately does not allow:** binding an arbitrary agent by id.
+  The link row *is* the use-time authorization (chat-time resolution checks
+  attachment, never ownership), so a bind makes that agent's persona, model
+  override and config overrides run for every viewer of the KB, with its owner
+  given no notice and no veto. Tool escalation is separately impossible — the
+  per-agent allowlist is re-enforced at dispatch time and privileged tools are
+  stripped unless `agents_allow_privileged_tools` is on. The listing endpoints
+  (`GET /api/agents`, `GET /api/agent-teams`) stay owner-scoped. **Detach is
+  unchanged** and was never owner-scoped: it can only remove a link on the KB
+  you already administer.
+- **A default agent/team that is switched off is now visible in the KB's
+  workflow view.** `agent_kb_links.is_default` survives the agent being
+  disabled, and the workflow canvas was reading the chat picker's
+  `is_enabled`-filtered list — so such a KB showed „keine Vorgabe", the row
+  could not be cleared, and it took effect again as soon as anyone re-enabled
+  the agent. The canvas now reads a separate query that includes disabled
+  entries and marks them. **No behaviour change in chat:** a disabled agent
+  remains unselectable there, and a KB with a disabled default still answers
+  with the standard path — which is what the canvas now says it does.
+- **A default team with no active member is no longer drawn as if it answered.**
+  A team can be attached, flagged default and switched *on*, and still take no
+  turn at all: chat-time resolution counts only its **enabled** members, and
+  zero members means the selection is dropped and the normal pipeline runs. (A
+  team reaches that state by having its members switched off, or by being
+  created with no members — the API accepts that.) The workflow canvas read
+  only the team's own on/off flag, so it drew such a KB as fully bound: the
+  binding node „aktiv", the agent/team orchestrator projected, and CRAG,
+  context compression and the sufficient-context gate demoted to „bedingt" on
+  every lane — for a binding that could never fire. The canvas now reports it
+  as inactive with its own reason („keine aktiven Mitglieder", distinct from
+  „abgeschaltet", because the remedy differs) and nothing below it is demoted.
+  No behaviour change in chat.
+- **The KB settings „Agenten & Teams" tab lists everything attached to the KB,
+  not only your own.** It rendered the caller's agents and teams alone, so on a
+  KB whose default is a co-admin's agent there was no row for it: no default
+  shown, no way to detach — while the Workflow tab, one click away in the same
+  panel, named it. Entries you did not create are listed, attachable,
+  detachable and bindable, and marked as not editable here.
+- **A KB's default agent/team applies in the web UI only — and binding one
+  turns off the standard retrieval path for that KB.** Two separate facts,
+  both worth knowing before you set a default:
+
+  *Reach.* The default is applied client-side: the web UI seeds a new chat's
+  selection from it and then sends that selection with every message. The
+  server never consults the binding on its own, so the public API
+  (`/api/v1/*`), the OpenAI-compatible layer, the KB-as-MCP endpoint and any
+  non-streaming `POST /api/kb/{id}/chat` ignore it entirely and answer as if
+  no default were set. This asymmetry **predates the workflow editor** — it is
+  how `is_default` has behaved since it shipped — and is documented here
+  because the workflow canvas now makes the binding visible for the first
+  time. The canvas says so on the node.
+
+  *Consequence.* The selection rides on every message of a chat that started
+  with it — not just the complex ones — so a bound KB routes those turns,
+  simple lookups included, through the agent/team orchestrator. That path does
+  not run the standard retrieval pipeline, so CRAG, context compression and the
+  sufficient-context gate do not execute on such a turn regardless of their
+  flags. Nothing silently degrades — the specialists still retrieve — but if
+  you rely on those three, do not bind a KB-wide default. Three kinds of turn
+  are **not** affected and still run the normal pipeline: chats that already
+  existed before the default was set (they carry their own stored selection,
+  which is empty), „Verbessern"-turns, and any non-streaming request. The
+  workflow canvas draws exactly this: on a bound KB those stages render
+  *bedingt* — conditional, not off — rather than *aktiv*, on every lane.
+- No migration, no `site_config` change, no re-ingest, no new env vars.
+
 ## v0.6.1 — 2026-08-14
 
 ### ⚠ Upgrade notes

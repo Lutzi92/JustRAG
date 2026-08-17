@@ -1,9 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { RotateCcw, X } from 'lucide-react';
-import type { WorkflowConfigField, WorkflowNodeData } from '../../../types';
+import type {
+  AgentBindingInfo, AgentBindingOption, WorkflowConfigField, WorkflowNodeData,
+} from '../../../types';
 import { reasonLabel } from './reasonLabel';
 import { fieldFor } from './api';
 import { NodeFieldInput } from './NodeFieldInput';
+import { NodeBindingControl } from './NodeBindingControl';
 import { ORIGIN_LABEL, UNKNOWN_ORIGIN_LABEL, DEFAULT_VALUE_LABEL } from './constants';
 import './NodeInspector.css';
 
@@ -28,6 +31,29 @@ interface Props {
    * regardless of the node's own editability — e.g. a save in flight. The
    * reason is shown to the user, not just enforced silently. */
   readOnlyReason?: string;
+  /**
+   * THE NON-REGISTRY CONTROL PATH. Set by the canvas only for the node that
+   * owns the KB's default agent/team (constants.ts' WF_NODE_AGENT_BINDING);
+   * undefined for every other node, which is what selects the control.
+   *
+   * Deliberately a prop rather than a field on WorkflowNodeData: that
+   * interface mirrors the server's ProjectedNode field for field, and the
+   * server put the binding at the TOP LEVEL of the response on purpose (its
+   * `options` and `id` are values Project has no argument for — see
+   * AgentBindingInfo in binding.go). Hanging it off the node on this side only
+   * would make the mirror lie about where the data lives. Deliberately not a
+   * faked registry key either: the key would have to be invented, and the
+   * registry is walked by anti-drift guards that would then have to explain it.
+   */
+  binding?: AgentBindingInfo;
+  /** Chosen option, or null for "Keine Vorgabe". Required whenever `binding`
+   * is set — a producer without its consumer is how a dead control ships. */
+  onBindingChange?: (next: AgentBindingOption | null) => void;
+  /** Why the binding dropdown is currently not operable (pending draft, save
+   * in flight, binding write in flight). Separate from readOnlyReason: the
+   * binding does NOT go through the savebar, so the two are disabled by
+   * different conditions and must be able to say different things. */
+  bindingDisabledReason?: string;
 }
 
 /**
@@ -53,8 +79,18 @@ interface Props {
  * everything else keeps the original read-only row — now with the field's
  * label instead of a bare key name whenever a field exists at all, which is
  * strictly better than before even for a locked node.
+ *
+ * Phase 6 adds a SECOND control path, `binding`, which is not key-driven at
+ * all: the KB's default agent/team is not a site_config value, so the node
+ * that owns it has an empty `keys` and `editable: false` and would otherwise
+ * render as a read-only description of a setting nobody can reach. Its
+ * writes bypass the savebar entirely — see NodeBindingControl and
+ * setKbDefaultBinding.
  */
-export function NodeInspector({ node, onClose, fields, draft, onChange, onRefuse, onReset, readOnlyReason }: Props) {
+export function NodeInspector({
+  node, onClose, fields, draft, onChange, onRefuse, onReset, readOnlyReason,
+  binding, onBindingChange, bindingDisabledReason,
+}: Props) {
   const panelRef = useRef<HTMLElement | null>(null);
   const nodeId = node?.id;
 
@@ -91,6 +127,16 @@ export function NodeInspector({ node, onClose, fields, draft, onChange, onRefuse
       {node.help && <p className="wf-inspector__help">{node.help}</p>}
       {badge && <span className="wf-inspector__reason">{badge}</span>}
       {node.condition && <p className="wf-inspector__condition">{node.condition}</p>}
+
+      {/* Both halves required: a control with no handler would be a dropdown
+          that silently discards the admin's choice. */}
+      {binding && onBindingChange && (
+        <NodeBindingControl
+          binding={binding}
+          onChange={onBindingChange}
+          disabledReason={bindingDisabledReason}
+        />
+      )}
 
       {node.keys.length > 0 && (
         <>

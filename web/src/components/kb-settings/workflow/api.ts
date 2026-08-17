@@ -1,7 +1,9 @@
 import type {
+  BindingTarget,
   WorkflowConfigField, WorkflowGraph, WorkflowLane, WorkflowPreset, WorkflowPresetApplyResult,
 } from '../../../types';
 import { API_BASE_URL, authFetch } from '../../../api';
+import { attachAgentToKb, attachTeamToKb } from '../../agents/api';
 
 // authFetch injects the Bearer token from localStorage and fires the logout
 // event on 401 — a raw fetch() would send no Authorization header and 401.
@@ -64,6 +66,37 @@ export async function applyPreset(kbId: string, presetId: string): Promise<Workf
 // between the two surfaces (both read body.error on failure, including the new
 // 400 that names mutually-exclusive keys).
 export { saveKbSettings, resetKbSetting } from '../api';
+
+/**
+ * setKbDefaultBinding writes the KB's default agent/team through the EXISTING
+ * attach endpoint (PUT /api/kb/{id}/agents/{agentId} or …/teams/{teamId},
+ * body `{isDefault}`) — deliberately not through the settings savebar the rest
+ * of this canvas uses. The endpoints and payloads differ, and folding a second
+ * call into one Save button creates a partial-failure state (settings written,
+ * binding not) with no good recovery.
+ *
+ * `isDefault: false` is how the binding is CLEARED, addressed at the currently
+ * bound link. That really clears rather than no-opping: both attach statements
+ * are `INSERT … ON CONFLICT (…, kb_id) DO UPDATE SET is_default =
+ * EXCLUDED.is_default` (internal/agentteams/store_pg.go), so an existing row is
+ * updated to false. Only `isDefault: true` runs the two clearing UPDATEs first,
+ * which is also why a switch from one agent to another needs no explicit clear.
+ *
+ * The attach endpoint is gated by the ROUTE (kbAdminChain / RequireKBRole
+ * admin) and by nothing else. It used to re-check that the caller owned the
+ * agent, which 404'd a KB admin operating on their own KB — including when
+ * clearing a default someone else had bound, i.e. the exact write this control
+ * exists to make possible. That check is gone; what remains is an existence
+ * check, so a 404 here now means the agent or team really is not there. Any
+ * failure surfaces through the canvas's opError channel like any other write.
+ */
+export function setKbDefaultBinding(
+  kbId: string, target: BindingTarget, id: string, isDefault: boolean,
+): Promise<{ success: boolean }> {
+  return target === 'team'
+    ? attachTeamToKb(kbId, id, isDefault)
+    : attachAgentToKb(kbId, id, isDefault);
+}
 
 /**
  * fieldFor resolves a config key's registry metadata, or undefined when the key

@@ -48,6 +48,7 @@ const graph: WorkflowGraph = {
   presetBase: '',
   presetBaseKnown: true,
   deviations: [],
+  agentBinding: { kind: '', id: '', name: '', disabled: false, emptyTeam: false, options: [] },
 };
 
 function makeNode(): WorkflowNodeData {

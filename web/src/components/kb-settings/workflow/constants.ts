@@ -24,3 +24,17 @@ export const UNKNOWN_ORIGIN_LABEL = 'unbekannt';
 // unset key must read as "the code default applies", never as an
 // empty/cleared box.
 export const DEFAULT_VALUE_LABEL = 'Standardwert';
+
+// The projection's id for the KB-default agent/team node — pipeline.NodeAgentBinding
+// (go-backend/internal/pipeline/nodes.go). It is the ONE place the frontend
+// matches a node by id, because it is the one node whose inspector shows a
+// control that is not driven by the site_config registry: `keys` is empty, so
+// there is nothing else to key the control off.
+//
+// Drift risk, stated rather than hidden: renaming the Go NodeID would make the
+// control silently disappear (the node would still draw, its inspector would
+// just lose the dropdown), and no test on either side of the wire can see that
+// — the Go wire pin checks the SHAPE of `agentBinding`, not this id. If the
+// vocabulary ever gains a second non-registry control, give the projection an
+// explicit per-node control marker instead of growing this list.
+export const WF_NODE_AGENT_BINDING = 'agent_binding';

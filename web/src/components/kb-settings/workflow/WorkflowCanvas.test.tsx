@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { MIN_ZOOM } from './layout';
-import type { WorkflowGraph } from '../../../types';
+import type { AgentBindingInfo, WorkflowGraph } from '../../../types';
 
 // fieldFor is real (not a vi.fn()): NodeInspector, rendered inside this
 // canvas, imports it from the same module and needs a genuine lookup, not a
@@ -20,9 +20,10 @@ vi.mock('./api', async (importOriginal) => {
     // suite doesn't exercise the picker itself (see PresetPicker.test.tsx) —
     // an empty list keeps it present but inert.
     fetchPresets: vi.fn(),
+    setKbDefaultBinding: vi.fn(),
   };
 });
-import { fetchWorkflow, saveKbSettings, resetKbSetting, fetchPresets } from './api';
+import { fetchWorkflow, saveKbSettings, resetKbSetting, fetchPresets, setKbDefaultBinding } from './api';
 
 // WorkflowCanvas reads useReducedMotion, which calls window.matchMedia —
 // not available in jsdom by default (same treatment as Login.test.tsx).
@@ -83,6 +84,7 @@ const graph = (over: Partial<WorkflowGraph> = {}): WorkflowGraph => ({
   presetBase: '',
   presetBaseKnown: true,
   deviations: [],
+  agentBinding: { kind: '', id: '', name: '', disabled: false, emptyTeam: false, options: [] },
   ...over,
 });
 
@@ -101,6 +103,7 @@ describe('WorkflowCanvas', () => {
     vi.mocked(saveKbSettings).mockReset();
     vi.mocked(resetKbSetting).mockReset();
     vi.mocked(fetchPresets).mockReset().mockResolvedValue([]);
+    vi.mocked(setKbDefaultBinding).mockReset();
     lastRfProps = null;
   });
 
@@ -763,6 +766,203 @@ describe('WorkflowCanvas', () => {
       fireEvent.change(input, { target: { value: '' } });
       expect(input.value).toBe('Europe/Berlin');
       expect(screen.queryByText(/geändert/)).not.toBeInTheDocument();
+    });
+  });
+
+  // --- Phase 6: the KB default agent/team ---
+
+  describe('the agent/team binding', () => {
+    const AGENT_OPT = { kind: 'agent' as const, id: 'a1', name: 'Bibliotheks-Assistent', disabled: false, emptyTeam: false };
+    const TEAM_OPT = { kind: 'team' as const, id: 't1', name: 'Recherche-Team', disabled: false, emptyTeam: false };
+
+    // The binding node as the projection actually ships it: keyless,
+    // editable:false. Alongside it an ordinary editable key node, so the same
+    // fixture can produce a settings draft — the state the binding control
+    // must lock itself against.
+    const bindingGraph = (binding: Partial<AgentBindingInfo> = {}): WorkflowGraph => graph({
+      nodes: [
+        { id: 'agent_binding', label: 'Standard-Agent / Team', group: 'Antwort', help: 'Wer neue Chats übernimmt.', keys: [], alwaysOn: false, llmCalls: 0, latencyMs: 0, activation: 'inactive', reason: 'no_binding', values: {}, origins: {}, editable: false },
+        { id: 'crag_grade', label: 'CRAG-Bewertung', group: 'Korrektur', help: '', keys: ['crag_enabled'], alwaysOn: false, llmCalls: 1, latencyMs: 600, activation: 'active', values: { crag_enabled: 'true' }, origins: { crag_enabled: 'kb' }, editable: true },
+      ],
+      edges: [],
+      fields: {
+        crag_enabled: { key: 'crag_enabled', type: 'bool', group: 'Korrektur', label: 'CRAG aktiviert', help: '' },
+      },
+      agentBinding: { kind: '', id: '', name: '', disabled: false, emptyTeam: false, options: [AGENT_OPT, TEAM_OPT], ...binding },
+    });
+
+    const bindingSelect = () =>
+      screen.getByRole('combobox', { name: 'Vorgabe für neue Chats' }) as HTMLSelectElement;
+
+    const openBindingNode = async () => {
+      await userEvent.click(await screen.findByTestId('wf-node-agent_binding'));
+      return bindingSelect();
+    };
+
+    // The id mapping is the whole control path: the canvas hands `binding`
+    // to NodeInspector for exactly one node id.
+    it('offers the dropdown on the binding node and on no other node', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(bindingGraph());
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      expect(screen.queryByRole('combobox', { name: 'Vorgabe für neue Chats' })).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByTestId('wf-node-agent_binding'));
+      expect(bindingSelect()).toBeInTheDocument();
+    });
+
+    it('binds a team through the teams endpoint and repaints from the server', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(bindingGraph());
+      vi.mocked(setKbDefaultBinding).mockResolvedValue({ success: true });
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.selectOptions(await openBindingNode(), 'team:t1');
+
+      await waitFor(() => expect(setKbDefaultBinding).toHaveBeenCalledWith('kb-1', 'team', 't1', true));
+      // Refetched, not guessed: the binding changes the node's activation and
+      // whether OrchTeam is a projected candidate.
+      await waitFor(() => expect(fetchWorkflow).toHaveBeenCalledTimes(2));
+    });
+
+    it('binds an agent through the agents endpoint', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(bindingGraph());
+      vi.mocked(setKbDefaultBinding).mockResolvedValue({ success: true });
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.selectOptions(await openBindingNode(), 'agent:a1');
+
+      await waitFor(() => expect(setKbDefaultBinding).toHaveBeenCalledWith('kb-1', 'agent', 'a1', true));
+    });
+
+    // There is no "unset the default" endpoint. Clearing means writing
+    // isDefault:false on the link that currently holds it — which really
+    // clears, because both attach statements are
+    // `ON CONFLICT (…) DO UPDATE SET is_default = EXCLUDED.is_default`
+    // (internal/agentteams/store_pg.go).
+    it('clears by writing isDefault:false on the currently bound link', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(
+        bindingGraph({ kind: 'team', id: 't1', name: 'Recherche-Team' }),
+      );
+      vi.mocked(setKbDefaultBinding).mockResolvedValue({ success: true });
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.selectOptions(await openBindingNode(), '');
+
+      await waitFor(() => expect(setKbDefaultBinding).toHaveBeenCalledWith('kb-1', 'team', 't1', false));
+    });
+
+    it('writes nothing when clearing a KB that has no default — there is no link to clear', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(bindingGraph());
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      const sel = await openBindingNode();
+      fireEvent.change(sel, { target: { value: '' } });
+
+      expect(setKbDefaultBinding).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a failed write through the canvas error channel and keeps showing the stored value', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(
+        bindingGraph({ kind: 'agent', id: 'a1', name: 'Bibliotheks-Assistent' }),
+      );
+      vi.mocked(setKbDefaultBinding).mockRejectedValue(new Error('agent not found'));
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      const sel = await openBindingNode();
+      expect(sel.value).toBe('agent:a1');
+      await userEvent.selectOptions(sel, 'team:t1');
+
+      // The canvas's existing savebar error surface — no second one.
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Die Vorgabe konnte nicht gespeichert werden (agent not found).',
+      );
+      // The control shows the SERVER's binding, never an optimistic guess: a
+      // failed write must not leave „Team: Recherche-Team" on screen for a KB
+      // that still has the agent bound.
+      expect(bindingSelect().value).toBe('agent:a1');
+      // And the failure must not be dressed up as a repaint problem.
+      expect(fetchWorkflow).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a write that landed but could not be repainted as saved, not as failed', async () => {
+      vi.mocked(fetchWorkflow)
+        .mockResolvedValueOnce(bindingGraph())
+        .mockRejectedValueOnce(new Error('fetch workflow: 500'));
+      vi.mocked(setKbDefaultBinding).mockResolvedValue({ success: true });
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.selectOptions(await openBindingNode(), 'team:t1');
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/Vorgabe gespeichert/);
+    });
+
+    // The presets follow the same rule for the same reason: this write lands
+    // immediately and a settings draft does not, so both being in flight
+    // against one KB leaves the admin unable to tell which intention took.
+    it('locks the dropdown while a settings draft is pending — and only then', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(bindingGraph());
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      // Enabled with no draft. Without this half the assertion below could
+      // pass on a control that is simply always disabled.
+      expect(await openBindingNode()).toBeEnabled();
+
+      await userEvent.click(screen.getByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+      expect(await screen.findByText(/1 Einstellung geändert/)).toBeInTheDocument();
+
+      await userEvent.click(screen.getByTestId('wf-node-agent_binding'));
+      expect(bindingSelect()).toBeDisabled();
+      expect(screen.getByText('Speichere oder verwirf deine Änderungen, bevor du die Vorgabe änderst.'))
+        .toBeInTheDocument();
+
+      // Enabled again once the draft is gone — the lock is the draft's, not a
+      // one-way latch.
+      await userEvent.click(screen.getByRole('button', { name: /verwerfen/i }));
+      expect(bindingSelect()).toBeEnabled();
+    });
+
+    // The handler re-checks the same gate the control renders from: the canvas
+    // behind the panel stays live, so a draft can appear between the render
+    // that enabled the dropdown and the change event.
+    it('refuses the write even if a change event reaches the locked dropdown', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(bindingGraph());
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-crag_grade'));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CRAG aktiviert' }), 'false');
+      await userEvent.click(screen.getByTestId('wf-node-agent_binding'));
+
+      fireEvent.change(bindingSelect(), { target: { value: 'team:t1' } });
+
+      expect(setKbDefaultBinding).not.toHaveBeenCalled();
+    });
+
+    // The canvas's delegated keydown handler covers the WHOLE surface, and the
+    // inspector is rendered inside it. It preventDefault()s Space/Enter to open
+    // a node — which would make a <select> unusable by keyboard, the very
+    // reason WorkflowCanvas documents why the toggle is NOT put on the node
+    // itself. The panel sits outside the node markup, so findWfNodeId resolves
+    // nothing for it; this pins that.
+    it('leaves the dropdown keyboard-operable — the surface delegate must not swallow Space on it', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(bindingGraph());
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      const sel = await openBindingNode();
+      // fireEvent returns false when the event was cancelled (preventDefault).
+      expect(fireEvent.keyDown(sel, { key: ' ', code: 'Space' })).toBe(true);
+      expect(fireEvent.keyDown(sel, { key: 'Enter', code: 'Enter' })).toBe(true);
+    });
+
+    it('offers no dropdown when the server could not read the binding', async () => {
+      vi.mocked(fetchWorkflow).mockResolvedValue(bindingGraph({ kind: 'unknown', options: [] }));
+      render(<WorkflowCanvas kbId="kb-1" />);
+
+      await userEvent.click(await screen.findByTestId('wf-node-agent_binding'));
+
+      expect(screen.queryByRole('combobox', { name: 'Vorgabe für neue Chats' })).not.toBeInTheDocument();
+      expect(screen.getByText(/Aktuell: unbekannt/)).toBeInTheDocument();
     });
   });
 });

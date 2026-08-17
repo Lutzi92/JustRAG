@@ -110,6 +110,7 @@ describe('fieldFor', () => {
     presetBase: '',
     presetBaseKnown: true,
     deviations: [],
+    agentBinding: { kind: '', id: '', name: '', disabled: false, emptyTeam: false, options: [] },
   };
 
   it('returns the field entry for a registered key', () => {

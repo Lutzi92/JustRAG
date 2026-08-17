@@ -280,6 +280,68 @@ describe('NodeInspector', () => {
     expect(screen.queryByRole('button', { name: new RegExp(boolField().label) })).not.toBeInTheDocument();
   });
 
+  // --- Phase 6: the non-registry control path ---
+
+  // The binding node is keyless and editable:false (project.go assigns
+  // Editable from Keys[0], and there is no Keys[0]), so the key-driven path
+  // renders nothing at all for it. Everything below therefore also proves the
+  // control is NOT reached through `keys`/`fields`.
+  const bindingNode = () => data({
+    id: 'agent_binding', label: 'Standard-Agent / Team', group: 'Antwort',
+    help: 'Legt fest, welcher Agent neue Chats übernimmt.',
+    keys: [], values: {}, origins: {}, editable: false, activation: 'inactive',
+  });
+
+  it('renders the binding control for a node it was handed a binding for', () => {
+    renderInspector({
+      node: bindingNode(),
+      binding: { kind: 'team', id: 't1', name: 'Recherche-Team', disabled: false, emptyTeam: false, options: [{ kind: 'team', id: 't1', name: 'Recherche-Team', disabled: false, emptyTeam: false }] },
+      onBindingChange: vi.fn(),
+    });
+    expect(screen.getByRole('combobox', { name: 'Vorgabe für neue Chats' })).toBeInTheDocument();
+    expect(screen.getByText('Aktuell: Team „Recherche-Team“')).toBeInTheDocument();
+  });
+
+  it('renders no binding control for a node it was handed no binding for', () => {
+    // The canvas hands `binding` over for exactly one node id; every other
+    // node must be untouched by this path.
+    renderInspector({ fields: bothFields(), onBindingChange: vi.fn() });
+    expect(screen.queryByRole('combobox', { name: 'Vorgabe für neue Chats' })).not.toBeInTheDocument();
+  });
+
+  it('forwards the chosen binding to the canvas, which owns the write', async () => {
+    const onBindingChange = vi.fn();
+    renderInspector({
+      node: bindingNode(),
+      binding: { kind: '', id: '', name: '', disabled: false, emptyTeam: false, options: [{ kind: 'agent', id: 'a1', name: 'Bibliotheks-Assistent', disabled: false, emptyTeam: false }] },
+      onBindingChange,
+    });
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Vorgabe für neue Chats' }), 'agent:a1');
+    expect(onBindingChange).toHaveBeenCalledWith({ kind: 'agent', id: 'a1', name: 'Bibliotheks-Assistent', disabled: false, emptyTeam: false });
+  });
+
+  it('does not render the binding control without a handler — a dropdown that discards the choice is worse than none', () => {
+    renderInspector({
+      node: bindingNode(),
+      binding: { kind: '', id: '', name: '', disabled: false, emptyTeam: false, options: [{ kind: 'agent', id: 'a1', name: 'Bibliotheks-Assistent', disabled: false, emptyTeam: false }] },
+    });
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  });
+
+  // readOnlyReason belongs to the SAVEBAR path (a settings save in flight);
+  // the binding does not go through the savebar and is gated by its own
+  // reason. Sharing one flag would disable the dropdown for the wrong reasons
+  // and show the wrong sentence.
+  it('gates the binding control on its own reason, not on readOnlyReason', () => {
+    renderInspector({
+      node: bindingNode(),
+      binding: { kind: '', id: '', name: '', disabled: false, emptyTeam: false, options: [{ kind: 'agent', id: 'a1', name: 'Bibliotheks-Assistent', disabled: false, emptyTeam: false }] },
+      onBindingChange: vi.fn(),
+      readOnlyReason: 'Wird gerade gespeichert.',
+    });
+    expect(screen.getByRole('combobox', { name: 'Vorgabe für neue Chats' })).toBeEnabled();
+  });
+
   it('renders every field read-only and offers no Reset when readOnlyReason is set, even on an editable kb-origin key', () => {
     renderInspector({
       fields: bothFields(),
