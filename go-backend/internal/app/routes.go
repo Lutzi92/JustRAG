@@ -134,6 +134,7 @@ type routeCtx struct {
 	kbViewChain     func(http.HandlerFunc) http.Handler
 	kbEditChain     func(http.HandlerFunc) http.Handler
 	kbAdminChain    func(http.HandlerFunc) http.Handler
+	kbAdvancedChain func(http.HandlerFunc) http.Handler
 	analyticsChain  func(http.HandlerFunc) http.Handler
 	apiKeyChain     func(http.HandlerFunc) http.Handler
 
@@ -283,12 +284,37 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 		kbEditChain: func(h http.HandlerFunc) http.Handler {
 			return authMiddleware.Authenticate(kbMw.RequireKBRole(kbaccess.RoleEdit)(http.HandlerFunc(h)))
 		},
-		// kbAdminChain replaces kbTuningChain. The extra RequireRole hurdle
-		// (api-user/admin/superadmin) is gone: the KB role 'admin' is now
-		// the permission for the settings surface, independent of the
-		// system role. Superadmins resolve to 'owner' anyway.
+		// kbAdminChain is the plain four-role gate: KB role 'admin' or better,
+		// independent of the system role. It carries the per-KB decisions any
+		// KB admin may make — rename, membership, categories, canonicalize,
+		// community build.
 		kbAdminChain: func(h http.HandlerFunc) http.Handler {
 			return authMiddleware.Authenticate(kbMw.RequireKBRole(kbaccess.RoleAdmin)(http.HandlerFunc(h)))
+		},
+		// kbAdvancedChain gates the KB "advanced settings" surface
+		// (KbSettingsPanel: RAG settings, Agenten & Teams, Evals, Workflow)
+		// on BOTH a system role in {api-user, admin, superadmin} AND the KB
+		// role 'admin'. Order — Authenticate -> RequireRole -> RequireKBRole
+		// — matches adminChain/superadminChain (auth.RoleChain) with the KB
+		// check appended, and puts the free in-memory system-role test ahead
+		// of the KB lookup's database round-trip.
+		//
+		// This restores the hurdle the deleted kbTuningChain used to impose
+		// and that 9a4f83a dropped when it folded that chain into
+		// kbAdminChain. Dropping it made every KB owner — i.e. every ordinary
+		// user who ever created a KB — an operator of the 52-key per-KB
+		// site_config registry (three of whose keys force a full re-ingest),
+		// of eval runs, and of the workflow presets that rewrite how the KB
+		// answers. Those are deployment-operator controls, so they need an
+		// operator system role on top of the KB role; the KB role alone is
+		// not the intended permission for them. Note this is layered ON TOP
+		// of kbaccess.EffectiveRole, which is unchanged: KB roles still mean
+		// exactly what they meant.
+		//
+		// Superadmin passes RequireRole via its hoisted bypass and resolves
+		// to KB role 'owner', so it reaches everything as before.
+		kbAdvancedChain: func(h http.HandlerFunc) http.Handler {
+			return authMiddleware.Authenticate(kbAdvancedInner(authMiddleware, kbMw)(h))
 		},
 		kbConfigStore:   kbConfigStore,
 		kbConfigHandler: kbConfigHandler,
@@ -504,7 +530,13 @@ func registerAdminRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/admin/reembed-all", rc.superadminChain(maintenanceHandler.ReembedAll))
 	rc.mux.Handle("POST /api/admin/reembed-user-memory", rc.superadminChain(maintenanceHandler.ReembedUserMemory))
 	rc.mux.Handle("POST /api/admin/agent/template", rc.superadminChain(maintenanceHandler.UploadAgentTemplate))
-	rc.mux.Handle("POST /api/kb/{id}/reembed", rc.kbAdminChain(maintenanceHandler.ReembedKB))
+	// The per-KB sweep sits on kbAdvancedChain, not kbAdminChain: its only
+	// caller is the advanced settings panel's Save flow, which offers it after
+	// a key marked requiresReingest changes (web/src/components/kb-settings/
+	// api.ts is the sole reference to the path). Leaving it a rung lower would
+	// hand anyone refused the settings themselves a way to queue a full
+	// re-ingest of the KB anyway.
+	rc.mux.Handle("POST /api/kb/{id}/reembed", rc.kbAdvancedChain(maintenanceHandler.ReembedKB))
 
 	// Admin-triggered batch entity canonicalization (EDC dedup) for a KB.
 	canonicalizeHandler := kggraph.NewCanonicalizeHandler(
@@ -608,18 +640,20 @@ func registerAdminEvalRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/admin/eval/golden-sets/jobs", rc.adminChain(h.ListGenJobs))
 	rc.mux.Handle("GET /api/admin/eval/golden-sets/{id}", rc.adminChain(h.GetGoldenSet))
 
-	// Per-KB eval surface (KB admin role, independent of system role).
-	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets", rc.kbAdminChain(h.ListGoldenSetsForKB))
-	rc.mux.Handle("POST /api/kb/{id}/eval/golden-sets", rc.kbAdminChain(h.CreateGoldenSetForKB))
-	rc.mux.Handle("POST /api/kb/{id}/eval/golden-sets/generate", rc.kbAdminChain(h.GenerateGoldenSetForKB))
-	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/jobs", rc.kbAdminChain(h.ListGenJobsForKB))
-	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbAdminChain(h.GetGoldenSetForKB))
-	rc.mux.Handle("DELETE /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbAdminChain(h.DeleteGoldenSetForKB))
-	rc.mux.Handle("POST /api/kb/{id}/eval/runs", rc.kbAdminChain(h.CreateRunForKB))
-	rc.mux.Handle("GET /api/kb/{id}/eval/runs", rc.kbAdminChain(h.ListRunsForKB))
-	rc.mux.Handle("GET /api/kb/{id}/eval/runs/{runId}", rc.kbAdminChain(h.GetRunForKB))
-	rc.mux.Handle("GET /api/kb/{id}/eval/runs/{runId}/export", rc.kbAdminChain(h.ExportRunForKB))
-	rc.mux.Handle("DELETE /api/kb/{id}/eval/runs/{runId}", rc.kbAdminChain(h.DeleteRunForKB))
+	// Per-KB eval surface — the Evals tab of the advanced settings panel, so
+	// kbAdvancedChain: KB role admin AND a system role in
+	// {api-user, admin, superadmin}.
+	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets", rc.kbAdvancedChain(h.ListGoldenSetsForKB))
+	rc.mux.Handle("POST /api/kb/{id}/eval/golden-sets", rc.kbAdvancedChain(h.CreateGoldenSetForKB))
+	rc.mux.Handle("POST /api/kb/{id}/eval/golden-sets/generate", rc.kbAdvancedChain(h.GenerateGoldenSetForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/jobs", rc.kbAdvancedChain(h.ListGenJobsForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbAdvancedChain(h.GetGoldenSetForKB))
+	rc.mux.Handle("DELETE /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbAdvancedChain(h.DeleteGoldenSetForKB))
+	rc.mux.Handle("POST /api/kb/{id}/eval/runs", rc.kbAdvancedChain(h.CreateRunForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/runs", rc.kbAdvancedChain(h.ListRunsForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/runs/{runId}", rc.kbAdvancedChain(h.GetRunForKB))
+	rc.mux.Handle("GET /api/kb/{id}/eval/runs/{runId}/export", rc.kbAdvancedChain(h.ExportRunForKB))
+	rc.mux.Handle("DELETE /api/kb/{id}/eval/runs/{runId}", rc.kbAdvancedChain(h.DeleteRunForKB))
 }
 
 // pendingInviteAdapter narrows *kb.PGStore down to kbmembers.PendingInviteStore:
@@ -667,22 +701,25 @@ func registerKBRoutes(rc *routeCtx) {
 	// full row that GET /api/kb/global (subscription-filtered) will not return.
 	rc.mux.Handle("GET /api/kb/{id}", rc.kbViewChain(kbHandler.GetKnowledgeBase))
 
-	// Per-KB settings (registry-driven RAG-pipeline overrides)
-	rc.mux.Handle("GET /api/kb/{id}/settings", rc.kbAdminChain(rc.kbConfigHandler.GetSettings))
-	rc.mux.Handle("PUT /api/kb/{id}/settings", rc.kbAdminChain(rc.kbConfigHandler.PutSettings))
-	rc.mux.Handle("DELETE /api/kb/{id}/settings/{key}", rc.kbAdminChain(rc.kbConfigHandler.DeleteSetting))
+	// Per-KB settings (registry-driven RAG-pipeline overrides). This and the
+	// workflow routes below are the KB "advanced settings" surface, hence
+	// kbAdvancedChain rather than kbAdminChain — see its definition for why
+	// the KB role alone is not the permission here.
+	rc.mux.Handle("GET /api/kb/{id}/settings", rc.kbAdvancedChain(rc.kbConfigHandler.GetSettings))
+	rc.mux.Handle("PUT /api/kb/{id}/settings", rc.kbAdvancedChain(rc.kbConfigHandler.PutSettings))
+	rc.mux.Handle("DELETE /api/kb/{id}/settings/{key}", rc.kbAdvancedChain(rc.kbConfigHandler.DeleteSetting))
 	// Read-only pipeline projection ("what actually runs for this KB?").
 	// Node edits go through PUT /api/kb/{id}/settings above, so validation
 	// stays in one place.
-	rc.mux.Handle("GET /api/kb/{id}/workflow", rc.kbAdminChain(rc.workflowHandler.GetWorkflow))
+	rc.mux.Handle("GET /api/kb/{id}/workflow", rc.kbAdvancedChain(rc.workflowHandler.GetWorkflow))
 	// Applying a curated preset. POST writes the preset's bundle plus the
 	// workflow_preset provenance marker in one statement; GET on the same path
 	// (?preset=<id>) previews the same apply without writing, so the UI can
 	// warn "this overwrites N of your settings" before destroying any. Same
-	// kbAdminChain as the projection above — a preset rewrites how the KB
-	// answers, which the four-role model puts on admin, not edit.
-	rc.mux.Handle("GET /api/kb/{id}/workflow/preset", rc.kbAdminChain(rc.workflowHandler.PreviewPreset))
-	rc.mux.Handle("POST /api/kb/{id}/workflow/preset", rc.kbAdminChain(rc.workflowHandler.ApplyPreset))
+	// kbAdvancedChain as the projection above — a preset rewrites how the KB
+	// answers, which is an operator decision, not merely an edit.
+	rc.mux.Handle("GET /api/kb/{id}/workflow/preset", rc.kbAdvancedChain(rc.workflowHandler.PreviewPreset))
+	rc.mux.Handle("POST /api/kb/{id}/workflow/preset", rc.kbAdvancedChain(rc.workflowHandler.ApplyPreset))
 	// Curated presets are deployment-wide, not per-KB — authenticated only,
 	// same "no KB in the path" pattern as GET /api/kb / GET /api/kb/global
 	// above (and GET /api/kb/catalog, GET /api/kb-categories below).
@@ -1046,12 +1083,17 @@ func registerAgentTeamRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/agent-teams/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.GetTeam)))
 	rc.mux.Handle("PUT /api/agent-teams/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.UpdateTeam)))
 	rc.mux.Handle("DELETE /api/agent-teams/{id}", rc.authMw.Authenticate(http.HandlerFunc(h.DeleteTeam)))
-	// KB attachment: view to list (picker), admin to attach/detach.
+	// KB attachment. The LIST stays on kbViewChain: the chat session's agent
+	// picker (useKbAgents) reads it for every ordinary user, and gating it
+	// would break agent selection in chat. Attach/detach are the "Agenten &
+	// Teams" tab of the advanced settings panel — and the same two PUTs carry
+	// the workflow canvas's default-binding write — so they sit on
+	// kbAdvancedChain.
 	rc.mux.Handle("GET /api/kb/{id}/agents", rc.kbViewChain(h.ListKBAgents))
-	rc.mux.Handle("PUT /api/kb/{id}/agents/{agentId}", rc.kbAdminChain(h.AttachAgent))
-	rc.mux.Handle("DELETE /api/kb/{id}/agents/{agentId}", rc.kbAdminChain(h.DetachAgent))
-	rc.mux.Handle("PUT /api/kb/{id}/teams/{teamId}", rc.kbAdminChain(h.AttachTeam))
-	rc.mux.Handle("DELETE /api/kb/{id}/teams/{teamId}", rc.kbAdminChain(h.DetachTeam))
+	rc.mux.Handle("PUT /api/kb/{id}/agents/{agentId}", rc.kbAdvancedChain(h.AttachAgent))
+	rc.mux.Handle("DELETE /api/kb/{id}/agents/{agentId}", rc.kbAdvancedChain(h.DetachAgent))
+	rc.mux.Handle("PUT /api/kb/{id}/teams/{teamId}", rc.kbAdvancedChain(h.AttachTeam))
+	rc.mux.Handle("DELETE /api/kb/{id}/teams/{teamId}", rc.kbAdvancedChain(h.DetachTeam))
 }
 
 func registerFileRoutes(rc *routeCtx) {
@@ -1437,4 +1479,24 @@ func (a *kbRouterCandidateAdapter) ListKBRouterCandidates(ctx context.Context, u
 		})
 	}
 	return out, nil
+}
+
+// kbAdvancedInner is the authorization core of kbAdvancedChain: the system-role
+// test and the KB-role test, without the outer Authenticate wrapper.
+//
+// It exists as a named function for one reason: the chain tests must exercise
+// the composition this file actually installs, not a copy of it. They used to
+// rebuild the same nesting themselves, which meant the most security-relevant
+// line in the gate was unpinned — adding auth.RoleUser to the argument list
+// below left the entire suite green, because the tests were asserting against
+// their own mirror. Anything that changes who passes must change this function,
+// and every caller sees it.
+//
+// The nesting order is load-bearing: RequireRole outside, RequireKBRole inside,
+// so a caller without the system role is refused before any KB lookup runs.
+func kbAdvancedInner(authMw *auth.Middleware, kbMw *kbaccess.Middleware) func(http.HandlerFunc) http.Handler {
+	return func(h http.HandlerFunc) http.Handler {
+		return authMw.RequireRole(auth.RoleAPIUser, auth.RoleAdmin)(
+			kbMw.RequireKBRole(kbaccess.RoleAdmin)(http.HandlerFunc(h)))
+	}
 }

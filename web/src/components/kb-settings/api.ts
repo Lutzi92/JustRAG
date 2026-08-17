@@ -8,9 +8,27 @@ import { API_BASE_URL, authFetch } from '../../api';
 const url = (kbId: string, suffix = ''): string =>
   `${API_BASE_URL}/api/kb/${kbId}/settings${suffix}`;
 
+/**
+ * KbSettingsHttpError carries the HTTP status alongside the message so callers
+ * can tell the one failure that is not a fault from the ones that are: a 403
+ * means the caller may not operate this surface at all (kbAdvancedChain wants a
+ * system role in {api-user, admin, superadmin} on top of KB role admin), which
+ * deserves an explanation rather than a status code. Everything else keeps the
+ * old shape.
+ */
+export class KbSettingsHttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'KbSettingsHttpError';
+    this.status = status;
+  }
+}
+
 export async function fetchKbSettings(kbId: string): Promise<KbSettingsResponse> {
   const res = await authFetch(url(kbId));
-  if (!res.ok) throw new Error(`fetch settings: ${res.status}`);
+  if (!res.ok) throw new KbSettingsHttpError(res.status, `fetch settings: ${res.status}`);
   return res.json();
 }
 

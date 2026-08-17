@@ -31,8 +31,9 @@ type workflowBindings struct{ store *agentteams.Store }
 
 // ListBindingOptions implements the workflow handler's bindingSource.
 //
-// Permission note: no access check here. The route above it is kbAdminChain
-// (RequireKBRole admin), which strictly outranks the kbViewChain that already
+// Permission note: no access check here. The route above it is
+// kbAdvancedChain (RequireRole api-user/admin/superadmin + RequireKBRole
+// admin), which strictly outranks the kbViewChain that already
 // serves the attached list via GET /api/kb/{id}/agents, and ListKBAgents adds
 // no handler-internal check of its own. This read returns the same rows plus
 // the disabled ones, all of them facts about the caller's own KB — no new

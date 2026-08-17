@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { motion } from 'framer-motion';
 import { SlidersHorizontal, FlaskConical, Workflow, Bot, ChevronDown, ChevronRight, Search, Save, RotateCcw, Copy, Check } from 'lucide-react';
 import type { KbConfigField, KbSettingsResponse } from '../../types';
-import { fetchKbSettings, saveKbSettings, resetKbSetting, reembedKb } from './api';
+import { fetchKbSettings, saveKbSettings, resetKbSetting, reembedKb, KbSettingsHttpError } from './api';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
 import { useModalContext } from '../../contexts/ModalContext';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -20,16 +20,20 @@ interface Props {
   onCreateAgent?: () => void;
 }
 
-// The Agenten tab is where attaching agents/teams to a KB lives on the ADMIN
-// surface. It was reachable in exactly one other place, the chat composer's
-// system-prompt panel (ChatView.tsx), behind `currentKb.userId === user.id` —
-// the legacy owner-mirror column. That gate excludes a KB admin who is not the
-// owner, and a PUBLIC KB has no owner at all (publishing NULLs
-// knowledge_bases.user_id), so on every public KB the only UI for attaching
-// agents was visible to nobody. This panel is the KB-admin surface: its entry
-// point in HomeView is gated on the same role, and every endpoint
-// KbAgentsSection calls (PUT/DELETE /api/kb/{id}/agents|teams/{…}) is on
-// kbAdminChain.
+// All four tabs are the KB "advanced settings" surface. Every endpoint they
+// call sits on kbAdvancedChain, which wants a system role in
+// {api-user, admin, superadmin} on TOP of KB role admin — the panel's two entry
+// points (the sliders icon in HomeView, the one in the ChatView header) share
+// canOpenKbAdvancedSettings so they gate on exactly that, and a caller who
+// arrives without it gets the explicit "Keine Berechtigung" state below rather
+// than four tabs that each 403.
+//
+// The Agenten tab in particular is where attaching agents/teams to a KB lives.
+// It has one other mount, the chat composer's system-prompt panel
+// (ChatView.tsx), which used to be gated on `currentKb.userId === user.id` —
+// the legacy owner-mirror column, NULL on every public KB (publishing NULLs
+// knowledge_bases.user_id) and silent about a KB admin who is not the owner.
+// That mount now takes the same predicate this panel's entry point does.
 //
 // The two mounts never render at once — `view === 'kb-settings'` returns before
 // ChatView in AuthenticatedApp — so there are no two live copies to disagree.
@@ -49,6 +53,11 @@ export function KbSettingsPanel({ kbId, onCreateAgent }: Props) {
   const { showConfirm, showAlert } = useModalContext();
   const [tab, setTab] = useState<'settings' | 'agents' | 'evals' | 'workflow'>('settings');
   const [data, setData] = useState<KbSettingsResponse | null>(null);
+  // Set when the very first load came back 403. Kept apart from `error`
+  // because it is not a fault to report but a permission to explain, and
+  // because it suppresses the tab bar: every one of the four tabs talks to
+  // kbAdvancedChain, so all four would fail the same way.
+  const [forbidden, setForbidden] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -66,8 +75,22 @@ export function KbSettingsPanel({ kbId, onCreateAgent }: Props) {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(openMap)); } catch { /* quota/disabled */ }
   }, [openMap]);
 
+  // The reset of `forbidden` lives in the resolution handlers, not at the top
+  // of the effect: setting state synchronously in an effect body cascades a
+  // render (react-hooks/set-state-in-effect), and both paths below cover the
+  // kbId switch anyway — a KB the caller may read clears the flag on success,
+  // and any non-403 failure clears it before reporting itself.
   useEffect(() => {
-    fetchKbSettings(kbId).then(setData).catch((e) => setError(String(e)));
+    fetchKbSettings(kbId)
+      .then((fresh) => {
+        setForbidden(false);
+        setData(fresh);
+      })
+      .catch((e) => {
+        const denied = e instanceof KbSettingsHttpError && e.status === 403;
+        setForbidden(denied);
+        if (!denied) setError(String(e));
+      });
   }, [kbId]);
 
   const effective = (key: string): string =>
@@ -177,6 +200,26 @@ export function KbSettingsPanel({ kbId, onCreateAgent }: Props) {
       </div>
     </>
   );
+
+  // A 403 on the initial load: the caller reached the panel without the
+  // permission the server requires. Say so plainly, in place of the tabs —
+  // rendering them would offer four controls that each fail the same way, and
+  // rendering nothing would look like a stuck spinner.
+  if (forbidden) {
+    return (
+      <div className="kb-settings">
+        <div role="alert" style={{ maxWidth: 560, color: 'var(--text-primary)', lineHeight: 1.55 }}>
+          <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>Keine Berechtigung</h2>
+          <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
+            Für die erweiterten Einstellungen dieser Knowledge Base brauchst du
+            zusätzlich zur KB-Rolle „admin" eine der Systemrollen „api-user",
+            „admin" oder „superadmin". Wende dich an deine Administration, wenn
+            du sie brauchst.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (error) {
     return (

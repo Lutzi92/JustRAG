@@ -115,9 +115,9 @@ type AttachEligibility struct {
 // attach, re-point or clear it on kbID.
 //
 // The rule is: the caller OWNS the agent, OR the agent is ALREADY attached to
-// this KB. The route above (kbAdminChain) has already established the caller is
-// a KB admin, so this is the second half of a two-part decision, not a
-// re-litigation of the first.
+// this KB. The route above (kbAdvancedChain) has already established the caller
+// is a KB admin with an operator system role, so this is the second half of a
+// two-part decision, not a re-litigation of the first.
 //
 // Both halves are load-bearing and each fixes a different defect:
 //

@@ -87,9 +87,18 @@ vi.mock('../contexts/ThemeContext', () => ({
   }),
 }));
 
+// The caller's SYSTEM role, mutable per test. It is a separate axis from the
+// KB role: the advanced-settings trigger needs BOTH, so a fixed 'user' here
+// would make every one of those assertions unfalsifiable in one direction.
+// vi.hoisted because vi.mock's factory is hoisted above this file's top-level
+// statements.
+const authState = vi.hoisted(() => ({ role: 'user' }));
+
+beforeEach(() => { authState.role = 'user'; });
+
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({
-    user: { id: 'user-1', username: 'grace', role: 'user' },
+    user: { id: 'user-1', username: 'grace', role: authState.role },
     siteConfigs: {},
   }),
 }));
@@ -203,15 +212,32 @@ describe('HomeView members-dialog trigger', () => {
   });
 });
 
-// KbSettingsPanel (RAG settings / evals / workflow) had no entry point anywhere
-// in the app — `grep -rn KbSettingsPanel web/src` outside its own directory hit
-// nothing, so the panel and its workflow canvas were unreachable in a browser.
-// The KB card is where a KB admin looks; every endpoint the panel calls is
-// kbAdminChain, so the trigger takes the same myRole gate as the members one.
+// KbSettingsPanel (RAG settings / evals / workflow) is the KB "advanced
+// settings" surface, and its endpoints sit on kbAdvancedChain: a system role in
+// {api-user, admin, superadmin} AND KB role admin or better. The trigger must
+// therefore be hidden in exactly the cases the server refuses — both terms, not
+// the members button's KB-role-only gate, which is what it wrongly shared
+// before. The share button beside it deliberately keeps that looser gate, and
+// the last case here pins the two apart.
 describe('HomeView KB-settings trigger', () => {
   const label = translations.kbAdvancedSettings.en;
 
-  it('shows the trigger for an owner and hands the KB to the callback', async () => {
+  it('hides the trigger from a plain user who OWNS the KB', async () => {
+    authState.role = 'user';
+    const kb: KnowledgeBase = { ...baseKb, myRole: 'owner' };
+    renderView(<HomeView kbs={[kb]} {...noopProps} />);
+    expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
+  });
+
+  it('still offers the plain owner the members dialog — only the advanced surface is gated', () => {
+    authState.role = 'user';
+    const kb: KnowledgeBase = { ...baseKb, myRole: 'owner' };
+    renderView(<HomeView kbs={[kb]} {...noopProps} />);
+    expect(screen.getByRole('button', { name: translations.share.en })).toBeInTheDocument();
+  });
+
+  it('shows the trigger for an api-user who owns the KB, and hands the KB to the callback', async () => {
+    authState.role = 'api-user';
     const onOpenKbSettings = vi.fn();
     const kb: KnowledgeBase = { ...baseKb, myRole: 'owner' };
     renderView(<HomeView kbs={[kb]} {...noopProps} onOpenKbSettings={onOpenKbSettings} />);
@@ -219,14 +245,23 @@ describe('HomeView KB-settings trigger', () => {
     expect(onOpenKbSettings).toHaveBeenCalledWith(kb, expect.anything());
   });
 
-  it('shows the trigger for an admin who is not the owner', async () => {
+  it('shows the trigger for a system admin who is KB admin but not owner', async () => {
+    authState.role = 'admin';
     const kb: KnowledgeBase = { ...baseKb, myRole: 'admin' };
     renderView(<HomeView kbs={[kb]} {...noopProps} />);
     await expandSection(translations.homeSharedWithMe.en);
     expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
   });
 
-  it('hides the trigger from an editor — the settings endpoints are admin-only', async () => {
+  it('shows the trigger for a superadmin', () => {
+    authState.role = 'superadmin';
+    const kb: KnowledgeBase = { ...baseKb, myRole: 'owner' };
+    renderView(<HomeView kbs={[kb]} {...noopProps} />);
+    expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+  });
+
+  it('hides the trigger from an api-user who is only an editor — the KB role still counts', async () => {
+    authState.role = 'api-user';
     const kb: KnowledgeBase = { ...baseKb, myRole: 'edit' };
     renderView(<HomeView kbs={[kb]} {...noopProps} />);
     await expandSection(translations.homeSharedWithMe.en);

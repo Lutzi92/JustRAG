@@ -216,4 +216,51 @@ describe('KbSettingsPanel', () => {
 
     expect(onCreateAgent).toHaveBeenCalled();
   });
+
+  // Every endpoint this panel calls sits on kbAdvancedChain, which wants a
+  // system role in {api-user, admin, superadmin} on top of KB role admin. The
+  // entry points are gated on the same predicate, so a caller only lands here
+  // without it through a stale tab or a hand-typed route — but "only" is not
+  // "never", and the honest failure is the point: no blank screen, no tab bar
+  // offering four controls that would each 403 in turn, and no spinner that
+  // never resolves.
+  describe('on a 403 from the settings endpoint', () => {
+    beforeEach(() => {
+      global.fetch = vi.fn(async () => (
+        { ok: false, status: 403, json: async () => ({ error: 'Insufficient permissions' }) } as Response
+      )) as unknown as typeof fetch;
+    });
+
+    it('explains the missing permission instead of leaving the panel empty', async () => {
+      render(<KbSettingsPanel kbId="kb-1" />);
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Keine Berechtigung');
+      // Names the roles, so the reader knows what to ask for rather than only
+      // that something went wrong.
+      expect(alert).toHaveTextContent(/api-user/);
+      expect(alert).toHaveTextContent(/superadmin/);
+    });
+
+    it('drops the tab bar and the loading state', async () => {
+      render(<KbSettingsPanel kbId="kb-1" />);
+
+      await screen.findByRole('alert');
+      expect(screen.queryByRole('button', { name: /Agenten & Teams/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /RAG Settings/ })).not.toBeInTheDocument();
+      expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    });
+
+    it('does not mistake an ordinary failure for a permission problem', async () => {
+      global.fetch = vi.fn(async () => (
+        { ok: false, status: 500, json: async () => ({}) } as Response
+      )) as unknown as typeof fetch;
+
+      render(<KbSettingsPanel kbId="kb-1" />);
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).not.toHaveTextContent('Keine Berechtigung');
+      expect(alert).toHaveTextContent(/500/);
+    });
+  });
 });

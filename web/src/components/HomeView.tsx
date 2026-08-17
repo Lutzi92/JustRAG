@@ -10,6 +10,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { KBCardSkeleton } from './Skeleton';
 import { KbAccordion } from './KbAccordion';
+import { canOpenKbAdvancedSettings } from '../utils/kbAccess';
 import KbCatalogPanel from './KbCatalogPanel';
 import './HomeView.css';
 
@@ -274,6 +275,12 @@ function PublicKbCard({
 interface PrivateKbCardProps {
   kb: KnowledgeBase;
   currentUserId?: string;
+  /**
+   * The caller's SYSTEM role. Needed here because the advanced-settings
+   * trigger below requires one of {api-user, admin, superadmin} on top of the
+   * KB role — the card cannot decide that from `kb` alone.
+   */
+  systemRole?: string;
   removingKb: boolean;
   rtf: Intl.RelativeTimeFormat;
   t: (k: string) => string;
@@ -287,7 +294,7 @@ interface PrivateKbCardProps {
 // card in both, since the only difference between the sections is the
 // caller's own role, which the card already reads off myRole.
 function PrivateKbCard({
-  kb, currentUserId, removingKb, rtf, t, onSelectKB, onOpenShare, onOpenKbSettings, onDeleteKB,
+  kb, currentUserId, systemRole, removingKb, rtf, t, onSelectKB, onOpenShare, onOpenKbSettings, onDeleteKB,
 }: PrivateKbCardProps) {
   return (
     // Card-level click is a mouse convenience (role="presentation"); the
@@ -314,10 +321,14 @@ function PrivateKbCard({
             </button>
           )}
 
-          {/* RAG settings / evals / workflow (KbSettingsPanel). Same gate as
-              the members button: every endpoint the panel calls is
-              kbAdminChain, so admins and owners only. */}
-          {canManageMembers(kb) && (
+          {/* RAG settings / evals / workflow (KbSettingsPanel). NOT the same
+              gate as the members button beside it: every endpoint the panel
+              calls is kbAdvancedChain, which requires a system role in
+              {api-user, admin, superadmin} as well as the KB admin role.
+              canOpenKbAdvancedSettings is the shared predicate — ChatView's
+              trigger calls the same one, so the two entry points cannot drift
+              apart again. */}
+          {canOpenKbAdvancedSettings(kb, systemRole) && (
             <button
               onClick={(e) => onOpenKbSettings(kb, e)}
               className="home-view__mini-icon"
@@ -564,6 +575,7 @@ export function HomeView(props: HomeViewProps) {
                 key={kb.id}
                 kb={kb}
                 currentUserId={user?.id}
+                systemRole={user?.role}
                 removingKb={removingKb}
                 rtf={rtf}
                 t={t}
@@ -602,6 +614,7 @@ export function HomeView(props: HomeViewProps) {
               key={kb.id}
               kb={kb}
               currentUserId={user?.id}
+              systemRole={user?.role}
               removingKb={removingKb}
               rtf={rtf}
               t={t}

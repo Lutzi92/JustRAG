@@ -455,9 +455,10 @@ func (h *Handler) DeleteTeam(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------------------
 // KB attachment endpoints. Route-level ACL is the WHOLE access decision here:
-// ListKBAgents behind kbViewChain, attach/detach behind kbAdminChain
+// ListKBAgents behind kbViewChain, attach/detach behind kbAdvancedChain
 // (internal/app/routes.go — a doc comment here used to say kbEditChain, which
-// was never true of the routes as registered).
+// was never true of the routes as registered). The list deliberately stays a
+// rung lower: the chat agent picker reads it for every ordinary user.
 //
 // Attach used to additionally require that the caller OWN the agent
 // (GetAgent/GetTeam scoped to the caller's user_id), which meant a KB admin who

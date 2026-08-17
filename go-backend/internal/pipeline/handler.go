@@ -69,7 +69,8 @@ func NewHandler(s store, g globalReader, b bindingSource) *Handler {
 
 // GetWorkflow handles GET /api/kb/{id}/workflow?lane=…
 //
-// Mounted on kbAdminChain (KB role admin). Read-only: node edits go through the
+// Mounted on kbAdvancedChain (KB role admin AND a system role in
+// {api-user, admin, superadmin}). Read-only: node edits go through the
 // existing PUT /api/kb/{id}/settings so validation stays in one place.
 func (h *Handler) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -189,9 +190,10 @@ type applyPresetRequest struct {
 
 // ApplyPreset handles POST /api/kb/{id}/workflow/preset.
 //
-// Mounted on kbAdminChain, like GET /api/kb/{id}/workflow: it rewrites the
+// Mounted on kbAdvancedChain, like GET /api/kb/{id}/workflow: it rewrites the
 // KB's answering pipeline, which the four-role model places squarely on admin
-// ("how the KB is processed and answered"), not edit.
+// ("how the KB is processed and answered"), not edit — and which the system
+// role must additionally authorise, since it is an operator control.
 //
 // The write is all-or-nothing in both directions: every check runs before
 // anything is written (planApply), and the write itself is one UpsertBatch —
@@ -236,7 +238,7 @@ func (h *Handler) ApplyPreset(w http.ResponseWriter, r *http.Request) {
 // warn before it destroys anything.
 //
 // A client COULD compute the overwrite count itself: GET /api/kb/{id}/settings
-// (same kbAdminChain) returns each key's raw `override` explicitly, and GET
+// (same kbAdvancedChain) returns each key's raw `override` explicitly, and GET
 // /api/workflow/presets returns each preset's full Bundle, which is everything
 // Overwrites needs. Note this is NOT derivable from the workflow projection
 // alone — ProjectedNode.Origins collapses a KB override that happens to equal
@@ -291,11 +293,14 @@ func writeBadRequest(ctx context.Context, w http.ResponseWriter, err error) bool
 //
 // Mounted authenticated-only, WITHOUT a KB in the path: presets are curated,
 // deployment-wide starting points (internal/pipeline/presets.go), not a
-// per-KB resource, so kbAdminChain's RequireKBRole gate does not apply here —
-// there is no {id} to resolve a role against. Follows the same
+// per-KB resource, so kbAdvancedChain's RequireKBRole gate does not apply
+// here — there is no {id} to resolve a role against. Follows the same
 // "authenticated, no KB" pattern as GET /api/kb/catalog and GET
 // /api/kb-categories in routes.go (rc.authMw.Authenticate directly, no
-// kbaccess middleware).
+// kbaccess middleware). Left authenticated-only on purpose: the response is
+// the same static, deployment-wide preset catalogue for every caller and
+// carries no KB state, so reading it grants nothing. Applying a preset is
+// where the KB is touched, and that route IS on kbAdvancedChain.
 func (h *Handler) ListPresets(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
