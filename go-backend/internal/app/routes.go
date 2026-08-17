@@ -1226,6 +1226,7 @@ func registerResearchRoutes(rc *routeCtx, researchRL *middleware.RedisRateLimite
 func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 	apiKeyAuth := apikeyauth.NewMiddleware(apikeyauth.NewStore(rc.infra.db.Main))
 	openaiHandler := openaicompat.NewHandler(&openaiDeps{PGStore: rc.kbStore, kbAccessStore: rc.kbAccessStore}, rc.aiResolver, rc.searchService)
+	openaiHandler.SetUsageRecorder(usage.NewRecorder(rc.infra.db.Main))
 
 	rc.mux.Handle("GET /openai/v1/models", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(openaiHandler.ListModels))))
 	rc.mux.Handle("POST /openai/v1/chat/completions", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(openaiHandler.ChatCompletions))))
