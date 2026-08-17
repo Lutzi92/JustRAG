@@ -28,7 +28,15 @@ export async function saveKbSettings(kbId: string, configs: Record<string, strin
 
 export async function resetKbSetting(kbId: string, key: string): Promise<void> {
   const res = await authFetch(url(kbId, `/${encodeURIComponent(key)}`), { method: 'DELETE' });
-  if (!res.ok) throw new Error(`reset setting: ${res.status}`);
+  if (!res.ok) {
+    // Mirrors saveKbSettings above: a DELETE can 400 too (clearing an
+    // override may fall the key back to a conflicting global value), and
+    // handler.go writes the specific reason to body.error. A bare status
+    // code told the admin THAT it failed but never WHY — the whole point of
+    // the message on a conflict is naming the other key involved.
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `reset setting: ${res.status}`);
+  }
 }
 
 export async function reembedKb(kbId: string): Promise<{ queued: number }> {

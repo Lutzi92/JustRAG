@@ -97,6 +97,80 @@ func (s *Store) DeleteAgent(ctx context.Context, id, userID string) (bool, error
 	return tag.RowsAffected() > 0, nil
 }
 
+// AttachEligibility is the KB-attach endpoint's two-part answer about one agent
+// or team: does the row exist at all, and may THIS caller bind or re-point it
+// on THIS KB.
+//
+// Two fields rather than one because they produce different statuses and the
+// difference is information the caller is entitled to: a missing agent is a 404
+// (a typo'd id, and telling the truth costs nothing), while a real agent the
+// caller may not touch is a 403. Collapsing them would either leak the
+// existence of every foreign agent as a 403, or hide a genuine typo as one.
+type AttachEligibility struct {
+	Exists  bool
+	Allowed bool
+}
+
+// AgentAttachEligibility answers whether agentID exists, and whether userID may
+// attach, re-point or clear it on kbID.
+//
+// The rule is: the caller OWNS the agent, OR the agent is ALREADY attached to
+// this KB. The route above (kbAdminChain) has already established the caller is
+// a KB admin, so this is the second half of a two-part decision, not a
+// re-litigation of the first.
+//
+// Both halves are load-bearing and each fixes a different defect:
+//
+//   - "already attached" is what makes the workflow canvas usable. The
+//     endpoint used to require ownership (GetAgent scoped to the caller), so a
+//     KB admin who did not create the agent got 404 on their own KB —
+//     including when CLEARING a default someone else had bound, since clearing
+//     goes through this same endpoint with isDefault:false. The canvas showed
+//     them a binding they were structurally unable to remove.
+//   - "owns it" is what keeps the widening from going further than that. The
+//     link row IS the use-time authorization: LoadAgentForChat checks
+//     attachment and never ownership, so a bind makes that agent's persona,
+//     model override and config overrides run for every viewer of the KB. With
+//     no ownership arm at all, any KB admin could conscript any agent whose
+//     UUID they could read, with the owner given no notice and no veto. (Tool
+//     escalation is separately impossible — chat.RestrictedDispatcher re-gates
+//     the allowlist at dispatch time and strips privileged tools unless
+//     agents_allow_privileged_tools is on.)
+//
+// Nothing usable is lost by the narrower rule: GET /api/agents and
+// GET /api/agent-teams stay owner-scoped, so an admin cannot even see an
+// unattached foreign agent to name it.
+//
+// Detach is deliberately NOT gated by this: it can only ever remove a link on
+// this KB, so "already attached" is true by construction there.
+func (s *Store) AgentAttachEligibility(ctx context.Context, agentID, kbID, userID string) (AttachEligibility, error) {
+	var el AttachEligibility
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1),
+		        EXISTS(SELECT 1 FROM agents WHERE id = $1 AND user_id = $3)
+		     OR EXISTS(SELECT 1 FROM agent_kb_links WHERE agent_id = $1 AND kb_id = $2)`,
+		agentID, kbID, userID).Scan(&el.Exists, &el.Allowed)
+	if err != nil {
+		return AttachEligibility{}, fmt.Errorf("AgentAttachEligibility: %w", err)
+	}
+	return el, nil
+}
+
+// TeamAttachEligibility is AgentAttachEligibility for teams — see there for the
+// rule and why it is exactly this wide.
+func (s *Store) TeamAttachEligibility(ctx context.Context, teamID, kbID, userID string) (AttachEligibility, error) {
+	var el AttachEligibility
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM agent_teams WHERE id = $1),
+		        EXISTS(SELECT 1 FROM agent_teams WHERE id = $1 AND user_id = $3)
+		     OR EXISTS(SELECT 1 FROM team_kb_links WHERE team_id = $1 AND kb_id = $2)`,
+		teamID, kbID, userID).Scan(&el.Exists, &el.Allowed)
+	if err != nil {
+		return AttachEligibility{}, fmt.Errorf("TeamAttachEligibility: %w", err)
+	}
+	return el, nil
+}
+
 // CountOwnedAgents returns how many of ids exist AND belong to userID —
 // the team-membership same-owner check.
 func (s *Store) CountOwnedAgents(ctx context.Context, userID string, ids []string) (int, error) {
@@ -289,6 +363,54 @@ func (s *Store) ListAttachedForKB(ctx context.Context, kbID string) (*KBAgents, 
 		teams = []AttachedTeam{}
 	}
 	return &KBAgents{Agents: agents, Teams: teams}, nil
+}
+
+// ListBindingCandidatesForKB returns every agent and team attached to the KB,
+// INCLUDING the ones that cannot currently run, each carrying its own
+// is_enabled flag and — for teams — its count of ENABLED members.
+//
+// Those are the two independent ways a binding can exist and never fire, and
+// both have to reach the canvas: a team with zero enabled members is dropped at
+// chat time exactly like a disabled one (resolveTeamSelection returns
+// "empty_team"), so reporting only is_enabled drew such a KB as if the team
+// answered every question.
+//
+// This is the workflow canvas's read, and it is deliberately a SECOND query
+// rather than a flag on ListAttachedForKB (see BindingCandidate for why). The
+// difference is one WHERE clause, and that clause is the whole point: the chat
+// picker must not offer a disabled agent, and the canvas must not pretend a
+// bound one does not exist.
+//
+// Ordered by kind then name so the inspector's single dropdown has a stable
+// order across both kinds without sorting client-side.
+func (s *Store) ListBindingCandidatesForKB(ctx context.Context, kbID string) ([]BindingCandidate, error) {
+	agents, err := pgxutil.QueryRows[BindingCandidate](ctx, s.pool,
+		// 1 AS enabled_member_count: an agent has no membership, so nothing
+		// about members can stop it. See BindingCandidate.EnabledMemberCount.
+		`SELECT 'agent' AS kind, a.id::text AS id, a.name, l.is_default, a.is_enabled,
+		        1 AS enabled_member_count
+		 FROM agent_kb_links l JOIN agents a ON a.id = l.agent_id
+		 WHERE l.kb_id = $1 ORDER BY a.name`, kbID)
+	if err != nil {
+		return nil, fmt.Errorf("ListBindingCandidatesForKB: agents: %w", err)
+	}
+	teams, err := pgxutil.QueryRows[BindingCandidate](ctx, s.pool,
+		// The member subquery repeats LoadTeamForChat's `AND is_enabled`
+		// deliberately: a team whose members are all switched off resolves to
+		// zero members at chat time and the selection is dropped, so counting
+		// members without that clause would report a team as live that never
+		// runs. This is the same class of fact as is_enabled and is read the
+		// same way — not filtered on here, carried, so the canvas can say why.
+		`SELECT 'team' AS kind, t.id::text AS id, t.name, l.is_default, t.is_enabled,
+		        (SELECT count(*) FROM agent_team_members m
+		          JOIN agents ma ON ma.id = m.agent_id
+		         WHERE m.team_id = t.id AND ma.is_enabled)::int AS enabled_member_count
+		 FROM team_kb_links l JOIN agent_teams t ON t.id = l.team_id
+		 WHERE l.kb_id = $1 ORDER BY t.name`, kbID)
+	if err != nil {
+		return nil, fmt.Errorf("ListBindingCandidatesForKB: teams: %w", err)
+	}
+	return append(agents, teams...), nil
 }
 
 // ---------------------------------------------------------------------------

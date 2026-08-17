@@ -1,0 +1,107 @@
+/* The canvas is a flex COLUMN: toolbar in normal flow, surface taking the rest.
+   The surface used to be `position: absolute; inset: 3.1rem 0 0` — a hardcoded
+   guess at the toolbar's height that cannot survive `flex-wrap: wrap` on the
+   bar above it. The bar holds three lane pills, three legend items, up to three
+   orchestrator chips and the cost line; the moment it wrapped to a second row,
+   the absolutely-positioned surface covered that row and `.react-flow__pane`
+   swallowed the clicks, making the lane selector unusable.
+
+   The surface keeps `position: relative` because NodeInspector is
+   `position: absolute` and needs a positioning context. */
+.wf-canvas {
+  display: flex;
+  flex-direction: column;
+  /* Viewport-relative, not a fixed 620px: the real topology is ~20 dagre ranks
+     (≈2500px), so every pixel of surface height buys readable scale. Capped so
+     the panel doesn't run away on a very tall monitor, floored so it stays
+     usable on a short one. See MIN_ZOOM in layout.ts for the other half. */
+  height: clamp(420px, 78vh, 900px);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+.wf-canvas__bar {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  flex: 0 0 auto;
+  padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border-color);
+}
+.wf-canvas__lanes { display: flex; gap: 0.25rem; }
+.wf-canvas__lane {
+  font-size: 0.78rem; padding: 0.3rem 0.6rem; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border-color); background: none; color: var(--text-secondary);
+  transition: background 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.wf-canvas__lane[aria-pressed='true'] { border-color: var(--accent-primary); color: var(--accent-primary); background: var(--bg-hover); }
+.wf-canvas__meta { font-size: 0.75rem; color: var(--text-secondary); margin-left: auto; }
+
+.wf-canvas__orchestrators { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.wf-canvas__orchestrators-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
+.wf-canvas__orchestrator-list { display: flex; gap: 0.35rem; list-style: none; margin: 0; padding: 0; font-size: 0.72rem; flex-wrap: wrap; }
+.wf-canvas__orchestrator {
+  display: flex; align-items: baseline; gap: 0.35rem; flex-wrap: wrap;
+  padding: 0.15rem 0.5rem; border-radius: 999px; border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+.wf-canvas__orchestrator-name { font-weight: 600; }
+.wf-canvas__orchestrator-state { font-size: 0.66rem; color: var(--text-secondary); }
+.wf-canvas__orchestrator-condition { font-size: 0.66rem; color: var(--text-secondary); }
+.wf-canvas__orchestrator[data-activation='active'] { border-color: var(--accent-primary); }
+.wf-canvas__orchestrator[data-activation='active'] .wf-canvas__orchestrator-name { color: var(--accent-primary); }
+/* The amber pair is used as a pair. #b45309 as text on the page background is
+   ≈3.4:1, below AA; on #fef3c7 it clears it — the same pairing the node badge
+   uses. Never the foreground colour on its own. */
+.wf-canvas__orchestrator[data-activation='conditional'] { border-color: #b45309; background: #fef3c7; }
+.wf-canvas__orchestrator[data-activation='conditional'] .wf-canvas__orchestrator-name,
+.wf-canvas__orchestrator[data-activation='conditional'] .wf-canvas__orchestrator-state,
+.wf-canvas__orchestrator[data-activation='conditional'] .wf-canvas__orchestrator-condition { color: #b45309; }
+.wf-canvas__orchestrator[data-activation='inactive'] { opacity: 0.5; }
+
+.wf-canvas__legend { display: flex; gap: 0.75rem; font-size: 0.7rem; color: var(--text-secondary); }
+.wf-canvas__swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 0.25rem; border: 1px solid var(--border-color); }
+.wf-canvas__swatch--conditional { border-color: #b45309; background: #fef3c7; }
+
+.wf-canvas__surface { flex: 1 1 auto; position: relative; min-height: 0; }
+.wf-canvas__error { padding: 1rem; color: var(--error-text); font-size: 0.85rem; }
+
+/* Save bar: a sibling flex row after the surface (not an overlay inside it),
+   so it never competes for space with the inspector, which already anchors
+   itself to the surface's top-right corner. */
+.wf-canvas__savebar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.85rem;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+.wf-canvas__savebar-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.wf-canvas__savebar-count { font-size: 0.82rem; color: var(--text-primary); }
+.wf-canvas__savebar-hint { margin: 0; font-size: 0.75rem; color: var(--text-secondary); }
+.wf-canvas__savebar-error { margin: 0; font-size: 0.8rem; color: var(--error-text); }
+.wf-canvas__savebar-warn { margin: 0; font-size: 0.7rem; color: var(--text-secondary); opacity: 0.8; }
+.wf-canvas__savebar-actions { display: flex; gap: 0.5rem; }
+
+.wf-canvas__savebar-save,
+.wf-canvas__savebar-discard {
+  display: flex; align-items: center; gap: 0.4rem;
+  font-size: 0.8rem; padding: 0.4rem 0.75rem; border-radius: 8px; cursor: pointer;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+.wf-canvas__savebar-save { border: none; background: var(--accent-primary); color: var(--accent-on-primary); }
+.wf-canvas__savebar-discard { border: 1px solid var(--border-color); background: none; color: var(--text-secondary); }
+.wf-canvas__savebar-discard:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); }
+.wf-canvas__savebar-save:disabled,
+.wf-canvas__savebar-discard:disabled { opacity: 0.6; cursor: default; }
+
+/* An edge is only as live as its weaker endpoint (see layout.ts). Dimming the
+   whole `.react-flow__edge` group takes the label with the path — otherwise a
+   dead CRAG loop still shouted "erneut suchen (max. 1×)" at full strength. */
+.react-flow__edge.wf-edge--dimmed { opacity: 0.28; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wf-canvas__lane,
+  .wf-canvas__savebar-save,
+  .wf-canvas__savebar-discard { transition: none; }
+}

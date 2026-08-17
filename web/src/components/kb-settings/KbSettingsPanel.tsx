@@ -1,30 +1,53 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
-import { SlidersHorizontal, FlaskConical, ChevronDown, ChevronRight, Search, Save, RotateCcw, Copy, Check } from 'lucide-react';
+import { SlidersHorizontal, FlaskConical, Workflow, Bot, ChevronDown, ChevronRight, Search, Save, RotateCcw, Copy, Check } from 'lucide-react';
 import type { KbConfigField, KbSettingsResponse } from '../../types';
 import { fetchKbSettings, saveKbSettings, resetKbSetting, reembedKb } from './api';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
 import { useModalContext } from '../../contexts/ModalContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import AdminEvalTab from '../admin/AdminEvalTab';
+import KbAgentsSection from '../agents/KbAgentsSection';
+import { WorkflowCanvas } from './workflow/WorkflowCanvas';
 
 interface Props {
   kbId: string;
+  /**
+   * Navigate to the "My Agents" screen. Optional because the panel works
+   * without it — the Agenten tab then shows its list and its attach controls
+   * and only the "create one" shortcut is inert.
+   */
+  onCreateAgent?: () => void;
 }
 
+// The Agenten tab is where attaching agents/teams to a KB lives on the ADMIN
+// surface. It was reachable in exactly one other place, the chat composer's
+// system-prompt panel (ChatView.tsx), behind `currentKb.userId === user.id` —
+// the legacy owner-mirror column. That gate excludes a KB admin who is not the
+// owner, and a PUBLIC KB has no owner at all (publishing NULLs
+// knowledge_bases.user_id), so on every public KB the only UI for attaching
+// agents was visible to nobody. This panel is the KB-admin surface: its entry
+// point in HomeView is gated on the same role, and every endpoint
+// KbAgentsSection calls (PUT/DELETE /api/kb/{id}/agents|teams/{…}) is on
+// kbAdminChain.
+//
+// The two mounts never render at once — `view === 'kb-settings'` returns before
+// ChatView in AuthenticatedApp — so there are no two live copies to disagree.
 const TABS = [
   { id: 'settings', label: 'RAG Settings', Icon: SlidersHorizontal },
+  { id: 'agents', label: 'Agenten & Teams', Icon: Bot },
   { id: 'evals', label: 'Evals', Icon: FlaskConical },
+  { id: 'workflow', label: 'Workflow', Icon: Workflow },
 ] as const;
 
 const STORAGE_KEY = 'kb-settings-sections-open-v1';
 
 // draft maps key -> string value being edited. Only keys whose draft differs
 // from the effective value are sent on Save.
-export function KbSettingsPanel({ kbId }: Props) {
+export function KbSettingsPanel({ kbId, onCreateAgent }: Props) {
   const reducedMotion = useReducedMotion();
   const { showConfirm, showAlert } = useModalContext();
-  const [tab, setTab] = useState<'settings' | 'evals'>('settings');
+  const [tab, setTab] = useState<'settings' | 'agents' | 'evals' | 'workflow'>('settings');
   const [data, setData] = useState<KbSettingsResponse | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -100,15 +123,26 @@ export function KbSettingsPanel({ kbId }: Props) {
     }
   };
 
+  // Mirrors onSave's try/catch. resetKbSetting throws on !res.ok, and the
+  // DELETE can now legitimately fail with 400: clearing an override makes the
+  // key fall back to the global value, which may be the enabled half of a
+  // mutually-exclusive pair (kbconfig.DeleteSetting -> ValidateConflicts).
+  // Without this, the reject would surface only as an unhandled promise and
+  // the admin would see the button do nothing, with no explanation.
   const onReset = async (key: string) => {
-    await resetKbSetting(kbId, key);
-    const fresh = await fetchKbSettings(kbId);
-    setData(fresh);
-    setDraft((d) => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { [key]: _removed, ...rest } = d;
-      return rest;
-    });
+    setError(null);
+    try {
+      await resetKbSetting(kbId, key);
+      const fresh = await fetchKbSettings(kbId);
+      setData(fresh);
+      setDraft((d) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { [key]: _removed, ...rest } = d;
+        return rest;
+      });
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   const header = (
@@ -243,8 +277,12 @@ export function KbSettingsPanel({ kbId }: Props) {
             </button>
           </div>
         </>
-      ) : (
+      ) : tab === 'agents' ? (
+        <KbAgentsSection kbId={kbId} onCreateAgent={onCreateAgent} />
+      ) : tab === 'evals' ? (
         <AdminEvalTab basePath={`/api/kb/${kbId}/eval`} kbId={kbId} />
+      ) : (
+        <WorkflowCanvas kbId={kbId} />
       )}
     </div>
   );

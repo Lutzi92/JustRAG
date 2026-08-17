@@ -171,6 +171,39 @@ var snapshotConfigKeys = []string{
 	"chat_corpus_table_concurrency",
 	"chat_corpus_table_model",
 	"chat_corpus_table_router_llm_enabled",
+	// Verifikation / Korrektur registry keys (kb-workflow-editor Phase 2
+	// Task 2; cross-checked by snapshot_registry_test.go like the blocks
+	// above). "factcheck_in_chat" and "citation_validation_enabled" were
+	// already present above this block.
+	"chat_factuality_verifier_enabled",
+	"chat_factuality_verifier_always_run",
+	"chat_self_rag_enabled",
+	"chat_factuality_gate_enabled",
+	"chat_sufficient_context_enabled",
+	// Retrieval/orchestrator registry keys (kb-workflow-editor Phase 2
+	// Task 3; cross-checked by snapshot_registry_test.go like the blocks
+	// above).
+	"query_cache_enabled",
+	"recency_boost_enabled",
+	"chat_feedback_boost_enabled",
+	"hype_search_enabled",
+	"chat_drift_enabled",
+	"chat_plan_execute_dag",
+	"chat_plan_execute_tool_aware",
+	"chat_agentic_max_hops",
+	// chat_kb_router_enabled was here while it was (wrongly) a per-KB
+	// registry key. It is structurally global — the router picks WHICH KB
+	// answers, and it runs before the KB overlay exists — and an eval run
+	// addresses a fixed KB, so snapshotting it captured nothing an eval
+	// could exercise. See the comment in internal/siteconfig/registry.go.
+	"chat_answer_tools_enabled",
+	"chat_answer_tools_max_rounds",
+	// workflow_preset (kb-workflow-editor Phase 5 Task 2; cross-checked by
+	// snapshot_registry_test.go like the blocks above). A pure marker of
+	// which preset a KB was based on — no eval code branches on it — but the
+	// snapshot must still capture it so a snapshotted eval run reproduces a
+	// KB's exact per-KB config surface, marker included.
+	"workflow_preset",
 }
 
 // ---------------------------------------------------------------------------

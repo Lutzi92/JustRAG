@@ -67,6 +67,7 @@ import (
 	"github.com/justrag/go-backend/internal/middleware"
 	"github.com/justrag/go-backend/internal/misc"
 	"github.com/justrag/go-backend/internal/openaicompat"
+	"github.com/justrag/go-backend/internal/pipeline"
 	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/proxy"
 	"github.com/justrag/go-backend/internal/publicapi"
@@ -139,6 +140,7 @@ type routeCtx struct {
 	// Per-KB settings
 	kbConfigStore   *kbconfig.Store
 	kbConfigHandler *kbconfig.Handler
+	workflowHandler *pipeline.Handler
 
 	// Agent teams (user-defined agents + teams attachable to a KB). The
 	// store is also consumed directly by the chat handler wiring (routes
@@ -169,6 +171,13 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	kbConfigStore := kbconfig.NewStore(infra.db.Main)
 	kbConfigHandler := kbconfig.NewHandler(kbConfigStore, chatStore)
 	agentTeamsStore := agentteams.NewStore(infra.db.Main)
+	// The workflow projection needs the KB's default agent/team binding, which
+	// lives in the agent/team link tables — hence the adapter (see
+	// workflow_bindings.go: internal/pipeline must stay free of the
+	// internal/agentteams import). Constructed after agentTeamsStore for that
+	// reason alone.
+	workflowHandler := pipeline.NewHandler(kbConfigStore, chatStore,
+		workflowBindings{store: agentTeamsStore})
 	queryCache := vector.NewQueryCache(infra.db.Vector)
 	queryCache.StartWriter(ctx)
 	// Track the sweeper goroutine so routeCleanup can drain it before the
@@ -283,6 +292,7 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 		},
 		kbConfigStore:   kbConfigStore,
 		kbConfigHandler: kbConfigHandler,
+		workflowHandler: workflowHandler,
 		agentTeamsStore: agentTeamsStore,
 		analyticsChain: func(h http.HandlerFunc) http.Handler {
 			return authMiddleware.Authenticate(
@@ -661,6 +671,22 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/kb/{id}/settings", rc.kbAdminChain(rc.kbConfigHandler.GetSettings))
 	rc.mux.Handle("PUT /api/kb/{id}/settings", rc.kbAdminChain(rc.kbConfigHandler.PutSettings))
 	rc.mux.Handle("DELETE /api/kb/{id}/settings/{key}", rc.kbAdminChain(rc.kbConfigHandler.DeleteSetting))
+	// Read-only pipeline projection ("what actually runs for this KB?").
+	// Node edits go through PUT /api/kb/{id}/settings above, so validation
+	// stays in one place.
+	rc.mux.Handle("GET /api/kb/{id}/workflow", rc.kbAdminChain(rc.workflowHandler.GetWorkflow))
+	// Applying a curated preset. POST writes the preset's bundle plus the
+	// workflow_preset provenance marker in one statement; GET on the same path
+	// (?preset=<id>) previews the same apply without writing, so the UI can
+	// warn "this overwrites N of your settings" before destroying any. Same
+	// kbAdminChain as the projection above — a preset rewrites how the KB
+	// answers, which the four-role model puts on admin, not edit.
+	rc.mux.Handle("GET /api/kb/{id}/workflow/preset", rc.kbAdminChain(rc.workflowHandler.PreviewPreset))
+	rc.mux.Handle("POST /api/kb/{id}/workflow/preset", rc.kbAdminChain(rc.workflowHandler.ApplyPreset))
+	// Curated presets are deployment-wide, not per-KB — authenticated only,
+	// same "no KB in the path" pattern as GET /api/kb / GET /api/kb/global
+	// above (and GET /api/kb/catalog, GET /api/kb-categories below).
+	rc.mux.Handle("GET /api/workflow/presets", rc.authMw.Authenticate(http.HandlerFunc(rc.workflowHandler.ListPresets)))
 
 	// KB operations (need KB permission middleware)
 	rc.mux.Handle("PATCH /api/kb/{id}", rc.kbAdminChain(kbUpdateHandler.UpdateKB))

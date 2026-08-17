@@ -13,7 +13,7 @@ interface UseKnowledgeBasesParams {
   setCurrentKb: (kb: KnowledgeBase | null) => void;
   setIsPro: (isPro: boolean) => void;
   setKbView: (view: 'chat' | 'dashboard' | 'research' | 'studio' | 'mindmap') => void;
-  setView: (view: 'home' | 'kb' | 'admin' | 'profile' | 'global-kb-settings' | 'privacy' | 'accessibility') => void;
+  setView: (view: 'home' | 'kb' | 'admin' | 'profile' | 'global-kb-settings' | 'kb-settings' | 'privacy' | 'accessibility') => void;
   setSelectedContent: (content: GeneratedContent | null) => void;
   setGeneratedContent: (content: GeneratedContent[]) => void;
 }
@@ -167,9 +167,18 @@ export function useKnowledgeBases({
     setView('global-kb-settings');
   };
 
+  // Per-KB RAG settings / evals / workflow (KbSettingsPanel). Same shape as
+  // handleOpenGlobalKbSettings above — the panel's endpoints are all
+  // kbAdminChain, so the caller side gates on myRole admin|owner.
+  const handleOpenKbSettings = (kb: KnowledgeBase, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCurrentKb(kb);
+    setView('kb-settings');
+  };
+
   return {
     kbs, setKbs, globalKbs, setGlobalKbs,
     fetchKBs, handleCreateKB, handleSelectKB, handleOpenKbById, handleDeleteKB, removingKb,
-    handleCreateGlobalKB, handleDeleteGlobalKB, handleOpenGlobalKbSettings,
+    handleCreateGlobalKB, handleDeleteGlobalKB, handleOpenGlobalKbSettings, handleOpenKbSettings,
   };
 }

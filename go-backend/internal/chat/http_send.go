@@ -499,61 +499,65 @@ func (h *Handler) tryDeepChat(
 	// branch of SendMessage.)
 	var chatCtx *ChatContext
 	var err error
+
 	agenticEnabled := ChatAgenticEnabled(ctx, h.siteConfigReader)
 	planExecuteEnabled := ChatPlanExecuteEnabled(ctx, h.siteConfigReader)
-
 	supervisorEnabled := ChatSupervisorEnabled(ctx, h.siteConfigReader)
 	driftEnabled := ChatDriftEnabled(ctx, h.siteConfigReader)
+	corpusTableEnabled := ChatCorpusTableEnabled(ctx, h.siteConfigReader)
 
 	// In-chat document comparison takes top priority over every orchestrator
 	// (including corpus-table) — an explicit attachment + modes is an
 	// unambiguous user intent, so it should never be hijacked by a query
 	// classifier. attachmentStore being non-nil is the infrastructure guard.
-	runCompare := h.attachmentStore != nil &&
+	comparisonReady := h.attachmentStore != nil &&
 		willRunComparison(CompareEnabled(ctx, h.siteConfigReader), body.AttachmentID, body.ComparisonModes)
 
-	// Explicit user-created team/agent selection takes priority over every
-	// flag-driven orchestrator (but not the comparison attachment) — the
-	// team router is the triage, so it also supersedes the corpus-table
-	// heuristic classifier.
-	willRunTeam := !runCompare && teamSel != nil && body.Enhance == ""
+	// The full precedence ladder now lives in SelectOrchestrator
+	// (orchestrator_select.go) — this call site only resolves inputs.
+	// Rationale for each gate, preserved from the original inline ladder:
+	//   - team: explicit user-created team/agent selection takes priority
+	//     over every flag-driven orchestrator (but not the comparison
+	//     attachment) — the team router is the triage, so it also
+	//     supersedes the corpus-table heuristic classifier.
+	//   - corpus-table: two-stage gate (keyword classifier + optional LLM
+	//     confirm). Both higher-priority explicit-intent gates short-circuit
+	//     it so the classifier — and especially the optional confirm LLM
+	//     call — never runs on comparison or team turns.
+	//   - drift: full iterative DRIFT takes priority over the other
+	//     orchestrators, but only for global-synthesis queries (its primer
+	//     is wasted on narrow lookups). Narrow gate → it rarely intercepts;
+	//     everything else falls through to
+	//     supervisor/plan-execute/agentic/standard unchanged.
+	//   - supervisor: Phase 3 §3.2 supervisor takes priority over both
+	//     plan-execute and agentic when the gate is on. Plan §3.2 ship
+	//     gate: "non-regression on lookup/enumeration; ≥ 2 pp gain on
+	//     complex_reasoning MRR or nDCG" — only the eval harness can decide
+	//     whether the gate flips, so this gate stays per-deployment opt-in.
+	orchIn := OrchestratorInputs{
+		QueryType:             queryType,
+		EnhanceRequested:      body.Enhance != "",
+		ComparisonReady:       comparisonReady,
+		TeamSelected:          teamSel != nil,
+		CorpusTableEnabled:    corpusTableEnabled,
+		CorpusChunksAvailable: h.corpusChunks != nil,
+		IsCorpusQuery:         IsCorpusComparisonQuery(searchQuery, lang),
+		CorpusRouterLLMOn:     ChatCorpusTableRouterLLMEnabled(ctx, h.siteConfigReader),
+		DriftEnabled:          driftEnabled,
+		IsGlobalSynthesis:     IsGlobalSynthesisQuery(searchQuery),
+		SupervisorEnabled:     supervisorEnabled,
+		PlanExecuteEnabled:    planExecuteEnabled,
+		AgenticEnabled:        agenticEnabled,
+	}
 
-	// Corpus-table comparison: two-stage gate (keyword classifier + optional
-	// LLM confirm). Both explicit-intent gates above short-circuit it so the
-	// classifier — and especially the optional confirm LLM call — never runs
-	// on comparison or team turns.
-	corpusTableEnabled := ChatCorpusTableEnabled(ctx, h.siteConfigReader)
-	willRunCorpusTable := !runCompare && !willRunTeam && corpusTableEnabled &&
-		h.corpusChunks != nil &&
-		body.Enhance == "" &&
-		IsCorpusComparisonQuery(searchQuery, lang) &&
-		(!ChatCorpusTableRouterLLMEnabled(ctx, h.siteConfigReader) ||
-			ai.ConfirmCorpusComparison(ctx, h.aiResolver, searchQuery, kbID, lang, ChatCorpusTableModel(ctx, h.siteConfigReader)))
-
-	// Full iterative DRIFT takes priority over the other orchestrators, but
-	// only for global-synthesis queries (its primer is wasted on narrow
-	// lookups). Narrow gate → it rarely intercepts; everything else falls
-	// through to supervisor/plan-execute/agentic/standard unchanged.
-	willRunDrift := !runCompare && !willRunCorpusTable && !willRunTeam && driftEnabled &&
-		queryType == vector.QueryTypeComplexReasoning &&
-		body.Enhance == "" &&
-		IsGlobalSynthesisQuery(searchQuery)
-
-	// Phase 3 §3.2 supervisor takes priority over both plan-execute and
-	// agentic when the gate is on. Plan §3.2 ship gate: "non-regression
-	// on lookup/enumeration; ≥ 2 pp gain on complex_reasoning MRR or
-	// nDCG" — only the eval harness can decide whether the gate flips,
-	// so this gate stays per-deployment opt-in.
-	willRunSupervisor := !runCompare && !willRunCorpusTable && !willRunTeam && !willRunDrift && supervisorEnabled &&
-		queryType == vector.QueryTypeComplexReasoning &&
-		body.Enhance == ""
-	willRunPlanExecute := !runCompare && !willRunCorpusTable && !willRunTeam && !willRunDrift && !willRunSupervisor && planExecuteEnabled &&
-		queryType == vector.QueryTypeComplexReasoning &&
-		body.Enhance == ""
-	willRunAgentic := !runCompare && !willRunCorpusTable && !willRunTeam && !willRunDrift && !willRunSupervisor && !willRunPlanExecute &&
-		agenticEnabled &&
-		queryType == vector.QueryTypeComplexReasoning &&
-		body.Enhance == ""
+	// The corpus-table confirmation is an LLM call; SelectOrchestrator
+	// invokes this at most once, and only after every higher-priority gate
+	// has already failed and the cheap keyword classifier has already
+	// matched — preserving the original short-circuit that kept this call
+	// off the hot path.
+	orch := SelectOrchestrator(orchIn, func() bool {
+		return ai.ConfirmCorpusComparison(ctx, h.aiResolver, searchQuery, kbID, lang, ChatCorpusTableModel(ctx, h.siteConfigReader))
+	})
 
 	logctx.From(ctx).Info("rag.deep_chat.dispatch",
 		"supervisor_enabled", supervisorEnabled,
@@ -563,13 +567,14 @@ func (h *Handler) tryDeepChat(
 		"corpus_table_enabled", corpusTableEnabled,
 		"query_type", queryType,
 		"enhance", body.Enhance,
-		"will_run_comparison", runCompare,
-		"will_run_corpus_table", willRunCorpusTable,
-		"will_run_team", willRunTeam,
-		"will_run_drift", willRunDrift,
-		"will_run_supervisor", willRunSupervisor,
-		"will_run_plan_execute", willRunPlanExecute,
-		"will_run_agentic", willRunAgentic,
+		"will_run_comparison", orch == OrchComparison,
+		"will_run_corpus_table", orch == OrchCorpusTable,
+		"will_run_team", orch == OrchTeam,
+		"will_run_drift", orch == OrchDrift,
+		"will_run_supervisor", orch == OrchSupervisor,
+		"will_run_plan_execute", orch == OrchPlanExecute,
+		"will_run_agentic", orch == OrchAgentic,
+		"orchestrator", string(orch),
 	)
 
 	plateau := ResolvePlateauConfig(ctx, h.siteConfigReader)
@@ -583,8 +588,8 @@ func (h *Handler) tryDeepChat(
 		planExecuteTools = h.toolDispatcher
 	}
 
-	switch {
-	case runCompare:
+	switch orch {
+	case OrchComparison:
 		userID := ""
 		if u := auth.UserFromContext(ctx); u != nil {
 			userID = u.ID
@@ -621,7 +626,7 @@ func (h *Handler) tryDeepChat(
 				"\n\n" + renderFindingsForSummary(cmpFindings)
 		}
 
-	case willRunTeam:
+	case OrchTeam:
 		params := TeamParams{
 			KbID:                 kbID,
 			ChatID:               chatID,
@@ -668,7 +673,7 @@ func (h *Handler) tryDeepChat(
 		}
 		chatCtx, err = RunTeamChat(ctx, h.aiResolver, h.searchService, params, collectEmit)
 
-	case willRunCorpusTable:
+	case OrchCorpusTable:
 		chatCtx, err = RunCorpusTableChat(ctx, h.aiResolver, h.searchService, h.corpusChunks, CorpusTableParams{
 			KbID:           kbID,
 			Query:          searchQuery,
@@ -680,7 +685,7 @@ func (h *Handler) tryDeepChat(
 			Concurrency:    ChatCorpusTableConcurrency(ctx, h.siteConfigReader),
 		}, collectEmit)
 
-	case willRunDrift:
+	case OrchDrift:
 		driftParams := DriftChatParams{
 			KbID:            kbID,
 			Query:           searchQuery,
@@ -698,7 +703,7 @@ func (h *Handler) tryDeepChat(
 		}
 		chatCtx, err = RunDriftChat(ctx, h.aiResolver, h.searchService, driftParams, collectEmit)
 
-	case willRunSupervisor:
+	case OrchSupervisor:
 		supervisorParams := SupervisorChatParams{
 			KbID:            kbID,
 			Query:           searchQuery,
@@ -717,7 +722,7 @@ func (h *Handler) tryDeepChat(
 		}
 		chatCtx, err = RunSupervisorChat(ctx, h.aiResolver, h.searchService, supervisorParams, collectEmit)
 
-	case willRunPlanExecute:
+	case OrchPlanExecute:
 		planningModel := ChatPlanExecuteModel(ctx, h.siteConfigReader)
 		if planningModel == "" {
 			planningModel = EnrichmentModel(ctx, h.siteConfigReader)
@@ -770,7 +775,7 @@ func (h *Handler) tryDeepChat(
 		}
 		chatCtx, err = RunPlanExecuteChat(ctx, h.aiResolver, h.searchService, planExecuteParams, collectEmit)
 
-	case willRunAgentic:
+	case OrchAgentic:
 		agenticParams := AgenticChatParams{
 			KbID:            kbID,
 			Query:           searchQuery,
@@ -787,7 +792,12 @@ func (h *Handler) tryDeepChat(
 		}
 		chatCtx, err = RunAgenticChat(ctx, h.aiResolver, h.searchService, agenticParams, collectEmit)
 
+	case OrchStandard:
+		chatCtx, err = RunDeepChat(ctx, h.aiResolver, h.searchService, deepParams, collectEmit)
 	default:
+		// Defensive: an unrecognized Orchestrator value must never leave
+		// chatCtx nil — fall back to the same 2-step research path standard
+		// turns use.
 		chatCtx, err = RunDeepChat(ctx, h.aiResolver, h.searchService, deepParams, collectEmit)
 	}
 	if err != nil {
@@ -863,7 +873,7 @@ func (h *Handler) tryDeepChat(
 	// system prompt (a prompt-injection amplifier if handed the full,
 	// unrestricted answer-tool catalog) — answer tools stay off on team turns
 	// until per-team catalog restriction lands (follow-up).
-	useAnswerTools := !willRunTeam && ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
+	useAnswerTools := orch != OrchTeam && ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
 	if useAnswerTools {
 		answerTrace := func(stage, decision, reason string, details map[string]any) {
 			payload := map[string]any{
@@ -962,7 +972,7 @@ func (h *Handler) tryDeepChat(
 		reasoningPtr = &fullReasoning
 	}
 	// Derive team/agent attribution for AI message (reused for recordAgentDecision below).
-	decTeamID, decAgentID := attributionIDs(willRunTeam, teamSel)
+	decTeamID, decAgentID := attributionIDs(orch == OrchTeam, teamSel)
 	aiMsg, err := h.store.AddMessage(ctx, AddMessageParams{
 		ChatID:          chatID,
 		Role:            "ai",
@@ -1009,20 +1019,20 @@ func (h *Handler) tryDeepChat(
 	// metrics panel. agentOutcomeFromEvents maps the trajectory's
 	// terminal `answer` stage to the closed-enum outcome label.
 	mode := "standard"
-	switch {
-	case runCompare:
+	switch orch {
+	case OrchComparison:
 		mode = "comparison"
-	case willRunTeam:
+	case OrchTeam:
 		mode = "team"
-	case willRunCorpusTable:
+	case OrchCorpusTable:
 		mode = "corpus_table"
-	case willRunDrift:
+	case OrchDrift:
 		mode = "drift"
-	case willRunSupervisor:
+	case OrchSupervisor:
 		mode = "supervisor"
-	case willRunPlanExecute:
+	case OrchPlanExecute:
 		mode = "plan_execute"
-	case willRunAgentic:
+	case OrchAgentic:
 		mode = "agentic"
 	}
 	outcome, hops, rounds := agentOutcomeFromEvents(progressEvents)

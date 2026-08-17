@@ -1,7 +1,7 @@
 import { useState, lazy, Suspense, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import { motion } from 'framer-motion';
-import { Loader2, HelpCircle } from 'lucide-react';
+import { Loader2, HelpCircle, ArrowLeft } from 'lucide-react';
 import type { KnowledgeBase, GeneratedContent } from './types';
 import { isMarkdownArtifact } from './utils/artifactTypes';
 import { API_BASE_URL } from './api';
@@ -38,6 +38,7 @@ import { KbWorkspaceModals } from './components/KbWorkspaceModals';
 
 // Lazy load heavy components
 const GlobalKbSettings = lazy(() => import('./components/GlobalKbSettings').then(module => ({ default: module.GlobalKbSettings })));
+const KbSettingsPanel = lazy(() => import('./components/kb-settings/KbSettingsPanel').then(module => ({ default: module.KbSettingsPanel })));
 
 import { OnboardingTour } from './components/OnboardingTour';
 import { Footer } from './components/Footer';
@@ -281,6 +282,34 @@ function AuthenticatedAppInner() {
     );
   }
 
+  // Per-KB RAG settings / evals / workflow. Mirrors the 'global-kb-settings'
+  // branch above (that one is the system-admin editor for public KBs; this one
+  // is the KB-admin tuning surface, and every endpoint it calls is
+  // kbAdminChain). Entry point: the sliders icon on a KB card in HomeView,
+  // shown only for myRole admin|owner.
+  if (view === 'kb-settings' && currentKb) {
+    return (
+      <div className="app-container" data-theme={theme}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: viewportHeight('100dvh', '100vh'), width: '100%', overflow: 'auto' }}>
+          <div style={{ padding: '1rem 1.5rem 0' }}>
+            <button
+              type="button"
+              onClick={() => { kbMgmt.fetchKBs(); viewState.handleGoHome(); }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '0.45rem 0.75rem', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem' }}
+            >
+              <ArrowLeft size={16} aria-hidden="true" /> {currentKb.name}
+            </button>
+          </div>
+          <div style={{ padding: '1.25rem 1.5rem 2rem' }}>
+            <Suspense fallback={<LoadingFallback />}>
+              <KbSettingsPanel kbId={currentKb.id} onCreateAgent={() => setView('agents')} />
+            </Suspense>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (view === 'profile' && user) {
     return (
       <div className="app-container" data-theme={theme}>
@@ -341,6 +370,7 @@ function AuthenticatedAppInner() {
           onOpenKbById={kbMgmt.handleOpenKbById}
           onDeleteGlobalKB={kbMgmt.handleDeleteGlobalKB}
           onOpenGlobalKbSettings={kbMgmt.handleOpenGlobalKbSettings}
+          onOpenKbSettings={kbMgmt.handleOpenKbSettings}
           onOpenShare={sharing.handleOpenShare}
           onUpdateKBSettings={handleUpdateKBSettings}
           showShareModal={sharing.showShareModal}

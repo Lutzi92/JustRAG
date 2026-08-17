@@ -394,16 +394,20 @@ func ChatFactualityVerifierModel(ctx context.Context, reader SiteConfigReader) s
 // ChatFactualityGateEnabled reports whether the AP-A1 refine gate runs
 // when the verifier flags ≥1 unsupported/contradicted claim. When true
 // AND the verifier produced refine-eligible flags, the chat post-
-// response path runs ONE refine LLM call, replaces the message content
-// in the database, and re-runs the verifier on the refined text. Out
+// response path runs ai.RefineFlaggedClaims, replaces the message
+// content in the database, and re-runs ai.VerifyFactuality on the
+// refined text (post_refine.go:47,87) — TWO LLM calls in the normal
+// case. The one exception is when the refined text comes back
+// identical to the original: post_refine.go:60-79 skips the persist
+// and the re-verify call, so that branch spends only one call. Out
 // of scope claims do NOT trigger refine — only unsupported and
 // contradicted do. Default off. Tunable via "chat_factuality_gate_enabled".
 //
 // The refine round runs blocking inside the post-response goroutine,
-// so enabling this knob extends the post-response wait by one extra
-// LLM call (typically 1–3 s). The frontend's existing verification
-// SSE payload carries the refined content and the new `refine` block;
-// AP-A2 will add streaming diff visualisation on top.
+// so enabling this knob extends the post-response wait by two extra
+// LLM calls (typically 1–3 s combined). The frontend's existing
+// verification SSE payload carries the refined content and the new
+// `refine` block; AP-A2 will add streaming diff visualisation on top.
 func ChatFactualityGateEnabled(ctx context.Context, reader SiteConfigReader) bool {
 	return readBool(ctx, reader, "chat_factuality_gate_enabled", false)
 }

@@ -1,12 +1,57 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { KbSettingsPanel } from './KbSettingsPanel';
 import { API_BASE_URL } from '../../api';
+import { translations } from '../../translations';
+
+// The Agenten tab mounts the real KbAgentsSection, which reaches for
+// ThemeContext (its labels), ToastContext (its write failures) and its own api
+// module. Stubbed the same way KbAgentsSection.test.tsx stubs them, so this
+// suite tests the MOUNT rather than re-testing the section.
+vi.mock('../../contexts/ThemeContext', () => ({
+  useTheme: () => ({
+    t: (key: string) => {
+      const entry = translations[key as keyof typeof translations];
+      return entry ? entry.de : key;
+    },
+  }),
+}));
+vi.mock('../../contexts/ToastContext', () => ({
+  useToast: () => ({ error: vi.fn(), success: vi.fn() }),
+}));
+const fetchKbAgents = vi.fn();
+vi.mock('../agents/api', () => ({
+  listAgents: () => Promise.resolve([]),
+  listTeams: () => Promise.resolve([]),
+  fetchKbAgents: (...a: unknown[]) => fetchKbAgents(...a),
+  attachAgentToKb: vi.fn(),
+  attachTeamToKb: vi.fn(),
+  detachAgentFromKb: vi.fn(),
+  detachTeamFromKb: vi.fn(),
+}));
+const kbAgentsHelpText = translations.kbAgentsSectionHelp.de;
+const kbAgentsCreateText = translations.kbAgentsCreateFirst.de;
+
+// The Workflow tab mounts the real (unmocked) React Flow canvas, whose internal
+// node-measuring hook requires ResizeObserver — absent in jsdom, stubbed once
+// globally in src/test/setup.ts.
 
 const showConfirm = vi.fn(async () => true);
 const showAlert = vi.fn(async () => {});
 vi.mock('../../contexts/ModalContext', () => ({
   useModalContext: () => ({ showConfirm, showAlert }),
+}));
+
+vi.mock('./workflow/api', () => ({
+  fetchWorkflow: vi.fn().mockResolvedValue({
+    lane: 'complex_reasoning', nodes: [], edges: [], orchestrators: [],
+    estLlmCalls: 0, estLatencyMs: 0, presetBase: '', presetBaseKnown: true, deviations: [],
+  }),
+  // PresetPicker (Task 5) fetches this on mount, unconditionally, once the
+  // Workflow tab renders — this suite doesn't exercise the picker itself
+  // (see PresetPicker.test.tsx), so an empty list keeps it present but inert.
+  fetchPresets: vi.fn().mockResolvedValue([]),
 }));
 
 const sample = {
@@ -27,6 +72,8 @@ const sample = {
 beforeEach(() => {
   showConfirm.mockClear();
   showAlert.mockClear();
+  fetchKbAgents.mockClear();
+  fetchKbAgents.mockResolvedValue({ agents: [], teams: [] });
   vi.stubGlobal('localStorage', {
     getItem: () => null,
     setItem: () => {},
@@ -125,5 +172,48 @@ describe('KbSettingsPanel', () => {
       );
     });
     await waitFor(() => expect(showAlert).toHaveBeenCalled());
+  });
+
+  it('shows the workflow tab and renders the canvas when selected', async () => {
+    render(<KbSettingsPanel kbId="kb-1" />);
+
+    const tab = await screen.findByRole('button', { name: /workflow/i });
+    await userEvent.click(tab);
+
+    expect(await screen.findByRole('button', { name: 'Komplexe Frage' })).toBeInTheDocument();
+  });
+
+  // KbAgentsSection is the only UI that attaches agents/teams to a KB. Its one
+  // other mount, in ChatView's system-prompt panel, is gated on
+  // `currentKb.userId === user.id` — a KB admin who is not the owner never sees
+  // it, and a PUBLIC KB has no owner at all (publishing NULLs
+  // knowledge_bases.user_id), so on those it was visible to nobody. This panel
+  // is the KB-admin surface, and its attach/detach endpoints are kbAdminChain.
+  //
+  // The section renders the REAL component (contexts and its api module stubbed
+  // above) rather than a placeholder, so this also proves the panel supplies
+  // everything the section needs to mount.
+  it('shows the agents tab and mounts the KB agent attach UI for this KB', async () => {
+    render(<KbSettingsPanel kbId="kb-1" />);
+
+    // Not visible until asked for — the tab is a tab, not a section.
+    expect(screen.queryByText(kbAgentsHelpText)).not.toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole('button', { name: /Agenten & Teams/ }));
+
+    expect(await screen.findByText(kbAgentsHelpText)).toBeInTheDocument();
+    // Bound to THIS KB: the section fetches the attached list by id, and a
+    // mount that passed the wrong id would still render the same explainer.
+    await waitFor(() => expect(fetchKbAgents).toHaveBeenCalledWith('kb-1'));
+  });
+
+  it('routes the agents tab’s create shortcut to the caller’s navigation', async () => {
+    const onCreateAgent = vi.fn();
+    render(<KbSettingsPanel kbId="kb-1" onCreateAgent={onCreateAgent} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /Agenten & Teams/ }));
+    await userEvent.click(await screen.findByRole('button', { name: kbAgentsCreateText }));
+
+    expect(onCreateAgent).toHaveBeenCalled();
   });
 });

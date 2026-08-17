@@ -6,7 +6,7 @@ import AgentEntityRow from './AgentEntityRow';
 import {
   attachAgentToKb, attachTeamToKb, detachAgentFromKb, detachTeamFromKb,
   fetchKbAgents, listAgents, listTeams,
-  type AgentRecord, type KbAgents, type TeamRecord,
+  type AgentRecord, type KbAgentOption, type KbAgents, type TeamRecord,
 } from './api';
 
 interface Props {
@@ -21,7 +21,65 @@ interface Props {
   onCreateAgent?: () => void;
 }
 
-// Per-KB attach/detach UI for the owner's agents and teams, with a single
+/**
+ * One row in the section: an agent or team that is either the caller's own, or
+ * attached to this KB, or both.
+ *
+ * `owned` is what separates the two sources. It is not a permission — attach,
+ * detach and "make default" all work on a foreign entry, because the backend
+ * gates those on the KB role plus the link, not on who created the agent — it
+ * is what the row SAYS, so an admin is not left wondering why an entry has no
+ * edit affordance.
+ */
+interface Entry {
+  id: string;
+  name: string;
+  owned: boolean;
+  attached: boolean;
+  isDefault: boolean;
+}
+
+/**
+ * Merge "my agents/teams" with "what is attached to this KB" into one list.
+ *
+ * The section used to render `myAgents`/`myTeams` alone, which meant an agent
+ * attached to this KB but created by a co-admin had NO ROW: the tab showed no
+ * default selected and offered no detach, while the Workflow tab — one click
+ * away in the same panel — named it. Foreign-owned attachments are the expected
+ * case now that binding is a KB-admin decision rather than an owner one, so the
+ * attached set has to be a source here, not just a lookup.
+ *
+ * Attached wins on name/default (it is the KB's own view of the entry); `owned`
+ * survives from the caller's list. Re-sorted by name because both inputs are
+ * sorted individually and a concatenation of two sorted lists is not sorted.
+ *
+ * Note the attached list is the chat picker's read, which filters disabled
+ * agents away — so a bound-but-disabled entry still has no row here. That state
+ * is surfaced on the Workflow tab, which reads a query that keeps them.
+ */
+function mergeEntries(
+  mine: { id: string; name: string }[],
+  attached: KbAgentOption[],
+): Entry[] {
+  const byId = new Map<string, Entry>();
+  for (const m of mine) {
+    byId.set(m.id, { id: m.id, name: m.name, owned: true, attached: false, isDefault: false });
+  }
+  for (const a of attached) {
+    const prev = byId.get(a.id);
+    byId.set(a.id, {
+      id: a.id,
+      name: a.name,
+      owned: prev?.owned ?? false,
+      attached: true,
+      isDefault: a.isDefault,
+    });
+  }
+  return [...byId.values()].sort((x, y) => x.name.localeCompare(y.name, 'de'));
+}
+
+// Per-KB attach/detach UI for every agent and team the caller can act on here —
+// their own, plus everything already attached to this KB — with a single
 // "default" radio across both kinds (backend enforces one default per KB).
 export default function KbAgentsSection({ kbId, onCreateAgent }: Props) {
   const { t } = useTheme();
@@ -39,29 +97,30 @@ export default function KbAgentsSection({ kbId, onCreateAgent }: Props) {
 
   useEffect(reload, [reload]);
 
-  const attachedAgentIds = new Set(attached.agents.map(a => a.id));
-  const attachedTeamIds = new Set(attached.teams.map(x => x.id));
+  const agentEntries = mergeEntries(myAgents, attached.agents);
+  const teamEntries = mergeEntries(myTeams, attached.teams);
 
-  const row = (
-    kind: 'agent' | 'team',
-    id: string, name: string, isAttached: boolean, isDefault: boolean,
-  ) => (
+  const row = (kind: 'agent' | 'team', e: Entry) => (
     <AgentEntityRow
-      key={`${kind}-${id}`}
+      key={`${kind}-${e.id}`}
       icon={kind === 'agent' ? <Bot size={15} aria-hidden="true" /> : <Users size={15} aria-hidden="true" />}
-      name={name}
+      name={e.name}
+      // Said once, quietly, on the row it applies to. A foreign entry is fully
+      // operable here; what it is not is editable, and the muted secondary line
+      // is where that belongs — not in a badge competing with the actions.
+      secondary={e.owned ? undefined : t('kbAgentsForeign')}
       actions={!kbId ? null : (
         <>
-          {isAttached && (
+          {e.attached && (
             <label className="form-hint" style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', margin: 0 }}>
               <input
                 type="radio"
                 name={`kb-default-${kbId}`}
-                checked={isDefault}
+                checked={e.isDefault}
                 onChange={async () => {
                   try {
-                    if (kind === 'agent') await attachAgentToKb(kbId, id, true);
-                    else await attachTeamToKb(kbId, id, true);
+                    if (kind === 'agent') await attachAgentToKb(kbId, e.id, true);
+                    else await attachTeamToKb(kbId, e.id, true);
                     reload();
                   } catch {
                     toast.error(t('settingsUpdateError'));
@@ -77,11 +136,11 @@ export default function KbAgentsSection({ kbId, onCreateAgent }: Props) {
             onClick={async () => {
               try {
                 if (kind === 'agent') {
-                  if (isAttached) await detachAgentFromKb(kbId, id);
-                  else await attachAgentToKb(kbId, id);
+                  if (e.attached) await detachAgentFromKb(kbId, e.id);
+                  else await attachAgentToKb(kbId, e.id);
                 } else {
-                  if (isAttached) await detachTeamFromKb(kbId, id);
-                  else await attachTeamToKb(kbId, id);
+                  if (e.attached) await detachTeamFromKb(kbId, e.id);
+                  else await attachTeamToKb(kbId, e.id);
                 }
                 reload();
               } catch {
@@ -89,7 +148,7 @@ export default function KbAgentsSection({ kbId, onCreateAgent }: Props) {
               }
             }}
           >
-            {isAttached ? t('kbAgentsDetach') : t('kbAgentsAttach')}
+            {e.attached ? t('kbAgentsDetach') : t('kbAgentsAttach')}
           </button>
         </>
       )}
@@ -100,7 +159,11 @@ export default function KbAgentsSection({ kbId, onCreateAgent }: Props) {
   // agents, which meant someone who had never created one saw no trace of the
   // feature in KB settings — the exact place they'd be deciding how the KB
   // should behave. The empty state is the entry point instead.
-  const isEmpty = myAgents.length === 0 && myTeams.length === 0;
+  //
+  // Counted over the MERGED lists: an admin who owns nothing but whose KB has a
+  // co-admin's agent attached used to fall into the empty state and see no
+  // rows at all — the same defect one level up from the missing row itself.
+  const isEmpty = agentEntries.length === 0 && teamEntries.length === 0;
 
   return (
     <section style={{ marginTop: '1rem' }}>
@@ -138,17 +201,13 @@ export default function KbAgentsSection({ kbId, onCreateAgent }: Props) {
             </button>
           </nav>
 
-          {tab === 'agents' && (myAgents.length === 0
+          {tab === 'agents' && (agentEntries.length === 0
             ? <p className="form-hint">{t('noAgentsYet')}</p>
-            : myAgents.map(a => row('agent', a.id, a.name,
-              attachedAgentIds.has(a.id),
-              attached.agents.find(x => x.id === a.id)?.isDefault ?? false)))}
+            : agentEntries.map(e => row('agent', e)))}
 
-          {tab === 'teams' && (myTeams.length === 0
+          {tab === 'teams' && (teamEntries.length === 0
             ? <p className="form-hint">{t('noTeamsYet')}</p>
-            : myTeams.map(tm => row('team', tm.id, tm.name,
-              attachedTeamIds.has(tm.id),
-              attached.teams.find(x => x.id === tm.id)?.isDefault ?? false)))}
+            : teamEntries.map(e => row('team', e)))}
 
           {!kbId && <p className="form-hint">{t('kbAgentsNoKbNote')}</p>}
         </>

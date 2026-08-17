@@ -127,6 +127,7 @@ const noopProps = {
   onOpenKbById: vi.fn(),
   onDeleteGlobalKB: vi.fn(),
   onOpenGlobalKbSettings: vi.fn(),
+  onOpenKbSettings: vi.fn(),
   onOpenShare: vi.fn(),
   onUpdateKBSettings: vi.fn(),
   showShareModal: false,
@@ -199,6 +200,37 @@ describe('HomeView members-dialog trigger', () => {
     renderView(<HomeView kbs={[kb]} {...noopProps} />);
     await expandSection(translations.homeSharedWithMe.en);
     expect(screen.queryByRole('button', { name: translations.share.en })).not.toBeInTheDocument();
+  });
+});
+
+// KbSettingsPanel (RAG settings / evals / workflow) had no entry point anywhere
+// in the app — `grep -rn KbSettingsPanel web/src` outside its own directory hit
+// nothing, so the panel and its workflow canvas were unreachable in a browser.
+// The KB card is where a KB admin looks; every endpoint the panel calls is
+// kbAdminChain, so the trigger takes the same myRole gate as the members one.
+describe('HomeView KB-settings trigger', () => {
+  const label = translations.kbAdvancedSettings.en;
+
+  it('shows the trigger for an owner and hands the KB to the callback', async () => {
+    const onOpenKbSettings = vi.fn();
+    const kb: KnowledgeBase = { ...baseKb, myRole: 'owner' };
+    renderView(<HomeView kbs={[kb]} {...noopProps} onOpenKbSettings={onOpenKbSettings} />);
+    await userEvent.click(screen.getByRole('button', { name: label }));
+    expect(onOpenKbSettings).toHaveBeenCalledWith(kb, expect.anything());
+  });
+
+  it('shows the trigger for an admin who is not the owner', async () => {
+    const kb: KnowledgeBase = { ...baseKb, myRole: 'admin' };
+    renderView(<HomeView kbs={[kb]} {...noopProps} />);
+    await expandSection(translations.homeSharedWithMe.en);
+    expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+  });
+
+  it('hides the trigger from an editor — the settings endpoints are admin-only', async () => {
+    const kb: KnowledgeBase = { ...baseKb, myRole: 'edit' };
+    renderView(<HomeView kbs={[kb]} {...noopProps} />);
+    await expandSection(translations.homeSharedWithMe.en);
+    expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
   });
 });
 

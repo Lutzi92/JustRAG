@@ -1,0 +1,94 @@
+.wf-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.wf-presets__list {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.wf-presets__card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  width: 190px;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.wf-presets__card:hover:not(:disabled) { border-color: var(--accent-primary); background: var(--bg-hover); }
+.wf-presets__card:disabled { opacity: 0.6; cursor: default; }
+/* The KB's current base gets a permanent accent border, not just on hover —
+   otherwise "which preset am I on" is only answerable by reading the Basis
+   line below, which a fast scan of the cards would miss. */
+.wf-presets__card[aria-current='true'] { border-color: var(--accent-primary); }
+
+.wf-presets__card-label { font-weight: 600; font-size: 0.85rem; }
+.wf-presets__card-desc { font-size: 0.72rem; color: var(--text-secondary); }
+.wf-presets__card-cost { font-size: 0.7rem; color: var(--text-secondary); margin-top: 0.15rem; }
+
+.wf-presets__hint { margin: 0; font-size: 0.75rem; color: var(--text-secondary); }
+/* Says WHICH configuration the per-card cost badge describes — the deployment
+   defaults, not this KB. See PresetPicker's `lane` prop comment. */
+.wf-presets__note { margin: 0; font-size: 0.72rem; color: var(--text-secondary); max-width: 60ch; }
+.wf-presets__error { margin: 0; font-size: 0.8rem; color: var(--error-text); }
+
+.wf-presets__base {
+  display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  margin: 0; font-size: 0.78rem; color: var(--text-secondary);
+}
+.wf-presets__reset {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.72rem; padding: 0.2rem 0.55rem; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border-color); background: none; color: var(--text-secondary);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.wf-presets__reset:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); }
+.wf-presets__reset:disabled { opacity: 0.6; cursor: default; }
+
+.wf-presets__base--loading { opacity: 0.7; }
+
+.wf-presets__confirm-desc { color: var(--text-secondary); font-size: 0.85rem; margin: 0 0 0.5rem; }
+.wf-presets__confirm-count { font-weight: 600; font-size: 0.85rem; margin: 0 0 0.4rem; }
+.wf-presets__confirm-own { font-size: 0.8rem; color: var(--text-secondary); margin: 0 0 0.3rem; }
+.wf-presets__confirm-own-tag { color: var(--text-secondary); }
+/* The pinning sentence is the fact the old dialog omitted entirely; it is not
+   an aside, so it keeps body-text colour rather than the muted secondary. */
+.wf-presets__confirm-pinned { font-size: 0.8rem; color: var(--text-primary); margin: 0.5rem 0 0; }
+.wf-presets__confirm:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.wf-presets__confirm-loading { color: var(--text-secondary); font-size: 0.85rem; }
+.wf-presets__confirm-keys {
+  margin: 0 0 0.75rem; padding-left: 1.1rem; font-size: 0.78rem;
+  color: var(--text-secondary); max-height: 160px; overflow-y: auto;
+}
+.wf-presets__confirm-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.75rem; }
+.wf-presets__confirm-actions button {
+  font-size: 0.8rem; padding: 0.4rem 0.85rem; border-radius: 8px; cursor: pointer;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+.wf-presets__confirm-actions button:first-child {
+  border: 1px solid var(--border-color); background: none; color: var(--text-secondary);
+}
+.wf-presets__confirm-actions button:last-child {
+  border: none; background: var(--accent-primary); color: var(--accent-on-primary);
+}
+.wf-presets__confirm-actions button:disabled { opacity: 0.6; cursor: default; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wf-presets__card,
+  .wf-presets__reset,
+  .wf-presets__confirm-actions button { transition: none; }
+}

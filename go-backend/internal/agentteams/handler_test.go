@@ -13,12 +13,17 @@ import (
 
 // fakeStore implements handlerStore in memory.
 type fakeStore struct {
-	agents map[string]AgentRecord
-	teams  map[string]TeamRecord
+	agents         map[string]AgentRecord
+	teams          map[string]TeamRecord
+	attachedAgents map[string]bool // "kbID/agentID" -> isDefault
+	attachedTeams  map[string]bool // "kbID/teamID"  -> isDefault
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{agents: map[string]AgentRecord{}, teams: map[string]TeamRecord{}}
+	return &fakeStore{
+		agents: map[string]AgentRecord{}, teams: map[string]TeamRecord{},
+		attachedAgents: map[string]bool{}, attachedTeams: map[string]bool{},
+	}
 }
 
 func (f *fakeStore) CreateAgent(_ context.Context, a AgentRecord) (*AgentRecord, error) {
@@ -104,16 +109,44 @@ func (f *fakeStore) DeleteTeam(_ context.Context, id, userID string) (bool, erro
 	delete(f.teams, id)
 	return true, nil
 }
+
+// The attach rule in one place: exists at all, and (owned by the caller OR
+// already linked to this KB). Mirrors the two EXISTS arms of the SQL.
+func (f *fakeStore) AgentAttachEligibility(_ context.Context, agentID, kbID, userID string) (AttachEligibility, error) {
+	a, ok := f.agents[agentID]
+	if !ok {
+		return AttachEligibility{}, nil
+	}
+	_, attached := f.attachedAgents[kbID+"/"+agentID]
+	return AttachEligibility{Exists: true, Allowed: a.UserID == userID || attached}, nil
+}
+func (f *fakeStore) TeamAttachEligibility(_ context.Context, teamID, kbID, userID string) (AttachEligibility, error) {
+	tm, ok := f.teams[teamID]
+	if !ok {
+		return AttachEligibility{}, nil
+	}
+	_, attached := f.attachedTeams[kbID+"/"+teamID]
+	return AttachEligibility{Exists: true, Allowed: tm.UserID == userID || attached}, nil
+}
+
+// attachedAgents / attachedTeams record what actually reached the store, keyed
+// "kbID/entityID" -> isDefault. The attach tests assert on these rather than on
+// the 200, because "returned 200 without writing anything" is exactly the shape
+// a vacuous permission test would still pass.
 func (f *fakeStore) AttachAgent(_ context.Context, kbID, agentID string, isDefault bool) error {
+	f.attachedAgents[kbID+"/"+agentID] = isDefault
 	return nil
 }
 func (f *fakeStore) DetachAgent(_ context.Context, kbID, agentID string) (bool, error) {
+	delete(f.attachedAgents, kbID+"/"+agentID)
 	return true, nil
 }
 func (f *fakeStore) AttachTeam(_ context.Context, kbID, teamID string, isDefault bool) error {
+	f.attachedTeams[kbID+"/"+teamID] = isDefault
 	return nil
 }
 func (f *fakeStore) DetachTeam(_ context.Context, kbID, teamID string) (bool, error) {
+	delete(f.attachedTeams, kbID+"/"+teamID)
 	return true, nil
 }
 func (f *fakeStore) ListAttachedForKB(_ context.Context, kbID string) (*KBAgents, error) {
@@ -208,6 +241,219 @@ func TestCreateTeamRejectsForeignMembers(t *testing.T) {
 	}
 	if len(fs.teams) != 0 {
 		t.Fatalf("rejected team must not reach the store, got %d teams", len(fs.teams))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// KB attach/detach: route-gated, and gated on the agent's relationship to THIS
+// KB — never on who created it alone.
+//
+// The routes sit on kbAdminChain (internal/app/routes.go), so by the time these
+// handlers run, kbaccess has already decided the caller is a KB admin. They
+// used to ALSO re-check that the caller OWNS the agent, which meant a KB admin
+// who did not create it got 404 on their own KB — including when clearing a
+// default someone else had bound, i.e. a binding the workflow canvas showed
+// them and they could not remove.
+//
+// These tests state the rule in words on purpose, because it is a permission
+// boundary and the exact width is the point:
+//
+//	a KB admin may attach, re-point or clear an agent/team on their KB when
+//	they OWN it, OR when it is ALREADY attached to that KB — and not otherwise.
+//
+// The second arm is what makes the workflow canvas usable (a co-admin attaches
+// it, another admin binds it). The first arm's ABSENCE is what would be
+// dangerous: the link row is the use-time authorization — LoadAgentForChat
+// checks attachment and never ownership — so binding an agent makes its
+// persona, model override and config overrides run for every viewer of the KB,
+// with the owner given no notice and no veto. An earlier revision dropped the
+// ownership check entirely and let any KB admin conscript any agent whose UUID
+// they could read; that is what these tests now forbid.
+//
+// Nothing usable is lost: GET /api/agents and GET /api/agent-teams stay
+// owner-scoped, so an admin cannot even SEE an unattached foreign agent in
+// order to name one.
+// ---------------------------------------------------------------------------
+
+// seedForeign creates an agent and a team owned by "owner", and returns the
+// store — the caller in every test below is "kb-admin", a different user.
+func seedForeign(t *testing.T) (*fakeStore, *Handler) {
+	t.Helper()
+	fs := newFakeStore()
+	h := testHandler(fs)
+	doJSON(t, h.CreateAgent, "POST", "/api/agents", "owner", map[string]any{"name": "Fremd"}, nil)
+	doJSON(t, h.CreateTeam, "POST", "/api/agent-teams", "owner", map[string]any{"name": "FremdT"}, nil)
+	if _, ok := fs.agents["agent-Fremd"]; !ok {
+		t.Fatal("fixture: agent was not created")
+	}
+	if _, ok := fs.teams["team-FremdT"]; !ok {
+		t.Fatal("fixture: team was not created")
+	}
+	return fs, h
+}
+
+// Arm one: the agent is foreign but ALREADY attached to this KB. This is the
+// case the workflow canvas is built on — someone else attached it, and any KB
+// admin can now make it the default or take it back off.
+func TestAttachAgentAllowsAKbAdminToBindAnAlreadyAttachedForeignAgent(t *testing.T) {
+	fs, h := seedForeign(t)
+	// Attached, but not the default. The link is what authorizes the caller.
+	fs.attachedAgents["kb1/agent-Fremd"] = false
+
+	w := doJSON(t, h.AttachAgent, "PUT", "/api/kb/kb1/agents/agent-Fremd", "kb-admin",
+		map[string]any{"isDefault": true},
+		map[string]string{"id": "kb1", "agentId": "agent-Fremd"})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — an agent already attached to this KB must be "+
+			"bindable by any KB admin, whoever created it: %s", w.Code, w.Body.String())
+	}
+	if got, ok := fs.attachedAgents["kb1/agent-Fremd"]; !ok || !got {
+		t.Fatalf("attachedAgents = %v, want the link written with isDefault=true — "+
+			"a 200 that writes nothing would be the same bug with a nicer status", fs.attachedAgents)
+	}
+}
+
+// Arm two: the caller OWNS the agent, and it is not attached to this KB yet.
+// This is how an agent gets attached in the first place, and it must keep
+// working — a rule that only allowed already-attached agents would make the
+// attach endpoint unable to attach anything.
+func TestAttachAgentAllowsTheOwnerToAttachTheirOwnAgent(t *testing.T) {
+	fs := newFakeStore()
+	h := testHandler(fs)
+	doJSON(t, h.CreateAgent, "POST", "/api/agents", "kb-admin", map[string]any{"name": "Eigen"}, nil)
+
+	w := doJSON(t, h.AttachAgent, "PUT", "/api/kb/kb1/agents/agent-Eigen", "kb-admin",
+		map[string]any{"isDefault": true},
+		map[string]string{"id": "kb1", "agentId": "agent-Eigen"})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — the owner attaching their own agent is the "+
+			"ordinary path: %s", w.Code, w.Body.String())
+	}
+	if got, ok := fs.attachedAgents["kb1/agent-Eigen"]; !ok || !got {
+		t.Fatalf("attachedAgents = %v, want the link written", fs.attachedAgents)
+	}
+}
+
+// The boundary itself, in both kinds: a real agent/team that the caller neither
+// owns nor has attached to this KB is REFUSED, even though the caller is a KB
+// admin. 403, not 404 — the row exists and saying so is not a leak the listing
+// endpoints do not already prevent (they are owner-scoped, so an admin cannot
+// discover a foreign id through the product at all).
+//
+// Without this, a KB admin could make ANY agent whose UUID they could read
+// executable by every viewer of their KB — running that agent's persona, model
+// override and config overrides — because the link row, not ownership, is what
+// LoadAgentForChat authorizes on.
+func TestAttachRefusesAForeignAgentThatIsNotAttachedToThisKB(t *testing.T) {
+	fs, h := seedForeign(t)
+
+	w := doJSON(t, h.AttachAgent, "PUT", "/api/kb/kb1/agents/agent-Fremd", "kb-admin",
+		map[string]any{"isDefault": true},
+		map[string]string{"id": "kb1", "agentId": "agent-Fremd"})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 — a KB admin may not conscript an agent that is "+
+			"neither theirs nor already attached here: %s", w.Code, w.Body.String())
+	}
+	if len(fs.attachedAgents) != 0 {
+		t.Fatalf("attachedAgents = %v, want nothing written — a refusal that still "+
+			"writes the link is the whole vulnerability with a nicer status",
+			fs.attachedAgents)
+	}
+
+	w = doJSON(t, h.AttachTeam, "PUT", "/api/kb/kb1/teams/team-FremdT", "kb-admin",
+		map[string]any{"isDefault": true},
+		map[string]string{"id": "kb1", "teamId": "team-FremdT"})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for a foreign unattached team: %s",
+			w.Code, w.Body.String())
+	}
+	if len(fs.attachedTeams) != 0 {
+		t.Fatalf("attachedTeams = %v, want nothing written", fs.attachedTeams)
+	}
+}
+
+// The clearing half, which is what the workflow canvas needs: an admin who does
+// not own the bound agent must be able to take it back off their KB. Clearing
+// goes through the SAME attach endpoint with isDefault:false (there is no
+// "unset the default" endpoint), so the old owner check blocked removal too.
+func TestAttachAgentClearsADefaultTheCallerDoesNotOwn(t *testing.T) {
+	fs, h := seedForeign(t)
+	fs.attachedAgents["kb1/agent-Fremd"] = true
+
+	w := doJSON(t, h.AttachAgent, "PUT", "/api/kb/kb1/agents/agent-Fremd", "kb-admin",
+		map[string]any{"isDefault": false},
+		map[string]string{"id": "kb1", "agentId": "agent-Fremd"})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a KB admin must be able to CLEAR a default "+
+			"bound by someone else: %s", w.Code, w.Body.String())
+	}
+	if got := fs.attachedAgents["kb1/agent-Fremd"]; got {
+		t.Fatal("the link is still flagged default — clearing did not reach the store")
+	}
+}
+
+func TestAttachTeamAllowsAKbAdminToBindAnAlreadyAttachedForeignTeam(t *testing.T) {
+	fs, h := seedForeign(t)
+	fs.attachedTeams["kb1/team-FremdT"] = false
+
+	w := doJSON(t, h.AttachTeam, "PUT", "/api/kb/kb1/teams/team-FremdT", "kb-admin",
+		map[string]any{"isDefault": true},
+		map[string]string{"id": "kb1", "teamId": "team-FremdT"})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — same rule as agents: %s", w.Code, w.Body.String())
+	}
+	if got, ok := fs.attachedTeams["kb1/team-FremdT"]; !ok || !got {
+		t.Fatalf("attachedTeams = %v, want the link written with isDefault=true", fs.attachedTeams)
+	}
+}
+
+// The existence check, and its PRECEDENCE over the permission check. A 404 for
+// an agent that does not exist is a correct answer and must stay: without it a
+// typo'd id reaches the FK and comes back as a 500, and the write must not
+// happen either way. It has to come first, too — answering 403 for a
+// nonexistent id would tell an admin to go ask a nonexistent owner.
+func TestAttachRejectsAnAgentThatDoesNotExist(t *testing.T) {
+	fs, h := seedForeign(t)
+
+	w := doJSON(t, h.AttachAgent, "PUT", "/api/kb/kb1/agents/nope", "kb-admin", nil,
+		map[string]string{"id": "kb1", "agentId": "nope"})
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for a nonexistent agent: %s", w.Code, w.Body.String())
+	}
+	if len(fs.attachedAgents) != 0 {
+		t.Fatalf("a nonexistent agent reached the store: %v", fs.attachedAgents)
+	}
+
+	w = doJSON(t, h.AttachTeam, "PUT", "/api/kb/kb1/teams/nope", "kb-admin", nil,
+		map[string]string{"id": "kb1", "teamId": "nope"})
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for a nonexistent team: %s", w.Code, w.Body.String())
+	}
+	if len(fs.attachedTeams) != 0 {
+		t.Fatalf("a nonexistent team reached the store: %v", fs.attachedTeams)
+	}
+}
+
+// Detach was never owner-scoped (it has no GetAgent call to begin with) — pinned
+// so the rule above is not later "made consistent" by adding one. It needs no
+// check of its own: it can only delete a link on THIS KB, so the "already
+// attached to this KB" arm holds for it by construction, and a detach that
+// matches nothing is a no-op.
+func TestDetachIsNotOwnerScoped(t *testing.T) {
+	fs, h := seedForeign(t)
+	fs.attachedAgents["kb1/agent-Fremd"] = true
+
+	w := doJSON(t, h.DetachAgent, "DELETE", "/api/kb/kb1/agents/agent-Fremd", "kb-admin", nil,
+		map[string]string{"id": "kb1", "agentId": "agent-Fremd"})
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if _, still := fs.attachedAgents["kb1/agent-Fremd"]; still {
+		t.Fatal("detach did not reach the store")
 	}
 }
 
