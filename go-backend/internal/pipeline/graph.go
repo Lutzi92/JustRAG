@@ -39,6 +39,17 @@ var edges = []EdgeSpec{
 	{From: NodeCompression, To: NodeSufficientCtx},
 
 	{From: NodeSufficientCtx, To: NodeOrchestrator, Label: "ausreichend"},
+
+	// The KB's default agent/team binding is an INPUT to orchestrator
+	// selection, not a stage the material flows through — hence a second
+	// edge INTO the orchestrator rather than a link in the chain. Deliberately
+	// unlabelled: the condition under which the binding applies is long
+	// (new web chats only, overridable per chat, ignored by API/OpenAI-compat/
+	// MCP) and already lives in the node's Help and Condition. When nothing is
+	// bound the node projects inactive, and the client dims this edge from its
+	// endpoints — which is the honest rendering without a word of edge label.
+	{From: NodeAgentBinding, To: NodeOrchestrator},
+
 	{From: NodeOrchestrator, To: NodeAnswerTools},
 	{From: NodeAnswerTools, To: NodeAnswer},
 

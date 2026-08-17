@@ -71,7 +71,7 @@ func (s *recordingStore) value(key string) (string, bool) {
 }
 
 func newApplyHandler(s *recordingStore, globals map[string]string) *Handler {
-	return NewHandler(s, fakeReader{vals: globals})
+	return NewHandler(s, fakeReader{vals: globals}, fakeBindings{})
 }
 
 // withPresets swaps the curated preset table for the duration of one test.
@@ -437,6 +437,94 @@ func TestApplyPresetReportsWhatItOverwrote(t *testing.T) {
 	if strings.Join(res.Overwrites, ",") != "crag_enabled" {
 		t.Errorf("Overwrites = %v, want [crag_enabled]", res.Overwrites)
 	}
+}
+
+// The review finding this pins: a KB with NO overrides of its own gets
+// Overwrites=[] — correctly, it loses nothing it set — while the apply still
+// writes all 21 bundle keys and, on a deployment whose globals disagree with
+// the bundle, changes how the KB answers. Overwrites alone therefore cannot be
+// the dialog's only number. Effective is that second number.
+//
+// The fixture is the real deployment case named in the review: the supervisor
+// orchestrator is on GLOBALLY and "Standard" turns it off for the KB.
+func TestEffectiveCountsBehaviourChangesTheAdminNeverSetThemselves(t *testing.T) {
+	s := newRecordingStore(nil) // the KB overrides nothing at all
+	h := newApplyHandler(s, map[string]string{"chat_supervisor_enabled": "true"})
+
+	rec := doPreview(t, h, "preset=standard")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	res := decodeApplyResult(t, rec)
+
+	if len(res.Overwrites) != 0 {
+		t.Fatalf("Overwrites = %v, want none — the KB sets nothing of its own", res.Overwrites)
+	}
+	if !contains(res.Effective, "chat_supervisor_enabled") {
+		t.Errorf("Effective = %v, want it to name chat_supervisor_enabled: the global has "+
+			"the supervisor ON and this preset turns it OFF for the KB, which is a "+
+			"behaviour change the dialog must be able to state", res.Effective)
+	}
+	if res.Pinned != 21 {
+		t.Errorf("Pinned = %d, want 21 (the bundle size, marker excluded)", res.Pinned)
+	}
+}
+
+// The other direction: a key whose effective value ALREADY equals the bundle is
+// not a behaviour change, however it got that way (global row, KB override, or
+// nothing set anywhere and the code default agreeing).
+func TestEffectiveIgnoresKeysThatAlreadyMatchTheBundle(t *testing.T) {
+	// "Standard" states every vocabulary key at its code default except the two
+	// kill switches, so a KB with nothing set and globals that say nothing has
+	// nothing to change.
+	s := newRecordingStore(nil)
+	h := newApplyHandler(s, map[string]string{})
+
+	rec := doPreview(t, h, "preset=standard")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	res := decodeApplyResult(t, rec)
+	if len(res.Effective) != 0 {
+		t.Errorf("Effective = %v, want none — every bundle key already resolves to what "+
+			"the bundle states, so applying changes no behaviour", res.Effective)
+	}
+}
+
+// Effective is measured against the EFFECTIVE state, so a KB override that
+// re-states the global still counts as no change, and an override that
+// contradicts the bundle counts once — not twice alongside Overwrites.
+func TestEffectiveAndOverwritesAnswerDifferentQuestions(t *testing.T) {
+	s := newRecordingStore(map[string]string{"crag_enabled": "false"})
+	h := newApplyHandler(s, map[string]string{"chat_supervisor_enabled": "true"})
+
+	rec := doPreview(t, h, "preset=high_precision")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	res := decodeApplyResult(t, rec)
+
+	if strings.Join(res.Overwrites, ",") != "crag_enabled" {
+		t.Errorf("Overwrites = %v, want [crag_enabled]", res.Overwrites)
+	}
+	if !contains(res.Effective, "crag_enabled") {
+		t.Errorf("Effective = %v, want it to include the hand-set key it changes", res.Effective)
+	}
+	// "Hohe Präzision" wants the supervisor ON and the global already has it
+	// ON, so it is NOT a behaviour change — unlike in the "Standard" case above.
+	if contains(res.Effective, "chat_supervisor_enabled") {
+		t.Errorf("Effective = %v, want chat_supervisor_enabled absent: the global already "+
+			"has it on and this bundle wants it on", res.Effective)
+	}
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

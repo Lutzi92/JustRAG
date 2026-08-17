@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -134,8 +135,10 @@ func (s boolDefaultSites) resolve(key string) (bool, bool) {
 // minCheckedActivationKeys guards against a vacuous pass: if the walk breaks
 // (helpers renamed, argument order changed) it would find nothing and every
 // assertion below would be skipped. Measured 2026-08-14: 14 of the projection's
-// activation keys resolve to a literal default. Floor set a little below.
-const minCheckedActivationKeys = 12
+// activation keys resolve to a literal default; re-measured 2026-08-17 over
+// guardedBoolKeys (activation keys ∪ the preset vocabulary): 23 of 25. Floor
+// set a little below.
+const minCheckedActivationKeys = 20
 
 // activationKeys returns each node's on/off key — Keys[0] — skipping the
 // unconditional nodes, which have no activation key at all.
@@ -150,6 +153,47 @@ func activationKeys() []string {
 	return out
 }
 
+// presetVocabulary returns every key any curated bundle states. Deviations and
+// EffectiveChanges resolve an UNSET bundle key through defaultOn
+// (matchesBundleValue), so a bundle key whose code default flips without
+// defaultOn following it makes the deviation badge and the apply dialog
+// under-report — silently, since neither number is derived from anything a test
+// currently compares against the call site.
+//
+// activationKeys alone does not cover them: it takes each node's Keys[0] only,
+// and eight of the 21 bundle keys are a node's SECOND-or-later key
+// (adaptive_routing_enabled, the four orchestrator gates under
+// chat_supervisor_enabled, chat_factuality_verifier_always_run) or sit on an
+// AlwaysOn node. All eight are false today, which is exactly why nobody
+// noticed — and this repo flips flags to default-ON as kill switches routinely
+// (chat_answer_history_*, chat_date_awareness_enabled, factcheck_in_chat).
+func presetVocabulary() []string {
+	out := []string{}
+	for _, p := range Presets() {
+		for k := range p.Bundle {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// guardedBoolKeys is the union of the two, deduplicated and sorted — every
+// boolean key whose default the projection or the preset machinery consults
+// through defaultOn.
+func guardedBoolKeys() []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, k := range append(activationKeys(), presetVocabulary()...) {
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // TestDefaultOnMatchesReadBoolDefaults is the guard that makes the defaultOn
 // map non-driftable in the direction that matters: what the canvas says about
 // a node it has no explicit value for.
@@ -157,7 +201,7 @@ func TestDefaultOnMatchesReadBoolDefaults(t *testing.T) {
 	sites := collectBoolDefaults(t)
 
 	checked := 0
-	for _, key := range activationKeys() {
+	for _, key := range guardedBoolKeys() {
 		def, ok := sites.resolve(key)
 		if !ok {
 			if len(sites[key]) > 1 {

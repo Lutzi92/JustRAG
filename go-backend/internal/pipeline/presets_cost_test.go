@@ -55,7 +55,7 @@ func TestPricePresetsAgreesWithProject(t *testing.T) {
 	for _, pp := range priced {
 		br := bundleReader{bundle: pp.Bundle, global: global}
 		for _, lane := range pricedLanes {
-			g, err := Project(context.Background(), br, global, lane)
+			g, err := Project(context.Background(), br, global, lane, AgentBinding{})
 			if err != nil {
 				t.Fatalf("Project(%s, %s): %v", pp.ID, lane, err)
 			}

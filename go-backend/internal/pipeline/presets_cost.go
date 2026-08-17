@@ -80,7 +80,13 @@ func PricePresets(ctx context.Context, global siteconfig.BatchReader) ([]PricedP
 		br := bundleReader{bundle: p.Bundle, global: global}
 		costs := make(map[Lane]LaneCost, len(pricedLanes))
 		for _, lane := range pricedLanes {
-			g, err := Project(ctx, br, global, lane)
+			// AgentBinding{} — a preset is a deployment-wide bundle of
+			// site_config keys with no KB behind it, so there is no binding to
+			// resolve. NodeAgentBinding costs 0 LLM calls and 0 ms either way,
+			// so this cannot move a preset's price; passing a binding here
+			// would only make preset prices depend on whichever KB happened to
+			// ask for the list.
+			g, err := Project(ctx, br, global, lane, AgentBinding{})
 			if err != nil {
 				return nil, fmt.Errorf("pipeline: price preset %q on lane %q: %w", p.ID, lane, err)
 			}

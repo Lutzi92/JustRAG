@@ -36,14 +36,36 @@ type globalReader interface {
 	GetSiteConfigValue(ctx context.Context, key string) (*string, error)
 }
 
+// bindingSource lists the agents and teams attached to one KB, flagging the one
+// that is the KB default (agent_kb_links.is_default / team_kb_links.is_default)
+// and any whose agent/team is switched off.
+//
+// The disabled ones must be included, which is why this is NOT the chat
+// picker's read: that one filters is_enabled (correctly — a disabled agent is
+// not selectable in chat), and reusing it left a KB whose default points at a
+// disabled agent projecting „keine Vorgabe" with no way to clear the row.
+//
+// It is stated in this package's OWN types on purpose. The single production
+// implementation wraps internal/agentteams' Store.ListBindingCandidatesForKB,
+// but that method returns agentteams' own DTOs, and naming a foreign struct in
+// this interface would drag the import into a package that must stay a leaf
+// (see the package doc in nodes.go). internal/app owns the small adapter, the
+// same way it owns communitySink for internal/community.
+type bindingSource interface {
+	ListBindingOptions(ctx context.Context, kbID string) ([]BindingOption, error)
+}
+
 // Handler serves the read-only workflow projection.
 type Handler struct {
-	store  store
-	global globalReader
+	store    store
+	global   globalReader
+	bindings bindingSource
 }
 
 // NewHandler constructs the workflow Handler.
-func NewHandler(s store, g globalReader) *Handler { return &Handler{store: s, global: g} }
+func NewHandler(s store, g globalReader, b bindingSource) *Handler {
+	return &Handler{store: s, global: g, bindings: b}
+}
 
 // GetWorkflow handles GET /api/kb/{id}/workflow?lane=…
 //
@@ -71,12 +93,17 @@ func (h *Handler) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	overlay := siteconfig.NewKBOverlay(h.global, overrides)
 
-	g, err := Project(ctx, overlay, h.global, lane)
+	binding := h.resolveBinding(ctx, kbID)
+
+	g, err := Project(ctx, overlay, h.global, lane, binding.binding())
 	if err != nil {
 		logctx.From(ctx).Error("pipeline.workflow.project", "error", err, "kb_id", kbID)
 		httputil.WriteInternalErrorCtx(ctx, w, err)
 		return
 	}
+	// Project fills Kind and Name from what it was handed; the id and the
+	// attachable set are the handler's to add (see AgentBindingInfo).
+	g.AgentBinding = binding
 
 	if err := h.annotatePreset(ctx, g, overlay, overrides); err != nil {
 		logctx.From(ctx).Error("pipeline.workflow.preset_base", "error", err, "kb_id", kbID)
@@ -85,6 +112,29 @@ func (h *Handler) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSONCtx(ctx, w, http.StatusOK, g)
+}
+
+// resolveBinding reads the KB's default agent/team plus the attachable set.
+//
+// A failed read does NOT fail the request. The graph is ~30 nodes of resolved
+// configuration and one of them is the binding; refusing to draw the whole
+// pipeline because the agent listing is down would be a worse answer than
+// drawing it with one node marked unreadable. The route is a KB admin's only
+// view of what their KB actually does.
+//
+// What it must not do is degrade to the ZERO AgentBinding. That value means
+// "nothing bound", which is a claim about the KB — and the wrong one for every
+// KB that does have a default. BindingUnknown exists precisely so a failed read
+// can say "I do not know" on the node (applyAgentBinding) instead of quietly
+// asserting the more common case. Options stays empty, so Task 4's inspector
+// has nothing to offer and cannot write a change from a state it cannot see.
+func (h *Handler) resolveBinding(ctx context.Context, kbID string) AgentBindingInfo {
+	opts, err := h.bindings.ListBindingOptions(ctx, kbID)
+	if err != nil {
+		logctx.From(ctx).Error("pipeline.workflow.bindings", "error", err, "kb_id", kbID)
+		return AgentBindingInfo{Kind: BindingUnknown, Options: []BindingOption{}}
+	}
+	return bindingInfoFrom(opts)
 }
 
 // annotatePreset fills PresetBase / PresetBaseKnown / Deviations.

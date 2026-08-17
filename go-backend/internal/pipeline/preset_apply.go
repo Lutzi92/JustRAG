@@ -23,6 +23,24 @@ type ApplyResult struct {
 	// keys included. Empty means the apply takes nothing away from the admin
 	// — it only pins keys they had left alone.
 	Overwrites []string `json:"overwrites"`
+
+	// Effective names the bundle keys whose EFFECTIVE value changes, sorted —
+	// what the KB will actually answer differently on. It is the number that
+	// decides whether clicking is safe, and it is NOT bounded by Overwrites: a
+	// KB with no overrides at all has zero Overwrites and can still have a
+	// dozen Effective entries, because the apply pins every bundle key over
+	// whatever the deployment global said. Reporting only Overwrites there
+	// produced „Keine deiner eigenen Einstellungen wird überschrieben." while
+	// (for instance) the globally-enabled supervisor was turned off for the KB.
+	Effective []string `json:"effective"`
+
+	// Pinned is how many settings the apply writes as per-KB rows — the size
+	// of the bundle, i.e. the count that stops following the deployment
+	// defaults afterwards. The workflow_preset marker is deliberately NOT
+	// counted: it records provenance and changes no behaviour, so counting it
+	// would inflate a number whose whole job is to say how much of the KB's
+	// answering behaviour is now frozen.
+	Pinned int `json:"pinned"`
 }
 
 // applyPayload builds the exact key/value set an apply writes: the preset's
@@ -127,9 +145,15 @@ func (h *Handler) planApply(ctx context.Context, kbID, presetID string) (*applyP
 	return &applyPlan{
 		kv: kv,
 		result: ApplyResult{
-			Preset:     p.ID,
-			Label:      p.Label,
+			Preset: p.ID,
+			Label:  p.Label,
+			// Two counts, from the two maps already in hand: `overrides` is
+			// what THIS ADMIN set, `existing` is what the KB currently
+			// RESOLVES to. They answer different questions and the dialog
+			// needs both — see ApplyResult's field comments.
 			Overwrites: Overwrites(p.Bundle, overrides),
+			Effective:  EffectiveChanges(p.Bundle, existing),
+			Pinned:     len(p.Bundle),
 		},
 	}, nil
 }

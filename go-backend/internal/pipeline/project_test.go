@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"context"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/justrag/go-backend/internal/chat"
@@ -47,7 +49,7 @@ func TestProjectMarksDisabledNodeInactive(t *testing.T) {
 	// escalation and lives in its own node (NodeFactVerifier).
 	r := fakeReader{vals: map[string]string{"factcheck_in_chat": "false"}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -67,7 +69,7 @@ func TestProjectMarksDisabledNodeInactive(t *testing.T) {
 func TestProjectMarksEnabledNodeActive(t *testing.T) {
 	r := fakeReader{vals: map[string]string{"factcheck_in_chat": "true"}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -77,9 +79,19 @@ func TestProjectMarksEnabledNodeActive(t *testing.T) {
 	}
 }
 
-// Nodes with no keys are unconditional stages and must always be active.
+// The unconditional stages — retrieval, reranking, answer generation — own no
+// site_config key and must always render active.
+//
+// This used to be stated as "nodes with no keys are unconditional stages", and
+// that is no longer true: NodeAgentBinding is keyless AND conditional on the
+// agent/team link tables. The list below is enumerated rather than derived
+// from `len(n.Keys) == 0` precisely so it keeps asserting what it means; a
+// derived version would now be wrong, and a derived version that special-cased
+// NodeAgentBinding would just be this list with extra steps. The keyless-but-
+// not-unconditional case has its own guards below
+// (TestProjectAgentBinding*).
 func TestProjectKeylessNodesAreAlwaysActive(t *testing.T) {
-	g, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, fakeReader{vals: map[string]string{}}, LaneLookup)
+	g, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, fakeReader{vals: map[string]string{}}, LaneLookup, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -99,7 +111,7 @@ func TestProjectLookupLaneYieldsStandardOnly(t *testing.T) {
 		"chat_drift_enabled":      "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneLookup)
+	g, err := Project(context.Background(), r, r, LaneLookup, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -120,7 +132,7 @@ func TestProjectComplexLaneListsConditionalDrift(t *testing.T) {
 		"chat_supervisor_enabled": "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -157,11 +169,11 @@ func TestProjectCostEstimateExcludesInactiveNodes(t *testing.T) {
 	off := fakeReader{vals: map[string]string{"factcheck_in_chat": "false"}}
 	on := fakeReader{vals: map[string]string{"factcheck_in_chat": "true"}}
 
-	gOff, err := Project(context.Background(), off, off, LaneComplex)
+	gOff, err := Project(context.Background(), off, off, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
-	gOn, err := Project(context.Background(), on, on, LaneComplex)
+	gOn, err := Project(context.Background(), on, on, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -174,7 +186,7 @@ func TestProjectCostEstimateExcludesInactiveNodes(t *testing.T) {
 
 // Registry membership decides whether the UI may offer an editor.
 func TestProjectMarksEditability(t *testing.T) {
-	g, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, fakeReader{vals: map[string]string{}}, LaneComplex)
+	g, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, fakeReader{vals: map[string]string{}}, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -195,7 +207,7 @@ func TestProjectCRAGLaneSkippedOnLookupAndEnumeration(t *testing.T) {
 	}}
 
 	for _, lane := range []Lane{LaneLookup, LaneEnumeration} {
-		g, err := Project(context.Background(), r, r, lane)
+		g, err := Project(context.Background(), r, r, lane, AgentBinding{})
 		if err != nil {
 			t.Fatalf("Project(%s): %v", lane, err)
 		}
@@ -225,7 +237,7 @@ func TestProjectCRAGNotLaneSkippedOnComplexLaneUnderAdaptiveRouting(t *testing.T
 		"adaptive_routing_enabled": "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -251,7 +263,7 @@ func TestProjectCRAGActiveOnLookupWhenAdaptiveRoutingOff(t *testing.T) {
 		"adaptive_routing_enabled": "false",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneLookup)
+	g, err := Project(context.Background(), r, r, LaneLookup, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -278,7 +290,7 @@ func TestProjectVerifierSupersededBySelfRAG(t *testing.T) {
 		"chat_self_rag_enabled":            "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -302,7 +314,7 @@ func TestProjectFactcheckSurvivesSelfRAG(t *testing.T) {
 		"chat_self_rag_enabled": "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -321,7 +333,7 @@ func TestProjectFactcheckSurvivesSelfRAG(t *testing.T) {
 }
 
 func TestProjectRejectsUnknownLane(t *testing.T) {
-	if _, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, fakeReader{vals: map[string]string{}}, Lane("nonsense")); err == nil {
+	if _, err := Project(context.Background(), fakeReader{vals: map[string]string{}}, fakeReader{vals: map[string]string{}}, Lane("nonsense"), AgentBinding{}); err == nil {
 		t.Fatal("Project accepted an unknown lane")
 	}
 }
@@ -330,7 +342,7 @@ func TestProjectReportsValueOrigins(t *testing.T) {
 	global := fakeReader{vals: map[string]string{"crag_enabled": "false"}}
 	overlaid := fakeReader{vals: map[string]string{"crag_enabled": "true"}}
 
-	g, err := Project(context.Background(), overlaid, global, LaneComplex)
+	g, err := Project(context.Background(), overlaid, global, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -344,7 +356,7 @@ func TestProjectReportsValueOrigins(t *testing.T) {
 func TestProjectReportsGlobalOrigin(t *testing.T) {
 	global := fakeReader{vals: map[string]string{"crag_enabled": "true"}}
 
-	g, err := Project(context.Background(), global, global, LaneComplex)
+	g, err := Project(context.Background(), global, global, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -358,7 +370,7 @@ func TestProjectReportsGlobalOrigin(t *testing.T) {
 func TestProjectReportsDefaultOrigin(t *testing.T) {
 	empty := fakeReader{vals: map[string]string{}}
 
-	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	g, err := Project(context.Background(), empty, empty, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -387,7 +399,7 @@ func TestProjectPrepareChatContextStagesAreConditionalOnComplexLane(t *testing.T
 		"chat_sufficient_context_enabled":  "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -422,7 +434,7 @@ func TestProjectPrepareChatContextStagesActiveOnLookupLane(t *testing.T) {
 		"chat_sufficient_context_enabled":  "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneLookup)
+	g, err := Project(context.Background(), r, r, LaneLookup, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -450,7 +462,7 @@ func TestProjectSufficientContextActiveUnderSupervisor(t *testing.T) {
 		"chat_sufficient_context_enabled": "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -466,7 +478,7 @@ func TestProjectSufficientContextActiveUnderSupervisor(t *testing.T) {
 		"chat_agentic_enabled":            "true",
 		"chat_sufficient_context_enabled": "true",
 	}}
-	g2, err := Project(context.Background(), r2, r2, LaneComplex)
+	g2, err := Project(context.Background(), r2, r2, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -480,7 +492,7 @@ func TestProjectSufficientContextActiveUnderSupervisor(t *testing.T) {
 func TestProjectBypassDoesNotMaskFlagOff(t *testing.T) {
 	empty := fakeReader{vals: map[string]string{}}
 
-	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	g, err := Project(context.Background(), empty, empty, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -504,7 +516,7 @@ func TestProjectComplexOnlyStagesLaneSkippedOnLookup(t *testing.T) {
 	}}
 
 	for _, lane := range []Lane{LaneLookup, LaneEnumeration} {
-		g, err := Project(context.Background(), r, r, lane)
+		g, err := Project(context.Background(), r, r, lane, AgentBinding{})
 		if err != nil {
 			t.Fatalf("Project(%s): %v", lane, err)
 		}
@@ -535,7 +547,7 @@ func TestProjectSelfRAGInactiveWithoutCitationValidation(t *testing.T) {
 		"citation_validation_enabled": "false",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -561,7 +573,7 @@ func TestProjectSelfRAGInactiveWithAlwaysRunButNoLaunch(t *testing.T) {
 		"chat_factuality_verifier_always_run": "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -579,7 +591,7 @@ func TestProjectSelfRAGConditionalBehindCitationValidator(t *testing.T) {
 		"citation_validation_enabled": "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -601,7 +613,7 @@ func TestProjectSelfRAGActiveWithAlwaysRun(t *testing.T) {
 		"chat_factuality_verifier_always_run": "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -618,7 +630,7 @@ func TestProjectVerifierConditionalBehindCitationValidator(t *testing.T) {
 		"citation_validation_enabled":      "true",
 	}}
 
-	g, err := Project(context.Background(), r, r, LaneComplex)
+	g, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -634,7 +646,7 @@ func TestProjectVerifierConditionalBehindCitationValidator(t *testing.T) {
 		"chat_factuality_verifier_enabled": "true",
 		"citation_validation_enabled":      "false",
 	}}
-	g2, err := Project(context.Background(), r2, r2, LaneComplex)
+	g2, err := Project(context.Background(), r2, r2, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -685,7 +697,7 @@ func TestProjectPhase2NodesAreEditable(t *testing.T) {
 	}
 
 	empty := fakeReader{vals: map[string]string{}}
-	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	g, err := Project(context.Background(), empty, empty, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -726,7 +738,7 @@ func TestProjectPhase2NodesAreEditable(t *testing.T) {
 // reason: that key is structurally global, not a tuning threshold.
 func TestProjectRetrievalThresholdNodeStaysNotEditable(t *testing.T) {
 	empty := fakeReader{vals: map[string]string{}}
-	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	g, err := Project(context.Background(), empty, empty, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -756,7 +768,7 @@ func TestProjectRetrievalThresholdNodeStaysNotEditable(t *testing.T) {
 // structurally global, so the node must project editable:false.
 func TestProjectKBRouterStaysNotEditable(t *testing.T) {
 	empty := fakeReader{vals: map[string]string{}}
-	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	g, err := Project(context.Background(), empty, empty, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -796,7 +808,7 @@ func TestProjectKBRouterStaysNotEditable(t *testing.T) {
 // PRESENCE of an entry already anchored by the Nodes()-derived vocabulary.
 func TestProjectFields(t *testing.T) {
 	empty := fakeReader{vals: map[string]string{}}
-	g, err := Project(context.Background(), empty, empty, LaneComplex)
+	g, err := Project(context.Background(), empty, empty, LaneComplex, AgentBinding{})
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
@@ -867,5 +879,730 @@ func TestProjectFields(t *testing.T) {
 		if _, present := g.Fields[key]; present {
 			t.Errorf("Fields contains unregistered key %q — decision was to omit, not synthesise", key)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 Task 1 — NodeAgentBinding
+//
+// NodeAgentBinding is the first node whose activation comes from somewhere
+// other than site_config, and it is KEYLESS. Every key-driven guard in this
+// package (TestNodeKeysAreActuallyRead, activationKeys in defaults_test.go)
+// skips a keyless node by construction, so the tests below are the ONLY thing
+// standing between this node and a silently wrong activation.
+// ---------------------------------------------------------------------------
+
+// projectWithBinding is the shared fixture: an otherwise-default deployment,
+// projected on the complex lane with one binding.
+func projectWithBinding(t *testing.T, b AgentBinding) *ProjectedGraph {
+	t.Helper()
+	empty := fakeReader{vals: map[string]string{}}
+	g, err := Project(context.Background(), empty, empty, LaneComplex, b)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	return g
+}
+
+// The one the plan calls out for mutation testing: with nothing bound the node
+// must be INACTIVE.
+//
+// Project's activation switch has a keyless shortcut (`len(spec.Keys) == 0` →
+// active) that sits one line below NodeAgentBinding's own branch. Delete that
+// branch and this node falls straight through it and renders "aktiv" on every
+// KB in the deployment — a canvas claiming every KB has a default agent.
+func TestProjectAgentBindingUnboundIsInactive(t *testing.T) {
+	n := nodeByIDIn(projectWithBinding(t, AgentBinding{}), NodeAgentBinding)
+	if n == nil {
+		t.Fatal("agent_binding node missing from projection")
+	}
+	if n.Activation != ActivationInactive {
+		t.Errorf("Activation = %q, want %q", n.Activation, ActivationInactive)
+	}
+	if n.Reason != "no_binding" {
+		t.Errorf("Reason = %q, want %q", n.Reason, "no_binding")
+	}
+	if n.Condition == "" {
+		t.Error("Condition is empty — an inactive node whose Reason is not about a " +
+			"config key must say what an operator would have to do")
+	}
+	// A binding node with keys would mean somebody gave it a synthetic
+	// site_config key, which is exactly what the design forbids.
+	if len(n.Keys) != 0 {
+		t.Errorf("Keys = %v, want empty — the binding owns no site_config key", n.Keys)
+	}
+	if n.Editable {
+		t.Error("Editable = true — Editable is derived from Keys[0] and there is no Keys[0]")
+	}
+}
+
+func TestProjectAgentBindingTeamIsActive(t *testing.T) {
+	n := nodeByIDIn(projectWithBinding(t, AgentBinding{Kind: BindingTeam, Name: "Recherche-Team"}), NodeAgentBinding)
+	if n == nil {
+		t.Fatal("agent_binding node missing from projection")
+	}
+	if n.Activation != ActivationActive {
+		t.Errorf("Activation = %q, want %q", n.Activation, ActivationActive)
+	}
+	if n.Reason != "" {
+		t.Errorf("Reason = %q, want empty on an active node", n.Reason)
+	}
+	if !strings.Contains(n.Condition, "Recherche-Team") {
+		t.Errorf("Condition = %q, want it to name the bound team", n.Condition)
+	}
+	if !strings.Contains(n.Condition, "Team") {
+		t.Errorf("Condition = %q, want it to say this is a team", n.Condition)
+	}
+}
+
+func TestProjectAgentBindingAgentIsActive(t *testing.T) {
+	n := nodeByIDIn(projectWithBinding(t, AgentBinding{Kind: BindingAgent, Name: "Bibliotheks-Assistent"}), NodeAgentBinding)
+	if n == nil {
+		t.Fatal("agent_binding node missing from projection")
+	}
+	if n.Activation != ActivationActive {
+		t.Errorf("Activation = %q, want %q", n.Activation, ActivationActive)
+	}
+	if !strings.Contains(n.Condition, "Bibliotheks-Assistent") {
+		t.Errorf("Condition = %q, want it to name the bound agent", n.Condition)
+	}
+	if !strings.Contains(n.Condition, "Agenten") {
+		t.Errorf("Condition = %q, want it to say this is an agent, not a team", n.Condition)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A bound-but-DISABLED default: the row exists, and nothing routes through it.
+//
+// agent_kb_links.is_default survives the agent being switched off. Chat-time
+// resolution filters is_enabled (LoadAgentForChat / LoadTeamForChat), and so
+// does the list the web client picks the default from, so such a KB really does
+// answer with the standard path. The canvas used to be told nothing about the
+// row at all — ListAttachedForKB filtered it away — and therefore projected
+// „keine Vorgabe" on a KB that had one, which an admin could neither see nor
+// clear, and which came back the moment anyone re-enabled the agent.
+//
+// The projection now has to say BOTH things at once: the row exists (so it can
+// be cleared) and it does not run (so nothing below it is misreported).
+// ---------------------------------------------------------------------------
+
+func TestProjectDisabledBindingIsInactiveAndSaysWhy(t *testing.T) {
+	n := nodeByIDIn(projectWithBinding(t,
+		AgentBinding{Kind: BindingAgent, Name: "Bibliotheks-Assistent", Disabled: true}),
+		NodeAgentBinding)
+	if n == nil {
+		t.Fatal("agent_binding node missing from projection")
+	}
+	// INACTIVE, not active: „aktiv" would claim the agent answers, and it does
+	// not. Not conditional either — there is no circumstance in which a
+	// switched-off agent takes a turn.
+	if n.Activation != ActivationInactive {
+		t.Errorf("Activation = %q, want %q — a switched-off agent answers nothing, "+
+			"so anything but inaktiv is the lie this node exists to prevent",
+			n.Activation, ActivationInactive)
+	}
+	// A DISTINCT reason from "no_binding": the two states need different
+	// actions from the admin (nothing to do vs. a row to re-enable or clear),
+	// and collapsing them is what made the row invisible in the first place.
+	if n.Reason != "binding_disabled" {
+		t.Errorf("Reason = %q, want %q — „nichts hinterlegt\" and „hinterlegt, aber "+
+			"abgeschaltet\" are different states", n.Reason, "binding_disabled")
+	}
+	if !strings.Contains(n.Condition, "Bibliotheks-Assistent") {
+		t.Errorf("Condition = %q, want it to name the bound agent — an admin cannot "+
+			"clear what the canvas will not name", n.Condition)
+	}
+	if !strings.Contains(n.Condition, "abgeschaltet") {
+		t.Errorf("Condition = %q, want it to say the binding is switched off", n.Condition)
+	}
+}
+
+func TestProjectDisabledTeamBindingIsInactiveAndNamesTheTeam(t *testing.T) {
+	n := nodeByIDIn(projectWithBinding(t,
+		AgentBinding{Kind: BindingTeam, Name: "Recherche-Team", Disabled: true}),
+		NodeAgentBinding)
+	if n == nil {
+		t.Fatal("agent_binding node missing from projection")
+	}
+	if n.Activation != ActivationInactive || n.Reason != "binding_disabled" {
+		t.Errorf("node = %q/%q, want inactive/binding_disabled", n.Activation, n.Reason)
+	}
+	if !strings.Contains(n.Condition, "Recherche-Team") {
+		t.Errorf("Condition = %q, want it to name the bound team", n.Condition)
+	}
+	if !strings.Contains(n.Condition, "Team") {
+		t.Errorf("Condition = %q, want it to say this is a team", n.Condition)
+	}
+}
+
+// The other half, and the one that makes the projection honest rather than
+// merely informative: a disabled binding must change NOTHING below it. The
+// orchestrator really is the ordinary fallback, and it really does simply run.
+//
+// This is the assertion most likely to pass vacuously — "OrchTeam is absent" is
+// also true of a projection that produced nothing — so it checks the fallback
+// is present AND still active, which a demoted (bound-KB) projection is not.
+func TestProjectDisabledBindingChangesNoOrchestrator(t *testing.T) {
+	g := projectWithBinding(t,
+		AgentBinding{Kind: BindingTeam, Name: "Recherche-Team", Disabled: true})
+
+	if c := orchCandidate(g, chat.OrchTeam); c != nil {
+		t.Fatalf("OrchTeam projected for a DISABLED binding: %+v — chat-time "+
+			"resolution rejects a switched-off team, so the turn never gets there",
+			c)
+	}
+	if len(g.Orchestrators) == 0 {
+		t.Fatal("no orchestrator candidates at all — the assertion above passed vacuously")
+	}
+	last := g.Orchestrators[len(g.Orchestrators)-1]
+	if last.Activation != ActivationActive || last.Condition != "" {
+		t.Errorf("fallback %q = %q/%q, want active with no condition — demoting it "+
+			"would claim the KB's default takes turns away from it, and it does not",
+			last.Orchestrator, last.Activation, last.Condition)
+	}
+}
+
+// The PrepareChatContext bypass is driven by the same Bound() predicate, so it
+// gets its own guard: with a disabled binding a lookup turn reaches the
+// standard path exactly as on an unbound KB, and CRAG must still read „aktiv".
+func TestProjectDisabledBindingDoesNotBypassTheStandardPath(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"crag_enabled":             "true",
+		"adaptive_routing_enabled": "false",
+	}}
+	g, err := Project(context.Background(), r, r, LaneLookup,
+		AgentBinding{Kind: BindingTeam, Name: "Recherche-Team", Disabled: true})
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	n := nodeByIDIn(g, NodeCRAGGrade)
+	if n == nil {
+		t.Fatal("crag_grade node missing from projection")
+	}
+	if n.Activation != ActivationActive {
+		t.Errorf("crag_grade = %q/%q, want aktiv — a switched-off default takes no "+
+			"turn into the deep-chat path, so the standard path really does run",
+			n.Activation, n.Reason)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A bound team with no ENABLED member — the second way a link row can exist and
+// never fire, and the one the canvas used to miss entirely.
+//
+// The team itself is switched ON, so is_enabled says nothing is wrong. But
+// LoadTeamForChat filters its members by is_enabled too, and
+// resolveTeamSelection (internal/chat/http_send.go) turns zero members into
+// (nil, "empty_team"): the selection is dropped and the FULL standard path
+// runs. A team can reach that state by having its members switched off, or by
+// being created empty — CreateTeam accepts memberIds: [].
+//
+// Before this, such a KB drew the node aktiv, projected OrchTeam, and demoted
+// every PrepareChatContext-owned stage to bedingt on all three lanes, for a
+// binding that can never take a single turn.
+// ---------------------------------------------------------------------------
+
+func TestProjectEmptyTeamBindingIsInactiveAndSaysWhy(t *testing.T) {
+	n := nodeByIDIn(projectWithBinding(t,
+		AgentBinding{Kind: BindingTeam, Name: "Recherche-Team", EmptyTeam: true}),
+		NodeAgentBinding)
+	if n == nil {
+		t.Fatal("agent_binding node missing from projection")
+	}
+	if n.Activation != ActivationInactive {
+		t.Errorf("Activation = %q, want %q — a team with nobody in it answers "+
+			"nothing, and the standard path runs instead",
+			n.Activation, ActivationInactive)
+	}
+	// Its OWN reason, not "binding_disabled". „Abgeschaltet" would send the
+	// admin to a switch that is already on; „keine aktiven Mitglieder" is the
+	// work that actually needs doing.
+	if n.Reason != "binding_empty_team" {
+		t.Errorf("Reason = %q, want %q — an unstaffed team and a switched-off one "+
+			"need different things from an admin", n.Reason, "binding_empty_team")
+	}
+	if !strings.Contains(n.Condition, "Recherche-Team") {
+		t.Errorf("Condition = %q, want it to name the bound team", n.Condition)
+	}
+	if !strings.Contains(n.Condition, "Mitglied") {
+		t.Errorf("Condition = %q, want it to say the team has no active member — "+
+			"that is the whole difference from binding_disabled", n.Condition)
+	}
+	// The negation guard: „abgeschaltet" here would be the wrong instruction,
+	// and it is the word a future editor is most likely to reach for.
+	if strings.Contains(n.Condition, "abgeschaltet") {
+		t.Errorf("Condition = %q, must NOT call an enabled team „abgeschaltet\" — "+
+			"the switch is already on", n.Condition)
+	}
+}
+
+// A team that is BOTH switched off and unstaffed keeps the disabled reason
+// (the more fundamental fault) but must not promise that re-enabling alone
+// brings the binding back — it does not.
+func TestProjectDisabledAndEmptyTeamSaysBothFixesAreNeeded(t *testing.T) {
+	n := nodeByIDIn(projectWithBinding(t, AgentBinding{
+		Kind: BindingTeam, Name: "Recherche-Team", Disabled: true, EmptyTeam: true,
+	}), NodeAgentBinding)
+	if n == nil {
+		t.Fatal("agent_binding node missing from projection")
+	}
+	if n.Activation != ActivationInactive || n.Reason != "binding_disabled" {
+		t.Errorf("node = %q/%q, want inactive/binding_disabled", n.Activation, n.Reason)
+	}
+	if !strings.Contains(n.Condition, "Mitglied") {
+		t.Errorf("Condition = %q, want the member half of the fix as well — "+
+			"switching the team back on alone changes nothing", n.Condition)
+	}
+	if strings.Contains(n.Condition, "sobald jemand") {
+		t.Errorf("Condition = %q, must not promise the binding springs back when "+
+			"someone re-enables the team: it stays inert until it is staffed",
+			n.Condition)
+	}
+}
+
+// The half that makes the projection honest rather than merely informative: an
+// empty team must change NOTHING below it. Same shape as the disabled guard,
+// including its anti-vacuity check on the fallback.
+func TestProjectEmptyTeamBindingChangesNoOrchestrator(t *testing.T) {
+	g := projectWithBinding(t,
+		AgentBinding{Kind: BindingTeam, Name: "Recherche-Team", EmptyTeam: true})
+
+	if c := orchCandidate(g, chat.OrchTeam); c != nil {
+		t.Fatalf("OrchTeam projected for a team with no active member: %+v — "+
+			"resolveTeamSelection drops the selection („empty_team\") and the turn "+
+			"never gets there", c)
+	}
+	if len(g.Orchestrators) == 0 {
+		t.Fatal("no orchestrator candidates at all — the assertion above passed vacuously")
+	}
+	last := g.Orchestrators[len(g.Orchestrators)-1]
+	if last.Activation != ActivationActive || last.Condition != "" {
+		t.Errorf("fallback %q = %q/%q, want active with no condition — an unstaffed "+
+			"team takes no turn away from it",
+			last.Orchestrator, last.Activation, last.Condition)
+	}
+}
+
+// And the bypass, which is what the review actually caught: on a KB bound to an
+// empty team, a lookup turn runs the full standard path, so CRAG must read
+// „aktiv" rather than „bedingt".
+func TestProjectEmptyTeamBindingDoesNotBypassTheStandardPath(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"crag_enabled":             "true",
+		"adaptive_routing_enabled": "false",
+	}}
+	g, err := Project(context.Background(), r, r, LaneLookup,
+		AgentBinding{Kind: BindingTeam, Name: "Recherche-Team", EmptyTeam: true})
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	n := nodeByIDIn(g, NodeCRAGGrade)
+	if n == nil {
+		t.Fatal("crag_grade node missing from projection")
+	}
+	if n.Activation != ActivationActive {
+		t.Errorf("crag_grade = %q/%q, want aktiv — a team with no active member "+
+			"never takes the deep-chat path, so the standard path really does run",
+			n.Activation, n.Reason)
+	}
+}
+
+// Bound() is the single predicate every guard above hangs off. Pinned directly
+// so a future reader cannot conclude it merely means "a row exists": it means
+// „the binding changes what runs", and both a switched-off entry and an
+// unstaffed team fail that.
+func TestAgentBindingBoundIsFalseWhenItCannotRun(t *testing.T) {
+	cases := []struct {
+		name string
+		b    AgentBinding
+		want bool
+	}{
+		{"enabled agent", AgentBinding{Kind: BindingAgent}, true},
+		{"enabled team", AgentBinding{Kind: BindingTeam}, true},
+		{"disabled agent", AgentBinding{Kind: BindingAgent, Disabled: true}, false},
+		{"disabled team", AgentBinding{Kind: BindingTeam, Disabled: true}, false},
+		// Teams only: an agent has no membership, so EmptyTeam must never be
+		// set for one — and if it somehow were, Bound() is allowed to be
+		// conservative. What must NOT happen is a bound team with nobody in it
+		// reading as live.
+		{"empty team", AgentBinding{Kind: BindingTeam, EmptyTeam: true}, false},
+		{"disabled and empty team", AgentBinding{Kind: BindingTeam, Disabled: true, EmptyTeam: true}, false},
+		{"nothing bound", AgentBinding{}, false},
+		{"unknown", AgentBinding{Kind: BindingUnknown}, false},
+	}
+	for _, c := range cases {
+		if got := c.b.Bound(); got != c.want {
+			t.Errorf("%s: Bound() = %v, want %v — Bound means „the binding changes "+
+				"what runs\", not „a row exists\"", c.name, got, c.want)
+		}
+	}
+}
+
+// The node's Help text is the only place the three-part truth about the
+// binding is written down for an operator, and the spec (§7.3) requires all
+// three parts. The third — that the API/OpenAI-compat/MCP surfaces ignore the
+// binding entirely — is the one nobody would notice going missing, because
+// nothing else in the product says it anywhere.
+//
+// This asserts the CLAIMS, not the vocabulary. The first version checked for
+// bare tokens ("neue", "Web", "umste", …) and a Help rewritten to state the
+// exact OPPOSITE of two of the three truths — „greift im Web-Chat und in JEDEM
+// Chat … du kannst sie nicht umstellen“ — kept it green, because "neue" was
+// still satisfied by the first sentence and "umste" by the word "umstellen"
+// inside the negation. A token that appears inside its own negation cannot
+// guard a claim, so every claim below carries a `want` pattern that only the
+// affirmative phrasing matches AND, where the claim has a natural negation, a
+// `reject` pattern that fails loudly when someone writes it.
+func TestAgentBindingHelpStatesTheThreeTruths(t *testing.T) {
+	spec, ok := NodeByID(NodeAgentBinding)
+	if !ok {
+		t.Fatal("NodeAgentBinding is not in the vocabulary")
+	}
+
+	claims := []struct {
+		claim  string
+		want   *regexp.Regexp
+		reject *regexp.Regexp
+	}{
+		{
+			claim: "die Vorgabe greift nur im Web-Chat und nur für NEU gestartete Chats",
+			// "nur … neu(e|gestartete) … Chats" — a restriction, not a mention.
+			want:   regexp.MustCompile(`(?i)nur[^.]{0,40}neu[^.]{0,20}chats`),
+			reject: regexp.MustCompile(`(?i)jede[mnrs]?\s+chat|in allen chats|auch für laufende`),
+		},
+		{
+			claim:  "die Vorgabe greift im Web-Chat",
+			want:   regexp.MustCompile(`(?i)web`),
+			reject: nil,
+		},
+		{
+			claim: "im laufenden Chat kannst du sie auf etwas anderes umstellen",
+			// The override must be tied to the running chat; the bare verb is
+			// not enough, because the negation contains it too.
+			want:   regexp.MustCompile(`(?i)(im laufenden chat|während des chats|jederzeit)[^.]{0,60}(umstellen|umstellbar|ändern|wechseln)`),
+			reject: regexp.MustCompile(`(?i)(nicht|nie)\s+(mehr\s+)?(umstellen|ändern|wechseln|umstellbar)`),
+		},
+		{
+			claim: "API, OpenAI-Schnittstelle und MCP ignorieren die Vorgabe",
+			// All three surfaces named, and the verb that says what they do
+			// with the binding — in one sentence, so naming MCP somewhere else
+			// entirely does not satisfy it.
+			want:   regexp.MustCompile(`(?i)api[^.]*openai[^.]*mcp[^.]*ignorier`),
+			reject: regexp.MustCompile(`(?i)(api|openai|mcp)[^.]{0,80}(gilt auch|berücksichtig|verwenden die vorgabe|nutzen die vorgabe)`),
+		},
+	}
+
+	for _, c := range claims {
+		if !c.want.MatchString(spec.Help) {
+			t.Errorf("Help does not state the claim %q (no match for %s) — required by "+
+				"spec §7.3.\nHelp = %q", c.claim, c.want, spec.Help)
+		}
+		if c.reject != nil && c.reject.MatchString(spec.Help) {
+			t.Errorf("Help states the NEGATION of the claim %q (matched %s) — that is not "+
+				"what the code does.\nHelp = %q", c.claim, c.reject, spec.Help)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 Task 2 — TeamSelected reaches orchestratorCandidates
+// ---------------------------------------------------------------------------
+
+func orchCandidate(g *ProjectedGraph, o chat.Orchestrator) *OrchestratorCandidate {
+	for i := range g.Orchestrators {
+		if g.Orchestrators[i].Orchestrator == o {
+			return &g.Orchestrators[i]
+		}
+	}
+	return nil
+}
+
+// The other one the plan calls out for mutation testing, and the one most
+// likely to pass vacuously: without a binding, OrchTeam must not be projected
+// AT ALL. It is the current (broken) behaviour, so a test asserting it can
+// look green while asserting nothing — the paired
+// TestProjectBoundTeamAddsConditionalOrchTeam above is what proves this
+// assertion can go red.
+func TestProjectWithoutBindingHasNoOrchTeam(t *testing.T) {
+	g := projectWithBinding(t, AgentBinding{})
+	if c := orchCandidate(g, chat.OrchTeam); c != nil {
+		t.Fatalf("OrchTeam projected with nothing bound: %+v (all: %+v)", c, g.Orchestrators)
+	}
+	// Guard against the vacuous version of this test: if the projection
+	// returned no candidates at all the assertion above would also pass.
+	if len(g.Orchestrators) == 0 {
+		t.Fatal("no orchestrator candidates at all — the assertion above passed vacuously")
+	}
+}
+
+func TestProjectBoundTeamAddsConditionalOrchTeam(t *testing.T) {
+	g := projectWithBinding(t, AgentBinding{Kind: BindingTeam, Name: "Recherche-Team"})
+
+	c := orchCandidate(g, chat.OrchTeam)
+	if c == nil {
+		t.Fatalf("OrchTeam not projected with a team bound: %+v", g.Orchestrators)
+	}
+	if c.Activation != ActivationConditional {
+		t.Errorf("OrchTeam Activation = %q, want %q — the user can override the "+
+			"binding per chat and the non-browser surfaces ignore it",
+			c.Activation, ActivationConditional)
+	}
+	if c.Condition == "" {
+		t.Error("OrchTeam has no Condition — a conditional candidate must say when it fires")
+	}
+
+	// The FALLBACK ORCHESTRATOR must not move. Project feeds it into
+	// complexBypassCondition, so folding TeamSelected into `base` instead of
+	// making it a predicate would rewrite every PrepareChatContext-owned node's
+	// explanation.
+	last := g.Orchestrators[len(g.Orchestrators)-1]
+	if last.Orchestrator != chat.OrchStandard {
+		t.Errorf("fallback = %q, want %q — a binding must not change which "+
+			"orchestrator wins when the request carries no selection",
+			last.Orchestrator, chat.OrchStandard)
+	}
+	// …but its ACTIVATION must: on a bound KB the fallback is not what the
+	// default web chat does, so claiming it plainly runs is the misreport this
+	// phase exists to fix, one rung lower down.
+	if last.Activation != ActivationConditional {
+		t.Errorf("fallback %q is %q, want %q — with a default bound it runs only "+
+			"when the binding does not reach the turn", last.Orchestrator,
+			last.Activation, ActivationConditional)
+	}
+	if !strings.Contains(last.Condition, "Vorgabe dieser KB") {
+		t.Errorf("fallback Condition = %q, want it to say that it runs only when the "+
+			"KB's default does not apply", last.Condition)
+	}
+}
+
+// Precedence order, with a fixture in which a WRONG order produces a different
+// list. The all-defaults fixture cannot do that: with every orchestrator flag
+// off, the corpus-table and global-synthesis predicates both collapse into the
+// fallback and get dropped, so team is the only entry and "team is first" holds
+// no matter where its predicate sits. Moving the team predicate to last in
+// `predicates` left the whole package green — this is that gap.
+//
+// So: turn on the corpus table, DRIFT and the supervisor, and pin the FULL
+// sequence against chat.SelectOrchestrator's ladder (team > corpus_table >
+// drift > supervisor). The canvas lists candidates in this order; listing them
+// out of precedence order would misstate which one wins when two could fire.
+func TestProjectCandidatesFollowSelectOrchestratorPrecedence(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"chat_corpus_table_enabled": "true",
+		"chat_drift_enabled":        "true",
+		"chat_supervisor_enabled":   "true",
+	}}
+	g, err := Project(context.Background(), r, r, LaneComplex,
+		AgentBinding{Kind: BindingTeam, Name: "Recherche-Team"})
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	want := []chat.Orchestrator{
+		chat.OrchTeam,        // TeamSelected — above everything but comparison
+		chat.OrchCorpusTable, // IsCorpusQuery
+		chat.OrchDrift,       // IsGlobalSynthesis
+		chat.OrchSupervisor,  // the fallback
+	}
+	got := make([]chat.Orchestrator, 0, len(g.Orchestrators))
+	for _, c := range g.Orchestrators {
+		got = append(got, c.Orchestrator)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("candidates = %v, want %v (position %d differs) — candidates must "+
+				"be listed in chat.SelectOrchestrator's precedence order", got, want, i)
+		}
+	}
+}
+
+// A bound AGENT routes through OrchTeam too, and that is not a simplification:
+// internal/chat/http_send.go sets OrchestratorInputs.TeamSelected from
+// `teamSel != nil`, and resolveTeamSelection returns a non-nil selection for
+// body.AgentID exactly as it does for body.TeamID. The OrchTeam branch then
+// runs the lone agent as a one-member team. Projecting an agent binding as
+// "changes nothing" would be the misreport this phase exists to fix, just in
+// the other direction.
+func TestProjectBoundAgentAlsoAddsOrchTeam(t *testing.T) {
+	g := projectWithBinding(t, AgentBinding{Kind: BindingAgent, Name: "Bibliotheks-Assistent"})
+	c := orchCandidate(g, chat.OrchTeam)
+	if c == nil {
+		t.Fatalf("OrchTeam not projected with an agent bound: %+v", g.Orchestrators)
+	}
+	if c.Activation != ActivationConditional {
+		t.Errorf("OrchTeam Activation = %q, want %q", c.Activation, ActivationConditional)
+	}
+}
+
+// The team gate in SelectOrchestrator does not require complex_reasoning — it
+// sits above complexAndUnenhanced entirely — so a bound default is a candidate
+// on the lookup and enumeration lanes too. TestProjectLookupLaneYieldsStandardOnly
+// pins the unbound case; this pins that the binding really does widen it.
+func TestProjectBoundTeamIsACandidateOnEveryLane(t *testing.T) {
+	empty := fakeReader{vals: map[string]string{}}
+	for _, lane := range []Lane{LaneLookup, LaneEnumeration, LaneComplex} {
+		g, err := Project(context.Background(), empty, empty, lane, AgentBinding{Kind: BindingTeam, Name: "T"})
+		if err != nil {
+			t.Fatalf("Project(%s): %v", lane, err)
+		}
+		if orchCandidate(g, chat.OrchTeam) == nil {
+			t.Errorf("lane %s: OrchTeam not projected with a team bound: %+v", lane, g.Orchestrators)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 Tasks 1-2, review round 1 — a bound default demotes what sits below
+// the team gate.
+//
+// The team gate in chat.SelectOrchestrator sits ABOVE the complexity check, so
+// on a KB with a default bound the ordinary web chat goes to chat.OrchTeam on
+// every lane. Everything the canvas draws as plainly running below that gate is
+// therefore a claim about turns the binding does NOT reach.
+// ---------------------------------------------------------------------------
+
+// The supervisor is the one orchestrator that runs the sufficient-context gate
+// itself, which is why NodeSufficientCtx is exempted from the complex-lane
+// bypass when the supervisor wins the fallback. That exemption is a statement
+// about the fallback, and on a bound KB the fallback is not the common path:
+// RunTeamChat never calls ai.JudgeContextSufficiency. Drawing „aktiv“ there
+// tells a KB admin the abstention gate protects their users when it does not.
+func TestProjectSufficientContextConditionalUnderSupervisorWhenBound(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"chat_supervisor_enabled":         "true",
+		"chat_sufficient_context_enabled": "true",
+	}}
+
+	for _, b := range []AgentBinding{
+		{Kind: BindingTeam, Name: "Recherche-Team"},
+		{Kind: BindingAgent, Name: "Bibliotheks-Assistent"},
+	} {
+		g, err := Project(context.Background(), r, r, LaneComplex, b)
+		if err != nil {
+			t.Fatalf("Project: %v", err)
+		}
+		n := nodeByIDIn(g, NodeSufficientCtx)
+		if n == nil {
+			t.Fatal("sufficient_ctx node missing from projection")
+		}
+		// Conditional, NOT inactive: a user can switch the agent off inside the
+		// chat, and then the supervisor — and its gate — really does run.
+		if n.Activation != ActivationConditional {
+			t.Errorf("%s binding: Activation = %q, want %q — the default web chat goes "+
+				"to the team, which never runs this gate", b.Kind, n.Activation, ActivationConditional)
+		}
+		if n.Reason != "orchestrator_bypass" {
+			t.Errorf("%s binding: Reason = %q, want %q", b.Kind, n.Reason, "orchestrator_bypass")
+		}
+		// The condition must name the bound default, not just say "an
+		// orchestrator answers directly" — the operator's next question is
+		// "which one, and can I change it?".
+		if !strings.Contains(n.Condition, b.Name) {
+			t.Errorf("%s binding: Condition = %q, want it to name the bound default %q",
+				b.Kind, n.Condition, b.Name)
+		}
+		if !strings.Contains(n.Condition, "Supervisor") {
+			t.Errorf("%s binding: Condition = %q, want it to say the supervisor still "+
+				"runs this check when the binding does not apply", b.Kind, n.Condition)
+		}
+	}
+}
+
+// The same misreport, one lane over: on a bound KB the standard path loses the
+// LOOKUP and ENUMERATION lanes too.
+//
+// http_send.go:299 takes the deep-chat path when `isComplex || runCompare ||
+// teamSel != nil`, and web/src/hooks/useChatStream.ts sends agentSelection.teamId
+// with every message of a chat that started from the KB default. So a plain
+// lookup on a bound KB goes to RunTeamChat and never reaches
+// PrepareChatContext — while the canvas drew „CRAG-Bewertung: aktiv“.
+//
+// TestProjectPrepareChatContextStagesActiveOnLookupLane pins the UNBOUND case
+// (they really are active there), which is what keeps this from being a
+// blanket downgrade.
+func TestProjectStandardPathStagesConditionalOnEveryLaneWhenBound(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"crag_enabled":                     "true",
+		"adaptive_routing_enabled":         "false",
+		"chat_context_compression_enabled": "true",
+		"chat_sufficient_context_enabled":  "true",
+	}}
+
+	for _, lane := range []Lane{LaneLookup, LaneEnumeration} {
+		g, err := Project(context.Background(), r, r, lane,
+			AgentBinding{Kind: BindingTeam, Name: "Recherche-Team"})
+		if err != nil {
+			t.Fatalf("Project(%s): %v", lane, err)
+		}
+		for _, id := range []NodeID{NodeCRAGGrade, NodeCRAGRewrite, NodeCompression, NodeSufficientCtx} {
+			n := nodeByIDIn(g, id)
+			if n == nil {
+				t.Fatalf("lane %s: node %q missing from projection", lane, id)
+			}
+			// Conditional, not inactive: without the binding on the turn the
+			// standard path runs on these lanes exactly as before.
+			if n.Activation != ActivationConditional {
+				t.Errorf("lane %s: node %q Activation = %q, want %q — a bound default "+
+					"routes every web turn into the deep-chat path",
+					lane, id, n.Activation, ActivationConditional)
+			}
+			if n.Reason != "orchestrator_bypass" {
+				t.Errorf("lane %s: node %q Reason = %q, want %q",
+					lane, id, n.Reason, "orchestrator_bypass")
+			}
+			if !strings.Contains(n.Condition, "Recherche-Team") {
+				t.Errorf("lane %s: node %q Condition = %q, want it to name the bound "+
+					"default", lane, id, n.Condition)
+			}
+		}
+	}
+}
+
+// Every candidate below the team gate must stop claiming to run — including the
+// fallback, which is the one the canvas prints as „aktiv“.
+func TestProjectBoundDefaultDemotesEveryOtherCandidate(t *testing.T) {
+	r := fakeReader{vals: map[string]string{
+		"chat_corpus_table_enabled": "true",
+		"chat_drift_enabled":        "true",
+		"chat_supervisor_enabled":   "true",
+	}}
+
+	unbound, err := Project(context.Background(), r, r, LaneComplex, AgentBinding{})
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	// Negative control: without a binding the fallback IS plainly active, so the
+	// assertion below is about the binding and not about the fixture.
+	if c := orchCandidate(unbound, chat.OrchSupervisor); c == nil || c.Activation != ActivationActive {
+		t.Fatalf("unbound: supervisor = %+v, want the active fallback", c)
+	}
+
+	bound, err := Project(context.Background(), r, r, LaneComplex,
+		AgentBinding{Kind: BindingTeam, Name: "Recherche-Team"})
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	for _, c := range bound.Orchestrators {
+		if c.Orchestrator == chat.OrchTeam {
+			continue
+		}
+		if c.Activation != ActivationConditional {
+			t.Errorf("candidate %q is %q on a KB with a default bound, want %q — it runs "+
+				"only when the binding does not reach the turn",
+				c.Orchestrator, c.Activation, ActivationConditional)
+		}
+		if !strings.Contains(c.Condition, "Vorgabe dieser KB") {
+			t.Errorf("candidate %q Condition = %q, want it to say the KB default must "+
+				"not apply", c.Orchestrator, c.Condition)
+		}
+	}
+	// The corpus-table candidate keeps its OWN condition too: a reader must not
+	// lose "only for comparison questions" when the binding clause is appended.
+	if c := orchCandidate(bound, chat.OrchCorpusTable); c == nil ||
+		!strings.Contains(c.Condition, "Vergleich") {
+		t.Errorf("corpus_table candidate = %+v, want its own query condition kept", c)
 	}
 }

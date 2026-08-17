@@ -39,19 +39,6 @@ func f(v float64) *float64 { return &v }
 // cross-check test in Plan 2). Operational/security keys are deliberately
 // absent so an api-user can never set them per-KB.
 var kbConfigRegistry = []KBConfigField{
-	// --- Vorlage ---
-	// workflow_preset's Enum is the five curated preset IDs from
-	// internal/pipeline/presets.go (PresetStandard, PresetHighPrecision,
-	// PresetFast, PresetResearch, PresetNews) plus "" for "frei
-	// zusammengestellt, keine Vorlage". Hardcoded, not derived from
-	// pipeline.Presets(): internal/pipeline imports internal/siteconfig
-	// (project.go, handler.go), so the reverse import would be a cycle.
-	// TestWorkflowPresetEnumMatchesPipelinePresets (registry_workflow_preset_test.go,
-	// package siteconfig_test so it can import internal/pipeline without
-	// tripping that cycle) pins this list against pipeline.Presets() so the
-	// two cannot drift apart.
-	{Key: "workflow_preset", Type: FieldEnum, Group: "Vorlage", Label: "Vorlage (Basis)", Help: "Vermerkt, mit welcher Werkzeug-Vorlage diese Wissensbank zuletzt eingerichtet wurde — reine Anzeige-Information für „Basis: … · N Abweichungen“ in der Werkstatt-Ansicht. Das Setzen oder Ändern dieses Werts allein verändert nicht, wie Antworten erzeugt werden; wirksam sind ausschließlich die einzelnen Einstellungen, die eine Vorlage beim Anwenden tatsächlich setzt. Leerer Wert bedeutet: frei zusammengestellt, ohne Vorlagen-Basis.", Enum: []string{"", "standard", "high_precision", "fast", "research", "news"}},
-
 	// --- Retrieval ---
 	{Key: "query_cache_enabled", Type: FieldBool, Group: "Retrieval", Label: "Anfragen-Cache", Help: "Beantwortet inhaltlich sehr ähnliche Wiederholungsfragen direkt aus dem Cache (Kosinus-Ähnlichkeit ≥ 0,96, 24 Stunden gültig) statt neu zu suchen und zu antworten — spart bei einem Treffer die komplette Suche samt Antwort-Modellaufruf. Prüft die Cache-Trefferquote über die ohnehin berechnete Anfrage-Einbettung, kein zusätzlicher Modellaufruf beim Prüfen selbst. Standardmäßig aus."},
 	{Key: "rerank_blend_alpha", Type: FieldFloat, Group: "Retrieval", Label: "Reranker blend α", Help: "Weight of reranker vs RRF (0=pure RRF, 1=pure reranker).", Min: f(0), Max: f(1)},
@@ -127,6 +114,32 @@ var kbConfigRegistry = []KBConfigField{
 	{Key: "parent_child_enabled", Type: FieldBool, Group: "Ingestion", Label: "Parent-child chunking", Help: "Small-to-big retrieval. Mutually exclusive with RAPTOR.", RequiresReingest: true},
 	{Key: "contextual_enrichment", Type: FieldBool, Group: "Ingestion", Label: "Contextual enrichment", Help: "Anthropic-style 1-sentence chunk prefix at ingest.", RequiresReingest: true},
 	{Key: "kg_extraction_enabled", Type: FieldBool, Group: "Ingestion", Label: "Knowledge-graph extraction (graphrag)", Help: "Extract entities + relations at ingest to build the per-KB knowledge graph. Required before graph routing can use this KB.", RequiresReingest: true},
+
+	// --- Vorlage ---
+	// DELIBERATELY LAST. The registry's order is the flat settings form's
+	// order (KbSettingsPanel groups in registry order), and this row is not a
+	// behaviour knob at all: it is a provenance MARKER the workflow canvas
+	// renders as „Basis: … · N Abweichungen". Leading the accordion with it
+	// put a display-only field ahead of every setting that actually changes
+	// how answers are produced, and invited an admin to hand-set a base the
+	// KB was never configured from. It stays IN the registry (rather than
+	// being filtered out of the form) because it is also the only way to
+	// clear a stale base: a workflow_preset naming a retired preset renders
+	// as „diese Vorlage gibt es nicht mehr" and the canvas offers no reset
+	// for it — the flat form is that escape hatch. The Help text carries the
+	// "setting this alone changes nothing" warning.
+	//
+	// workflow_preset's Enum is the five curated preset IDs from
+	// internal/pipeline/presets.go (PresetStandard, PresetHighPrecision,
+	// PresetFast, PresetResearch, PresetNews) plus "" for "frei
+	// zusammengestellt, keine Vorlage". Hardcoded, not derived from
+	// pipeline.Presets(): internal/pipeline imports internal/siteconfig
+	// (project.go, handler.go), so the reverse import would be a cycle.
+	// TestWorkflowPresetEnumMatchesPipelinePresets (registry_workflow_preset_test.go,
+	// package siteconfig_test so it can import internal/pipeline without
+	// tripping that cycle) pins this list against pipeline.Presets() so the
+	// two cannot drift apart.
+	{Key: "workflow_preset", Type: FieldEnum, Group: "Vorlage", Label: "Vorlage (Basis)", Help: "Vermerkt, mit welcher Werkzeug-Vorlage diese Wissensbank zuletzt eingerichtet wurde — reine Anzeige-Information für „Basis: … · N Abweichungen“ in der Werkstatt-Ansicht. Das Setzen oder Ändern dieses Werts allein verändert nicht, wie Antworten erzeugt werden; wirksam sind ausschließlich die einzelnen Einstellungen, die eine Vorlage beim Anwenden tatsächlich setzt. Leerer Wert bedeutet: frei zusammengestellt, ohne Vorlagen-Basis.", Enum: []string{"", "standard", "high_precision", "fast", "research", "news"}},
 }
 
 // byKey indexes the registry for O(1) lookup.

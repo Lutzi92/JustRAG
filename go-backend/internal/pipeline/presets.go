@@ -389,9 +389,40 @@ func PresetByID(id string) (Preset, bool) {
 // own vocabulary only, and the rest of the 51-key surface is the admin's to
 // tune without the UI calling it a deviation.
 func Deviations(bundle map[string]string, overrides map[string]*string) []string {
+	return bundleMismatches(bundle, overrides)
+}
+
+// EffectiveChanges reports the bundle keys whose EFFECTIVE value today differs
+// from what the preset states, sorted — i.e. exactly the keys applying the
+// preset would make the KB behave differently on.
+//
+// values is the KB's effective state in kbconfig.EffectiveState's shape (the
+// KB's own override where it has one, the deployment global otherwise, nil when
+// the key is set nowhere and the code default applies). That is the ONLY
+// difference from Deviations, which is fed the KB's raw overrides — the
+// computation is deliberately shared, because "does this key already say what
+// the bundle says?" is one question with one answer.
+//
+// It exists because Overwrites answers a different, narrower question ("how
+// many of MY OWN settings does this take away?") and a KB with no overrides at
+// all — a librarian's first preset, the common case — gets 0 from it while the
+// apply still writes the whole vocabulary. On a deployment whose globals differ
+// from the bundle (this one enables the supervisor globally; "Standard" turns
+// it off) that write changes how the KB answers. A dialog that reported only
+// Overwrites there would say "nothing of yours is overwritten" while silently
+// changing behaviour, which is the one thing a preset must never do.
+func EffectiveChanges(bundle map[string]string, values map[string]*string) []string {
+	return bundleMismatches(bundle, values)
+}
+
+// bundleMismatches is the shared body of Deviations and EffectiveChanges: the
+// bundle keys whose value in `values` does not already match what the bundle
+// states. Callers differ only in WHICH map they pass (raw overrides vs
+// effective state), never in how a match is decided.
+func bundleMismatches(bundle map[string]string, values map[string]*string) []string {
 	out := []string{}
 	for key, want := range bundle {
-		if !matchesBundleValue(key, want, overrides[key]) {
+		if !matchesBundleValue(key, want, values[key]) {
 			out = append(out, key)
 		}
 	}

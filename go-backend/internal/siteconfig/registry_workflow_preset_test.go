@@ -75,3 +75,30 @@ func TestWorkflowPresetEnumMatchesPipelinePresets(t *testing.T) {
 			"registry.go's workflow_preset row", onlyInPipeline)
 	}
 }
+
+// TestWorkflowPresetIsLastInTheRegistry pins the row's POSITION, not just
+// its enum.
+//
+// The registry's order is the flat settings form's order (KbSettingsPanel
+// renders groups in registry order), and workflow_preset is not a behaviour
+// knob at all: it is the provenance marker the workflow canvas renders as
+// „Basis: … · N Abweichungen". Leading the accordion with a display-only field
+// put it ahead of every setting that actually changes how answers are produced.
+// It now sits last, next to the other rows nobody needs on their first visit.
+//
+// Asserted as "last", not merely "not first", so the row cannot drift back up
+// unnoticed one insertion at a time.
+func TestWorkflowPresetIsLastInTheRegistry(t *testing.T) {
+	all := siteconfig.All()
+	if len(all) == 0 {
+		t.Fatal("registry is empty")
+	}
+	if got := all[len(all)-1].Key; got != "workflow_preset" {
+		t.Errorf("last registry row is %q, want workflow_preset — the provenance marker "+
+			"must not lead (or sit among) the behaviour knobs in the settings form", got)
+	}
+	if all[0].Key == "workflow_preset" {
+		t.Error("workflow_preset heads the registry again: a display-only marker would " +
+			"lead the settings accordion")
+	}
+}

@@ -33,6 +33,7 @@ const (
 	NodeFeedbackBoost NodeID = "feedback_boost"
 	NodeCompression   NodeID = "context_compression"
 	NodeSufficientCtx NodeID = "sufficient_context"
+	NodeAgentBinding  NodeID = "agent_binding"
 	NodeOrchestrator  NodeID = "orchestrator"
 	NodeAnswerTools   NodeID = "answer_tools"
 	NodeAnswer        NodeID = "answer"
@@ -48,7 +49,18 @@ const (
 // Keys lists the site_config keys this node owns. By convention Keys[0] is the
 // node's on/off key; the projection reads it to decide activation. An EMPTY
 // Keys slice means the stage is unconditional (retrieval, answer generation)
-// and always renders active.
+// and always renders active — with ONE exception, NodeAgentBinding, whose
+// activation comes from the agent/team link tables rather than from
+// site_config and which therefore renders inactive when nothing is bound. That
+// exception lives in Project's activation switch (see applyAgentBinding), not
+// here: a keyless node is still the right shape for it, because it genuinely
+// owns no config key and must not be handed one.
+//
+// Consequence for the invariant guards in this package: every key-driven guard
+// (TestNodeKeysAreActuallyRead, activationKeys in defaults_test.go) skips a
+// keyless node by construction, so NONE of them says anything about
+// NodeAgentBinding. Its activation source is guarded only by the explicit
+// tests in project_test.go.
 //
 // AlwaysOn marks a stage that runs unconditionally but still owns tuning keys
 // — MMR is the case that forced this field: it has no boolean gate, only
@@ -229,6 +241,39 @@ var nodes = []NodeSpec{
 		Help:     "Prüft vor dem Antworten, ob das gesammelte Material überhaupt ausreicht — sonst wird die Antwort verweigert.",
 		Keys:     []string{"chat_sufficient_context_enabled"},
 		LLMCalls: 1, LatencyMs: 600,
+	},
+	{
+		// The KB's default agent/team binding (agent_kb_links.is_default /
+		// team_kb_links.is_default, migration 0061). The FIRST node whose
+		// activation does not come from site_config: Keys is empty on purpose
+		// — there is no config key to own — and AlwaysOn is deliberately
+		// false, because "nothing bound" must render inactive rather than
+		// active. Project special-cases it (applyAgentBinding); see the
+		// NodeSpec.Keys doc comment above for what that costs in guard
+		// coverage.
+		//
+		// Placed immediately before NodeOrchestrator, and edged into it, for
+		// the reason the binding matters at all: it is an INPUT to
+		// orchestrator selection (chat.OrchestratorInputs.TeamSelected), and
+		// a bound default is what makes chat.OrchTeam a candidate at all.
+		//
+		// LLMCalls/LatencyMs are zero: the binding itself costs nothing. The
+		// team router + specialists that a bound team then runs are the
+		// ORCHESTRATOR's cost, and NodeOrchestrator already carries a flat
+		// estimate for whichever orchestrator wins. Charging the binding
+		// separately would double-count.
+		ID: NodeAgentBinding, Label: "Standard-Agent / Team", Group: "Antwort",
+		Help: "Legt fest, welcher Agent oder welches Team neue Chats dieser KB übernimmt. " +
+			"Die Vorgabe greift nur im Web-Chat und nur für neu gestartete Chats — " +
+			"im laufenden Chat kannst du sie jederzeit auf etwas anderes umstellen. " +
+			"Die öffentliche API, die OpenAI-kompatible Schnittstelle und der MCP-Zugang " +
+			"ignorieren die Vorgabe vollständig: dort antwortet immer der normale Ablauf. " +
+			"Ist der hinterlegte Agent oder das hinterlegte Team abgeschaltet, greift die " +
+			"Vorgabe nicht — der Eintrag bleibt aber bestehen und wirkt wieder, sobald " +
+			"jemand ihn einschaltet.",
+		// []string{}, NOT nil — see NodeClassify above for why.
+		Keys:     []string{},
+		LLMCalls: 0, LatencyMs: 0,
 	},
 	{
 		// Keys mixes orchestrator SELECTION gates (chat_supervisor_enabled,

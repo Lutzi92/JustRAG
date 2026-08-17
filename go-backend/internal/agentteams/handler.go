@@ -36,6 +36,8 @@ type handlerStore interface {
 	GetTeam(ctx context.Context, id, userID string) (*TeamRecord, error)
 	UpdateTeam(ctx context.Context, t TeamRecord) (*TeamRecord, error)
 	DeleteTeam(ctx context.Context, id, userID string) (bool, error)
+	AgentAttachEligibility(ctx context.Context, agentID, kbID, userID string) (AttachEligibility, error)
+	TeamAttachEligibility(ctx context.Context, teamID, kbID, userID string) (AttachEligibility, error)
 	AttachAgent(ctx context.Context, kbID, agentID string, isDefault bool) error
 	DetachAgent(ctx context.Context, kbID, agentID string) (bool, error)
 	AttachTeam(ctx context.Context, kbID, teamID string, isDefault bool) error
@@ -452,9 +454,36 @@ func (h *Handler) DeleteTeam(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// KB attachment endpoints. Route-level ACL: ListKBAgents behind kbViewChain,
-// attach/detach behind kbEditChain — this handler adds ownership of the
-// agent/team itself (only the owner may attach their agent to a KB they edit).
+// KB attachment endpoints. Route-level ACL is the WHOLE access decision here:
+// ListKBAgents behind kbViewChain, attach/detach behind kbAdminChain
+// (internal/app/routes.go — a doc comment here used to say kbEditChain, which
+// was never true of the routes as registered).
+//
+// Attach used to additionally require that the caller OWN the agent
+// (GetAgent/GetTeam scoped to the caller's user_id), which meant a KB admin who
+// did not create it got 404 „agent not found" on their own KB — including when
+// CLEARING a default someone else had bound, since clearing goes through this
+// same endpoint with isDefault:false. The canvas could therefore show a binding
+// the admin was structurally unable to remove.
+//
+// What replaced it is NOT "no check at all". The rule is: the caller owns the
+// agent/team, OR it is already attached to this KB (AgentAttachEligibility).
+// That restores clearing and re-pointing among the agents a KB actually has —
+// the real case, since a co-admin attaches one and another admin binds it —
+// without letting an admin conscript an arbitrary foreign agent. The link row
+// is the use-time authorization (LoadAgentForChat checks attachment, never
+// ownership), so a bind makes that agent's persona, model override and config
+// overrides run for every viewer of the KB; the owner gets no notice and no
+// veto. Nothing usable is lost: the listing endpoints stay owner-scoped, so an
+// admin cannot even see an unattached foreign agent to name it.
+//
+// Three answers, in this order: 404 if the agent/team does not exist (a typo'd
+// id deserves the truth), 403 if it exists but this caller may not bind it here,
+// otherwise the write.
+//
+// DETACH carries no such check and never did. It can only remove a link on this
+// KB, so "already attached" holds by construction — see
+// TestDetachIsNotOwnerScoped, which exists so nobody "makes it consistent".
 // ---------------------------------------------------------------------------
 
 // ListKBAgents handles GET /api/kb/{id}/agents (picker payload).
@@ -478,12 +507,18 @@ func (h *Handler) AttachAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agentID := r.PathValue("agentId")
-	if _, err := h.store.GetAgent(r.Context(), agentID, userID); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusNotFound, "agent not found")
-			return
-		}
+	el, err := h.store.AgentAttachEligibility(r.Context(), agentID, r.PathValue("id"), userID)
+	if err != nil {
 		httputil.WriteInternalErrorCtx(r.Context(), w, err)
+		return
+	}
+	if !el.Exists {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if !el.Allowed {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusForbidden,
+			"agent is neither yours nor attached to this knowledge base")
 		return
 	}
 	var req attachRequest
@@ -514,12 +549,18 @@ func (h *Handler) AttachTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	teamID := r.PathValue("teamId")
-	if _, err := h.store.GetTeam(r.Context(), teamID, userID); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusNotFound, "team not found")
-			return
-		}
+	el, err := h.store.TeamAttachEligibility(r.Context(), teamID, r.PathValue("id"), userID)
+	if err != nil {
 		httputil.WriteInternalErrorCtx(r.Context(), w, err)
+		return
+	}
+	if !el.Exists {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusNotFound, "team not found")
+		return
+	}
+	if !el.Allowed {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusForbidden,
+			"team is neither yours nor attached to this knowledge base")
 		return
 	}
 	var req attachRequest

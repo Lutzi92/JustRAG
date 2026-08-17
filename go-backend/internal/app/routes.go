@@ -170,8 +170,14 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	chatStore := chat.NewStore(infra.db.Main)
 	kbConfigStore := kbconfig.NewStore(infra.db.Main)
 	kbConfigHandler := kbconfig.NewHandler(kbConfigStore, chatStore)
-	workflowHandler := pipeline.NewHandler(kbConfigStore, chatStore)
 	agentTeamsStore := agentteams.NewStore(infra.db.Main)
+	// The workflow projection needs the KB's default agent/team binding, which
+	// lives in the agent/team link tables — hence the adapter (see
+	// workflow_bindings.go: internal/pipeline must stay free of the
+	// internal/agentteams import). Constructed after agentTeamsStore for that
+	// reason alone.
+	workflowHandler := pipeline.NewHandler(kbConfigStore, chatStore,
+		workflowBindings{store: agentTeamsStore})
 	queryCache := vector.NewQueryCache(infra.db.Vector)
 	queryCache.StartWriter(ctx)
 	// Track the sweeper goroutine so routeCleanup can drain it before the
