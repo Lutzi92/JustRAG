@@ -48,10 +48,24 @@ type LiveMetrics struct {
 	TotalFiles          int                        `json:"totalFiles"`
 	TotalStorageBytes   int64                      `json:"totalStorageBytes"`
 	TotalUsers          int                        `json:"totalUsers"`
+	TotalMessages       int                        `json:"totalMessages"`
+	TotalMessagesAPI    int                        `json:"totalMessagesApi"` //nolint:tagliatelle
+	Messages24h         int                        `json:"messages24h"`
+	Messages24hAPI      int                        `json:"messages24hApi"` //nolint:tagliatelle
 	QueueStats          map[string]QueueStats      `json:"queueStats"`
 	ResourceUsage       ResourceUsage              `json:"resourceUsage"`
 	SubsystemHealth     map[string]SubsystemHealth `json:"subsystemHealth"`
 	Timestamp           string                     `json:"timestamp"`
+}
+
+// TurnCounts are the usage-ledger aggregates shown on the systemhealth panel.
+// "API" is every surface except the web UI, i.e. what an LLM-gateway bill
+// attributes to JustRAG but no in-app chat history explains.
+type TurnCounts struct {
+	Total    int
+	TotalAPI int
+	Day      int
+	DayAPI   int
 }
 
 // HistoricalPoint is a single time-series data point.
@@ -75,6 +89,7 @@ type MetricsStore interface {
 	GetTotalStorageBytes(ctx context.Context) (int64, error)
 	GetTotalUsersCount(ctx context.Context) (int, error)
 	GetHistoricalMetrics(ctx context.Context, metric string, from, to time.Time) ([]HistoricalPoint, error)
+	GetTurnCounts(ctx context.Context) (TurnCounts, error)
 }
 
 // Service provides system-health business logic.
@@ -130,6 +145,10 @@ func (s *Service) GetLiveMetrics(ctx context.Context) (*LiveMetrics, error) {
 	if err != nil {
 		return nil, fmt.Errorf("total users: %w", err)
 	}
+	turns, err := s.store.GetTurnCounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("turn counts: %w", err)
+	}
 
 	queueStats := s.getQueueStats(ctx)
 	subsystems := s.GetSubsystems(ctx)
@@ -142,6 +161,10 @@ func (s *Service) GetLiveMetrics(ctx context.Context) (*LiveMetrics, error) {
 		TotalFiles:          totalFiles,
 		TotalStorageBytes:   totalStorage,
 		TotalUsers:          totalUsers,
+		TotalMessages:       turns.Total,
+		TotalMessagesAPI:    turns.TotalAPI,
+		Messages24h:         turns.Day,
+		Messages24hAPI:      turns.DayAPI,
 		QueueStats:          queueStats,
 		ResourceUsage:       resources,
 		SubsystemHealth:     subsystems,

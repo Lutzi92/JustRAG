@@ -7,7 +7,7 @@ import {
 } from 'recharts';
 import {
     Activity, Users, FileText, Database, HardDrive, Server,
-    RefreshCw, Clock, AlertCircle, CheckCircle, AlertTriangle, Cpu,
+    RefreshCw, Clock, AlertCircle, CheckCircle, AlertTriangle, Cpu, MessageSquare,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { API_BASE_URL } from './api';
@@ -32,6 +32,10 @@ interface LiveMetrics {
     totalFiles: number;
     totalStorageBytes: number;
     totalUsers: number;
+    totalMessages: number;
+    totalMessagesApi: number;
+    messages24h: number;
+    messages24hApi: number;
     queueStats: {
         'rag-quick': QueueStats;
         'rag-heavy': QueueStats;
@@ -566,6 +570,20 @@ export default function SystemHealthDashboard() {
                     title="Benutzer gesamt"
                     value={metrics.totalUsers}
                     icon={Users}
+                    color="#00838f"
+                />
+                <StatCard
+                    title="Nachrichten gesamt"
+                    value={metrics.totalMessages}
+                    subtitle={`davon ${metrics.totalMessagesApi} über API`}
+                    icon={MessageSquare}
+                    color="var(--accent-primary)"
+                />
+                <StatCard
+                    title="Nachrichten (24 h)"
+                    value={metrics.messages24h}
+                    subtitle={`davon ${metrics.messages24hApi} über API`}
+                    icon={MessageSquare}
                     color="#00838f"
                 />
             </div>
