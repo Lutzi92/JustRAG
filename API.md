@@ -287,6 +287,63 @@ All routes below are under `/openai/v1` and require an API key.
 
 Model IDs are exposed as `kb-{uuid}` and map directly to knowledge bases.
 
+### Source attribution
+
+`POST /chat/completions` returns the retrieved chunks that produced the answer,
+in two complementary forms. Both are additive to the standard OpenAI envelope —
+clients that ignore them are unaffected.
+
+**`message.annotations[]`** — inline citations, following OpenAI's annotation
+shape. One entry per `[n]` marker occurrence in the answer; a multi-cite marker
+(`[1, 2]`) yields one entry per referenced source, all sharing the marker's
+offset.
+
+```json
+{
+  "type": "file_citation",
+  "file_citation": { "file_id": "…", "filename": "handbuch.pdf", "index": 16 }
+}
+```
+
+`index` is a **character** offset into `message.content` (not bytes), matching
+OpenAI's definition — relevant because answers are frequently German.
+
+**`message.context.citations[]`** — the retrieved chunk bodies, following the
+Azure OpenAI "On Your Data" shape so OpenWebUI-family clients recognise them
+without bespoke handling:
+
+```json
+{
+  "content": "…chunk text…",
+  "title": "handbuch.pdf",
+  "filepath": "handbuch.pdf",
+  "file_id": "…",
+  "chunk_id": "…",
+  "score": 0.91,
+  "pages": [3]
+}
+```
+
+Both keys are **omitted entirely** when retrieval returned nothing or the
+answer cites nothing — they are never emitted as empty arrays, so clients can
+branch on presence.
+
+**Streaming.** Retrieval completes before the first token, so the sources ride
+the opening chunk and the annotations ride the closing one:
+
+| Chunk | Carries |
+|---|---|
+| first (`delta.role = "assistant"`) | `delta.context.citations[]` |
+| last (`finish_reason = "stop"`) | `delta.annotations[]` |
+
+This lets a client render source cards while the answer is still streaming;
+annotation offsets only exist once the full text is assembled.
+
+**Caveat.** This endpoint does not run the citation validator (that is a
+post-response task on the in-app chat path), so annotations reflect what the
+model claimed, not what was verified. Markers referencing a source that was
+never retrieved are dropped rather than emitted as dangling annotations.
+
 ## Rate Limiting
 
 The Go server applies per-category Redis-backed rate limits:

@@ -283,6 +283,7 @@ Helper: `chat.ResolveFastTierModel(ctx, reader, perTaskKey)` — the single reso
 
 - Data Explorer routes exist in the Go server but currently return `501`
 - the default deployment is Go-only
+- **OpenAI-compat source attribution** (not flag-gated, always on): `POST /openai/v1/chat/completions` returns retrieved chunks two ways — `message.annotations[]` (OpenAI `file_citation` shape, one per `[n]` marker occurrence, `index` is a **rune** offset because OpenAI defines it in characters and answers are mostly German) and `message.context.citations[]` (Azure "On Your Data" shape, carries the chunk bodies, so OpenWebUI-family clients read it natively). Streaming splits them: sources ride the **opening** chunk (retrieval finishes before the first token, so clients can render source cards immediately), annotations ride the **closing** chunk (offsets need the assembled text). Both keys are omitted rather than emitted empty, so clients branch on presence. `chat.ExtractCitationSpans` is the single definition of the `[n]` / `[1, 2, 5]` marker format — the citation validator and the annotation builder both read markers through it so they cannot drift. Caveat: this endpoint runs **no** citation validator, so annotations are model claims, not verified; out-of-range markers are dropped rather than left dangling. `internal/openaicompat/{citations,response}.go`.
 
 ## Document parsing
 
