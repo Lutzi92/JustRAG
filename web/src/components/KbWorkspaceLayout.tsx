@@ -3,7 +3,7 @@ import { useIsMobileContext } from '../contexts/MobileContext';
 import { useKbCore } from '../contexts/KbCoreContext';
 import { useKbLayout } from '../contexts/KbLayoutContext';
 import { SourcesPanel } from './sources/SourcesPanel';
-import { SidebarRight } from './SidebarRight';
+import { HistoryPanel } from './history/HistoryPanel';
 import { ChatView } from './ChatView';
 import { MobileTabBar, type MobileTab } from './MobileTabBar';
 
@@ -29,7 +29,7 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
       <div className="notebook-container notebook-container--mobile" {...swipeHandlers}>
         {mobileTab === 'files' && <SourcesPanel />}
         {mobileTab === 'chat' && <ChatView />}
-        {mobileTab === 'studio' && <SidebarRight />}
+        {mobileTab === 'studio' && <HistoryPanel />}
         <MobileTabBar activeTab={mobileTab} onTabChange={setMobileTab} />
       </div>
     );
@@ -37,7 +37,7 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
 
   return (
     <div className="notebook-container">
-      <SidebarRight />
+      <HistoryPanel />
 
       {/* Resize Handle Left */}
       {sidebar.isLeftSidebarOpen && (

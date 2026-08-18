@@ -216,10 +216,6 @@ function AuthenticatedAppInner() {
   // (which are recreated each render and would defeat the memoization).
   const { setSelectedContent } = content;
 
-  const handleExpandStudio = useCallback(() => {
-    setKbView('workspace');
-  }, []);
-
   const handleSelectContent = useCallback((item: GeneratedContent) => {
     setSelectedContent(item);
     setKbView('workspace');
@@ -461,7 +457,6 @@ function AuthenticatedAppInner() {
     deleteGitRepoSource: gitRepoHook.deleteGitRepoSource,
     syncGitRepoNow: gitRepoHook.syncGitRepoNow,
     handleSelectContent,
-    handleExpandStudio,
   };
 
   const layoutValue: KbLayoutContextValue = {

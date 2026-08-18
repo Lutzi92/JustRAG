@@ -278,6 +278,7 @@ export const translations = {
     // History
     history: { de: 'Verlauf', en: 'History' },
     noHistory: { de: 'Noch kein Chat-Verlauf.', en: 'No chat history.' },
+    chat: { de: 'Chat', en: 'Chat' },
     expandRightSidebar: { de: 'Rechte Leiste ausklappen', en: 'Expand right sidebar' },
 
     // Prompts & Alerts

@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { KbWorkspaceLayout } from './KbWorkspaceLayout';
 
 vi.mock('./sources/SourcesPanel', () => ({ SourcesPanel: () => <div data-testid="sources-panel" /> }));
-vi.mock('./SidebarRight', () => ({ SidebarRight: () => <div data-testid="history-panel" /> }));
+vi.mock('./history/HistoryPanel', () => ({ HistoryPanel: () => <div data-testid="history-panel" /> }));
 vi.mock('./ChatView', () => ({ ChatView: () => <div data-testid="chat-view" /> }));
 vi.mock('../contexts/ThemeContext', () => ({ useTheme: () => ({ t: (k: string) => k }) }));
 vi.mock('../contexts/MobileContext', () => ({ useIsMobileContext: () => false }));
@@ -29,6 +29,12 @@ const noSwipe = { onTouchStart: vi.fn(), onTouchEnd: vi.fn() };
 
 describe('KbWorkspaceLayout Quellen-Sichtbarkeit', () => {
   it('blendet die Quellenleiste im Workspace aus und danach wieder ein, ohne den Öffnen-Setter zu rufen', () => {
+    // Diese Assertion deckt NUR den Codepfad von KbWorkspaceLayout.tsx selbst
+    // ab (es ruft `setIsRightSidebarOpen` an keiner Stelle auf) — nicht das
+    // Verhalten von HistoryPanel oder SourcesPanel, die hier gemockt sind.
+    // Die eigentliche Regression, gegen die dieser Test ursprünglich geschrieben
+    // wurde, saß in AuthenticatedApp.handleExpandStudio; die Presence/Absence-
+    // Assertions unten sind die primäre Absicherung dieses Tests.
     kbView = 'chat';
     const { rerender } = render(
       <KbWorkspaceLayout mobileTab="chat" setMobileTab={vi.fn()} swipeHandlers={noSwipe} />,
