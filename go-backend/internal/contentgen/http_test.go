@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/contentgen"
@@ -228,6 +229,14 @@ func TestGenerateCards_NoAuth_Returns401(t *testing.T) {
 // Tests: GenerateAnalysis
 // ---------------------------------------------------------------------------
 
+// generateAnalysisResponse mirrors GenerateAnalysis's response envelope
+// ({record, degradedReason}) — it stopped returning the record directly once
+// GenerateAnalysis could run through an agent/team (Task 11).
+type generateAnalysisResponse struct {
+	Record         gencontent.GenContentRow `json:"record"`
+	DegradedReason string                   `json:"degradedReason"`
+}
+
 func TestGenerateAnalysis_Returns200(t *testing.T) {
 	llmContent := "## Analysis\n\nThis is a detailed analysis."
 	srv := buildLLMServer(t, llmContent)
@@ -242,12 +251,124 @@ func TestGenerateAnalysis_Returns200(t *testing.T) {
 		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp gencontent.GenContentRow
+	var resp generateAnalysisResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp.Type != "analysis" {
-		t.Errorf("expected type analysis, got %s", resp.Type)
+	if resp.Record.Type != "analysis" {
+		t.Errorf("expected type analysis, got %s", resp.Record.Type)
+	}
+	if resp.DegradedReason != "" {
+		t.Errorf("degradedReason = %q, want \"\" (no selection made, h.teams is nil)", resp.DegradedReason)
+	}
+}
+
+// mockTeamLoader is a minimal contentgen.TeamLoader for the handler-level
+// tests below. Defined here (package contentgen_test) rather than reusing
+// analysis_agent_test.go's unexported fakeTeamLoader, which lives in the
+// internal contentgen package and isn't visible from this external test
+// package.
+type mockTeamLoader struct {
+	agent *agentteams.AgentRecord
+	team  *agentteams.TeamForChat
+	err   error
+}
+
+func (m mockTeamLoader) LoadAgentForChat(context.Context, string, string) (*agentteams.AgentRecord, error) {
+	return m.agent, m.err
+}
+func (m mockTeamLoader) LoadTeamForChat(context.Context, string, string) (*agentteams.TeamForChat, error) {
+	return m.team, m.err
+}
+
+// mockTeamSearcher implements vector.Searcher (Search + ExpandNeighbors —
+// contentgen.Searcher only requires Search, which is why SetAgentDeps takes
+// a second, separately typed field; see http.go). called is set on every
+// Search invocation so tests can assert whether the agent/team path (which
+// alone uses this searcher, via RunTeamChat) actually ran.
+type mockTeamSearcher struct {
+	called *bool
+	chunks []vector.SearchChunk
+}
+
+func (m mockTeamSearcher) Search(_ context.Context, _, _ string, _ int, _ vector.SearchOptions) (*vector.SearchResult, error) {
+	if m.called != nil {
+		*m.called = true
+	}
+	return &vector.SearchResult{Chunks: m.chunks}, nil
+}
+
+func (m mockTeamSearcher) ExpandNeighbors(_ context.Context, chunks []vector.SearchChunk, _ int, _, _ string) []vector.SearchChunk {
+	return chunks
+}
+
+var _ vector.Searcher = mockTeamSearcher{}
+
+// Positive guard: a resolvable agentId must actually run the team/agent
+// pipeline (RunTeamChat), not just resolve without error. Detected via the
+// team searcher being invoked — only the agent path uses h.teamSearcher, the
+// standard path uses h.searchSvc.
+func TestGenerateAnalysisWithAgentRunsTeamChat(t *testing.T) {
+	llmContent := "## Analysis\n\nSynthesized by the agent."
+	srv := buildLLMServer(t, llmContent)
+
+	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
+
+	var called bool
+	searcher := mockTeamSearcher{
+		called: &called,
+		chunks: []vector.SearchChunk{
+			{ID: "c1", Content: "evidence", FileID: "f1", FileName: "f.pdf", Score: 0.8},
+		},
+	}
+	h.SetAgentDeps(mockTeamLoader{agent: &agentteams.AgentRecord{ID: "a1", Name: "Prüfer", ChatModel: "gpt-test"}}, searcher)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/analysis",
+		map[string]string{"topic": "Budget 2026", "agentId": "a1"})
+	rec := httptest.NewRecorder()
+	h.GenerateAnalysis(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var resp generateAnalysisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.DegradedReason != "" {
+		t.Errorf("degradedReason = %q, want \"\" (agent resolved and ran)", resp.DegradedReason)
+	}
+	if !called {
+		t.Error("with agentId, RunTeamChat is called — the team searcher was never invoked, so the agent path did not run")
+	}
+}
+
+// Fail-soft-Wächter: eine im Dialog getroffene, inzwischen ungültige Auswahl
+// kostet den Lauf nicht — sie MUSS aber sichtbar werden.
+func TestGenerateAnalysisWithUnresolvableAgentDegrades(t *testing.T) {
+	llmContent := "## Analysis\n\nThis is a detailed analysis."
+	srv := buildLLMServer(t, llmContent)
+
+	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
+	h.SetAgentDeps(mockTeamLoader{err: errors.New("not attached")}, nil)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/analysis",
+		map[string]string{"topic": "test analysis", "agentId": "a1"})
+	rec := httptest.NewRecorder()
+	h.GenerateAnalysis(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (fail-soft): %s", rec.Code, rec.Body.String())
+	}
+	var resp generateAnalysisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Record.Type != "analysis" {
+		t.Errorf("trotz Degradation muss ein Artefakt entstehen, got type %q", resp.Record.Type)
+	}
+	if resp.DegradedReason == "" {
+		t.Error("degradedReason ist leer — der Lauf degradiert stumm, genau das soll ausgeschlossen sein")
 	}
 }
 
