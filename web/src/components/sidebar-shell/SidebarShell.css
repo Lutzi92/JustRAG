@@ -2,15 +2,17 @@
   background: var(--sidebar-bg);
 }
 
-.sidebar-shell--left {
+.sidebar.sidebar-shell--left {
   border-right: 1px solid var(--border-color);
   border-left: none;
 }
 
 /* Die rechte Leiste trägt keinen eigenen Rand: den zeichnet das
    Resize-Handle in KbWorkspaceLayout (borderLeft), sonst stünden dort zwei
-   1px-Linien nebeneinander. */
-.sidebar-shell--right {
+   1px-Linien nebeneinander. Doppelklasse statt einfacher Klasse, damit die
+   Regel `.sidebar` in index.css:280 sicher schlägt und nicht bloß über die
+   Reihenfolge der Stylesheet-Importe gewinnt. */
+.sidebar.sidebar-shell--right {
   border-right: none;
   border-left: none;
   background: var(--bg-secondary);

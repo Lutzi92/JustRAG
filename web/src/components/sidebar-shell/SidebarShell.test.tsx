@@ -42,4 +42,11 @@ describe('SidebarShell', () => {
     rerender(<SidebarShell {...base} side="left" width={420} isOpen={false}><p>Inhalt</p></SidebarShell>);
     expect(container.querySelector('aside')).toHaveStyle({ width: '60px' });
   });
+
+  it('zeigt den Inhalt im offenen Zustand', () => {
+    render(
+      <SidebarShell {...base} side="left"><p>Inhalt</p></SidebarShell>,
+    );
+    expect(screen.getByText('Inhalt')).toBeVisible();
+  });
 });
