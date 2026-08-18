@@ -353,9 +353,11 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	})
 	// Invite-link redemption is guessing-resistant by entropy (43 base64url
 	// chars); this limiter is the second line of defence and keeps a leaked
-	// link from being hammered.
+	// link from being hammered. Keyed on client IP and outside Authenticate,
+	// so a lecture hall of students redeeming the same link behind one NAT
+	// is the normal case, not an attack — set generously above that.
 	inviteRL := middleware.NewRedisRateLimiter(infra.rdb.Client, middleware.RedisRateLimitConfig{
-		Max: 10, Window: time.Minute, Category: "invite",
+		Max: 30, Window: time.Minute, Category: "invite",
 	})
 
 	registerHealthRoutes(rc, buildVersion)
