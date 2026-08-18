@@ -62,6 +62,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 | 0064 | `kb_members` (four KB roles) + owner-mirror trigger; also **renames** `pending_kb_invites.permission` → `role` and widens its CHECK to allow `admin` |
 | 0065 | `knowledge_bases.visibility` + `auto_subscribe`, `is_global` becomes a generated column; `kb_subscriptions`, `kb_categories`, `kb_category_links` |
 | 0066 | `usage_events` (per-turn usage ledger across web / api_v1 / openai_compat / mcp) + backfill of historical web turns |
+| 0067 | `kb_invite_links` (permanent, revocable KB invite links carrying a role) |
 
 **Vector tables** are dim-keyed (`document_chunks_2560`, `document_chunks_4096`, …); switching the embedder requires a re-ingest.
 

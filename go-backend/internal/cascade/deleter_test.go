@@ -402,6 +402,29 @@ func TestCascadeDropsTabularTables(t *testing.T) {
 	}
 }
 
+// Ein Einladungslink haengt an der KB und muss mit ihr verschwinden. Der FK
+// wuerde kaskadieren, aber deleteKBTransaction zaehlt jede KB-gebundene
+// Tabelle explizit auf — dieser Test haelt die Aufzaehlung vollstaendig.
+func TestDeleteKB_RemovesInviteLinks(t *testing.T) {
+	mainPool, vectorPool := openTestPools(t)
+	_, kbID, _ := seedFixture(t, mainPool, false)
+	stor := localFS(t, mainPool, kbID)
+
+	ctx := context.Background()
+	if _, err := mainPool.Exec(ctx, `
+		INSERT INTO kb_invite_links (kb_id, token, role)
+		VALUES ($1::uuid, 'cascade-test-token', 'view')`, kbID); err != nil {
+		t.Fatalf("insert invite link: %v", err)
+	}
+
+	d := cascade.New(mainPool, vectorPool, stor)
+	if err := d.DeleteKB(ctx, kbID); err != nil {
+		t.Fatalf("DeleteKB: %v", err)
+	}
+
+	assertCountZero(t, mainPool, `SELECT count(*) FROM kb_invite_links WHERE kb_id = $1::uuid`, kbID)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
