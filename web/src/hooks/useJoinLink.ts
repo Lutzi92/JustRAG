@@ -50,3 +50,13 @@ export function takeJoinToken(): string | null {
     s.removeItem(JOIN_TOKEN_KEY);
     return token;
 }
+
+/**
+ * Re-parks a token that takeJoinToken() already consumed, so a retryable
+ * redemption failure (network error, 5xx, rate limit) can be retried on the
+ * next mount instead of forcing the user to find the original link again.
+ * Not for the 404 case: a genuinely invalid/revoked token must stay cleared.
+ */
+export function parkJoinToken(token: string): void {
+    storage()?.setItem(JOIN_TOKEN_KEY, token);
+}

@@ -3,7 +3,7 @@ import axios from 'axios';
 import { API_BASE_URL } from '../api';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { takeJoinToken } from './useJoinLink';
+import { takeJoinToken, parkJoinToken } from './useJoinLink';
 
 interface RedeemResponse {
     kbId: string;
@@ -20,8 +20,13 @@ interface UseJoinRedeemParams {
 /**
  * Redeems a token parked by the /join/<token> entry route, once, right after
  * the user is authenticated: grant the role, then drop them straight into the
- * KB. A failure (revoked or invalid link) only toasts and leaves them on the
- * overview.
+ * KB.
+ *
+ * Failures are discriminated: a 404 means the link is genuinely invalid or
+ * revoked, so the already-cleared token stays gone. Anything else (429 rate
+ * limit, 5xx, a dropped connection) is not a verdict on the link, so the
+ * token is re-parked for a retry and the user gets a distinct, retryable
+ * message instead of being told the link is broken.
  */
 export function useJoinRedeem({ openKbById }: UseJoinRedeemParams): void {
     const toast = useToast();
@@ -40,17 +45,31 @@ export function useJoinRedeem({ openKbById }: UseJoinRedeemParams): void {
         if (!token) return;
 
         void (async () => {
+            let result: RedeemResponse;
             try {
                 const res = await axios.post<RedeemResponse>(
                     `${API_BASE_URL}/api/invites/${encodeURIComponent(token)}/redeem`);
-                toast.success(res.data.alreadyMember
-                    ? t('joinLinkAlreadyMember')
-                    : t('joinLinkJoined').replace('{kb}', res.data.kbName));
-                await openKbById(res.data.kbId);
+                result = res.data;
             } catch (err: unknown) {
                 console.error('Invite-link redemption failed:', err);
-                toast.error(t('joinLinkInvalid'));
+                if (axios.isAxiosError(err) && err.response?.status === 404) {
+                    toast.error(t('joinLinkInvalid'));
+                } else {
+                    parkJoinToken(token);
+                    toast.error(t('joinLinkRetry'));
+                }
+                return;
             }
+
+            // Outside the try block on purpose: openKbById swallows its own
+            // errors today, but nothing here should assume that — if it ever
+            // threw, catching it above would produce a contradictory
+            // "invalid link" toast right after the success toast for a join
+            // that actually succeeded.
+            toast.success(result.alreadyMember
+                ? t('joinLinkAlreadyMember')
+                : t('joinLinkJoined').replace('{kb}', result.kbName));
+            await openKbById(result.kbId);
         })();
     }, [openKbById, toast, t]);
 }

@@ -26,6 +26,7 @@ export const translations = {
     joinLinkJoined: { de: '"{kb}" wurde zu Ihren Wissensdatenbanken hinzugefügt', en: 'You joined "{kb}"' },
     joinLinkAlreadyMember: { de: 'Sie haben bereits Zugriff auf diese Wissensdatenbank', en: 'You already have access to this knowledge base' },
     joinLinkInvalid: { de: 'Dieser Einladungslink ist ungültig oder wurde widerrufen', en: 'This invite link is invalid or has been revoked' },
+    joinLinkRetry: { de: 'Beitritt konnte nicht abgeschlossen werden. Bitte versuchen Sie es erneut.', en: 'Could not complete the join. Please try again.' },
 
     // Accessibility
     skipToChat: { de: 'Zum Chat springen', en: 'Skip to chat' },
@@ -337,6 +338,7 @@ export const translations = {
     revokeInviteLink: { de: 'Widerrufen', en: 'Revoke' },
     inviteLinkUses: { de: 'Nutzungen', en: 'Uses' },
     inviteLinkNeverUsed: { de: 'Noch nicht genutzt', en: 'Not used yet' },
+    inviteLinkLastUsed: { de: 'Zuletzt genutzt', en: 'Last used' },
     inviteLinkUnnamed: { de: 'Ohne Bezeichnung', en: 'Unnamed' },
     noInviteLinks: { de: 'Noch keine Einladungslinks', en: 'No invite links yet' },
     selectPermission: { de: 'Berechtigung auswählen', en: 'Select permission' },
