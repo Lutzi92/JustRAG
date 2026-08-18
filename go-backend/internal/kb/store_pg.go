@@ -2,7 +2,6 @@ package kb
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -65,7 +64,6 @@ type kbFullRow struct {
 	SystemPrompt   *string         `db:"system_prompt"`
 	HeaderText     *string         `db:"header_text"`
 	ExamplePrompts *string         `db:"example_prompts"`
-	StudioConfig   json.RawMessage `db:"studio_config"`
 	ChunkSize      *int            `db:"chunk_size"`
 	ChunkOverlap   *int            `db:"chunk_overlap"`
 	CreatedAt      time.Time       `db:"created_at"`
@@ -79,7 +77,7 @@ type kbFullRow struct {
 const kbSelectCols = `kb.id, kb.name, kb.user_id, kb.description,
        (kb.visibility = 'public') AS is_global, kb.visibility, kb.is_published,
        kb.language, kb.ai_config_id, kb.chat_model, kb.embedding_model, kb.rerank_model, kb.tts_model, kb.stt_model,
-       kb.system_prompt, kb.header_text, kb.example_prompts, kb.studio_config,
+       kb.system_prompt, kb.header_text, kb.example_prompts,
        kb.chunk_size, kb.chunk_overlap, kb.created_at`
 
 // kbStatsCols / kbStatsJoins add per-KB card metadata (file counts, turn
@@ -110,7 +108,7 @@ const kbStatsJoins = `
 const kbSelectColsNoAlias = `id, name, user_id, description,
        (visibility = 'public') AS is_global, visibility, is_published,
        language, ai_config_id, chat_model, embedding_model, rerank_model, tts_model, stt_model,
-       system_prompt, header_text, example_prompts, studio_config, chunk_size, chunk_overlap, created_at,
+       system_prompt, header_text, example_prompts, chunk_size, chunk_overlap, created_at,
        NULL::text AS owner_first_name, NULL::text AS owner_last_name, NULL::text AS owner_username`
 
 // kbMembershipCols surfaces the caller's own role (my_role) and the KB's
@@ -149,7 +147,6 @@ func toKBRow(r kbFullRow) KBRow {
 		SystemPrompt:   r.SystemPrompt,
 		HeaderText:     r.HeaderText,
 		ExamplePrompts: r.ExamplePrompts,
-		StudioConfig:   r.StudioConfig,
 		ChunkSize:      r.ChunkSize,
 		ChunkOverlap:   r.ChunkOverlap,
 		CreatedAt:      r.CreatedAt,
@@ -473,13 +470,6 @@ func (s *PGStore) UpdateKnowledgeBase(ctx context.Context, id string, data KBUpd
 	}
 	if data.IsPublished != nil {
 		b.Add("is_published = $%d", *data.IsPublished)
-	}
-	if data.StudioConfig != nil {
-		jsonBytes, err := json.Marshal(data.StudioConfig)
-		if err != nil {
-			return nil, fmt.Errorf("UpdateKnowledgeBase: marshal studio_config: %w", err)
-		}
-		b.Add("studio_config = $%d", jsonBytes)
 	}
 
 	if b.Len() == 0 {

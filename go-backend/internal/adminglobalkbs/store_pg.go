@@ -53,7 +53,6 @@ type globalKBDBRow struct {
 	RerankModel    *string         `db:"rerank_model"`
 	TTSModel       *string         `db:"tts_model"`
 	SttModel       *string         `db:"stt_model"`
-	StudioConfig   json.RawMessage `db:"studio_config"`
 	CreatedAt      time.Time       `db:"created_at"`
 }
 
@@ -62,7 +61,7 @@ type globalKBDBRow struct {
 const globalKBSelectCols = `id, name, description, language, is_published, auto_subscribe,
 	system_prompt, header_text, example_prompts,
 	ai_config_id, chat_model, embedding_model, rerank_model, tts_model, stt_model,
-	studio_config, created_at`
+	created_at`
 
 func toGlobalKBRow(r globalKBDBRow) GlobalKBRow {
 	return GlobalKBRow(r)
@@ -202,13 +201,6 @@ func (s *PGStore) UpdateGlobalKB(ctx context.Context, id string, data GlobalKBUp
 	}
 	if data.SttModel != nil || data.NullFields["sttModel"] {
 		setOrNull("stt_model", "sttModel", data.SttModel)
-	}
-	if data.StudioConfig != nil {
-		raw, err := json.Marshal(data.StudioConfig)
-		if err != nil {
-			return nil, fmt.Errorf("UpdateGlobalKB: marshal studio_config: %w", err)
-		}
-		setVal("studio_config", raw)
 	}
 
 	if b.Len() == 0 {

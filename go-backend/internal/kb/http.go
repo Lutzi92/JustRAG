@@ -39,7 +39,6 @@ type KBRow struct {
 	SttModel       *string         `json:"sttModel"       db:"stt_model"`
 	ChunkSize      *int            `json:"chunkSize"      db:"chunk_size"`
 	ChunkOverlap   *int            `json:"chunkOverlap"   db:"chunk_overlap"`
-	StudioConfig   json.RawMessage `json:"studioConfig"   db:"studio_config"`
 	CreatedAt      time.Time       `json:"createdAt"      db:"created_at"`
 
 	// Owner attribution — populated by ListKnowledgeBases so the UI can show

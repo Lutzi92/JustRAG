@@ -8,7 +8,7 @@ import {
     Type, Layout, Mic, X, Check,
     FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks, BarChart3
 } from 'lucide-react';
-import type { GeneratedContent, StudioConfig } from '../../types';
+import type { GeneratedContent } from '../../types';
 import { isMarkdownArtifact } from '../../utils/artifactTypes';
 import { QuizView } from './QuizView';
 import { API_BASE_URL } from '../../api';
@@ -23,7 +23,6 @@ interface StudioWorkspaceProps {
     onGenerate: (type: 'cards' | 'presentation' | 'podcast' | 'chart' | 'abstract' | 'briefing_doc' | 'faq' | 'study_guide' | 'timeline' | 'quiz') => void;
     onDeleteContent: (id: string, e: React.MouseEvent) => void;
     onClose: () => void;
-    studioConfig?: StudioConfig;
     selectedItem: GeneratedContent | null;
     hasFiles?: boolean;
 }
@@ -35,7 +34,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     kbId,
     onGenerate: onGenerateParent,
     onClose,
-    studioConfig,
     selectedItem,
     hasFiles = true
 }) => {
@@ -55,8 +53,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
     const [analysisInstruction, setAnalysisInstruction] = useState('');
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-
-    const sc = { cards: true, presentation: true, podcast: true, chart: true, abstract: true, briefingDoc: true, faq: true, studyGuide: true, timeline: true, quiz: true, ...studioConfig };
 
     const handleAnalyzeRequest = () => {
         setShowAnalysisModal(true);
@@ -304,58 +300,38 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 <button onClick={handleAnalyzeRequest} disabled={!hasFiles || isAnalyzing} className="studio-gen-btn">
                     <FileText size={16} /> {t('newAnalysis')}
                 </button>
-                {sc.cards && (
-                    <button onClick={() => onGenerateParent('cards')} disabled={!hasFiles} className="studio-gen-btn">
-                        <Type size={16} /> {t('flashcards')}
-                    </button>
-                )}
-                {sc.presentation && (
-                    <button onClick={() => onGenerateParent('presentation')} disabled={!hasFiles} className="studio-gen-btn">
-                        <Layout size={16} /> {t('slides')}
-                    </button>
-                )}
-                {sc.podcast && (
-                    <button onClick={() => onGenerateParent('podcast')} disabled={!hasFiles} className="studio-gen-btn">
-                        <Mic size={16} /> {t('podcast')}
-                    </button>
-                )}
+                <button onClick={() => onGenerateParent('cards')} disabled={!hasFiles} className="studio-gen-btn">
+                    <Type size={16} /> {t('flashcards')}
+                </button>
+                <button onClick={() => onGenerateParent('presentation')} disabled={!hasFiles} className="studio-gen-btn">
+                    <Layout size={16} /> {t('slides')}
+                </button>
+                <button onClick={() => onGenerateParent('podcast')} disabled={!hasFiles} className="studio-gen-btn">
+                    <Mic size={16} /> {t('podcast')}
+                </button>
 
-                {sc.abstract && (
-                    <button onClick={() => onGenerateParent('abstract')} disabled={!hasFiles} className="studio-gen-btn">
-                        <FileText size={16} /> {t('abstract')}
-                    </button>
-                )}
-                {sc.chart && (
-                    <button onClick={() => onGenerateParent('chart')} disabled={!hasFiles} className="studio-gen-btn">
-                        <BarChart3 size={16} /> {t('chart')}
-                    </button>
-                )}
+                <button onClick={() => onGenerateParent('abstract')} disabled={!hasFiles} className="studio-gen-btn">
+                    <FileText size={16} /> {t('abstract')}
+                </button>
+                <button onClick={() => onGenerateParent('chart')} disabled={!hasFiles} className="studio-gen-btn">
+                    <BarChart3 size={16} /> {t('chart')}
+                </button>
 
-                {sc.briefingDoc && (
-                    <button onClick={() => onGenerateParent('briefing_doc')} disabled={!hasFiles} className="studio-gen-btn">
-                        <Newspaper size={16} /> {t('briefingDoc')}
-                    </button>
-                )}
-                {sc.faq && (
-                    <button onClick={() => onGenerateParent('faq')} disabled={!hasFiles} className="studio-gen-btn">
-                        <HelpCircle size={16} /> {t('faq')}
-                    </button>
-                )}
-                {sc.studyGuide && (
-                    <button onClick={() => onGenerateParent('study_guide')} disabled={!hasFiles} className="studio-gen-btn">
-                        <GraduationCap size={16} /> {t('studyGuide')}
-                    </button>
-                )}
-                {sc.timeline && (
-                    <button onClick={() => onGenerateParent('timeline')} disabled={!hasFiles} className="studio-gen-btn">
-                        <Clock size={16} /> {t('timeline')}
-                    </button>
-                )}
-                {sc.quiz && (
-                    <button onClick={() => onGenerateParent('quiz')} disabled={!hasFiles} className="studio-gen-btn">
-                        <ListChecks size={16} /> {t('quiz')}
-                    </button>
-                )}
+                <button onClick={() => onGenerateParent('briefing_doc')} disabled={!hasFiles} className="studio-gen-btn">
+                    <Newspaper size={16} /> {t('briefingDoc')}
+                </button>
+                <button onClick={() => onGenerateParent('faq')} disabled={!hasFiles} className="studio-gen-btn">
+                    <HelpCircle size={16} /> {t('faq')}
+                </button>
+                <button onClick={() => onGenerateParent('study_guide')} disabled={!hasFiles} className="studio-gen-btn">
+                    <GraduationCap size={16} /> {t('studyGuide')}
+                </button>
+                <button onClick={() => onGenerateParent('timeline')} disabled={!hasFiles} className="studio-gen-btn">
+                    <Clock size={16} /> {t('timeline')}
+                </button>
+                <button onClick={() => onGenerateParent('quiz')} disabled={!hasFiles} className="studio-gen-btn">
+                    <ListChecks size={16} /> {t('quiz')}
+                </button>
             </div>
 
             {/* Main Area */}

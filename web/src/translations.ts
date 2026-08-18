@@ -410,8 +410,6 @@ export const translations = {
     systemPromptLabel: { de: 'System-Prompt', en: 'System Prompt' },
     systemPromptDescription: { de: 'Gib dem Assistenten eine Persona, definiere den Ton oder lege fachspezifische Regeln fest. Die RAG-Anweisungen werden automatisch angewendet.', en: 'Give the assistant a persona, define its tone, or set domain-specific rules. The RAG retrieval instructions are applied automatically.' },
     systemPromptPlaceholder: { de: 'z.B. Du bist ein freundlicher Experte für Personalrecht. Antworte immer in einfacher Sprache und vermeide Fachjargon.', en: 'e.g. You are a friendly expert in employment law. Always answer in plain language and avoid jargon.' },
-    studioConfigLabel: { de: 'Studio-Funktionen', en: 'Studio Features' },
-    studioConfigDescription: { de: 'Wähle aus, welche Studio-Funktionen den Benutzern dieser Knowledge Base zur Verfügung stehen.', en: 'Choose which studio features are available to users of this Knowledge Base.' },
     fileManagement: { de: 'Dateiverwaltung', en: 'File Management' },
     uploadFiles: { de: 'Dateien hochladen', en: 'Upload files' },
     noFiles: { de: 'Noch keine Dateien hochgeladen.', en: 'No files uploaded yet.' },

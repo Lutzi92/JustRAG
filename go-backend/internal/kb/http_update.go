@@ -40,7 +40,6 @@ type KBUpdate struct {
 	ChunkSize      *int            `json:"chunkSize"`
 	ChunkOverlap   *int            `json:"chunkOverlap"`
 	IsPublished    *bool           `json:"isPublished"`
-	StudioConfig   json.RawMessage `json:"studioConfig"`
 	NullFields     map[string]bool `json:"-"` // set of field names explicitly sent as null
 }
 

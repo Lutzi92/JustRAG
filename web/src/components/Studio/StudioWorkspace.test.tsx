@@ -59,4 +59,21 @@ describe('StudioWorkspace', () => {
     // the empty-state body when nothing is selected (both pre-date Task 5).
     expect(screen.getAllByRole('button', { name: /newAnalysis/ })).toHaveLength(2);
   });
+
+  it('zeigt alle Kacheln, unabhängig von jeder KB-Einstellung', () => {
+    render(
+      <StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
+        onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={null} />,
+    );
+    for (const key of ['newAnalysis', 'flashcards', 'slides', 'podcast', 'abstract',
+                       'chart', 'briefingDoc', 'faq', 'studyGuide', 'timeline', 'quiz']) {
+      // newAnalysis renders twice (tile grid + empty-state hint button), every
+      // other tile exactly once — see the length-2 assertion above.
+      if (key === 'newAnalysis') {
+        expect(screen.getAllByRole('button', { name: new RegExp(key) }).length).toBeGreaterThan(0);
+      } else {
+        expect(screen.getByRole('button', { name: new RegExp(key) })).toBeInTheDocument();
+      }
+    }
+  });
 });

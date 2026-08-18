@@ -40,7 +40,6 @@ type GlobalKBRow struct {
 	RerankModel    *string         `json:"rerankModel"    db:"rerank_model"`
 	TTSModel       *string         `json:"ttsModel"       db:"tts_model"`
 	SttModel       *string         `json:"sttModel"       db:"stt_model"`
-	StudioConfig   json.RawMessage `json:"studioConfig"   db:"studio_config"`
 	CreatedAt      time.Time       `json:"createdAt"      db:"created_at"`
 }
 
@@ -90,7 +89,6 @@ type GlobalKBUpdate struct {
 	RerankModel    *string         `json:"rerankModel"`
 	TTSModel       *string         `json:"ttsModel"`
 	SttModel       *string         `json:"sttModel"`
-	StudioConfig   json.RawMessage `json:"studioConfig"`
 	NullFields     map[string]bool `json:"-"`
 }
 
