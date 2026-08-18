@@ -12,13 +12,21 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/kbinvites"
 )
+
+// testRunSuffix is fixed once per process, not once per test: t.Name() alone
+// is deterministic across separate invocations of `go test`, so it cannot by
+// itself prevent the aborted-run collision below — the whole point is that
+// the SAME test, run twice, must NOT try to insert the same username twice.
+var testRunSuffix = fmt.Sprintf("%d", time.Now().UnixNano())
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -36,10 +44,25 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// insertUser inserts a throwaway user and returns its id.
+// uniqueUsername builds base-{testName}-{testRunSuffix}. An aborted run
+// (panic, ctrl-C, CI timeout) leaves its fixture rows behind — there is no
+// TRUNCATE between local runs against the throwaway DB — so the next run's
+// insertUser would collide on the users.username unique constraint unless
+// the username carries something that changes between runs. testRunSuffix
+// supplies that; t.Name() is folded in purely so a stray leftover row in the
+// DB is traceable back to the test that created it.
+func uniqueUsername(t *testing.T, base string) string {
+	t.Helper()
+	name := strings.NewReplacer("/", "-", " ", "-").Replace(t.Name())
+	return base + "-" + name + "-" + testRunSuffix
+}
+
+// insertUser inserts a throwaway user (username suffixed via uniqueUsername)
+// and returns its id.
 func insertUser(t *testing.T, pool *pgxpool.Pool, username string) string {
 	t.Helper()
 	ctx := context.Background()
+	username = uniqueUsername(t, username)
 	var id string
 	err := pool.QueryRow(ctx, `
 		INSERT INTO users (username, password_hash, role)
@@ -103,8 +126,9 @@ func TestCreateListDelete(t *testing.T) {
 	if created.Token != tok || created.Role != "edit" {
 		t.Fatalf("Create returned %+v, want token %q role edit", created, tok)
 	}
-	if created.CreatedByName == nil || *created.CreatedByName != "invites-owner" {
-		t.Fatalf("CreatedByName = %v, want invites-owner", created.CreatedByName)
+	wantOwnerName := uniqueUsername(t, "invites-owner")
+	if created.CreatedByName == nil || *created.CreatedByName != wantOwnerName {
+		t.Fatalf("CreatedByName = %v, want %s", created.CreatedByName, wantOwnerName)
 	}
 	if created.RedemptionCount != 0 {
 		t.Fatalf("RedemptionCount = %d, want 0", created.RedemptionCount)
