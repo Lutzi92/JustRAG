@@ -82,6 +82,7 @@ go-backend/cmd/migrate/migrate
 # See eval/golden/README.md §Sampling methodology #7 for the privacy escape hatch.
 /eval/golden/production-dryrun.jsonl
 /eval/golden/production-q032fix.jsonl
+/eval/golden/production-ppm-2026-08.jsonl
 /eval/golden/production.jsonl
 /eval/golden/*.xlsx
 /eval/golden/*.zip

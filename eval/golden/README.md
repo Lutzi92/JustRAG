@@ -16,10 +16,69 @@ Fields:
 | `kb_id`              | string   | KB UUID. Files in `must_cite_file_ids` must belong to it. |
 | `language`           | string   | `"de"` or `"en"`. Feeds PG text-search config.            |
 | `must_cite_file_ids` | string[] | UUIDs of files a correct retrieval must surface.          |
+| `must_cite_file_names` | string[] | File names a correct retrieval must surface. Alternative ground-truth key to `must_cite_file_ids` — **use one or the other per file, never both** (see below). |
 | `query_type`         | string   | (optional) One of `lookup`, `enumeration`, `global_synthesis`, `complex_reasoning`. Enables per-route metrics. |
 | `expected_kb_ids`    | string[] | (optional, AP-A4) KBs the sub-KB router should pick. Empty defaults to `[kb_id]` (single-KB). Multi-element rows test cross-KB fan-out. |
 | `expected_tools`     | string[] | (optional, Phase 2 §2.2) MCP tool names the agent should invoke. |
 | `notes`              | string   | (optional) Human context; ignored by the runner.          |
+
+## Ground truth by name, not by UUID
+
+`must_cite_file_names` matches a retrieved chunk on its file **name**;
+`must_cite_file_ids` matches on its UUID. Prefer names.
+
+A file's UUID is regenerated on every delete + re-upload, so a set authored
+purely by UUID dies the moment the KB is rebuilt — and it dies *silently*:
+every question scores recall 0.000 with no error, which reads like a
+retrieval regression rather than a stale fixture. Names survive re-ingest.
+`production-q032fix.jsonl` was lost this way when its KB was cleared. Once the
+KB row is gone there is no old-UUID→name mapping left in the repo — not in
+`snapshots/baseline_unrouted.json` (UUIDs only, from yet another KB
+generation), not in the `*_files_list.zip` exports (Confluence page IDs), not
+in git history. What saves you is `JLU_RAG_Eval_Set_v1.xlsx` plus
+`cmd/eval-genset`: the XLSX keys ground truth on **Confluence page IDs**,
+which are stable across re-ingests, and eval-genset resolves them against
+`files.confluence_page_id` in any KB. Regenerate, then rewrite the emitted
+`must_cite_file_ids` to names.
+
+**Never list the same logical file under both keys.** `buildTruth` cannot
+dedupe them (it does no DB lookup), so the file counts twice in the truth
+set and recall halves even when retrieval is perfect.
+
+Name matching needs `RetrievedChunk.FileName` to be populated on every eval
+path — the retrieval-only adapter in `cmd/eval/main.go` once dropped it,
+which is what `TestLegacySearchAdapterPropagatesFileName` now guards.
+
+## Production sets
+
+- `production-ppm-2026-08.jsonl` — **the active set.** The same 89 questions as
+  the retired `production-q032fix.jsonl`, re-pointed at KB `PPM-Eval`
+  (`83262307-…`, JLU Digitalprojekt-Portfolio + "Neue Wege mit KI" Confluence
+  spaces, 297 files). Ground truth regenerated from the XLSX via
+  `cmd/eval-genset`, then rewritten to `must_cite_file_names`.
+  Q006 and Q087 carry a substitute source: their XLSX gold doc is the
+  Confluence page "PPM Startseite" (`427983309`), which this export omits.
+  Baseline 2026-08-18 (k=10, retrieval-only, qwen3-embedding-8b + jina-v3 at
+  α=0.8, parent-child off, 0 errors): recall **0.911** / precision 0.328 /
+  MRR **0.919** / nDCG 0.918; lookup 0.948, enumeration 0.899 (MRR 1.000),
+  complex_reasoning 0.868. Full breakdown and caveats in `docs/retrieval.md`
+  §"Current baseline: qwen3-embedding-8b".
+- `production.jsonl` / `production-q032fix.jsonl` — superseded; both point at
+  the deleted KB `a4dab03f-…` and cannot be run.
+
+### Regenerating after a KB rebuild
+
+```bash
+cd go-backend && go build -o /tmp/eval-genset ./cmd/eval-genset
+/tmp/eval-genset --xlsx ../eval/golden/JLU_RAG_Eval_Set_v1.xlsx \
+                 --kb-id <new-kb-uuid> --output /tmp/genset.jsonl
+```
+
+Then map `must_cite_file_ids` → `must_cite_file_names` (one `files` lookup)
+and drop the ids. Read the tool's WARN lines: an unresolved Confluence page ID
+means the page is not in the new KB, and eval-genset **drops** the question
+rather than emitting a half-truth — a silently shorter set is the thing to
+watch for, not a crash.
 
 ## Authoring tips
 
@@ -66,14 +125,14 @@ section can't silently slip past CI.
 
 Phase C accept criterion: recall +5pp AND MRR +3pp on this set vs.
 Vector-only baseline, AND no >1pp regression on the 89-question
-production set. Failing → keep the GraphRAG code in repo, leave the
+production set (`production-ppm-2026-08.jsonl`). Failing → keep the GraphRAG code in repo, leave the
 `graph_search` tool default-off, document and revisit after
 corpus-side annotation work.
 
 ## Multi-KB sets (AP-A5)
 
 `multi_kb.jsonl` is the AP-A4 sub-KB router evaluation set, separate from
-the per-KB `production.jsonl`. The current commit ships a 10-row skeleton
+the per-KB production set. The current commit ships a 10-row skeleton
 with placeholder UUIDs (search for `TODO-A5`); the target shape is:
 
 - **30 single-KB rows** — each question is answerable from one KB only.
@@ -93,7 +152,7 @@ the cross-KB section disappears.
 
 ## Sampling methodology
 
-`production.jsonl` is the active golden set, drawn from real production chat logs following a reproducible, stratified process:
+`production-ppm-2026-08.jsonl` is the active golden set (see §Production sets; it superseded `production.jsonl`). It is drawn from real production chat logs following a reproducible, stratified process:
 
 1. **Sample window.** Pull ≥100 recent chat queries from prod logs (most recent 30-day window, ≥5 distinct real users). Exclude test/internal queries by filtering on the known internal admin user IDs.
 

@@ -40,9 +40,56 @@ Reranker deployment: the verified reranker configuration as of 2026-05-04 is `ji
 
 **Current production default (since 2026-06-01): `qwen3-embedding-8b`, 4096-dim, `document_chunks_4096`.** Switched back from `Octen/Octen-Embedding-8B`. Same dimension, so the active vector table is unchanged and the switch needed no re-ingest or dim migration. The embedder lives in admin `site_configs`, not in code — it is swappable at runtime, but vector tables are dim-keyed (`document_chunks_2560` for a 2560-dim model, `document_chunks_4096` for a 4096-dim one), so a *cross-dimension* switch does require a re-ingest.
 
-> ⚠️ **No golden-set numbers exist for the current production embedder.** Every recall / MRR / nDCG figure in this document that predates 2026-06-01 was measured on a different embedder and does **not** describe production. A fresh qwen3-embedding-8b baseline run is pending; until it lands, do not quote these numbers as current, and do not use them as the A/B reference for a new knob.
->
-> **The specific number to distrust is complex_reasoning MRR.** The clean 4B-vs-8B A/B below measured `Qwen3-Embedding-8B` costing **−7.0 pp complex_reasoning MRR** and −5.4 pp nDCG against Qwen3-Embedding-4B, while gaining +2.3 pp lookup recall. Octen-8B was adopted in May 2026 *precisely because* it was the first 8B that avoided that regression. Switching back to Qwen3-8B plausibly reintroduces it, and nothing has been measured since. Treat the complex_reasoning route as the open question when the baseline run happens.
+### Current baseline: qwen3-embedding-8b (2026-08-18)
+
+The first golden-set run on the current production embedder, closing the 78-day
+gap that opened with the 2026-06-01 switch.
+
+Config: `qwen3-embedding-8b` (4096-dim, `document_chunks_4096`) + `jina-reranker-v3`
+at α=0.8, retrieval-only (no `--production-context`, so no CRAG / enumeration
+pre-pass / orchestrator), k=10, `search_limit` 50, MMR λ=0.7, `hnsw_ef_search` 151,
+parent-child OFF. Fixture `eval/golden/production-ppm-2026-08.jsonl`, 89 questions,
+**0 errors**.
+
+| Route | n | recall | precision | MRR | nDCG |
+|---|---|---|---|---|---|
+| **overall** | 89 | **0.911** | 0.328 | **0.919** | 0.918 |
+| lookup | 43 | 0.948 | 0.337 | 0.899 | 0.906 |
+| enumeration | 14 | 0.899 | 0.286 | 1.000 | 1.000 |
+| complex_reasoning | 32 | 0.868 | 0.334 | 0.910 | 0.899 |
+
+> ⚠️ **This is a new baseline, not a clean A/B against the older numbers.** The
+> corpus was rebuilt between them: the fixture now runs against KB `PPM-Eval`
+> (297 files, a fresh Confluence export of the Digital-PPM **and** "Neue Wege mit
+> KI" spaces), where the pre-2026-06 numbers were measured on a smaller, differently
+> cut corpus, and ground truth is now keyed on file **names** rather than UUIDs.
+> Same 89 questions and the same route split (lookup 43 / enumeration 14 /
+> complex_reasoning 32), so the routes stay comparable in shape — but read every
+> delta below as indicative, not as an isolated embedder effect.
+
+**On the complex_reasoning MRR question this section used to flag as open:** the
+2026-05-04 A/B predicted `Qwen3-Embedding-8B` would cost −7.0 pp complex_reasoning
+MRR against the 4B (0.952 → 0.882 predicted). Measured now: **0.910** — a −4.2 pp
+gap to the 4B figure and −6.7 pp against Octen-8B's 0.977, so the regression is
+real but milder than predicted. It is *not* proof that the 8B swap was harmless:
+the corpus differs, and complex_reasoning remains the weakest route on both recall
+(0.868) and nDCG (0.899). Enumeration MRR at a flat 1.000 says the reranker still
+puts a correct chunk first on every list query; enumeration *recall* (0.899) is
+what the long multi-file questions cost.
+
+**Persistent failure cluster.** Four questions score recall 0: Q025, Q061, Q085,
+Q087. Q037 (22 gold documents) scores 0.09. The Octen-8B baseline recorded the
+cluster Q061/Q037/Q032/Q023/Q085 — four of those five still fail across an
+embedder change *and* a corpus rebuild, which makes them a fixture/corpus property
+rather than an embedder artifact. Q087's gold document is effectively empty in the
+export (the "Kurzanleitung" page is a Confluence macro that did not survive), and
+Q006/Q087 carry substitute ground truth (see the fixture header) — so treat Q087
+as a data-quality row, not a retrieval row.
+
+> **Historical figures below still do not describe production.** Every recall /
+> MRR / nDCG number in this document dated before 2026-08-18 was measured on a
+> different embedder, a different corpus, or both. Use the table above as the
+> reference for a new knob's A/B; quote the older ones only as history.
 
 ### Historical: Octen-Embedding-8B baseline (2026-05-07 → 2026-06-01)
 
