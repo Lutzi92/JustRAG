@@ -27,10 +27,11 @@ interface KBRow {
     totalSizeBytes: number;
     failedFileCount: number;
     processingFileCount: number;
-    messageCount: number;
+    webTurns: number;
+    apiTurns: number;
     chatCount: number;
     lastFileUploadAt?: string;
-    lastMessageAt?: string;
+    lastTurnAt?: string;
     createdAt: string;
 }
 
@@ -42,8 +43,8 @@ interface OverviewResponse {
 
 type SortKey = keyof Pick<KBRow,
     'name' | 'ownerName' | 'fileCount' | 'totalSizeBytes' | 'failedFileCount' |
-    'processingFileCount' | 'messageCount' | 'chatCount' | 'createdAt'>
-    | 'lastActivity';
+    'processingFileCount' | 'chatCount' | 'createdAt'>
+    | 'lastActivity' | 'activity';
 
 interface ColumnDef {
     key: SortKey;
@@ -52,10 +53,10 @@ interface ColumnDef {
     optional?: boolean;
 }
 
-// Most-recent of lastFileUploadAt / lastMessageAt, as a timestamp (NaN if neither).
+// Most-recent of lastFileUploadAt / lastTurnAt, as a timestamp (NaN if neither).
 function mergedActivityTs(row: KBRow): number {
     const a = row.lastFileUploadAt ? new Date(row.lastFileUploadAt).getTime() : NaN;
-    const b = row.lastMessageAt ? new Date(row.lastMessageAt).getTime() : NaN;
+    const b = row.lastTurnAt ? new Date(row.lastTurnAt).getTime() : NaN;
     if (Number.isNaN(a) && Number.isNaN(b)) return NaN;
     if (Number.isNaN(a)) return b;
     if (Number.isNaN(b)) return a;
@@ -65,11 +66,17 @@ function mergedActivityTs(row: KBRow): number {
 // The raw ISO string of whichever of the two timestamps is the most recent.
 function mergedActivityIso(row: KBRow): string | undefined {
     const a = row.lastFileUploadAt ? new Date(row.lastFileUploadAt).getTime() : NaN;
-    const b = row.lastMessageAt ? new Date(row.lastMessageAt).getTime() : NaN;
+    const b = row.lastTurnAt ? new Date(row.lastTurnAt).getTime() : NaN;
     if (Number.isNaN(a) && Number.isNaN(b)) return undefined;
-    if (Number.isNaN(a)) return row.lastMessageAt;
+    if (Number.isNaN(a)) return row.lastTurnAt;
     if (Number.isNaN(b)) return row.lastFileUploadAt;
-    return a >= b ? row.lastFileUploadAt : row.lastMessageAt;
+    return a >= b ? row.lastFileUploadAt : row.lastTurnAt;
+}
+
+// Aktivität = every accepted turn on every surface. One combined column
+// (web + API) keeps an already-wide table narrow; the split rides the tooltip.
+function turnTotal(row: KBRow): number {
+    return (row.webTurns ?? 0) + (row.apiTurns ?? 0);
 }
 
 function formatBytes(bytes: number): string {
@@ -234,6 +241,10 @@ export default function KBOverviewDashboard() {
                 if (Number.isNaN(bt)) return -1;
                 return sortAsc ? at - bt : bt - at;
             }
+            if (sortKey === 'activity') {
+                const cmp = turnTotal(a) - turnTotal(b);
+                return sortAsc ? cmp : -cmp;
+            }
             const av = a[sortKey];
             const bv = b[sortKey];
             // Nullish values sort last regardless of direction.
@@ -266,7 +277,7 @@ export default function KBOverviewDashboard() {
         { key: 'fileCount', label: t('tabFiles'), numeric: true },
         { key: 'totalSizeBytes', label: t('colSize'), numeric: true },
         { key: 'failedFileCount', label: t('colFailed'), numeric: true },
-        { key: 'messageCount', label: t('colMessages'), numeric: true },
+        { key: 'activity', label: t('colActivity'), numeric: true },
         { key: 'lastActivity', label: t('colLastActivity') },
         { key: 'processingFileCount', label: t('colProcessing'), numeric: true, optional: true },
         { key: 'chatCount', label: t('colChats'), numeric: true, optional: true },
@@ -313,8 +324,8 @@ export default function KBOverviewDashboard() {
                         {row.failedFileCount}
                     </>
                 );
-            case 'messageCount':
-                return row.messageCount;
+            case 'activity':
+                return turnTotal(row);
             case 'processingFileCount':
                 return row.processingFileCount;
             case 'chatCount':
@@ -475,9 +486,11 @@ export default function KBOverviewDashboard() {
                                             }
                                             const title = c.key === 'lastActivity'
                                                 ? mergedActivityIso(row)
-                                                : c.key === 'createdAt'
-                                                    ? row.createdAt
-                                                    : undefined;
+                                                : c.key === 'activity'
+                                                    ? `Web: ${row.webTurns ?? 0} · API: ${row.apiTurns ?? 0}`
+                                                    : c.key === 'createdAt'
+                                                        ? row.createdAt
+                                                        : undefined;
                                             return (
                                                 <td key={c.key} style={cellStyle} title={title}>
                                                     {renderCell(row, c.key)}
