@@ -4,12 +4,12 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import axios from 'axios';
 import {
-    Trash2, Minimize2,
+    Minimize2,
     Type, Layout, Mic, X, Check,
     FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks, BarChart3
 } from 'lucide-react';
 import type { GeneratedContent, StudioConfig } from '../../types';
-import { isMarkdownArtifact, artifactTypeLabel } from '../../utils/artifactTypes';
+import { isMarkdownArtifact } from '../../utils/artifactTypes';
 import { QuizView } from './QuizView';
 import { API_BASE_URL } from '../../api';
 import { MarkdownEditor } from './MarkdownEditor';
@@ -24,38 +24,24 @@ interface StudioWorkspaceProps {
     onDeleteContent: (id: string, e: React.MouseEvent) => void;
     onClose: () => void;
     studioConfig?: StudioConfig;
-    initialSelectedItem?: GeneratedContent | null;
+    selectedItem: GeneratedContent | null;
     hasFiles?: boolean;
 }
 
+// `generatedContent` and `onDeleteContent` are accepted for interface
+// stability with callers (the history panel now owns both the artifact list
+// and its delete affordance) but are not consumed inside this component.
 export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     kbId,
-    generatedContent,
     onGenerate: onGenerateParent,
-    onDeleteContent,
     onClose,
     studioConfig,
-    initialSelectedItem,
+    selectedItem,
     hasFiles = true
 }) => {
     const { t, language } = useTheme();
     const toast = useToast();
-    // We treat 'analysis' items as the editable notes.
-    const [selectedItem, setSelectedItem] = useState<GeneratedContent | null>(initialSelectedItem || null);
     const [editorContent, setEditorContent] = useState('');
-    const [localGeneratedContent, setLocalGeneratedContent] = useState<GeneratedContent[]>([]);
-
-    // Sync props to local state to allow immediate UI updates
-    useEffect(() => {
-        setLocalGeneratedContent(generatedContent);
-    }, [generatedContent]);
-
-    // Update selected item if initialSelectedItem changes (e.g. re-opening studio with different item)
-    useEffect(() => {
-        if (initialSelectedItem) {
-            setSelectedItem(initialSelectedItem);
-        }
-    }, [initialSelectedItem]);
 
     // When selection changes, update editor content if it's an analysis or abstract
     useEffect(() => {
@@ -93,12 +79,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 toast.error(t('analysisError'));
                 return;
             }
-            // Optimistic update
-            const updatedList = [newItem, ...localGeneratedContent];
-            setLocalGeneratedContent(updatedList);
-            setSelectedItem(newItem);
-
-            // Optimistic local state; parent syncs on next fetch
+            // Selection is controlled by the `selectedItem` prop; the parent
+            // refreshes generatedContent and drives selection of the new item.
         } catch (err: unknown) {
             console.error('Analysis failed:', err);
             const axiosErr = err as { response?: { data?: { error?: string } } };
@@ -117,11 +99,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 content: { ...selectedItem.content, text: editorContent }
             });
 
-            // Update local state item
-            const updatedItem = { ...selectedItem, content: { ...selectedItem.content, text: editorContent } } as GeneratedContent;
-            setSelectedItem(updatedItem);
-            setLocalGeneratedContent(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
-
             setSaveStatus('saved');
             setTimeout(() => setSaveStatus('idle'), 2000);
         } catch (err: unknown) {
@@ -130,15 +107,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             setSaveStatus('error');
             setTimeout(() => setSaveStatus('idle'), 3000);
         }
-    };
-
-    const handleDelete = (id: string, e: React.MouseEvent) => {
-        e.stopPropagation();
-        if (selectedItem?.id === id) {
-            setSelectedItem(null);
-        }
-        onDeleteContent(id, e);
-        setLocalGeneratedContent(prev => prev.filter(item => item.id !== id));
     };
 
     const [isCopied, setIsCopied] = useState(false);
@@ -316,137 +284,82 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     return (
         <div className="studio-workspace" style={{
             display: 'flex',
+            flexDirection: 'column',
             height: '100%',
             background: 'var(--bg-primary)',
             position: 'relative',
             overflow: 'hidden'
         }}>
-            {/* Left Sidebar: Content List */}
-            <div style={{
-                width: '300px',
-                borderRight: '1px solid var(--border-color)',
+            <div className="studio-workspace__tiles" style={{
+                padding: '1rem',
                 display: 'flex',
-                flexDirection: 'column',
-                background: 'var(--bg-secondary)'
-            }}>
-                <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)' }}>
-                    <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>{t('studio')}</h2>
-                    <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                        {t('researchWorkspace')}
-                    </p>
-                </div>
-
-                <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', opacity: hasFiles ? 1 : 0.4 }}
-                     title={!hasFiles ? t('sourcesRequiredHint') : undefined}
-                >
-                    <button onClick={handleAnalyzeRequest} disabled={!hasFiles || isAnalyzing} className="studio-gen-btn">
-                        <FileText size={16} /> {t('newAnalysis')}
+                flexWrap: 'wrap',
+                gap: '0.5rem',
+                borderBottom: '1px solid var(--border-color)',
+                background: 'var(--bg-secondary)',
+                opacity: hasFiles ? 1 : 0.4
+            }}
+                 title={!hasFiles ? t('sourcesRequiredHint') : undefined}
+            >
+                <button onClick={handleAnalyzeRequest} disabled={!hasFiles || isAnalyzing} className="studio-gen-btn">
+                    <FileText size={16} /> {t('newAnalysis')}
+                </button>
+                {sc.cards && (
+                    <button onClick={() => onGenerateParent('cards')} disabled={!hasFiles} className="studio-gen-btn">
+                        <Type size={16} /> {t('flashcards')}
                     </button>
-                    {sc.cards && (
-                        <button onClick={() => onGenerateParent('cards')} disabled={!hasFiles} className="studio-gen-btn">
-                            <Type size={16} /> {t('flashcards')}
-                        </button>
-                    )}
-                    {sc.presentation && (
-                        <button onClick={() => onGenerateParent('presentation')} disabled={!hasFiles} className="studio-gen-btn">
-                            <Layout size={16} /> {t('slides')}
-                        </button>
-                    )}
-                    {sc.podcast && (
-                        <button onClick={() => onGenerateParent('podcast')} disabled={!hasFiles} className="studio-gen-btn">
-                            <Mic size={16} /> {t('podcast')}
-                        </button>
-                    )}
+                )}
+                {sc.presentation && (
+                    <button onClick={() => onGenerateParent('presentation')} disabled={!hasFiles} className="studio-gen-btn">
+                        <Layout size={16} /> {t('slides')}
+                    </button>
+                )}
+                {sc.podcast && (
+                    <button onClick={() => onGenerateParent('podcast')} disabled={!hasFiles} className="studio-gen-btn">
+                        <Mic size={16} /> {t('podcast')}
+                    </button>
+                )}
 
-                    {sc.abstract && (
-                        <button onClick={() => onGenerateParent('abstract')} disabled={!hasFiles} className="studio-gen-btn">
-                            <FileText size={16} /> {t('abstract')}
-                        </button>
-                    )}
-                    {sc.chart && (
-                        <button onClick={() => onGenerateParent('chart')} disabled={!hasFiles} className="studio-gen-btn">
-                            <BarChart3 size={16} /> {t('chart')}
-                        </button>
-                    )}
+                {sc.abstract && (
+                    <button onClick={() => onGenerateParent('abstract')} disabled={!hasFiles} className="studio-gen-btn">
+                        <FileText size={16} /> {t('abstract')}
+                    </button>
+                )}
+                {sc.chart && (
+                    <button onClick={() => onGenerateParent('chart')} disabled={!hasFiles} className="studio-gen-btn">
+                        <BarChart3 size={16} /> {t('chart')}
+                    </button>
+                )}
 
-                    {sc.briefingDoc && (
-                        <button onClick={() => onGenerateParent('briefing_doc')} disabled={!hasFiles} className="studio-gen-btn">
-                            <Newspaper size={16} /> {t('briefingDoc')}
-                        </button>
-                    )}
-                    {sc.faq && (
-                        <button onClick={() => onGenerateParent('faq')} disabled={!hasFiles} className="studio-gen-btn">
-                            <HelpCircle size={16} /> {t('faq')}
-                        </button>
-                    )}
-                    {sc.studyGuide && (
-                        <button onClick={() => onGenerateParent('study_guide')} disabled={!hasFiles} className="studio-gen-btn">
-                            <GraduationCap size={16} /> {t('studyGuide')}
-                        </button>
-                    )}
-                    {sc.timeline && (
-                        <button onClick={() => onGenerateParent('timeline')} disabled={!hasFiles} className="studio-gen-btn">
-                            <Clock size={16} /> {t('timeline')}
-                        </button>
-                    )}
-                    {sc.quiz && (
-                        <button onClick={() => onGenerateParent('quiz')} disabled={!hasFiles} className="studio-gen-btn">
-                            <ListChecks size={16} /> {t('quiz')}
-                        </button>
-                    )}
-                </div>
-
-                <div style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
-                    <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 0 }}>
-                        {t('generatedContentHeader')}
-                    </h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        {localGeneratedContent.map(item => (
-                            <div
-                                key={item.id}
-                                className={`source-card ${selectedItem?.id === item.id ? 'active' : ''}`}
-                                role="button"
-                                tabIndex={0}
-                                onClick={() => setSelectedItem(item)}
-                                onKeyDown={(e) => {
-                                    // Ignore keys bubbling from the nested delete button.
-                                    if (e.target !== e.currentTarget) return;
-                                    if (e.key === 'Enter' || e.key === ' ') {
-                                        e.preventDefault();
-                                        setSelectedItem(item);
-                                    }
-                                }}
-                                style={{
-                                    cursor: 'pointer',
-                                    border: selectedItem?.id === item.id ? '1px solid var(--accent-primary)' : undefined,
-                                    padding: '0.75rem'
-                                }}
-                            >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ overflow: 'hidden' }}>
-                                        <div style={{ fontWeight: 500, fontSize: '0.9rem', marginBottom: '0.25rem' }}>
-                                            {item.title}
-                                        </div>
-                                        <div className="source-meta">
-                                            {artifactTypeLabel(item.type, t)} • {new Date(item.createdAt).toLocaleDateString()}
-                                        </div>
-                                    </div>
-                                    <button
-                                        onClick={(e) => handleDelete(item.id, e)}
-                                        className="settings-toggle"
-                                        style={{ padding: '4px' }}
-                                    >
-                                        <Trash2 size={14} />
-                                    </button>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
+                {sc.briefingDoc && (
+                    <button onClick={() => onGenerateParent('briefing_doc')} disabled={!hasFiles} className="studio-gen-btn">
+                        <Newspaper size={16} /> {t('briefingDoc')}
+                    </button>
+                )}
+                {sc.faq && (
+                    <button onClick={() => onGenerateParent('faq')} disabled={!hasFiles} className="studio-gen-btn">
+                        <HelpCircle size={16} /> {t('faq')}
+                    </button>
+                )}
+                {sc.studyGuide && (
+                    <button onClick={() => onGenerateParent('study_guide')} disabled={!hasFiles} className="studio-gen-btn">
+                        <GraduationCap size={16} /> {t('studyGuide')}
+                    </button>
+                )}
+                {sc.timeline && (
+                    <button onClick={() => onGenerateParent('timeline')} disabled={!hasFiles} className="studio-gen-btn">
+                        <Clock size={16} /> {t('timeline')}
+                    </button>
+                )}
+                {sc.quiz && (
+                    <button onClick={() => onGenerateParent('quiz')} disabled={!hasFiles} className="studio-gen-btn">
+                        <ListChecks size={16} /> {t('quiz')}
+                    </button>
+                )}
             </div>
 
             {/* Main Area */}
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div className="studio-workspace__body" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <header style={{
                     padding: '1rem 2rem',
                     borderBottom: '1px solid var(--border-color)',
