@@ -8,9 +8,11 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/store"
@@ -154,6 +156,26 @@ func (h *UpdateHandler) UpdateKB(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+
+	// Renaming is stricter than the route's kbAdminChain: only the owner of a
+	// private KB, or a system admin on a public (ownerless) KB, may change the
+	// name (kbaccess.CanRename). Every other PATCH field stays at KB role admin.
+	if body.Name != nil {
+		sysRole := ""
+		if claims := auth.UserFromContext(ctx); claims != nil {
+			sysRole = claims.Role
+		}
+		if !kbaccess.CanRename(kbaccess.AccessFromContext(ctx), sysRole) {
+			httputil.WriteErrorCtx(ctx, w, http.StatusForbidden, "only the owner may rename a knowledge base")
+			return
+		}
+		trimmed := strings.TrimSpace(*body.Name)
+		if trimmed == "" {
+			httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "name must not be empty")
+			return
+		}
+		body.Name = &trimmed
 	}
 
 	// Validate fields that have constraints.

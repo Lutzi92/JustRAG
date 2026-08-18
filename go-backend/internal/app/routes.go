@@ -287,8 +287,10 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 		},
 		// kbAdminChain is the plain four-role gate: KB role 'admin' or better,
 		// independent of the system role. It carries the per-KB decisions any
-		// KB admin may make — rename, membership, categories, canonicalize,
-		// community build.
+		// KB admin may make — description/prompt/models, membership,
+		// categories, canonicalize, community build. One exception sits
+		// inside PATCH /api/kb/{id}: the `name` field is owner-only
+		// (system admin on a public KB) — see kbaccess.CanRename.
 		kbAdminChain: func(h http.HandlerFunc) http.Handler {
 			return authMiddleware.Authenticate(kbMw.RequireKBRole(kbaccess.RoleAdmin)(http.HandlerFunc(h)))
 		},

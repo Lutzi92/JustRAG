@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/store"
@@ -47,12 +48,21 @@ func (m *mockUpdateStore) GetKBChunkConfig(_ context.Context, _ string) (int, in
 // injectKBAccess returns a copy of r with a KBAccessResult injected into the
 // context, mirroring what kbaccess.RequireKBRole does in production.
 func injectKBAccess(r *http.Request, kbID string) *http.Request {
+	return injectKBAccessAs(r, &kbaccess.KnowledgeBase{ID: kbID, IsGlobal: false}, kbaccess.RoleOwner, auth.RoleUser)
+}
+
+// injectKBAccessAs is the explicit-role variant: it injects both the resolved
+// KBAccessResult (role) and the auth claims (system role), which is what the
+// rename gate reads.
+func injectKBAccessAs(r *http.Request, kbRow *kbaccess.KnowledgeBase, role, sysRole string) *http.Request {
 	access := &kbaccess.KBAccessResult{
-		KB:      &kbaccess.KnowledgeBase{ID: kbID, IsGlobal: false},
-		IsOwner: true,
-		Role:    kbaccess.RoleEdit,
+		KB:      kbRow,
+		IsOwner: role == kbaccess.RoleOwner,
+		Role:    role,
 	}
-	return r.WithContext(kbaccess.WithAccess(r.Context(), access))
+	ctx := kbaccess.WithAccess(r.Context(), access)
+	ctx = auth.WithUser(ctx, &auth.Claims{ID: "user-1", Username: "u", Role: sysRole})
+	return r.WithContext(ctx)
 }
 
 func makeKBRow(id, name string) *kb.KBRow {
