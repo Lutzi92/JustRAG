@@ -13,6 +13,7 @@ vi.mock('../contexts/ThemeContext', () => ({
       const map: Record<string, string> = {
         imprintUrl: 'https://example.com/imprint',
         imprint: 'Imprint',
+        termsOfUse: 'Terms of Use',
         privacyPolicy: 'Privacy Policy',
         accessibility: 'Accessibility',
       };
@@ -29,6 +30,17 @@ describe('Footer', () => {
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('href', 'https://example.com/imprint');
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('renders Terms of Use as button calling onNavigate("terms")', async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    render(<Footer onNavigate={onNavigate} />);
+
+    const termsButton = screen.getByText('Terms of Use');
+    expect(termsButton.tagName).toBe('BUTTON');
+    await user.click(termsButton);
+    expect(onNavigate).toHaveBeenCalledWith('terms');
   });
 
   it('renders Privacy Policy as button calling onNavigate("privacy")', async () => {

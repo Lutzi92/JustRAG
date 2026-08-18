@@ -38,7 +38,7 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-    const [legalPage, setLegalPage] = useState<'privacy' | 'accessibility' | null>(null);
+    const [legalPage, setLegalPage] = useState<'terms' | 'privacy' | 'accessibility' | null>(null);
     const [providers, setProviders] = useState<PublicAuthProvider[]>([]);
     const [localAuthEnabled, setLocalAuthEnabled] = useState(false);
     const [authConfigLoaded, setAuthConfigLoaded] = useState(false);

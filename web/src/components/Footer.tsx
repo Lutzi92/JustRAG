@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
-type LegalPage = 'privacy' | 'accessibility';
+type LegalPage = 'terms' | 'privacy' | 'accessibility';
 
 interface FooterProps {
   onNavigate: (page: LegalPage) => void;
@@ -40,6 +40,8 @@ export function Footer({ onNavigate }: FooterProps) {
       >
         {t('imprint')}
       </a>
+      <span aria-hidden>·</span>
+      <button style={linkStyle} onClick={() => onNavigate('terms')}>{t('termsOfUse')}</button>
       <span aria-hidden>·</span>
       <button style={linkStyle} onClick={() => onNavigate('privacy')}>{t('privacyPolicy')}</button>
       <span aria-hidden>·</span>

@@ -5,7 +5,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
 import type { Language } from '../translations';
 
-type LegalPageType = 'privacy' | 'accessibility';
+type LegalPageType = 'terms' | 'privacy' | 'accessibility';
 
 interface LegalPageProps {
   page: LegalPageType;
@@ -13,11 +13,13 @@ interface LegalPageProps {
 }
 
 const titleKeys: Record<LegalPageType, string> = {
+  terms: 'termsOfUseTitle',
   privacy: 'privacyPolicyTitle',
   accessibility: 'accessibilityTitle',
 };
 
 const htmlFiles: Record<LegalPageType, Record<Language, string>> = {
+  terms: { de: '/legal/terms-de.html', en: '/legal/terms-en.html' },
   privacy: { de: '/legal/privacy-de.html', en: '/legal/privacy-en.html' },
   accessibility: { de: '/legal/accessibility-de.html', en: '/legal/accessibility-en.html' },
 };

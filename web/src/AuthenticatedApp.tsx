@@ -322,7 +322,7 @@ function AuthenticatedAppInner() {
     );
   }
 
-  if (view === 'privacy' || view === 'accessibility') {
+  if (view === 'terms' || view === 'privacy' || view === 'accessibility') {
     return <LegalPage page={view} onBack={viewState.handleGoHome} />;
   }
 

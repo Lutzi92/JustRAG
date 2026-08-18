@@ -555,6 +555,7 @@ export const translations = {
 
     // Footer & Legal Pages
     imprint: { de: 'Impressum', en: 'Imprint' },
+    termsOfUse: { de: 'Nutzungsbedingungen', en: 'Terms of Use' },
     privacyPolicy: { de: 'Datenschutz', en: 'Privacy Policy' },
     accessibility: { de: 'Barrierefreiheit', en: 'Accessibility' },
     backToHome: { de: 'Zurück zur Startseite', en: 'Back to Home' },
@@ -562,6 +563,7 @@ export const translations = {
         de: 'https://www.uni-giessen.de/de/ueber-uns/impressum?set_language=de',
         en: 'https://www.uni-giessen.de/en/about/imprint?set_language=en'
     },
+    termsOfUseTitle: { de: 'Nutzungsbedingungen', en: 'Terms of Use' },
     privacyPolicyTitle: { de: 'Datenschutzerklärung', en: 'Privacy Policy' },
     accessibilityTitle: { de: 'Erklärung zur Barrierefreiheit', en: 'Accessibility Statement' },
 
