@@ -61,6 +61,7 @@ Go-first RAG application with a React frontend, PostgreSQL + pgvector, Redis, an
 | 0060 | `git_repo_sources` + `files.git_repo_source_id`/`git_file_path`/`git_blob_sha` (git repository ingestion) |
 | 0064 | `kb_members` (four KB roles) + owner-mirror trigger; also **renames** `pending_kb_invites.permission` → `role` and widens its CHECK to allow `admin` |
 | 0065 | `knowledge_bases.visibility` + `auto_subscribe`, `is_global` becomes a generated column; `kb_subscriptions`, `kb_categories`, `kb_category_links` |
+| 0066 | `usage_events` (per-turn usage ledger across web / api_v1 / openai_compat / mcp) + backfill of historical web turns |
 
 **Vector tables** are dim-keyed (`document_chunks_2560`, `document_chunks_4096`, …); switching the embedder requires a re-ingest.
 
@@ -284,6 +285,23 @@ Helper: `chat.ResolveFastTierModel(ctx, reader, perTaskKey)` — the single reso
 - Data Explorer routes exist in the Go server but currently return `501`
 - the default deployment is Go-only
 - **OpenAI-compat source attribution** (not flag-gated, always on): `POST /openai/v1/chat/completions` returns retrieved chunks two ways — `message.annotations[]` (OpenAI `file_citation` shape, one per `[n]` marker occurrence, `index` is a **rune** offset because OpenAI defines it in characters and answers are mostly German) and `message.context.citations[]` (Azure "On Your Data" shape, carries the chunk bodies, so OpenWebUI-family clients read it natively). Streaming splits them: sources ride the **opening** chunk (retrieval finishes before the first token, so clients can render source cards immediately), annotations ride the **closing** chunk (offsets need the assembled text). Both keys are omitted rather than emitted empty, so clients branch on presence. `chat.ExtractCitationSpans` is the single definition of the `[n]` / `[1, 2, 5]` marker format — the citation validator and the annotation builder both read markers through it so they cannot drift. Caveat: this endpoint runs **no** citation validator, so annotations are model claims, not verified; out-of-range markers are dropped rather than left dangling. `internal/openaicompat/{citations,response}.go`.
+- **Usage ledger** (not flag-gated, always on): `usage_events` records one row per
+  **accepted** chat turn — after the KB and user resolve and the body validates,
+  before the answer — on all four answering surfaces (`web`, `api_v1`,
+  `openai_compat`, `mcp`). It exists because `internal/openaicompat` and
+  `internal/mcpserver` persisted *nothing* (only `internal/chat/store_pg.go`
+  writes chats/messages), so every message counter and every "last activity"
+  timestamp was blind to API traffic while the LLM gateway still billed for it.
+  One `usage.Recorder` writes it, called explicitly once per request from each
+  handler — fire-and-forget on a detached context, so telemetry can never fail or
+  slow a turn. Read by `internal/systemhealth` (global total + 24h, each split
+  web/API), `internal/adminkboverview` (the **Aktivität** column, which replaced
+  Nachrichten, plus `Letzte Aktivität`), and `internal/kb`'s `kbStatsCols`
+  LATERAL (home KB cards). Every FK is `ON DELETE SET NULL`, deliberately: a
+  deleted KB or user must not shrink the all-time total, which is why the global
+  total can exceed the sum of the per-KB columns. Research sessions
+  (`chats.type='research'`) are **not** counted, in either the backfill or the
+  live path. `internal/usage`; migration 0066.
 
 ## Document parsing
 
