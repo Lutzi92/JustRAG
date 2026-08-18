@@ -82,8 +82,9 @@ const kbSelectCols = `kb.id, kb.name, kb.user_id, kb.description,
        kb.system_prompt, kb.header_text, kb.example_prompts, kb.studio_config,
        kb.chunk_size, kb.chunk_overlap, kb.created_at`
 
-// kbStatsCols / kbStatsJoins add per-KB card metadata (file + message counts,
-// last activity) for the list endpoints. The aggregates run as correlated
+// kbStatsCols / kbStatsJoins add per-KB card metadata (file counts, turn
+// count + last activity from the usage_events ledger) for the list
+// endpoints. The aggregates run as correlated
 // LATERAL subqueries evaluated once per returned row (≤ limit), so no N+1 and
 // no full-table GROUP BY. Mirrors what /api/admin/kb-overview computes. The
 // outer query must alias knowledge_bases as `kb`.
@@ -91,8 +92,8 @@ const kbStatsCols = `,
        COALESCE(fs.file_count, 0)::int            AS file_count,
        COALESCE(fs.failed_file_count, 0)::int     AS failed_file_count,
        COALESCE(fs.processing_file_count, 0)::int AS processing_file_count,
-       COALESCE(ms.message_count, 0)::int         AS message_count,
-       ms.last_message_at                         AS last_message_at`
+       COALESCE(us.turn_count, 0)::int            AS turn_count,
+       us.last_activity_at                        AS last_activity_at`
 
 const kbStatsJoins = `
        LEFT JOIN LATERAL (
@@ -102,9 +103,9 @@ const kbStatsJoins = `
            FROM files f WHERE f.kb_id = kb.id
        ) fs ON true
        LEFT JOIN LATERAL (
-           SELECT COUNT(m.id) AS message_count, MAX(m.created_at) AS last_message_at
-           FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.kb_id = kb.id
-       ) ms ON true`
+           SELECT COUNT(*) AS turn_count, MAX(created_at) AS last_activity_at
+           FROM usage_events ue WHERE ue.kb_id = kb.id
+       ) us ON true`
 
 const kbSelectColsNoAlias = `id, name, user_id, description,
        (visibility = 'public') AS is_global, visibility, is_published,
@@ -166,8 +167,8 @@ type kbListRow struct {
 	FileCount           int        `db:"file_count"`
 	FailedFileCount     int        `db:"failed_file_count"`
 	ProcessingFileCount int        `db:"processing_file_count"`
-	MessageCount        int        `db:"message_count"`
-	LastMessageAt       *time.Time `db:"last_message_at"`
+	TurnCount           int        `db:"turn_count"`
+	LastActivityAt      *time.Time `db:"last_activity_at"`
 	MyRole              *string    `db:"my_role"`
 	MemberCount         int        `db:"member_count"`
 }
@@ -177,8 +178,8 @@ func toKBRowWithStats(r kbListRow) KBRow {
 	row.FileCount = r.FileCount
 	row.FailedFileCount = r.FailedFileCount
 	row.ProcessingFileCount = r.ProcessingFileCount
-	row.MessageCount = r.MessageCount
-	row.LastMessageAt = r.LastMessageAt
+	row.TurnCount = r.TurnCount
+	row.LastActivityAt = r.LastActivityAt
 	row.MyRole = r.MyRole
 	row.MemberCount = r.MemberCount
 	return row

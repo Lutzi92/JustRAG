@@ -265,8 +265,8 @@ export interface KnowledgeBase {
     fileCount?: number;
     failedFileCount?: number;
     processingFileCount?: number;
-    messageCount?: number;
-    lastMessageAt?: string | null;
+    turnCount?: number;
+    lastActivityAt?: string | null;
     // Caller's own role + total member count — returned by the same list
     // endpoints (Task 8). myRole is undefined for an implicit viewer with no
     // kb_members row (e.g. a published global KB nobody explicitly joined).

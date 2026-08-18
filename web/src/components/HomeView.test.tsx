@@ -386,6 +386,23 @@ describe('KB visibility badge', () => {
   });
 });
 
+// Task 10: the KB card's message chip and freshness line read the usage
+// ledger's turnCount/lastActivityAt now, not the old messageCount/
+// lastMessageAt pair the backend no longer sends.
+describe('KB card turn chip and freshness line', () => {
+  it('counts turns and reads lastActivityAt for the freshness line', async () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    renderHomeView({
+      kbs: [{
+        ...baseKb, id: 'kb-1', name: 'Meine KB', memberCount: 1, myRole: 'owner',
+        turnCount: 9, lastActivityAt: twoHoursAgo,
+      }],
+    });
+    expect(await screen.findByText(translations.kbMessagesChip.en.replace('{n}', '9'))).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(translations.kbLastActive.en))).toBeInTheDocument();
+  });
+});
+
 // The star on a Favoriten card is a favorites toggle and nothing else. It
 // must never drop a membership or delete chats — not for a plain subscriber
 // and not for a curator who happens to hold a kb_members row on the same

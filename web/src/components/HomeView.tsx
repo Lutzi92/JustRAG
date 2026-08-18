@@ -69,13 +69,13 @@ const LoadingFallback = () => (
 );
 
 // lastActiveLabel renders the KB-card freshness line (improvement #6): the
-// newest of lastMessageAt / createdAt as a locale-aware "Zuletzt aktiv vor …".
+// newest of lastActivityAt / createdAt as a locale-aware "Zuletzt aktiv vor …".
 function lastActiveLabel(
   kb: KnowledgeBase,
   rtf: Intl.RelativeTimeFormat,
   t: (k: string) => string,
 ): string {
-  const iso = kb.lastMessageAt || kb.createdAt;
+  const iso = kb.lastActivityAt || kb.createdAt;
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return '';
   const diffMs = then - Date.now(); // negative => past
@@ -142,7 +142,7 @@ function canManageMembers(kb: KnowledgeBase): boolean {
 function KbCardChips({ kb, t }: { kb: KnowledgeBase; t: (k: string) => string }) {
   const processing = kb.processingFileCount ?? 0;
   const files = kb.fileCount ?? 0;
-  const messages = kb.messageCount ?? 0;
+  const messages = kb.turnCount ?? 0;
   if (files === 0 && messages === 0 && processing === 0) return null;
   return (
     <div className="home-view__chip-row">
