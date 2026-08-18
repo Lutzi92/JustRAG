@@ -4,6 +4,9 @@ import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 import type { KnowledgeBase } from '../types';
 import { MembersModal } from './MembersModal';
+import { copyToClipboard } from '../utils/clipboard';
+
+vi.mock('../utils/clipboard', () => ({ copyToClipboard: vi.fn() }));
 
 // Automocks every axios method to a vi.fn() (repo convention — see
 // hooks/useSharing.test.tsx). The pre-existing tests below still use
@@ -162,7 +165,10 @@ describe('invite links tab', () => {
     vi.mocked(axios.get).mockReset();
     vi.mocked(axios.post).mockReset();
     vi.mocked(axios.delete).mockReset();
+    vi.mocked(copyToClipboard).mockReset();
     showConfirm.mockReset();
+    toastMock.success.mockReset();
+    toastMock.error.mockReset();
   });
 
   it('does not fetch invite links until the tab is opened', async () => {
@@ -272,5 +278,63 @@ describe('invite links tab', () => {
 
     expect(axios.delete).not.toHaveBeenCalled();
     expect(screen.getByText('WS26')).toBeInTheDocument();
+  });
+
+  it('copies the invite link and toasts success', async () => {
+    const user = userEvent.setup();
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith('/invite-links')) {
+        return {
+          data: {
+            links: [{
+              id: 'l1', kbId: 'kb-1', token: 'TOKEN123', role: 'view', label: 'WS26',
+              createdByName: 'prof', createdAt: '2026-08-18T10:00:00Z',
+              redemptionCount: 0, lastUsedAt: null,
+            }],
+          },
+        };
+      }
+      return { data: { members: [], pending: [] } };
+    });
+    vi.mocked(copyToClipboard).mockResolvedValue(true);
+
+    render(<MembersModal show onClose={() => {}} sharingKb={kb} myRole="owner" {...noopProps} />);
+
+    await user.click(screen.getByRole('tab', { name: /inviteLinks/i }));
+    await user.click(await screen.findByRole('button', { name: /copyToClipboard/i }));
+
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith(
+      expect.stringContaining('/join/TOKEN123'),
+    ));
+    expect(toastMock.success).toHaveBeenCalledWith('inviteLinkCopied');
+    expect(toastMock.error).not.toHaveBeenCalled();
+  });
+
+  it('toasts a failure when the clipboard copy fails', async () => {
+    const user = userEvent.setup();
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith('/invite-links')) {
+        return {
+          data: {
+            links: [{
+              id: 'l1', kbId: 'kb-1', token: 'TOKEN123', role: 'view', label: 'WS26',
+              createdByName: 'prof', createdAt: '2026-08-18T10:00:00Z',
+              redemptionCount: 0, lastUsedAt: null,
+            }],
+          },
+        };
+      }
+      return { data: { members: [], pending: [] } };
+    });
+    vi.mocked(copyToClipboard).mockResolvedValue(false);
+
+    render(<MembersModal show onClose={() => {}} sharingKb={kb} myRole="owner" {...noopProps} />);
+
+    await user.click(screen.getByRole('tab', { name: /inviteLinks/i }));
+    await user.click(await screen.findByRole('button', { name: /copyToClipboard/i }));
+
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalled());
+    expect(toastMock.error).toHaveBeenCalledWith('clipboardCopyFailed');
+    expect(toastMock.success).not.toHaveBeenCalled();
   });
 });
