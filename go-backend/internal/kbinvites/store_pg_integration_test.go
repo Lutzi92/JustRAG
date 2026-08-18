@@ -270,7 +270,14 @@ func TestRedeemUpgrades(t *testing.T) {
 	}
 }
 
-// The owner row is immutable outside the explicit transfer endpoint.
+// The owner row is immutable outside the explicit transfer endpoint. This
+// guarantee — redeeming a link never demotes an owner — genuinely holds and
+// this test genuinely proves it. What it does NOT isolate is which SQL
+// clause is doing the work: today the never-downgrade rank comparison alone
+// already refuses the write ('owner' outranks every role a link can carry),
+// so deleting the redundant `kb_members.role <> 'owner'` conjunct by itself
+// will NOT turn this test red. That is expected, not a coverage gap — see
+// the comment on that conjunct in Redeem.
 func TestRedeemLeavesOwnerUntouched(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()

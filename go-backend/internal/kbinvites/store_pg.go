@@ -157,6 +157,17 @@ func (s *PGStore) Redeem(ctx context.Context, token, userID string) (RedeemResul
 			VALUES ($1::uuid, $2::uuid, $3, NULL)
 			ON CONFLICT (kb_id, user_id) DO UPDATE
 			    SET role = EXCLUDED.role
+			    -- kb_members.role <> 'owner' is provably redundant under the
+			    -- current kbaccess.Rank order: 'owner' ranks highest (3) and
+			    -- kb_invite_links_role_check keeps link roles in
+			    -- {view,edit,admin} (ranks 0-2), so the rank comparison below
+			    -- already refuses every owner row on its own — an owner's
+			    -- rank is never less than an incoming link's rank. Kept
+			    -- anyway to state the invariant in the statement itself,
+			    -- mirroring kbmembers.SetRole's owner guard; it becomes the
+			    -- actively load-bearing clause the moment Rank is reordered
+			    -- or a role above 'owner' is admitted. Today, the rank
+			    -- comparison is what actually enforces owner-immutability.
 			    WHERE kb_members.role <> 'owner'
 			      AND (%s) < (%s)`,
 			fmt.Sprintf(roleRankSQL, "kb_members.role"),
