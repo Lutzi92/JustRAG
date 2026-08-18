@@ -151,13 +151,22 @@ func (h *Handler) SetPresetDeps(cfg SiteConfigReader, kbCfg KBConfigOverrideList
 }
 
 // readerForKB überlagert den globalen Reader mit den per-KB-Overrides.
-// Fehlschläge degradieren auf den globalen Reader statt zu erroren.
+// Fehlschläge degradieren auf den globalen Reader statt zu erroren — aber
+// NICHT unbemerkt: ein Ladefehler wird geloggt (anders als "diese KB hat
+// keine Overrides", was ein normaler, stiller Fall ist), damit ein
+// dauerhafter DB-Fehler nicht für immer unsichtbar globale Presets
+// ausliefert. Gleiches Muster wie internal/chat/kbconfig.go's forKB
+// (chat.kb_config.load_failed).
 func (h *Handler) readerForKB(ctx context.Context, kbID string) SiteConfigReader {
 	if h.siteCfg == nil || h.kbCfg == nil {
 		return h.siteCfg
 	}
 	overrides, err := h.kbCfg.ListKBOverrides(ctx, kbID)
-	if err != nil || len(overrides) == 0 {
+	if err != nil {
+		logctx.From(ctx).Warn("workspace.presets.kb_config.load_failed", "kb_id", kbID, "error", err)
+		return h.siteCfg
+	}
+	if len(overrides) == 0 {
 		return h.siteCfg
 	}
 	return siteconfig.NewKBOverlay(h.siteCfg, overrides)
@@ -175,6 +184,17 @@ func (h *Handler) readerForKB(ctx context.Context, kbID string) SiteConfigReader
 // false bei fehlendem/kaputtem Wert). Ein eigener, abweichender Vergleich
 // hier hätte die Kachel inkonsistent zu dem gemacht, was das Backend
 // tatsächlich freischaltet.
+//
+// FALLE für später: hier wird chat_compare_enabled über cfg gelesen, also
+// über readerForKB's KB-Overlay. internal/chat/http_attachment.go's
+// UploadAttachment (der eigentliche 503-Gate) ruft dagegen niemals forKB auf
+// und liest chat_compare_enabled ausschließlich vom globalen Reader. Das ist
+// heute folgenlos, NUR weil chat_compare_enabled keine kbConfigRegistry-Zeile
+// hat — das Overlay fällt für jeden Key ohne Registry-Eintrag immer auf den
+// globalen Wert zurück, die beiden Lesarten liefern also zwangsläufig
+// dasselbe. Sobald jemand chat_compare_enabled zur Registry hinzufügt (per-KB
+// überschreibbar macht), laufen Kachel-Sichtbarkeit hier und der 503-Gate in
+// UploadAttachment auseinander, ohne dass irgendein Test das bemerkt.
 func (h *Handler) GetWorkspacePresets(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	kbID := kbIDFromContext(r)

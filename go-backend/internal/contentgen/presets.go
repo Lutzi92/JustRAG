@@ -109,8 +109,16 @@ func resolvePresets(ctx context.Context, cfg SiteConfigReader, key string, def [
 		return def
 	}
 	var out []Preset
-	if err := json.Unmarshal([]byte(*raw), &out); err != nil || len(out) == 0 {
+	if err := json.Unmarshal([]byte(*raw), &out); err != nil {
 		logctx.From(ctx).Warn("workspace.presets.parse_failed", "key", key, "error", err)
+		return def
+	}
+	if len(out) == 0 {
+		// Valid JSON, but an empty list (e.g. "[]") — Validate explicitly
+		// accepts this (TestFieldJSONValidate), so it is not a parse
+		// failure and must not be logged as one. Falling back to def is
+		// still correct: an empty override would otherwise leave the
+		// dialog with no preset to pick.
 		return def
 	}
 	return out

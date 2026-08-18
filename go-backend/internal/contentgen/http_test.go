@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -462,10 +463,122 @@ func TestGetWorkspacePresetsFallsBackToDefaults(t *testing.T) {
 	if len(body.Analysis) != len(contentgen.DefaultAnalysisPresets("de")) {
 		t.Errorf("analysis = %d presets, want the %d defaults", len(body.Analysis), len(contentgen.DefaultAnalysisPresets("de")))
 	}
+	// DE and EN default lists happen to have the same length (4 and 3), so a
+	// length-only check would not catch ?lang=de being resolved as English
+	// (or vice versa). Compare an actual label too.
+	if len(body.Analysis) == 0 || body.Analysis[0].Label != contentgen.DefaultAnalysisPresets("de")[0].Label {
+		t.Errorf("analysis[0].Label = %q, want the DE default %q", firstLabel(body.Analysis), contentgen.DefaultAnalysisPresets("de")[0].Label)
+	}
 	if len(body.Comparison) == 0 {
 		t.Error("comparison presets must not be empty")
 	}
 	if body.CompareEnabled {
 		t.Error("compareEnabled must be false when no reader is wired")
+	}
+}
+
+func firstLabel(presets []contentgen.Preset) string {
+	if len(presets) == 0 {
+		return "<empty>"
+	}
+	return presets[0].Label
+}
+
+// ---------------------------------------------------------------------------
+// Tests: SetPresetDeps / readerForKB overlay wiring
+// ---------------------------------------------------------------------------
+//
+// TestGetWorkspacePresetsFallsBackToDefaults above only ever exercises the
+// handler with SetPresetDeps unset — it proves the code-default fallback,
+// not that a KB override actually reaches the response. The tests below are
+// what "mit KB-Override" in the commit message needs: a fake global reader
+// AND a fake per-KB override lister wired together via SetPresetDeps, so the
+// KBOverlayReader construction in readerForKB is on the exercised path.
+
+// fakeGlobalReader satisfies contentgen.SiteConfigReader for these tests.
+type fakeGlobalReader struct{ vals map[string]string }
+
+func (f fakeGlobalReader) GetSiteConfigValue(_ context.Context, key string) (*string, error) {
+	if v, ok := f.vals[key]; ok {
+		return &v, nil
+	}
+	return nil, nil
+}
+
+// fakeKBOverrides satisfies contentgen.KBConfigOverrideLister for these
+// tests. err, when set, simulates a failed per-KB override load.
+type fakeKBOverrides struct {
+	overrides map[string]*string
+	err       error
+}
+
+func (f fakeKBOverrides) ListKBOverrides(_ context.Context, _ string) (map[string]*string, error) {
+	return f.overrides, f.err
+}
+
+func strPtr(s string) *string { return &s }
+
+func getWorkspacePresetsAnalysisLabel(t *testing.T, h *contentgen.Handler) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/"+testKBID+"/workspace/presets?lang=de", nil)
+	req.SetPathValue("id", testKBID)
+	rec := httptest.NewRecorder()
+	h.GetWorkspacePresets(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Analysis []contentgen.Preset `json:"analysis"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Analysis) == 0 {
+		t.Fatal("analysis presets must not be empty")
+	}
+	return body.Analysis[0].Label
+}
+
+func TestGetWorkspacePresetsUsesKBOverrideOverGlobal(t *testing.T) {
+	global := fakeGlobalReader{vals: map[string]string{
+		"workspace_analysis_presets": `[{"label":"Global","prompt":"G"}]`,
+	}}
+	kbOverrides := fakeKBOverrides{overrides: map[string]*string{
+		"workspace_analysis_presets": strPtr(`[{"label":"Override","prompt":"O"}]`),
+	}}
+	h := contentgen.NewHandler(nil, nil, nil, nil, nil, nil)
+	h.SetPresetDeps(global, kbOverrides)
+
+	got := getWorkspacePresetsAnalysisLabel(t, h)
+	if got != "Override" {
+		t.Fatalf("analysis[0].Label = %q, want the KB override %q (not the global value or a code default)", got, "Override")
+	}
+}
+
+func TestGetWorkspacePresetsFallsBackToGlobalWhenKBHasNoOverride(t *testing.T) {
+	global := fakeGlobalReader{vals: map[string]string{
+		"workspace_analysis_presets": `[{"label":"Global","prompt":"G"}]`,
+	}}
+	kbOverrides := fakeKBOverrides{overrides: map[string]*string{}} // KB set nothing
+	h := contentgen.NewHandler(nil, nil, nil, nil, nil, nil)
+	h.SetPresetDeps(global, kbOverrides)
+
+	got := getWorkspacePresetsAnalysisLabel(t, h)
+	if got != "Global" {
+		t.Fatalf("analysis[0].Label = %q, want the global value %q", got, "Global")
+	}
+}
+
+func TestGetWorkspacePresetsDegradesToGlobalWhenKBOverrideLoadFails(t *testing.T) {
+	global := fakeGlobalReader{vals: map[string]string{
+		"workspace_analysis_presets": `[{"label":"Global","prompt":"G"}]`,
+	}}
+	kbOverrides := fakeKBOverrides{err: errors.New("db unreachable")}
+	h := contentgen.NewHandler(nil, nil, nil, nil, nil, nil)
+	h.SetPresetDeps(global, kbOverrides)
+
+	got := getWorkspacePresetsAnalysisLabel(t, h)
+	if got != "Global" {
+		t.Fatalf("analysis[0].Label = %q, want the global value %q (degrade on load failure)", got, "Global")
 	}
 }
