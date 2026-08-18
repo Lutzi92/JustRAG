@@ -10,6 +10,7 @@ import { useReducedMotion, getMotionProps } from './hooks/useReducedMotion';
 import { Footer } from './components/Footer';
 import { LegalPage } from './components/LegalPage';
 import { viewportHeight } from './utils/viewport';
+import { peekJoinToken } from './hooks/useJoinLink';
 
 interface LoginProps {
     onLogin: (token: string, user: { id: string; username: string; role: string }) => void;
@@ -42,6 +43,10 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
     const [providers, setProviders] = useState<PublicAuthProvider[]>([]);
     const [localAuthEnabled, setLocalAuthEnabled] = useState(false);
     const [authConfigLoaded, setAuthConfigLoaded] = useState(false);
+    // Deliberately without the KB's name: naming it would need an
+    // unauthenticated preview endpoint that hands KB names to anyone holding
+    // a token.
+    const hasPendingJoin = peekJoinToken() !== null;
 
     // The /admin path is the superadmin breakglass: it always shows the local
     // username/password form and never the SSO button.
@@ -226,6 +231,12 @@ const Login: React.FC<LoginProps> = ({ onLogin, siteConfigs }) => {
                     >
                         {error}
                     </div>
+                )}
+
+                {hasPendingJoin && (
+                    <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+                        {t('joinLinkLoginHint')}
+                    </p>
                 )}
 
                 {showPasswordForm && (

@@ -22,6 +22,7 @@ export const translations = {
     password: { de: 'Passwort', en: 'Password' },
     login: { de: 'Anmelden', en: 'Login' },
     invalidCredentials: { de: 'Ungültiger Benutzername oder Passwort', en: 'Invalid username or password' },
+    joinLinkLoginHint: { de: 'Melden Sie sich an, um der geteilten Wissensdatenbank beizutreten.', en: 'Sign in to join the shared knowledge base.' },
 
     // Accessibility
     skipToChat: { de: 'Zum Chat springen', en: 'Skip to chat' },

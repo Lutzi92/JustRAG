@@ -10,6 +10,12 @@ import { viewportHeight } from './utils/viewport';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ReloadPrompt } from './components/ReloadPrompt';
 import { useVersionCheck } from './hooks/useVersionCheck';
+import { captureJoinToken } from './hooks/useJoinLink';
+
+// Runs once at module load, before React renders anything — the token has to
+// be captured whether the user lands on the login screen or straight in the
+// app, and before the URL is used for anything else.
+captureJoinToken();
 
 // Lazy load
 const Login = lazy(() => import('./Login'));
