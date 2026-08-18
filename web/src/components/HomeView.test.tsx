@@ -399,7 +399,13 @@ describe('KB card turn chip and freshness line', () => {
       }],
     });
     expect(await screen.findByText(translations.kbMessagesChip.en.replace('{n}', '9'))).toBeInTheDocument();
-    expect(screen.getByText(new RegExp(translations.kbLastActive.en))).toBeInTheDocument();
+    // Assert the relative-time UNIT, not just the constant "Last active"
+    // prefix: lastActiveLabel falls back to kb.createdAt (fixed at
+    // baseKb's 2026-01-01, i.e. many months before "now") whenever
+    // lastActivityAt isn't read, which would still satisfy a prefix-only
+    // match. The fixture's lastActivityAt is 2 hours ago, so only the
+    // real read renders an "hour" unit — the fallback renders "day(s)".
+    expect(screen.getByText(new RegExp(`${translations.kbLastActive.en}.*hour`, 'i'))).toBeInTheDocument();
   });
 });
 
