@@ -57,6 +57,7 @@ func BuildTeamParams(ctx context.Context, in TeamParamsInput) TeamParams {
 	} else if in.Agent != nil {
 		p.Members = []agentteams.AgentRecord{*in.Agent}
 	}
+	// Tools only when the deployment's MCP layer is wired + gated on.
 	if in.ToolDispatcher != nil && ChatUseMCPTools(ctx, in.SiteCfg) {
 		p.ToolDispatcher = in.ToolDispatcher
 	}

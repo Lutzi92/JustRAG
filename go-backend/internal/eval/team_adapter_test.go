@@ -59,6 +59,47 @@ func TestTeamAdapterDispatchesEveryQuestionThroughTeam(t *testing.T) {
 	}
 }
 
+// TestTeamAdapterPreservesToolAndHyPEDefaults is the FIX round-1 #2
+// regression test: chat.BuildTeamParams derives HyPESearch/ToolMaxRounds/
+// AllowPrivilegedTools from SiteCfg (matching the chat send path), but the
+// eval path never wired any of the three pre-extraction — Search resets all
+// three back to their old zero values right after the BuildTeamParams call
+// (see the comment in team_adapter.go). This test pins that reset. SiteCfg
+// is deliberately configured to flip both readable flags to true, so a
+// deleted reset line is visible here — with an empty/nil SiteCfg both
+// readers already default to false and the assertion would pass either way,
+// hiding a dropped reset.
+func TestTeamAdapterPreservesToolAndHyPEDefaults(t *testing.T) {
+	teamLoader := &fakeTeamLoader{
+		tfc: &agentteams.TeamForChat{
+			Team:    agentteams.TeamRecord{ID: "t1"},
+			Members: []agentteams.AgentRecord{{ID: "a1"}},
+		},
+	}
+	siteCfg := &stubSiteCfg{values: map[string]string{
+		"hype_search_enabled":           "true",
+		"agents_allow_privileged_tools": "true",
+	}}
+	a := NewTeamDispatchAdapter(nil, nil, siteCfg, teamLoader, "t1", func(context.Context, string) string { return "" })
+	var captured chat.TeamParams
+	a.runTeam = func(_ context.Context, params chat.TeamParams) (*chat.ChatContext, error) {
+		captured = params
+		return &chat.ChatContext{}, nil
+	}
+	if _, err := a.Search(context.Background(), Question{ID: "q1", KbID: "kb1"}, 4); err != nil {
+		t.Fatal(err)
+	}
+	if captured.HyPESearch {
+		t.Error("HyPESearch must stay false on the eval path even when SiteCfg enables it — eval never wired HyPE search pre-extraction")
+	}
+	if captured.ToolMaxRounds != 0 {
+		t.Errorf("ToolMaxRounds = %d, want 0 — eval has no ToolDispatcher and never budgeted tool rounds pre-extraction", captured.ToolMaxRounds)
+	}
+	if captured.AllowPrivilegedTools {
+		t.Error("AllowPrivilegedTools must stay false on the eval path even when SiteCfg enables it")
+	}
+}
+
 // TestTeamAdapterCachesChatContextForJudge verifies the judge-mode surface:
 // after a successful Search, ChatContextForQuestion serves the exact
 // ChatContext RunTeamChat produced (SystemPrompt + Context + sandwich-order
