@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ type mockStore struct {
 	totalStorage    int64
 	totalUsers      int
 	historicalData  []systemhealth.HistoricalPoint
+	turnCounts      systemhealth.TurnCounts
 }
 
 func (m *mockStore) GetActiveUsersCount(_ context.Context) (int, error) {
@@ -45,6 +47,9 @@ func (m *mockStore) GetTotalUsersCount(_ context.Context) (int, error) {
 }
 func (m *mockStore) GetHistoricalMetrics(_ context.Context, _ string, _, _ time.Time) ([]systemhealth.HistoricalPoint, error) {
 	return m.historicalData, nil
+}
+func (m *mockStore) GetTurnCounts(_ context.Context) (systemhealth.TurnCounts, error) {
+	return m.turnCounts, nil
 }
 
 // noConfigStore implements ai.ConfigStore with no active providers.
@@ -122,6 +127,40 @@ func TestGetLiveMetrics_Returns200WithCorrectValues(t *testing.T) {
 	}
 	if body.SubsystemHealth == nil {
 		t.Error("expected SubsystemHealth to be present")
+	}
+}
+
+// TestLiveMetrics_ExposesTurnCounts pins the four usage numbers, including the
+// web/API split that answers "is the API traffic significant?".
+func TestLiveMetrics_ExposesTurnCounts(t *testing.T) {
+	store := &mockStore{}
+	store.turnCounts = systemhealth.TurnCounts{Total: 1000, TotalAPI: 250, Day: 40, DayAPI: 30}
+
+	svc := systemhealth.NewService(store, nil, nil, nil, nil, false)
+	got, err := svc.GetLiveMetrics(context.Background())
+	if err != nil {
+		t.Fatalf("GetLiveMetrics: %v", err)
+	}
+	if got.TotalMessages != 1000 || got.TotalMessagesAPI != 250 {
+		t.Errorf("totals: got %d/%d, want 1000/250", got.TotalMessages, got.TotalMessagesAPI)
+	}
+	if got.Messages24h != 40 || got.Messages24hAPI != 30 {
+		t.Errorf("24h: got %d/%d, want 40/30", got.Messages24h, got.Messages24hAPI)
+	}
+}
+
+// TestLiveMetrics_JSONKeys pins the wire names the frontend reads.
+func TestLiveMetrics_JSONKeys(t *testing.T) {
+	blob, err := json.Marshal(systemhealth.LiveMetrics{
+		TotalMessages: 7, TotalMessagesAPI: 3, Messages24h: 2, Messages24hAPI: 1,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, key := range []string{`"totalMessages":7`, `"totalMessagesApi":3`, `"messages24h":2`, `"messages24hApi":1`} {
+		if !strings.Contains(string(blob), key) {
+			t.Errorf("payload missing %s\ngot: %s", key, blob)
+		}
 	}
 }
 

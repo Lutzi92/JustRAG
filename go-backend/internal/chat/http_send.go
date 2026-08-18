@@ -22,6 +22,7 @@ import (
 	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/siteconfig"
+	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -205,6 +206,21 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	chatID, ok := h.resolveOrCreateChat(ctx, w, body.ChatID, kbID, user.ID, body.Message)
 	if !ok {
 		return
+	}
+
+	// Usage ledger: one row per accepted turn. Placed after maybeRouteKB so the
+	// event names the KB actually answered from, after parseAndValidateMessage
+	// so a malformed body records nothing, and after resolveOrCreateChat so a
+	// chatId the caller does not own (403) records nothing either — aligning
+	// web with publicapi, which runs the identical ownership check and already
+	// records after it.
+	if h.usageRecorder != nil {
+		h.usageRecorder.Record(ctx, usage.Event{
+			KbID:     kbID,
+			UserID:   user.ID,
+			APIKeyID: auth.APIKeyIDFromContext(ctx),
+			Surface:  usage.SurfaceWeb,
+		})
 	}
 
 	lang := body.Language

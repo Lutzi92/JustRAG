@@ -3,8 +3,11 @@ package publicapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +15,8 @@ import (
 	"github.com/justrag/go-backend/internal/chat"
 	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/publicapi"
+	"github.com/justrag/go-backend/internal/usage"
+	"github.com/justrag/go-backend/internal/vector"
 )
 
 // ---------------------------------------------------------------------------
@@ -316,5 +321,115 @@ func TestGetMessages_ChatNotFound_404(t *testing.T) {
 
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for missing chat, got %d", rr.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Usage ledger (Task 5): one usage_events row per accepted /api/v1 turn.
+// ---------------------------------------------------------------------------
+
+// fakeUsageRecorder captures usage events for assertions.
+type fakeUsageRecorder struct {
+	mu     sync.Mutex
+	events []usage.Event
+}
+
+func (f *fakeUsageRecorder) Record(_ context.Context, e usage.Event) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, e)
+}
+
+func (f *fakeUsageRecorder) snapshot() []usage.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]usage.Event(nil), f.events...)
+}
+
+// erroringSearcher implements vector.Searcher and always fails Search, so a
+// turn that reaches chat.PrepareChatContext is ACCEPTED (auth + KB access +
+// chat resolution all succeeded) but then fails downstream — exactly the
+// case the usage ledger is defined to still count.
+type erroringSearcher struct{}
+
+func (erroringSearcher) Search(_ context.Context, _, _ string, _ int, _ vector.SearchOptions) (*vector.SearchResult, error) {
+	return nil, errors.New("search backend unavailable")
+}
+
+func (erroringSearcher) ExpandNeighbors(_ context.Context, chunks []vector.SearchChunk, _ int, _, _ string) []vector.SearchChunk {
+	return chunks
+}
+
+var _ vector.Searcher = erroringSearcher{}
+
+// TestSendMessage_RecordsOneAPIv1UsageEvent pins the property the whole
+// design rests on: an ACCEPTED /api/v1 turn (valid body, KB access, chat
+// resolved) writes exactly one usage event, tagged api_v1, carrying the
+// authenticating API key id — even though the turn then fails.
+//
+// Why assert on a failing turn: usage.Event's package doc defines a turn as
+// counted the moment it is ACCEPTED, before the answer is produced, so the
+// numbers are comparable with the LLM gateway's own usage view — a turn that
+// fails downstream (here: chat.PrepareChatContext's search call, via
+// erroringSearcher) still spent model budget getting there. The Record call
+// sits after chat resolution but before PrepareChatContext, so this test
+// drives a genuinely accepted turn through the real handler without needing
+// a live AI backend.
+func TestSendMessage_RecordsOneAPIv1UsageEvent(t *testing.T) {
+	rec := &fakeUsageRecorder{}
+	chatRow := makeChat("chat-1", "kb-1", "user-1")
+	store := &mockStore{chatRow: &chatRow}
+	h := publicapi.NewHandler(store, nil, erroringSearcher{})
+	h.SetUsageRecorder(rec)
+
+	keyID := "22222222-2222-2222-2222-222222222222"
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/kb/kb-1/chat", strings.NewReader(`{"message":"hallo"}`))
+	req.SetPathValue("id", "kb-1")
+	ctx := auth.WithUser(req.Context(), &auth.Claims{ID: "user-1", Username: "u", Role: "user"})
+	ctx = auth.WithAPIKeyID(ctx, keyID)
+	rr := httptest.NewRecorder()
+	h.SendMessage(rr, req.WithContext(ctx))
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 (proving the turn failed after being accepted), got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	events := rec.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("usage events: got %d, want 1", len(events))
+	}
+	if events[0].Surface != usage.SurfaceAPIv1 {
+		t.Errorf("surface: got %q, want api_v1", events[0].Surface)
+	}
+	if events[0].APIKeyID == nil || *events[0].APIKeyID != keyID {
+		t.Errorf("api key id: got %v, want %s", events[0].APIKeyID, keyID)
+	}
+	if events[0].KbID != "kb-1" {
+		t.Errorf("kb_id: got %q, want %q", events[0].KbID, "kb-1")
+	}
+	if events[0].UserID != "user-1" {
+		t.Errorf("user_id: got %q, want %q", events[0].UserID, "user-1")
+	}
+}
+
+// TestSendMessage_UnauthenticatedRecordsNothing pins that a request rejected
+// before the Record call (no auth claims → 401) records nothing. This is the
+// guard that fails if anyone hoists the Record call above the auth check.
+func TestSendMessage_UnauthenticatedRecordsNothing(t *testing.T) {
+	rec := &fakeUsageRecorder{}
+	store := &mockStore{}
+	h := publicapi.NewHandler(store, nil, erroringSearcher{})
+	h.SetUsageRecorder(rec)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/kb/kb-1/chat", strings.NewReader(`{"message":"hallo"}`))
+	req.SetPathValue("id", "kb-1")
+	rr := httptest.NewRecorder()
+	h.SendMessage(rr, req) // no auth.WithUser on context
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+	if got := len(rec.snapshot()); got != 0 {
+		t.Errorf("usage events without auth: got %d, want 0", got)
 	}
 }

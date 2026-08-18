@@ -19,6 +19,7 @@ import (
 	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/research"
+	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -60,16 +61,19 @@ type ResearchStore interface {
 type Handler struct {
 	store         Store
 	aiResolver    *ai.ConfigResolver
-	searchService *vector.SearchService
+	searchService vector.Searcher
 
 	// Optional research dependencies — set via SetResearchDeps.
 	researchStore ResearchStore
 	redis         *redis.Client
+
+	// usageRecorder writes one usage_events row per accepted turn. Optional.
+	usageRecorder usage.Recorder
 }
 
 // NewHandler creates a Handler backed by the given store, AI resolver, and
 // search service.
-func NewHandler(store Store, aiResolver *ai.ConfigResolver, searchSvc *vector.SearchService) *Handler {
+func NewHandler(store Store, aiResolver *ai.ConfigResolver, searchSvc vector.Searcher) *Handler {
 	return &Handler{
 		store:         store,
 		aiResolver:    aiResolver,
@@ -82,6 +86,12 @@ func NewHandler(store Store, aiResolver *ai.ConfigResolver, searchSvc *vector.Se
 func (h *Handler) SetResearchDeps(rs ResearchStore, rdb *redis.Client) {
 	h.researchStore = rs
 	h.redis = rdb
+}
+
+// SetUsageRecorder injects the usage ledger. Optional — when unset, turns on
+// this surface are not counted.
+func (h *Handler) SetUsageRecorder(r usage.Recorder) {
+	h.usageRecorder = r
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +360,17 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		chatID = newChat.ID
+	}
+
+	// Usage ledger: one row per accepted turn (internal/usage). Placed after
+	// auth, KB access and chat resolution, so rejected requests record nothing.
+	if h.usageRecorder != nil {
+		h.usageRecorder.Record(ctx, usage.Event{
+			KbID:     kbID,
+			UserID:   user.ID,
+			APIKeyID: auth.APIKeyIDFromContext(ctx),
+			Surface:  usage.SurfaceAPIv1,
+		})
 	}
 
 	// ------------------------------------------------------------------

@@ -56,8 +56,8 @@ type KBRow struct {
 	FileCount           int        `json:"fileCount"`
 	FailedFileCount     int        `json:"failedFileCount"`
 	ProcessingFileCount int        `json:"processingFileCount"`
-	MessageCount        int        `json:"messageCount"`
-	LastMessageAt       *time.Time `json:"lastMessageAt,omitempty"`
+	TurnCount           int        `json:"turnCount"`
+	LastActivityAt      *time.Time `json:"lastActivityAt,omitempty"`
 
 	// MyRole is the caller's own kb_members.role for this KB, and MemberCount
 	// the KB's total member count — populated only by the same two list

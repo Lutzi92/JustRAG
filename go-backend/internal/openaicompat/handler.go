@@ -23,6 +23,7 @@ import (
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/observability"
+	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -47,17 +48,26 @@ type Store interface {
 type Handler struct {
 	store         Store
 	aiResolver    *ai.ConfigResolver
-	searchService *vector.SearchService
+	searchService vector.Searcher
+
+	// usageRecorder writes one usage_events row per accepted turn. Optional.
+	usageRecorder usage.Recorder
 }
 
 // NewHandler creates a Handler backed by the given store, AI resolver, and
 // search service.
-func NewHandler(store Store, aiResolver *ai.ConfigResolver, searchSvc *vector.SearchService) *Handler {
+func NewHandler(store Store, aiResolver *ai.ConfigResolver, searchSvc vector.Searcher) *Handler {
 	return &Handler{
 		store:         store,
 		aiResolver:    aiResolver,
 		searchService: searchSvc,
 	}
+}
+
+// SetUsageRecorder injects the usage ledger. Optional — when unset, turns on
+// this surface are not counted.
+func (h *Handler) SetUsageRecorder(r usage.Recorder) {
+	h.usageRecorder = r
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +395,21 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if lastUserMessage == "" {
 		writeAPIError(ctx, w, http.StatusBadRequest, "messages must contain at least one user message")
 		return
+	}
+
+	// Usage ledger (internal/usage). This surface persisted NOTHING before —
+	// no chat, no message, only an OTel span — which is why API traffic was
+	// invisible to every counter and "last activity" timestamp. Recorded here,
+	// after the last-user-message validation, so a body whose messages
+	// contain only system/assistant entries (rejected above) records nothing —
+	// only a genuinely ACCEPTED turn counts.
+	if h.usageRecorder != nil {
+		h.usageRecorder.Record(ctx, usage.Event{
+			KbID:     kbID,
+			UserID:   user.ID,
+			APIKeyID: auth.APIKeyIDFromContext(ctx),
+			Surface:  usage.SurfaceOpenAICompat,
+		})
 	}
 
 	// ------------------------------------------------------------------

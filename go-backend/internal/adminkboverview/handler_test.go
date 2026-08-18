@@ -15,8 +15,8 @@ func TestOverviewHandler_ReturnsJSONShape(t *testing.T) {
 		fileMap: map[string]FileStats{
 			"kb-1": {FileCount: 3, TotalSizeBytes: 1024},
 		},
-		msgMap: map[string]MessageStats{
-			"kb-1": {MessageCount: 9, ChatCount: 2},
+		chatMap: map[string]ChatStats{
+			"kb-1": {ChatCount: 2},
 		},
 	}
 	insp := &fakeInspector{info: map[string]*asynq.QueueInfo{
@@ -36,7 +36,7 @@ func TestOverviewHandler_ReturnsJSONShape(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("response is not valid JSON: %v", err)
 	}
-	if len(resp.Rows) != 1 || resp.Rows[0].FileCount != 3 || resp.Rows[0].MessageCount != 9 {
+	if len(resp.Rows) != 1 || resp.Rows[0].FileCount != 3 || resp.Rows[0].ChatCount != 2 {
 		t.Errorf("row payload wrong: %+v", resp.Rows)
 	}
 	if resp.QueueSummary["rag-quick"].Waiting != 1 {

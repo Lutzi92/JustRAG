@@ -332,3 +332,64 @@ func TestUpsertAndListPendingInvites_UseRoleColumn(t *testing.T) {
 		t.Fatalf("permission (role column) after update = %q, want %q", invites[0].Permission, "view")
 	}
 }
+
+// TestListKnowledgeBases_TurnStatsFromUsageLedger pins that the KB-card
+// aggregate reads usage_events, not messages — the cards were blind to API
+// traffic while they counted message rows.
+func TestListKnowledgeBases_TurnStatsFromUsageLedger(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	userID := insertUser(t, pool, "kbcards-usage")
+
+	var kbID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO knowledge_bases (name, user_id) VALUES ('cards-usage', $1::uuid)
+		RETURNING id::text`, userID).Scan(&kbID); err != nil {
+		t.Fatalf("insert kb: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM usage_events WHERE kb_id = $1::uuid`, kbID)      //nolint:errcheck
+		pool.Exec(ctx, `DELETE FROM knowledge_bases WHERE id = $1::uuid`, kbID)      //nolint:errcheck
+	})
+
+	// ListKnowledgeBases selects purely on kb_members since migration 0064
+	// (see TestListKnowledgeBases_ExcludesGlobalKBsWithMembership above); a
+	// raw INSERT INTO knowledge_bases does not get one for free the way
+	// CreateKnowledgeBase's transaction does, so without this row the query
+	// returns nothing for this KB and the test fails on "KB not returned"
+	// regardless of the ledger read this test actually targets.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1::uuid, $2::uuid, 'owner')`,
+		kbID, userID); err != nil {
+		t.Fatalf("insert kb_members owner row: %v", err)
+	}
+
+	// One web turn and one MCP turn: the card counts both.
+	for _, surface := range []string{"web", "mcp"} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO usage_events (kb_id, user_id, surface) VALUES ($1::uuid, $2::uuid, $3)`,
+			kbID, userID, surface); err != nil {
+			t.Fatalf("insert usage event: %v", err)
+		}
+	}
+
+	rows, err := kb.NewStore(pool).ListKnowledgeBases(ctx, userID, 50, 0)
+	if err != nil {
+		t.Fatalf("ListKnowledgeBases: %v", err)
+	}
+	var found *kb.KBRow
+	for i := range rows {
+		if rows[i].ID == kbID {
+			found = &rows[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("KB not returned")
+	}
+	if found.TurnCount != 2 {
+		t.Errorf("turn count: got %d, want 2 (one web + one mcp)", found.TurnCount)
+	}
+	if found.LastActivityAt == nil {
+		t.Error("lastActivityAt must be set once the KB has usage")
+	}
+}

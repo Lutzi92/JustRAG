@@ -10,6 +10,38 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## Unreleased
+
+<!-- Not a git-cliff section (every other heading below is a released, tagged
+     version). This one exists because the usage-events work landed its
+     hand-written upgrade notes before a release was cut. When cutting the
+     next release, `git cliff --unreleased --tag vX.Y.Z --prepend` will insert
+     the generated "## vX.Y.Z — <date>" section ABOVE this one — fold this
+     block's content into that new section's "### ⚠ Upgrade notes" and delete
+     this heading rather than leaving both. -->
+
+### ⚠ Upgrade notes
+
+- **Migration 0066** adds `usage_events` and backfills it from message history.
+  The backfill scans `messages` in one statement; on a large corpus expect the
+  migrate step to take proportionally longer than usual.
+- **Message counts drop by roughly half** on the home KB cards and in the admin
+  KB overview. They previously counted `COUNT(messages)` — user *and* AI rows —
+  so a 4-turn chat read as 8. They now count turns. No data was lost.
+- **Historical `/api/v1` traffic is attributed to `web`.** `messages` carries
+  nothing that separates the two surfaces, so the backfill cannot distinguish
+  them. Attribution is exact from this release onward. Historical OpenAI-compat
+  and MCP traffic cannot be recovered at all — it was never persisted.
+- `GET /api/admin/kb-overview` no longer returns `messageCount`; it returns
+  `webTurns`, `apiTurns` and `lastTurnAt`.
+- The KB list endpoints — including **`GET /api/v1/kb`**, the key-authenticated
+  external surface external scripts pin — return `turnCount` / `lastActivityAt`
+  instead of `messageCount` / `lastMessageAt`.
+- **Research sessions (`chats.type='research'`) are not counted**, in either
+  the migration 0066 backfill or the live recording path. An operator
+  reconciling spend against the LLM gateway's own usage view should expect
+  LLM-heavy research runs to be absent from this ledger.
+
 ## v0.8.0 — 2026-08-17
 
 ### ⚠ Upgrade notes

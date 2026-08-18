@@ -80,6 +80,7 @@ import (
 	"github.com/justrag/go-backend/internal/sserelay"
 	"github.com/justrag/go-backend/internal/systemhealth"
 	"github.com/justrag/go-backend/internal/tabular"
+	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/users"
 	"github.com/justrag/go-backend/internal/vector"
 	"github.com/justrag/go-backend/internal/websearch"
@@ -1016,6 +1017,7 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 			store: builtin.NewPgxRecentDocsStore(rc.infra.db.Main),
 		}),
 		chat.WithTeamLoader(rc.agentTeamsStore),
+		chat.WithUsageRecorder(usage.NewRecorder(rc.infra.db.Main)),
 	}
 	if rc.agentDecisionStore != nil {
 		chatOpts = append(chatOpts, chat.WithDecisionRecorder(&decisionRecorderAdapter{store: rc.agentDecisionStore}))
@@ -1224,12 +1226,14 @@ func registerResearchRoutes(rc *routeCtx, researchRL *middleware.RedisRateLimite
 func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 	apiKeyAuth := apikeyauth.NewMiddleware(apikeyauth.NewStore(rc.infra.db.Main))
 	openaiHandler := openaicompat.NewHandler(&openaiDeps{PGStore: rc.kbStore, kbAccessStore: rc.kbAccessStore}, rc.aiResolver, rc.searchService)
+	openaiHandler.SetUsageRecorder(usage.NewRecorder(rc.infra.db.Main))
 
 	rc.mux.Handle("GET /openai/v1/models", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(openaiHandler.ListModels))))
 	rc.mux.Handle("POST /openai/v1/chat/completions", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(openaiHandler.ChatCompletions))))
 
 	publicHandler := publicapi.NewHandler(&publicAPIDeps{PGStore: rc.chatStore, kbStore: rc.kbStore}, rc.aiResolver, rc.searchService)
 	publicHandler.SetResearchDeps(rc.chatStore, rc.infra.rdb.Client)
+	publicHandler.SetUsageRecorder(usage.NewRecorder(rc.infra.db.Main))
 
 	rc.mux.Handle("GET /api/v1/kb", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(publicHandler.ListKBs))))
 	rc.mux.Handle("GET /api/v1/kb/{id}/chats", apiRL.Middleware(apiKeyAuth.Authenticate(
@@ -1247,6 +1251,7 @@ func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 	// chain as the public chat endpoint.
 	mcpAnswerer := mcpserver.NewPipelineAnswerer(rc.aiResolver, rc.searchService, rc.chatStore, rc.chatStore)
 	mcpKBHandler := mcpserver.NewHandler(mcpAnswerer, rc.chatStore)
+	mcpKBHandler.SetUsageRecorder(usage.NewRecorder(rc.infra.db.Main))
 	rc.mux.Handle("POST /api/v1/kb/{id}/mcp", apiRL.Middleware(apiKeyAuth.Authenticate(
 		rc.kbMw.RequireKBRole(kbaccess.RoleView)(http.HandlerFunc(mcpKBHandler.ServeHTTP)))))
 }

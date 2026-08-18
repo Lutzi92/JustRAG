@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/auth"
+	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -314,5 +317,175 @@ func TestDeepChat_SiteConfigReaderPropagates(t *testing.T) {
 	// Confirm the gate evaluates to false through the same field tryDeepChat uses.
 	if FactcheckEnabled(context.Background(), h.siteConfigReader) {
 		t.Error("expected FactcheckEnabled(h.siteConfigReader) to return false in tryDeepChat context")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Usage ledger (Task 4): one usage_events row per accepted web turn.
+//
+// The Record call sits after resolveOrCreateChat (so a non-owned chatId,
+// which resolveOrCreateChat 403s on, is not counted) and before the RAG
+// pipeline. To reach it without a live AI backend, TestSendMessage_
+// AcceptedTurnRecordsOneUsageEventEvenOnLaterFailure drives a genuinely
+// ACCEPTED turn (valid body, new chat created) through to
+// PrepareChatContext's search call via an erroringSearcher — mirroring
+// publicapi's and openaicompat's identical pattern (see
+// internal/publicapi/handler_test.go's erroringSearcher). The rest of the
+// pipeline between resolveOrCreateChat and PrepareChatContext (classifyQuery,
+// resolveGraphRouting, resolveTeamSelection, assembleSystemPrompt) is
+// nil-safe against the harness's nil aiResolver/siteConfigReader/kgStore/
+// teamLoader for a short, marker-free message like "hello", so this reaches
+// the real failure point without panicking.
+// ---------------------------------------------------------------------------
+
+// fakeUsageRecorder captures usage events for assertions.
+type fakeUsageRecorder struct {
+	mu     sync.Mutex
+	events []usage.Event
+}
+
+func (f *fakeUsageRecorder) Record(_ context.Context, e usage.Event) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, e)
+}
+
+func (f *fakeUsageRecorder) snapshot() []usage.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]usage.Event(nil), f.events...)
+}
+
+// erroringSearcher implements vector.Searcher and always fails Search, so a
+// turn that reaches PrepareChatContext is ACCEPTED (validated, KB resolved,
+// chat resolved) but then fails downstream — exactly the case the usage
+// ledger is defined to still count. Mirrors publicapi's and openaicompat's
+// erroringSearcher; none of the three packages share a test-support package,
+// so it is duplicated here.
+type erroringSearcher struct{}
+
+func (erroringSearcher) Search(_ context.Context, _, _ string, _ int, _ vector.SearchOptions) (*vector.SearchResult, error) {
+	return nil, errors.New("search backend unavailable")
+}
+
+func (erroringSearcher) ExpandNeighbors(_ context.Context, chunks []vector.SearchChunk, _ int, _, _ string) []vector.SearchChunk {
+	return chunks
+}
+
+var _ vector.Searcher = erroringSearcher{}
+
+// TestSendMessage_AcceptedTurnRecordsOneUsageEventEvenOnLaterFailure pins the
+// property the whole design rests on: a turn that is ACCEPTED (valid body,
+// KB resolved, chat resolved) writes exactly one usage event, tagged web,
+// with no API key — even when the turn subsequently fails for an unrelated
+// reason.
+//
+// Why assert on a failing turn: usage.Event's package doc defines a turn as
+// counted the moment it is ACCEPTED, before the answer is produced, "so the
+// numbers are comparable with the LLM gateway's own usage view" — a turn
+// that fails downstream (here: PrepareChatContext's search call, via
+// erroringSearcher) still spent model budget getting there. The Record call
+// sits after resolveOrCreateChat but before PrepareChatContext, so this test
+// drives a genuinely accepted turn through the real handler without needing
+// a live AI backend.
+func TestSendMessage_AcceptedTurnRecordsOneUsageEventEvenOnLaterFailure(t *testing.T) {
+	rec := &fakeUsageRecorder{}
+	h := &Handler{
+		store:         newMockStore(),
+		aiResolver:    nil,
+		searchService: erroringSearcher{},
+		usageRecorder: rec,
+	}
+
+	body := `{"message": "hello"}`
+	r := httptest.NewRequest(http.MethodPost, "/api/kb/kb1/chat", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = injectUser(r, "user1")
+	r.SetPathValue("id", "kb1")
+
+	w := httptest.NewRecorder()
+	h.SendMessage(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 (proving the turn failed after being accepted), got %d: %s", w.Code, w.Body.String())
+	}
+
+	events := rec.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("usage events: got %d, want 1", len(events))
+	}
+	if events[0].Surface != usage.SurfaceWeb {
+		t.Errorf("surface: got %q, want web", events[0].Surface)
+	}
+	if events[0].APIKeyID != nil {
+		t.Errorf("api key id: got %q, want nil for a web turn", *events[0].APIKeyID)
+	}
+	if events[0].KbID != "kb1" {
+		t.Errorf("kb_id: got %q, want %q", events[0].KbID, "kb1")
+	}
+	if events[0].UserID != "user1" {
+		t.Errorf("user_id: got %q, want %q", events[0].UserID, "user1")
+	}
+}
+
+// TestSendMessage_RejectedBodyRecordsNoUsageEvent pins that validation failures
+// are not counted — if someone moves the Record call above
+// parseAndValidateMessage, this goes red.
+func TestSendMessage_RejectedBodyRecordsNoUsageEvent(t *testing.T) {
+	rec := &fakeUsageRecorder{}
+	h := &Handler{
+		store:         newMockStore(),
+		aiResolver:    nil,
+		searchService: nil,
+		usageRecorder: rec,
+	}
+
+	body := `{"message": ""}`
+	r := httptest.NewRequest(http.MethodPost, "/api/kb/kb1/chat", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = injectUser(r, "user1")
+	r.SetPathValue("id", "kb1")
+
+	w := httptest.NewRecorder()
+	h.SendMessage(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	if got := len(rec.snapshot()); got != 0 {
+		t.Errorf("usage events on a rejected request: got %d, want 0", got)
+	}
+}
+
+// TestSendMessage_NonOwnedChatIDRecordsNoUsageEvent pins that a chatId the
+// caller does not own — resolveOrCreateChat 403s ("access denied") — records
+// nothing. This is the guard for the Record call's placement AFTER
+// resolveOrCreateChat: moving it back above resolveOrCreateChat makes this
+// go red.
+func TestSendMessage_NonOwnedChatIDRecordsNoUsageEvent(t *testing.T) {
+	rec := &fakeUsageRecorder{}
+	store := newMockStore()
+	store.chats["chat-1"] = &ChatRow{ID: "chat-1", KbID: "kb1", UserID: "someone-else"}
+	h := &Handler{
+		store:         store,
+		aiResolver:    nil,
+		searchService: erroringSearcher{},
+		usageRecorder: rec,
+	}
+
+	body := `{"message": "hello", "chatId": "chat-1"}`
+	r := httptest.NewRequest(http.MethodPost, "/api/kb/kb1/chat", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = injectUser(r, "user1")
+	r.SetPathValue("id", "kb1")
+
+	w := httptest.NewRecorder()
+	h.SendMessage(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := len(rec.snapshot()); got != 0 {
+		t.Errorf("usage events on a non-owned chatId: got %d, want 0", got)
 	}
 }

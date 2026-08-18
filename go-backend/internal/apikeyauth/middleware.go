@@ -144,6 +144,10 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 			Role:     user.Role,
 		}
 		ctx = auth.WithUser(ctx, claims)
+		// Expose the authenticating key so downstream handlers can attribute a
+		// usage_events row to it (internal/usage). Without this the key id never
+		// leaves this middleware.
+		ctx = auth.WithAPIKeyID(ctx, matched.ID)
 		// Expose the resolved user ID to the outer access-log middleware
 		// — see logctx.UserIDCapture and the JWT-auth equivalent.
 		logctx.SetCapturedUserID(ctx, user.ID)

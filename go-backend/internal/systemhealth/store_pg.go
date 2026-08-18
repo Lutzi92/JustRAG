@@ -71,6 +71,21 @@ func (s *PGStore) GetTotalUsersCount(ctx context.Context) (int, error) {
 	return count, err
 }
 
+// GetTurnCounts returns the usage-ledger aggregates in one pass. surface <> 'web'
+// is the API share: /api/v1, the OpenAI-compatible endpoint, and KB-as-MCP.
+func (s *PGStore) GetTurnCounts(ctx context.Context) (TurnCounts, error) {
+	const sql = `
+		SELECT COUNT(*)::int                                                  AS total,
+		       COUNT(*) FILTER (WHERE surface <> 'web')::int                   AS total_api,
+		       COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours')::int AS day,
+		       COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours'
+		                          AND surface <> 'web')::int                   AS day_api
+		FROM usage_events`
+	var c TurnCounts
+	err := s.pool.QueryRow(ctx, sql).Scan(&c.Total, &c.TotalAPI, &c.Day, &c.DayAPI)
+	return c, err
+}
+
 // historicalPoint is an internal struct with db tags for scanning system_metrics.
 type historicalPoint struct {
 	Timestamp string  `db:"timestamp"`

@@ -89,35 +89,64 @@ func (s *PGStore) FileStatsByKB(ctx context.Context) (map[string]FileStats, erro
 	return out, nil
 }
 
-// msgStatRow scans the message/chat aggregate.
-type msgStatRow struct {
-	KbID          string  `db:"kb_id"`
-	MessageCount  int     `db:"message_count"`
-	ChatCount     int     `db:"chat_count"`
-	LastMessageAt *string `db:"last_message_at"`
+// chatStatRow scans the chat aggregate.
+type chatStatRow struct {
+	KbID      string `db:"kb_id"`
+	ChatCount int    `db:"chat_count"`
 }
 
-// MessageStatsByKB returns per-KB message + chat aggregates keyed by kb_id (text).
-func (s *PGStore) MessageStatsByKB(ctx context.Context) (map[string]MessageStats, error) {
+// ChatStatsByKB returns the per-KB chat count keyed by kb_id (text).
+//
+// Deliberately still COUNT(DISTINCT m.chat_id) over messages, not COUNT(*) over
+// chats: that preserves the column's existing meaning ("chats that actually have
+// a message"). Switching it to count empty chats too would silently change a
+// number nobody asked us to change.
+func (s *PGStore) ChatStatsByKB(ctx context.Context) (map[string]ChatStats, error) {
 	const sql = `
-		SELECT c.kb_id::text                                                        AS kb_id,
-		       COUNT(m.id)::int                                                     AS message_count,
-		       COUNT(DISTINCT m.chat_id)::int                                       AS chat_count,
-		       to_char(MAX(m.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_message_at
+		SELECT c.kb_id::text                    AS kb_id,
+		       COUNT(DISTINCT m.chat_id)::int   AS chat_count
 		FROM messages m
 		JOIN chats c ON c.id = m.chat_id
 		GROUP BY c.kb_id`
-	rows, err := pgxutil.QueryRows[msgStatRow](ctx, s.pool, sql)
+	rows, err := pgxutil.QueryRows[chatStatRow](ctx, s.pool, sql)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]MessageStats, len(rows))
+	out := make(map[string]ChatStats, len(rows))
 	for _, r := range rows {
-		out[r.KbID] = MessageStats{
-			MessageCount:  r.MessageCount,
-			ChatCount:     r.ChatCount,
-			LastMessageAt: r.LastMessageAt,
-		}
+		out[r.KbID] = ChatStats{ChatCount: r.ChatCount}
+	}
+	return out, nil
+}
+
+// turnStatRow scans the usage aggregate.
+type turnStatRow struct {
+	KbID       string  `db:"kb_id"`
+	WebTurns   int     `db:"web_turns"`
+	APITurns   int     `db:"api_turns"`
+	LastTurnAt *string `db:"last_turn_at"`
+}
+
+// TurnStatsByKB returns per-KB usage aggregates keyed by kb_id (text). Rows with
+// a NULL kb_id (the KB was deleted; the ledger keeps the row) are skipped by the
+// GROUP BY consumer below, which is why the global systemhealth total can exceed
+// the sum of these columns.
+func (s *PGStore) TurnStatsByKB(ctx context.Context) (map[string]TurnStats, error) {
+	const sql = `
+		SELECT kb_id::text                                                          AS kb_id,
+		       COUNT(*) FILTER (WHERE surface = 'web')::int                          AS web_turns,
+		       COUNT(*) FILTER (WHERE surface <> 'web')::int                         AS api_turns,
+		       to_char(MAX(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_turn_at
+		FROM usage_events
+		WHERE kb_id IS NOT NULL
+		GROUP BY kb_id`
+	rows, err := pgxutil.QueryRows[turnStatRow](ctx, s.pool, sql)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]TurnStats, len(rows))
+	for _, r := range rows {
+		out[r.KbID] = TurnStats{WebTurns: r.WebTurns, APITurns: r.APITurns, LastTurnAt: r.LastTurnAt}
 	}
 	return out, nil
 }
