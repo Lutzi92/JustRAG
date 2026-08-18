@@ -1,6 +1,7 @@
 package siteconfig
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -15,6 +16,10 @@ const (
 	FieldFloat  FieldType = "float"
 	FieldString FieldType = "string"
 	FieldEnum   FieldType = "enum"
+	// FieldJSON trägt eine strukturierte Liste als JSON-Text. Die UI rendert
+	// eine Textarea; Validate prüft die Struktur beim Speichern, damit ein
+	// Tippfehler nicht erst zur Laufzeit als leeres Dropdown auffällt.
+	FieldJSON FieldType = "json"
 )
 
 // KBConfigField describes one per-KB-overridable site_config key. It drives the
@@ -114,6 +119,10 @@ var kbConfigRegistry = []KBConfigField{
 	{Key: "parent_child_enabled", Type: FieldBool, Group: "Ingestion", Label: "Parent-child chunking", Help: "Small-to-big retrieval. Mutually exclusive with RAPTOR.", RequiresReingest: true},
 	{Key: "contextual_enrichment", Type: FieldBool, Group: "Ingestion", Label: "Contextual enrichment", Help: "Anthropic-style 1-sentence chunk prefix at ingest.", RequiresReingest: true},
 	{Key: "kg_extraction_enabled", Type: FieldBool, Group: "Ingestion", Label: "Knowledge-graph extraction (graphrag)", Help: "Extract entities + relations at ingest to build the per-KB knowledge graph. Required before graph routing can use this KB.", RequiresReingest: true},
+
+	// --- Workspace ---
+	{Key: "workspace_analysis_presets", Type: FieldJSON, Group: "Workspace", Label: "Presets: Neue Analyse", Help: `Auswahlvorschläge für das Prompt-Feld im Dialog „Neue Analyse“, als JSON-Liste: [{"label":"Risiken & Maßnahmen","prompt":"Nenne die wichtigsten Risiken und je eine Gegenmaßnahme."}]. Ein Preset füllt das Feld nur vor — die Nutzer können es frei überschreiben. Leerer Wert bedeutet: die eingebauten Standard-Presets gelten. Kein Modellaufruf.`},
+	{Key: "workspace_comparison_presets", Type: FieldJSON, Group: "Workspace", Label: "Presets: Dokumentenvergleich", Help: `Wie workspace_analysis_presets, aber für den Dialog „Dokumentenvergleich“. Der Preset-Text wird die Chatnachricht des Vergleichs-Turns. Leerer Wert bedeutet: die eingebauten Standard-Presets gelten.`},
 
 	// --- Vorlage ---
 	// DELIBERATELY LAST. The registry's order is the flat settings form's
@@ -236,6 +245,26 @@ func Validate(key, value string) error {
 		}
 		return fmt.Errorf("%q must be one of %v", key, fld.Enum)
 	case FieldString:
+		return nil
+	case FieldJSON:
+		if strings.TrimSpace(v) == "" {
+			return nil // leer = Code-Defaults
+		}
+		var presets []struct {
+			Label  string `json:"label"`
+			Prompt string `json:"prompt"`
+		}
+		if err := json.Unmarshal([]byte(v), &presets); err != nil {
+			return fmt.Errorf("%q must be a JSON array of {label, prompt}: %w", key, err)
+		}
+		for i, p := range presets {
+			if strings.TrimSpace(p.Label) == "" {
+				return fmt.Errorf("%q entry %d has an empty label", key, i)
+			}
+			if strings.TrimSpace(p.Prompt) == "" {
+				return fmt.Errorf("%q entry %d has an empty prompt", key, i)
+			}
+		}
 		return nil
 	}
 	return fmt.Errorf("%q has unknown field type %q", key, fld.Type)

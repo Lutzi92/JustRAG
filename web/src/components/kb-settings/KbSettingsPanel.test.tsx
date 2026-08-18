@@ -60,12 +60,14 @@ const sample = {
     { key: 'crag_enabled', type: 'bool', group: 'Corrective', label: 'Corrective RAG', help: 'h' },
     { key: 'chat_graph_routing_path_mode', type: 'enum', group: 'Knowledge graph', label: 'Graph mode', help: 'h', enum: ['neighbors', 'ppr', 'paths'] },
     { key: 'raptor_enabled', type: 'bool', group: 'Ingestion', label: 'RAPTOR indexing', help: 'h', requiresReingest: true },
+    { key: 'workspace_analysis_presets', type: 'json', group: 'Workspace', label: 'Presets', help: 'h' },
   ],
   values: {
     rerank_blend_alpha: { override: '0.3', global: '0.8', effective: '0.3' },
     crag_enabled: { override: null, global: 'true', effective: 'true' },
     chat_graph_routing_path_mode: { override: null, global: 'neighbors', effective: 'neighbors' },
     raptor_enabled: { override: null, global: 'false', effective: 'false' },
+    workspace_analysis_presets: { override: null, global: '', effective: '' },
   },
 };
 
@@ -122,6 +124,11 @@ describe('KbSettingsPanel', () => {
     await waitFor(() => screen.getByText('Reranker blend α'));
     expect(screen.getByTestId('override-badge-rerank_blend_alpha')).toBeTruthy();
     expect(screen.queryByTestId('override-badge-crag_enabled')).toBeNull();
+  });
+
+  it('rendert JSON-Felder als Textarea', async () => {
+    render(<KbSettingsPanel kbId="kb1" />);
+    expect(await screen.findByTestId('field-workspace_analysis_presets')).toHaveProperty('tagName', 'TEXTAREA');
   });
 
   it('saves changed values via PUT without prompting re-ingest for non-ingest keys', async () => {

@@ -436,3 +436,36 @@ func TestGeneratePodcast_Returns202(t *testing.T) {
 		t.Error("expected non-empty jobId")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: GetWorkspacePresets
+// ---------------------------------------------------------------------------
+
+func TestGetWorkspacePresetsFallsBackToDefaults(t *testing.T) {
+	h := contentgen.NewHandler(nil, nil, nil, nil, nil, nil) // ohne SetPresetDeps
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/"+testKBID+"/workspace/presets?lang=de", nil)
+	req.SetPathValue("id", testKBID)
+	rec := httptest.NewRecorder()
+	h.GetWorkspacePresets(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body struct {
+		Analysis       []contentgen.Preset `json:"analysis"`
+		Comparison     []contentgen.Preset `json:"comparison"`
+		CompareEnabled bool                `json:"compareEnabled"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Analysis) != len(contentgen.DefaultAnalysisPresets("de")) {
+		t.Errorf("analysis = %d presets, want the %d defaults", len(body.Analysis), len(contentgen.DefaultAnalysisPresets("de")))
+	}
+	if len(body.Comparison) == 0 {
+		t.Error("comparison presets must not be empty")
+	}
+	if body.CompareEnabled {
+		t.Error("compareEnabled must be false when no reader is wired")
+	}
+}

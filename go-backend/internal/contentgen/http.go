@@ -16,6 +16,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/auth"
+	"github.com/justrag/go-backend/internal/chat"
 	"github.com/justrag/go-backend/internal/gencontent"
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/jobs"
@@ -23,6 +24,7 @@ import (
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/pptx"
 	"github.com/justrag/go-backend/internal/prompts"
+	"github.com/justrag/go-backend/internal/siteconfig"
 	"github.com/justrag/go-backend/internal/vector"
 	"github.com/redis/go-redis/v9"
 )
@@ -100,6 +102,11 @@ type Handler struct {
 	// otherwise it falls back to LLM-from-context. See chart.go.
 	chartCatalog ChartCatalog
 	chartRO      ChartQuerier
+
+	// Optionale Preset-Abhängigkeiten (via SetPresetDeps). Fehlen sie, liefert
+	// GetWorkspacePresets die Code-Defaults — die Dialoge bleiben bedienbar.
+	siteCfg SiteConfigReader
+	kbCfg   KBConfigOverrideLister
 }
 
 // NewHandler creates a new Handler.
@@ -133,6 +140,52 @@ func defaultLang(lang string) string {
 		return "de"
 	}
 	return lang
+}
+
+// SetPresetDeps verdrahtet die Preset-Auflösung. Getrennter Setter statt
+// NewHandler-Parameter, weil NewHandler von Tests in mehreren Paketen
+// aufgerufen wird — dasselbe Muster wie SetChartDeps.
+func (h *Handler) SetPresetDeps(cfg SiteConfigReader, kbCfg KBConfigOverrideLister) {
+	h.siteCfg = cfg
+	h.kbCfg = kbCfg
+}
+
+// readerForKB überlagert den globalen Reader mit den per-KB-Overrides.
+// Fehlschläge degradieren auf den globalen Reader statt zu erroren.
+func (h *Handler) readerForKB(ctx context.Context, kbID string) SiteConfigReader {
+	if h.siteCfg == nil || h.kbCfg == nil {
+		return h.siteCfg
+	}
+	overrides, err := h.kbCfg.ListKBOverrides(ctx, kbID)
+	if err != nil || len(overrides) == 0 {
+		return h.siteCfg
+	}
+	return siteconfig.NewKBOverlay(h.siteCfg, overrides)
+}
+
+// GetWorkspacePresets — GET /api/kb/{id}/workspace/presets?lang=de
+//
+// Liefert die im Workspace angebotenen Prompt-Presets sowie das
+// Vergleichs-Flag. Letzteres reist mit, weil chat_compare_enabled sonst
+// nirgends im Frontend bekannt ist: bis 2026-08 wurde die Büroklammer im
+// Composer ungegated gerendert und das Backend antwortete mit 503.
+// compareEnabled nutzt bewusst chat.CompareEnabled (statt eines eigenen
+// String-Vergleichs) — das ist derselbe Gate-Helfer, der den 503 tatsächlich
+// auslöst, inklusive dessen Semantik (case-insensitiv, getrimmt, Default
+// false bei fehlendem/kaputtem Wert). Ein eigener, abweichender Vergleich
+// hier hätte die Kachel inkonsistent zu dem gemacht, was das Backend
+// tatsächlich freischaltet.
+func (h *Handler) GetWorkspacePresets(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	kbID := kbIDFromContext(r)
+	lang := defaultLang(r.URL.Query().Get("lang"))
+	cfg := h.readerForKB(ctx, kbID)
+
+	httputil.WriteJSONCtx(ctx, w, http.StatusOK, map[string]any{
+		"analysis":       resolvePresets(ctx, cfg, "workspace_analysis_presets", DefaultAnalysisPresets(lang)),
+		"comparison":     resolvePresets(ctx, cfg, "workspace_comparison_presets", DefaultComparisonPresets(lang)),
+		"compareEnabled": chat.CompareEnabled(ctx, cfg),
+	})
 }
 
 // ---------------------------------------------------------------------------
