@@ -11,20 +11,25 @@ import (
 
 // fakeStore returns canned data without touching Postgres.
 type fakeStore struct {
-	kbs     []KBBase
-	fileMap map[string]FileStats
-	msgMap  map[string]MessageStats
-	listErr error
-	fileErr error
-	msgErr  error
+	kbs       []KBBase
+	fileMap   map[string]FileStats
+	chatMap   map[string]ChatStats
+	turnStats map[string]TurnStats
+	listErr   error
+	fileErr   error
+	chatErr   error
+	turnErr   error
 }
 
 func (f *fakeStore) ListKBs(context.Context) ([]KBBase, error) { return f.kbs, f.listErr }
 func (f *fakeStore) FileStatsByKB(context.Context) (map[string]FileStats, error) {
 	return f.fileMap, f.fileErr
 }
-func (f *fakeStore) MessageStatsByKB(context.Context) (map[string]MessageStats, error) {
-	return f.msgMap, f.msgErr
+func (f *fakeStore) ChatStatsByKB(context.Context) (map[string]ChatStats, error) {
+	return f.chatMap, f.chatErr
+}
+func (f *fakeStore) TurnStatsByKB(context.Context) (map[string]TurnStats, error) {
+	return f.turnStats, f.turnErr
 }
 
 // fakeInspector satisfies queueInspector.
@@ -51,8 +56,8 @@ func TestOverview_MergesStatsByKBID(t *testing.T) {
 		fileMap: map[string]FileStats{
 			"kb-1": {FileCount: 10, TotalSizeBytes: 2048, FailedFileCount: 1, ProcessingFileCount: 2, LastFileUploadAt: strptr("2026-05-01T00:00:00Z")},
 		},
-		msgMap: map[string]MessageStats{
-			"kb-1": {MessageCount: 42, ChatCount: 7, LastMessageAt: strptr("2026-05-20T00:00:00Z")},
+		chatMap: map[string]ChatStats{
+			"kb-1": {ChatCount: 7},
 		},
 	}
 	svc := NewService(store, &fakeInspector{info: map[string]*asynq.QueueInfo{}})
@@ -70,17 +75,17 @@ func TestOverview_MergesStatsByKBID(t *testing.T) {
 	if r1.FileCount != 10 || r1.TotalSizeBytes != 2048 || r1.FailedFileCount != 1 || r1.ProcessingFileCount != 2 {
 		t.Errorf("kb-1 file stats wrong: %+v", r1)
 	}
-	if r1.MessageCount != 42 || r1.ChatCount != 7 {
-		t.Errorf("kb-1 message stats wrong: %+v", r1)
+	if r1.ChatCount != 7 {
+		t.Errorf("kb-1 chat stats wrong: %+v", r1)
 	}
 
 	// kb-2 has no entry in either stat map -> all zeros, nil timestamps.
 	r2 := resp.Rows[1]
-	if r2.FileCount != 0 || r2.MessageCount != 0 || r2.ChatCount != 0 {
+	if r2.FileCount != 0 || r2.ChatCount != 0 {
 		t.Errorf("kb-2 should be zeroed, got %+v", r2)
 	}
-	if r2.LastFileUploadAt != nil || r2.LastMessageAt != nil {
-		t.Errorf("kb-2 timestamps should be nil, got %+v / %+v", r2.LastFileUploadAt, r2.LastMessageAt)
+	if r2.LastFileUploadAt != nil {
+		t.Errorf("kb-2 timestamp should be nil, got %+v", r2.LastFileUploadAt)
 	}
 	if r2.OwnerName != nil {
 		t.Errorf("kb-2 owner should be nil, got %v", *r2.OwnerName)
@@ -134,10 +139,17 @@ func TestOverview_FileStatsErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestOverview_MessageStatsErrorPropagates(t *testing.T) {
-	svc := NewService(&fakeStore{msgErr: errors.New("msg stats db down")}, &fakeInspector{})
+func TestOverview_ChatStatsErrorPropagates(t *testing.T) {
+	svc := NewService(&fakeStore{chatErr: errors.New("chat stats db down")}, &fakeInspector{})
 	if _, err := svc.Overview(context.Background()); err == nil {
-		t.Fatal("expected error when MessageStatsByKB fails")
+		t.Fatal("expected error when ChatStatsByKB fails")
+	}
+}
+
+func TestOverview_TurnStatsErrorPropagates(t *testing.T) {
+	svc := NewService(&fakeStore{turnErr: errors.New("turn stats db down")}, &fakeInspector{})
+	if _, err := svc.Overview(context.Background()); err == nil {
+		t.Fatal("expected error when TurnStatsByKB fails")
 	}
 }
 
@@ -152,7 +164,7 @@ func TestOverview_SurfacesOwnerIdentity(t *testing.T) {
 			CreatedAt:     "2026-01-01T00:00:00Z",
 		}},
 		fileMap: map[string]FileStats{},
-		msgMap:  map[string]MessageStats{},
+		chatMap: map[string]ChatStats{},
 	}
 	svc := NewService(store, nil)
 
@@ -169,5 +181,36 @@ func TestOverview_SurfacesOwnerIdentity(t *testing.T) {
 	}
 	if row.OwnerUsername == nil || *row.OwnerUsername != "ada" {
 		t.Errorf("OwnerUsername = %v, want ada", row.OwnerUsername)
+	}
+}
+
+// TestOverview_MergesTurnStats pins the per-KB usage merge and that a KB with
+// no usage yields zeros plus a nil timestamp — not a zero-time string, which
+// the frontend would render as "vor 56 Jahren".
+func TestOverview_MergesTurnStats(t *testing.T) {
+	store := &fakeStore{
+		kbs: []KBBase{
+			{ID: "kb-1", Name: "one", CreatedAt: "2026-01-01T00:00:00Z"},
+			{ID: "kb-2", Name: "two", CreatedAt: "2026-01-01T00:00:00Z"},
+		},
+		turnStats: map[string]TurnStats{
+			"kb-1": {WebTurns: 12, APITurns: 5, LastTurnAt: strptr("2026-08-17T10:00:00Z")},
+		},
+	}
+	svc := NewService(store, nil)
+	out, err := svc.Overview(context.Background())
+	if err != nil {
+		t.Fatalf("Overview: %v", err)
+	}
+
+	r1, r2 := out.Rows[0], out.Rows[1]
+	if r1.WebTurns != 12 || r1.APITurns != 5 {
+		t.Errorf("kb-1 turns: got %d/%d, want 12/5", r1.WebTurns, r1.APITurns)
+	}
+	if r1.LastTurnAt == nil || *r1.LastTurnAt != "2026-08-17T10:00:00Z" {
+		t.Errorf("kb-1 lastTurnAt: got %v", r1.LastTurnAt)
+	}
+	if r2.WebTurns != 0 || r2.APITurns != 0 || r2.LastTurnAt != nil {
+		t.Errorf("kb-2 should have no usage, got %d/%d/%v", r2.WebTurns, r2.APITurns, r2.LastTurnAt)
 	}
 }

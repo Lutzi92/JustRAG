@@ -42,11 +42,19 @@ type FileStats struct {
 	LastFileUploadAt    *string
 }
 
-// MessageStats are the per-KB chat/message aggregates.
-type MessageStats struct {
-	MessageCount  int
-	ChatCount     int
-	LastMessageAt *string
+// ChatStats is the per-KB chat aggregate. Message counts moved to the usage
+// ledger (TurnStats); this type survives only for the optional chatCount column.
+type ChatStats struct {
+	ChatCount int
+}
+
+// TurnStats are the per-KB usage-ledger aggregates. WebTurns and APITurns sum
+// to the KB's Aktivität column; LastTurnAt feeds Letzte Aktivität, which was
+// blind to API traffic while it read MAX(messages.created_at).
+type TurnStats struct {
+	WebTurns   int
+	APITurns   int
+	LastTurnAt *string
 }
 
 // QueueStats holds queue depth counters (mirrors systemhealth.QueueStats).
@@ -69,10 +77,11 @@ type KBRow struct {
 	TotalSizeBytes      int64   `json:"totalSizeBytes"`
 	FailedFileCount     int     `json:"failedFileCount"`
 	ProcessingFileCount int     `json:"processingFileCount"`
-	MessageCount        int     `json:"messageCount"`
 	ChatCount           int     `json:"chatCount"`
+	WebTurns            int     `json:"webTurns"`
+	APITurns            int     `json:"apiTurns"`
 	LastFileUploadAt    *string `json:"lastFileUploadAt,omitempty"`
-	LastMessageAt       *string `json:"lastMessageAt,omitempty"`
+	LastTurnAt          *string `json:"lastTurnAt,omitempty"`
 	CreatedAt           string  `json:"createdAt"`
 }
 
@@ -87,7 +96,8 @@ type OverviewResponse struct {
 type Store interface {
 	ListKBs(ctx context.Context) ([]KBBase, error)
 	FileStatsByKB(ctx context.Context) (map[string]FileStats, error)
-	MessageStatsByKB(ctx context.Context) (map[string]MessageStats, error)
+	ChatStatsByKB(ctx context.Context) (map[string]ChatStats, error)
+	TurnStatsByKB(ctx context.Context) (map[string]TurnStats, error)
 }
 
 // queueInspector is the subset of *asynq.Inspector we use (for testability).
@@ -117,7 +127,11 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 	if err != nil {
 		return OverviewResponse{}, err
 	}
-	msgStats, err := s.store.MessageStatsByKB(ctx)
+	chatStats, err := s.store.ChatStatsByKB(ctx)
+	if err != nil {
+		return OverviewResponse{}, err
+	}
+	turnStats, err := s.store.TurnStatsByKB(ctx)
 	if err != nil {
 		return OverviewResponse{}, err
 	}
@@ -141,10 +155,13 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 			row.ProcessingFileCount = fs.ProcessingFileCount
 			row.LastFileUploadAt = fs.LastFileUploadAt
 		}
-		if ms, ok := msgStats[kb.ID]; ok {
-			row.MessageCount = ms.MessageCount
-			row.ChatCount = ms.ChatCount
-			row.LastMessageAt = ms.LastMessageAt
+		if cs, ok := chatStats[kb.ID]; ok {
+			row.ChatCount = cs.ChatCount
+		}
+		if ts, ok := turnStats[kb.ID]; ok {
+			row.WebTurns = ts.WebTurns
+			row.APITurns = ts.APITurns
+			row.LastTurnAt = ts.LastTurnAt
 		}
 		rows = append(rows, row)
 	}
