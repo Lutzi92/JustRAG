@@ -440,6 +440,7 @@ func (a *legacySearchAdapter) Search(ctx context.Context, q eval.Question, k int
 		idx, total := eval.ChunkPositionFromMetadata(c.Metadata)
 		out = append(out, eval.RetrievedChunk{
 			FileID:      c.FileID,
+			FileName:    c.FileName,
 			Score:       c.Score,
 			ChunkIndex:  idx,
 			TotalChunks: total,
