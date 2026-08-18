@@ -1,0 +1,46 @@
+.sidebar-shell {
+  background: var(--sidebar-bg);
+}
+
+.sidebar-shell--left {
+  border-right: 1px solid var(--border-color);
+  border-left: none;
+}
+
+/* Die rechte Leiste trägt keinen eigenen Rand: den zeichnet das
+   Resize-Handle in KbWorkspaceLayout (borderLeft), sonst stünden dort zwei
+   1px-Linien nebeneinander. */
+.sidebar-shell--right {
+  border-right: none;
+  border-left: none;
+  background: var(--bg-secondary);
+}
+
+.sidebar-shell--mobile {
+  border-right: none;
+  border-left: none;
+  overflow-y: auto;
+}
+
+.sidebar-shell__body {
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-shell__collapse-row {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.75rem 1.5rem 0;
+}
+
+.sidebar-shell__collapse-btn {
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
+  cursor: pointer;
+  background: none;
+  border: none;
+}
