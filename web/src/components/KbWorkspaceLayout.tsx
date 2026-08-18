@@ -19,6 +19,11 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
   const { kbView } = useKbCore();
   const { sidebar } = useKbLayout();
 
+  // Die Quellenleiste wird im Workspace ausgeblendet, aber NICHT zugeklappt:
+  // `setIsRightSidebarOpen(false)` (so lief es bis 2026-08) ließ sie nach dem
+  // Verlassen des Workspace zugeklappt zurück, weil niemand sie wieder öffnete.
+  const showSources = kbView !== 'workspace';
+
   if (isMobile) {
     return (
       <div className="notebook-container notebook-container--mobile" {...swipeHandlers}>
@@ -71,39 +76,39 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
       <ChatView />
 
       {/* Resize Handle Right */}
-      <div
-        role="slider"
-        aria-orientation="vertical"
-        aria-label={t('resizeRightSidebar')}
-        aria-valuemin={150}
-        aria-valuemax={800}
-        aria-valuenow={sidebar.rightSidebarWidth}
-        tabIndex={0}
-        onMouseDown={() => sidebar.setIsResizingRight(true)}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowLeft') {
-            e.preventDefault();
-            sidebar.setRightSidebarWidth?.(Math.min(800, sidebar.rightSidebarWidth + 10));
-          } else if (e.key === 'ArrowRight') {
-            e.preventDefault();
-            sidebar.setRightSidebarWidth?.(Math.max(150, sidebar.rightSidebarWidth - 10));
-          }
-        }}
-        style={{
-          width: '5px',
-          cursor: 'col-resize',
-          background: sidebar.isResizingRight ? 'var(--accent-primary)' : 'transparent',
-          zIndex: 20,
-          transition: 'background 0.2s',
-          borderLeft: '1px solid var(--border-color)',
-          marginRight: '-1px'
-        }}
-        className="resize-handle"
-      />
-
-      {kbView !== 'studio' && (
-        <SidebarRight />
+      {showSources && (
+        <div
+          role="slider"
+          aria-orientation="vertical"
+          aria-label={t('resizeRightSidebar')}
+          aria-valuemin={150}
+          aria-valuemax={800}
+          aria-valuenow={sidebar.rightSidebarWidth}
+          tabIndex={0}
+          onMouseDown={() => sidebar.setIsResizingRight(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowLeft') {
+              e.preventDefault();
+              sidebar.setRightSidebarWidth?.(Math.min(800, sidebar.rightSidebarWidth + 10));
+            } else if (e.key === 'ArrowRight') {
+              e.preventDefault();
+              sidebar.setRightSidebarWidth?.(Math.max(150, sidebar.rightSidebarWidth - 10));
+            }
+          }}
+          style={{
+            width: '5px',
+            cursor: 'col-resize',
+            background: sidebar.isResizingRight ? 'var(--accent-primary)' : 'transparent',
+            zIndex: 20,
+            transition: 'background 0.2s',
+            borderLeft: '1px solid var(--border-color)',
+            marginRight: '-1px'
+          }}
+          className="resize-handle"
+        />
       )}
+
+      {showSources && <SidebarRight />}
     </div>
   );
 }

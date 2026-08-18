@@ -183,6 +183,7 @@ export const translations = {
     timeline: { de: 'Zeitleiste', en: 'Timeline' },
     quiz: { de: 'Quiz', en: 'Quiz' },
     mindMap: { de: 'Mindmap', en: 'Mind Map' },
+    workspace: { de: 'Workspace', en: 'Workspace' },
     mindMapLoading: { de: 'Wissensgraph wird geladen…', en: 'Loading knowledge graph…' },
     mindMapBuilding: { de: 'Wissensgraph wird aktualisiert…', en: 'Updating knowledge graph…' },
     graphExport: { de: 'Exportieren', en: 'Export' },

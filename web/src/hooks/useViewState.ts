@@ -3,7 +3,7 @@ import { type MobileTab } from '../components/MobileTabBar';
 import { useSwipeGesture } from './useSwipeGesture';
 
 type ViewType = 'home' | 'kb' | 'admin' | 'profile' | 'global-kb-settings' | 'kb-settings' | 'privacy' | 'accessibility' | 'agents';
-type KbViewType = 'chat' | 'dashboard' | 'research' | 'academic_research' | 'studio' | 'mindmap';
+type KbViewType = 'chat' | 'dashboard' | 'research' | 'academic_research' | 'workspace' | 'mindmap';
 
 interface UseViewStateParams {
   setView: React.Dispatch<React.SetStateAction<ViewType>>;

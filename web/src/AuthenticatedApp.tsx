@@ -3,7 +3,6 @@ import axios from 'axios';
 import { motion } from 'framer-motion';
 import { Loader2, HelpCircle, ArrowLeft } from 'lucide-react';
 import type { KnowledgeBase, GeneratedContent } from './types';
-import { isMarkdownArtifact } from './utils/artifactTypes';
 import { API_BASE_URL } from './api';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
@@ -215,27 +214,16 @@ function AuthenticatedAppInner() {
   // Cross-hook handlers. The setters are destructured into stable locals so
   // the useCallback dep arrays don't have to depend on the whole hook objects
   // (which are recreated each render and would defeat the memoization).
-  const { setIsRightSidebarOpen } = sidebar;
-  const { setSelectedContent, setCurrentCardIndex, setIsAnswerVisible, setShowContentModal } = content;
+  const { setSelectedContent } = content;
 
   const handleExpandStudio = useCallback(() => {
-    setKbView('studio');
-    setIsRightSidebarOpen(false);
-  }, [setIsRightSidebarOpen]);
+    setKbView('workspace');
+  }, []);
 
   const handleSelectContent = useCallback((item: GeneratedContent) => {
     setSelectedContent(item);
-    if (isMarkdownArtifact(item.type)) {
-      setKbView('studio');
-      setIsRightSidebarOpen(false);
-    } else {
-      if (item.type === 'flashcards') {
-        setCurrentCardIndex(0);
-        setIsAnswerVisible(false);
-      }
-      setShowContentModal(true);
-    }
-  }, [setSelectedContent, setCurrentCardIndex, setIsAnswerVisible, setShowContentModal, setIsRightSidebarOpen]);
+    setKbView('workspace');
+  }, [setSelectedContent]);
 
   const handleUpdateKBSettings = async (data: Record<string, unknown>) => {
     if (!currentKb) return;
