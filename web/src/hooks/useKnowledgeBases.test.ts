@@ -175,10 +175,22 @@ describe('useKnowledgeBases handleRenameKB', () => {
     vi.clearAllMocks();
   });
 
+  // PATCH /api/kb/{id} returns the bare kb.KBRow (kbSelectColsNoAlias): no
+  // myRole, no memberCount, no card stats. Those live only on the list
+  // projections, and HomeView's owned/shared split keys on myRole — so the
+  // hook must merge the new name into the row it already has rather than
+  // replace it, or a renamed KB jumps into "Mit mir geteilt" and loses its
+  // owner controls until the next reload.
+  const patchResponse = (kb: KnowledgeBase, name: string): KnowledgeBase => {
+    const bare: KnowledgeBase = { ...kb, name };
+    delete bare.myRole;
+    return bare;
+  };
+
   it('prompts with the current name, PATCHes the trimmed new name and updates the list', async () => {
     showPrompt.mockResolvedValue('  Neues Handbuch ');
     const renamed = { ...personalKb, name: 'Neues Handbuch' };
-    mockedAxios.patch.mockResolvedValue({ data: renamed });
+    mockedAxios.patch.mockResolvedValue({ data: patchResponse(personalKb, 'Neues Handbuch') });
 
     const { result } = setup();
     act(() => { result.current.setKbs([personalKb]); });
@@ -186,7 +198,7 @@ describe('useKnowledgeBases handleRenameKB', () => {
     await act(async () => { await result.current.handleRenameKB(personalKb, fakeEvent); });
 
     expect(fakeEvent.stopPropagation).toHaveBeenCalled();
-    expect(showPrompt).toHaveBeenCalledWith('renameKbPrompt', 'Handbuch');
+    expect(showPrompt).toHaveBeenCalledWith('renameKbPrompt', 'Handbuch', 'renameKb');
     expect(mockedAxios.patch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/kb\/kb-1$/), { name: 'Neues Handbuch' });
     expect(result.current.kbs).toEqual([renamed]);
   });
@@ -194,7 +206,7 @@ describe('useKnowledgeBases handleRenameKB', () => {
   it('propagates the renamed row into the current KB only when it is the same KB', async () => {
     showPrompt.mockResolvedValue('Neu');
     const renamed = { ...personalKb, name: 'Neu' };
-    mockedAxios.patch.mockResolvedValue({ data: renamed });
+    mockedAxios.patch.mockResolvedValue({ data: patchResponse(personalKb, 'Neu') });
 
     const { result } = setup();
     await act(async () => { await result.current.handleRenameKB(personalKb); });
@@ -213,7 +225,7 @@ describe('useKnowledgeBases handleRenameKB', () => {
   it('updates a public KB in globalKbs', async () => {
     showPrompt.mockResolvedValue('Katalog 2');
     const renamed = { ...subscribedGlobalKb, name: 'Katalog 2' };
-    mockedAxios.patch.mockResolvedValue({ data: renamed });
+    mockedAxios.patch.mockResolvedValue({ data: patchResponse(subscribedGlobalKb, 'Katalog 2') });
 
     const { result } = setup();
     act(() => { result.current.setGlobalKbs([subscribedGlobalKb]); });
@@ -233,6 +245,16 @@ describe('useKnowledgeBases handleRenameKB', () => {
 
     expect(mockedAxios.patch).not.toHaveBeenCalled();
     expect(result.current.kbs).toEqual([personalKb]);
+  });
+
+  it('rejects a name longer than 255 characters before any request', async () => {
+    showPrompt.mockResolvedValue('x'.repeat(256));
+
+    const { result } = setup();
+    await act(async () => { await result.current.handleRenameKB(personalKb); });
+
+    expect(mockedAxios.patch).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith('kbNameTooLong');
   });
 
   it('toasts and leaves the list untouched when the PATCH fails', async () => {

@@ -382,6 +382,7 @@ export const translations = {
     renameKb: { de: 'Knowledge Base umbenennen', en: 'Rename Knowledge Base' },
     renameKbPrompt: { de: 'Neuer Name für die Knowledge Base:', en: 'New name for the Knowledge Base:' },
     kbRenameError: { de: 'Fehler beim Umbenennen der Knowledge Base', en: 'Error renaming knowledge base' },
+    kbNameTooLong: { de: 'Der Name darf höchstens 255 Zeichen lang sein', en: 'The name must not exceed 255 characters' },
 
     // KB Catalog Modal
     discoverKbs: { de: 'KBs entdecken', en: 'Discover KBs' },

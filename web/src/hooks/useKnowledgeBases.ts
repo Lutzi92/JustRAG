@@ -100,21 +100,33 @@ export function useKnowledgeBases({
   // Rename via the same prompt dialog KB creation uses, prefilled with the
   // current name. Owner-only on private KBs, system-admin-only on public ones
   // — canRenameKb decides whether a trigger is shown, the server (kbaccess.
-  // CanRename on PATCH /api/kb/{id}) enforces it. The response row replaces
-  // the KB in whichever list holds it, and in currentKb only if that IS the
-  // renamed KB (functional setter — a rename from the Home card of a KB that
-  // is not open must not hijack the open one).
+  // CanRename on PATCH /api/kb/{id}) enforces it.
+  //
+  // Only the NAME is merged into local state, never the whole response row:
+  // PATCH returns the bare kb.KBRow (kbSelectColsNoAlias), which carries no
+  // myRole/memberCount and no card stats — those exist only on the list
+  // projections. Replacing the row would drop myRole, and HomeView's
+  // owned/shared split keys on exactly that, so the renamed KB would jump into
+  // "Mit mir geteilt" and lose its owner controls until the next reload.
+  // currentKb is touched only if it IS the renamed KB (functional setter — a
+  // rename from the Home card of a KB that is not open must not hijack the
+  // open one).
   const handleRenameKB = useCallback(async (kb: KnowledgeBase, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    const answer = await showPrompt(t('renameKbPrompt'), kb.name);
+    const answer = await showPrompt(t('renameKbPrompt'), kb.name, t('renameKb'));
     const name = (answer ?? '').trim();
     if (!name || name === kb.name) return;
+    if (name.length > 255) {
+      toast.error(t('kbNameTooLong'));
+      return;
+    }
     try {
       const res = await axios.patch(`${API_BASE_URL}/api/kb/${kb.id}`, { name });
-      const updated: KnowledgeBase = res.data;
-      setKbs(prev => prev.map(k => k.id === updated.id ? updated : k));
-      setGlobalKbs(prev => prev.map(k => k.id === updated.id ? updated : k));
-      setCurrentKb(prev => (prev && prev.id === updated.id ? updated : prev));
+      const newName: string = res.data?.name ?? name;
+      const rename = (k: KnowledgeBase) => (k.id === kb.id ? { ...k, name: newName } : k);
+      setKbs(prev => prev.map(rename));
+      setGlobalKbs(prev => prev.map(rename));
+      setCurrentKb(prev => (prev ? rename(prev) : prev));
     } catch (err: unknown) {
       console.error('Failed to rename KB:', err);
       toast.error(t('kbRenameError'));
