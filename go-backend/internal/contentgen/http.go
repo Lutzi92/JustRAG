@@ -719,13 +719,14 @@ func (h *Handler) GenerateAnalysis(w http.ResponseWriter, r *http.Request) {
 	var analysis string
 	if sel != nil {
 		params := chat.BuildTeamParams(ctx, chat.TeamParamsInput{
-			KbID:          kbID,
-			Query:         req.Topic,
-			Language:      lang,
-			Team:          sel.Team,
-			Agent:         sel.Agent,
-			SiteCfg:       h.readerForKB(ctx, kbID),
-			SearchService: h.teamSearcher,
+			KbID:           kbID,
+			Query:          req.Topic,
+			Language:       lang,
+			KbSystemPrompt: prompts.AnalysisSystemPrompt(lang),
+			Team:           sel.Team,
+			Agent:          sel.Agent,
+			SiteCfg:        h.readerForKB(ctx, kbID),
+			SearchService:  h.teamSearcher,
 		})
 		// RunTeamChat liefert einen SystemPrompt, KEINE fertige Antwort — die
 		// Chat-Sendestrecke streamt sie im Anschluss selbst. Hier gibt es

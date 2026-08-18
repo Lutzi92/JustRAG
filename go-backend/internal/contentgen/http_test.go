@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,6 +147,47 @@ func buildLLMServer(t *testing.T, content string) *httptest.Server {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// buildCapturingLLMServer is buildLLMServer plus request capture: every
+// decoded ai.ChatRequest is appended to *captured, in call order. Used to
+// assert on the messages actually sent (system/user role, content) rather
+// than just on the response — a test that only checks the stored output
+// text cannot tell "correct call, correct answer" apart from "arguments
+// swapped, but the fake server echoes the same content regardless".
+func buildCapturingLLMServer(t *testing.T, content string, captured *[]ai.ChatRequest) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err == nil {
+			var req ai.ChatRequest
+			if json.Unmarshal(body, &req) == nil {
+				*captured = append(*captured, req)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": content}},
+			},
+		}
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// chatMessage returns the content of the first message with the given role
+// in req, or "" if none. Test helper for asserting on captured requests.
+func chatMessage(req ai.ChatRequest, role string) string {
+	for _, m := range req.Messages {
+		if m.Role == role {
+			return m.Content
+		}
+	}
+	return ""
 }
 
 // resolverFor creates a ConfigResolver pointing at the given test server.
@@ -289,11 +332,15 @@ func (m mockTeamLoader) LoadTeamForChat(context.Context, string, string) (*agent
 type mockTeamSearcher struct {
 	called *bool
 	chunks []vector.SearchChunk
+	err    error
 }
 
 func (m mockTeamSearcher) Search(_ context.Context, _, _ string, _ int, _ vector.SearchOptions) (*vector.SearchResult, error) {
 	if m.called != nil {
 		*m.called = true
+	}
+	if m.err != nil {
+		return nil, m.err
 	}
 	return &vector.SearchResult{Chunks: m.chunks}, nil
 }
@@ -305,12 +352,22 @@ func (m mockTeamSearcher) ExpandNeighbors(_ context.Context, chunks []vector.Sea
 var _ vector.Searcher = mockTeamSearcher{}
 
 // Positive guard: a resolvable agentId must actually run the team/agent
-// pipeline (RunTeamChat), not just resolve without error. Detected via the
-// team searcher being invoked — only the agent path uses h.teamSearcher, the
-// standard path uses h.searchSvc.
+// pipeline (RunTeamChat), not just resolve without error, and the stored
+// artifact must be built from what that run actually produced — not a
+// coincidentally-matching fixed string, and not the topic/prompt swapped
+// into the wrong role. buildCapturingLLMServer records every request the
+// handler sends to the (fake) provider; the final one is the answer-
+// generation call (ai.GenerateCompletion(ctx, resolver, req.Topic,
+// chatCtx.SystemPrompt, kbID, false)) — its system message must be the
+// assembled team/analysis prompt (proven by two independent markers: the
+// "TEAM FINDINGS" section RunTeamChat always emits, and a fragment of
+// prompts.AnalysisSystemPrompt("de") this task wires in as KbSystemPrompt so
+// the agent produces an analysis rather than a chat reply) and its user
+// message must be the plain topic.
 func TestGenerateAnalysisWithAgentRunsTeamChat(t *testing.T) {
 	llmContent := "## Analysis\n\nSynthesized by the agent."
-	srv := buildLLMServer(t, llmContent)
+	var requests []ai.ChatRequest
+	srv := buildCapturingLLMServer(t, llmContent, &requests)
 
 	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
 
@@ -340,6 +397,67 @@ func TestGenerateAnalysisWithAgentRunsTeamChat(t *testing.T) {
 	}
 	if !called {
 		t.Error("with agentId, RunTeamChat is called — the team searcher was never invoked, so the agent path did not run")
+	}
+
+	// The stored text must be exactly what the (fake) agent LLM returned —
+	// not a discarded answer replaced with something else.
+	content, ok := resp.Record.Content.(map[string]any)
+	if !ok {
+		t.Fatalf("record.content is not an object: %#v", resp.Record.Content)
+	}
+	if content["text"] != llmContent {
+		t.Errorf("stored text = %q, want the agent's actual answer %q", content["text"], llmContent)
+	}
+
+	if len(requests) == 0 {
+		t.Fatal("no requests reached the LLM server")
+	}
+	final := requests[len(requests)-1]
+	sysMsg := chatMessage(final, "system")
+	userMsg := chatMessage(final, "user")
+	if !strings.Contains(sysMsg, "TEAM FINDINGS") {
+		t.Errorf("final call's system message doesn't contain RunTeamChat's assembled prompt (no \"TEAM FINDINGS\" marker); got: %q", sysMsg)
+	}
+	if !strings.Contains(sysMsg, "Analyseexperte") {
+		t.Errorf("final call's system message doesn't carry the analysis instruction (KbSystemPrompt); the agent path is producing a chat reply, not an analysis; got: %q", sysMsg)
+	}
+	if userMsg != "Budget 2026" {
+		t.Errorf("final call's user message = %q, want the plain topic %q", userMsg, "Budget 2026")
+	}
+}
+
+// The RunTeamChat-fails branch (http.go: rerr != nil) has its own reason
+// string and its own fall-through to the standard path — distinct code from
+// the sibling ai.GenerateCompletion-fails branch twenty lines below, which
+// is a hard 500. A resolvable selection whose run then fails must NOT 500:
+// it degrades to the standard (non-agent) path and reports "run_failed".
+func TestGenerateAnalysisWithAgentRunFailureDegrades(t *testing.T) {
+	llmContent := "## Analysis\n\nStandard-path fallback."
+	srv := buildLLMServer(t, llmContent)
+
+	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
+	// A valid agent resolves, but its specialist retrieval fails, so
+	// RunTeamChat itself returns an error ("all specialists failed").
+	searcher := mockTeamSearcher{err: errors.New("search backend down")}
+	h.SetAgentDeps(mockTeamLoader{agent: &agentteams.AgentRecord{ID: "a1", Name: "Prüfer", ChatModel: "gpt-test"}}, searcher)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/analysis",
+		map[string]string{"topic": "Budget 2026", "agentId": "a1"})
+	rec := httptest.NewRecorder()
+	h.GenerateAnalysis(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (fail-soft on run failure): %s", rec.Code, rec.Body.String())
+	}
+	var resp generateAnalysisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Record.Type != "analysis" {
+		t.Errorf("a run failure must still produce an artifact via the standard path, got type %q", resp.Record.Type)
+	}
+	if resp.DegradedReason != "run_failed" {
+		t.Errorf("degradedReason = %q, want %q", resp.DegradedReason, "run_failed")
 	}
 }
 
