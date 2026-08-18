@@ -362,19 +362,6 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Usage ledger (internal/usage). This surface persisted NOTHING before —
-	// no chat, no message, only an OTel span — which is why API traffic was
-	// invisible to every counter and "last activity" timestamp. Recorded once
-	// here, before the stream/non-stream branch, so both paths count exactly one.
-	if h.usageRecorder != nil {
-		h.usageRecorder.Record(ctx, usage.Event{
-			KbID:     kbID,
-			UserID:   user.ID,
-			APIKeyID: auth.APIKeyIDFromContext(ctx),
-			Surface:  usage.SurfaceOpenAICompat,
-		})
-	}
-
 	// ------------------------------------------------------------------
 	// 5. Parse messages: collect system content, conversation history,
 	//    and the last user message.
@@ -408,6 +395,21 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if lastUserMessage == "" {
 		writeAPIError(ctx, w, http.StatusBadRequest, "messages must contain at least one user message")
 		return
+	}
+
+	// Usage ledger (internal/usage). This surface persisted NOTHING before —
+	// no chat, no message, only an OTel span — which is why API traffic was
+	// invisible to every counter and "last activity" timestamp. Recorded here,
+	// after the last-user-message validation, so a body whose messages
+	// contain only system/assistant entries (rejected above) records nothing —
+	// only a genuinely ACCEPTED turn counts.
+	if h.usageRecorder != nil {
+		h.usageRecorder.Record(ctx, usage.Event{
+			KbID:     kbID,
+			UserID:   user.ID,
+			APIKeyID: auth.APIKeyIDFromContext(ctx),
+			Surface:  usage.SurfaceOpenAICompat,
+		})
 	}
 
 	// ------------------------------------------------------------------

@@ -44,7 +44,7 @@ func (r *PGRecorder) Record(ctx context.Context, e Event) {
 
 		const sql = `
 			INSERT INTO usage_events (kb_id, user_id, api_key_id, surface)
-			VALUES ($1::uuid, $2::uuid, $3::uuid, $4)`
+			VALUES (NULLIF($1,'')::uuid, NULLIF($2,'')::uuid, $3::uuid, $4)`
 		if _, err := r.pool.Exec(bgCtx, sql, e.KbID, e.UserID, e.APIKeyID, string(e.Surface)); err != nil {
 			logctx.From(bgCtx).Warn("usage: record failed",
 				"kb_id", e.KbID, "surface", string(e.Surface), "error", err)

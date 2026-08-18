@@ -41,10 +41,3 @@ type Event struct {
 type Recorder interface {
 	Record(ctx context.Context, e Event)
 }
-
-// NopRecorder satisfies Recorder and does nothing. Used by tests and as the
-// zero value for handlers wired without a recorder.
-type NopRecorder struct{}
-
-// Record does nothing.
-func (NopRecorder) Record(context.Context, Event) {}

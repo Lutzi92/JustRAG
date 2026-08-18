@@ -203,9 +203,17 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// (returns h) when the KB has no overrides.
 	h = h.forKB(ctx, kbID)
 
+	chatID, ok := h.resolveOrCreateChat(ctx, w, body.ChatID, kbID, user.ID, body.Message)
+	if !ok {
+		return
+	}
+
 	// Usage ledger: one row per accepted turn. Placed after maybeRouteKB so the
-	// event names the KB actually answered from, and after
-	// parseAndValidateMessage so a malformed body records nothing.
+	// event names the KB actually answered from, after parseAndValidateMessage
+	// so a malformed body records nothing, and after resolveOrCreateChat so a
+	// chatId the caller does not own (403) records nothing either — aligning
+	// web with publicapi, which runs the identical ownership check and already
+	// records after it.
 	if h.usageRecorder != nil {
 		h.usageRecorder.Record(ctx, usage.Event{
 			KbID:     kbID,
@@ -213,11 +221,6 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 			APIKeyID: auth.APIKeyIDFromContext(ctx),
 			Surface:  usage.SurfaceWeb,
 		})
-	}
-
-	chatID, ok := h.resolveOrCreateChat(ctx, w, body.ChatID, kbID, user.ID, body.Message)
-	if !ok {
-		return
 	}
 
 	lang := body.Language

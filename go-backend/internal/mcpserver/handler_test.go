@@ -259,3 +259,33 @@ func TestServeHTTP_UnknownToolRecordsNothing(t *testing.T) {
 		t.Errorf("usage events for unknown tool: got %d, want 0", got)
 	}
 }
+
+// TestServeHTTP_MissingQuestionRecordsNothing: a tools/call with empty
+// arguments (no "question") is rejected by runAskKB's own parsing before it
+// ever reaches the Answerer — this is the sharpest rejection case, since
+// LLM-driven MCP clients omit required arguments routinely. It must not be
+// counted: the guard for the Record call sitting after runAskKB succeeds.
+func TestServeHTTP_MissingQuestionRecordsNothing(t *testing.T) {
+	rec := &fakeUsageRecorder{}
+	fa := &fakeAnswerer{result: AnswerResult{Answer: "should not be reached"}}
+	h := NewHandler(fa, fakeCfg{enabled: "true"})
+	h.SetUsageRecorder(rec)
+
+	body := `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"ask_kb","arguments":{}}}`
+	req := newReq(testKBID, body)
+	ctx := auth.WithUser(req.Context(), &auth.Claims{ID: testUserID, Username: "u", Role: "user"})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req.WithContext(ctx))
+
+	var resp rpcResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp.Error == nil || resp.Error.Code != codeInvalidParams {
+		t.Fatalf("error = %+v, want invalid params", resp.Error)
+	}
+	if fa.gotQuestion != "" {
+		t.Errorf("answerer was invoked with question %q, want never invoked", fa.gotQuestion)
+	}
+	if got := len(rec.snapshot()); got != 0 {
+		t.Errorf("usage events for a missing question: got %d, want 0", got)
+	}
+}

@@ -142,6 +142,41 @@ func TestRecord_NilAPIKeyStoredAsNull(t *testing.T) {
 	}
 }
 
+// TestRecord_EmptyDimensionsStoredAsNull pins the fix for the mcpserver
+// nil-claims defensive branch (unreachable in practice behind
+// apiKeyAuth.Authenticate, but the insert must degrade gracefully if it
+// ever fires): an empty KbID/UserID string must land as SQL NULL in the
+// nullable columns, not fail the $1::uuid cast and get the whole row
+// swallowed at WARN.
+func TestRecord_EmptyDimensionsStoredAsNull(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	usage.NewRecorder(pool).Record(ctx, usage.Event{
+		KbID: "", UserID: "", Surface: usage.SurfaceMCP,
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	var count int
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(ctx, `
+			SELECT COUNT(*)::int FROM usage_events
+			WHERE kb_id IS NULL AND user_id IS NULL AND surface = 'mcp'
+			  AND created_at > now() - interval '1 minute'`).Scan(&count); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if count >= 1 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if count < 1 {
+		t.Fatalf("row with empty kb_id/user_id: got %d matching NULL/NULL rows, want >= 1", count)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM usage_events WHERE kb_id IS NULL AND user_id IS NULL AND surface = 'mcp' AND created_at > now() - interval '1 minute'`) //nolint:errcheck
+	})
+}
+
 // TestRecord_SurvivesKBDeletion pins the ledger decision: the FK is
 // ON DELETE SET NULL, not CASCADE, so deleting a KB must not shrink the
 // all-time total. A future "cleanup" to CASCADE turns this red.

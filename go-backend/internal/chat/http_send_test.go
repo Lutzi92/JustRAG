@@ -27,10 +27,6 @@ var _ Store = (*mockStore)(nil)
 type mockStore struct {
 	chats    map[string]*ChatRow
 	messages []MessageRow
-	// createChatErr, when set, makes CreateChat return this error instead of
-	// creating a chat. Opt-in (nil by default) so every existing test that
-	// relies on CreateChat succeeding is unaffected.
-	createChatErr error
 }
 
 func newMockStore() *mockStore {
@@ -50,9 +46,6 @@ func (m *mockStore) GetChatByID(_ context.Context, chatID string) (*ChatRow, err
 }
 
 func (m *mockStore) CreateChat(_ context.Context, kbID, userID, title string) (*ChatRow, error) {
-	if m.createChatErr != nil {
-		return nil, m.createChatErr
-	}
 	c := &ChatRow{
 		ID:        "new-chat-id",
 		KbID:      kbID,
@@ -330,13 +323,19 @@ func TestDeepChat_SiteConfigReaderPropagates(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Usage ledger (Task 4): one usage_events row per accepted web turn.
 //
-// A full successful SendMessage turn cannot be driven in this file's unit
-// harness — newTestHandler wires nil aiResolver/searchService, and reaching
-// the RAG pipeline would panic on those nil dependencies. So these tests pin
-// the same "one event per accepted turn" property via the two paths that ARE
-// reachable here: a turn that is accepted (passes validation, reaches
-// resolveOrCreateChat) but then fails for an unrelated reason, and a turn
-// that is rejected by validation before the Record call.
+// The Record call sits after resolveOrCreateChat (so a non-owned chatId,
+// which resolveOrCreateChat 403s on, is not counted) and before the RAG
+// pipeline. To reach it without a live AI backend, TestSendMessage_
+// AcceptedTurnRecordsOneUsageEventEvenOnLaterFailure drives a genuinely
+// ACCEPTED turn (valid body, new chat created) through to
+// PrepareChatContext's search call via an erroringSearcher — mirroring
+// publicapi's and openaicompat's identical pattern (see
+// internal/publicapi/handler_test.go's erroringSearcher). The rest of the
+// pipeline between resolveOrCreateChat and PrepareChatContext (classifyQuery,
+// resolveGraphRouting, resolveTeamSelection, assembleSystemPrompt) is
+// nil-safe against the harness's nil aiResolver/siteConfigReader/kgStore/
+// teamLoader for a short, marker-free message like "hello", so this reaches
+// the real failure point without panicking.
 // ---------------------------------------------------------------------------
 
 // fakeUsageRecorder captures usage events for assertions.
@@ -357,30 +356,44 @@ func (f *fakeUsageRecorder) snapshot() []usage.Event {
 	return append([]usage.Event(nil), f.events...)
 }
 
+// erroringSearcher implements vector.Searcher and always fails Search, so a
+// turn that reaches PrepareChatContext is ACCEPTED (validated, KB resolved,
+// chat resolved) but then fails downstream — exactly the case the usage
+// ledger is defined to still count. Mirrors publicapi's and openaicompat's
+// erroringSearcher; none of the three packages share a test-support package,
+// so it is duplicated here.
+type erroringSearcher struct{}
+
+func (erroringSearcher) Search(_ context.Context, _, _ string, _ int, _ vector.SearchOptions) (*vector.SearchResult, error) {
+	return nil, errors.New("search backend unavailable")
+}
+
+func (erroringSearcher) ExpandNeighbors(_ context.Context, chunks []vector.SearchChunk, _ int, _, _ string) []vector.SearchChunk {
+	return chunks
+}
+
+var _ vector.Searcher = erroringSearcher{}
+
 // TestSendMessage_AcceptedTurnRecordsOneUsageEventEvenOnLaterFailure pins the
 // property the whole design rests on: a turn that is ACCEPTED (valid body,
-// KB resolved) writes exactly one usage event, tagged web, with no API key —
-// even when the turn subsequently fails for an unrelated reason.
+// KB resolved, chat resolved) writes exactly one usage event, tagged web,
+// with no API key — even when the turn subsequently fails for an unrelated
+// reason.
 //
 // Why assert on a failing turn: usage.Event's package doc defines a turn as
 // counted the moment it is ACCEPTED, before the answer is produced, "so the
 // numbers are comparable with the LLM gateway's own usage view" — a turn
-// that fails downstream still spent model budget getting there. The Record
-// call sits after parseAndValidateMessage + h.forKB but before
-// resolveOrCreateChat, so forcing CreateChat to error (via the mockStore's
-// createChatErr) makes the handler return 500 without ever touching the nil
-// aiResolver/searchService — letting this test reach a genuinely ACCEPTED
-// turn without panicking on the unit harness's nil AI dependencies. This is
-// intentional, not a workaround: it exercises the exact ordering the guard
-// is meant to enforce.
+// that fails downstream (here: PrepareChatContext's search call, via
+// erroringSearcher) still spent model budget getting there. The Record call
+// sits after resolveOrCreateChat but before PrepareChatContext, so this test
+// drives a genuinely accepted turn through the real handler without needing
+// a live AI backend.
 func TestSendMessage_AcceptedTurnRecordsOneUsageEventEvenOnLaterFailure(t *testing.T) {
 	rec := &fakeUsageRecorder{}
-	store := newMockStore()
-	store.createChatErr = errors.New("boom")
 	h := &Handler{
-		store:         store,
+		store:         newMockStore(),
 		aiResolver:    nil,
-		searchService: nil,
+		searchService: erroringSearcher{},
 		usageRecorder: rec,
 	}
 
@@ -394,7 +407,7 @@ func TestSendMessage_AcceptedTurnRecordsOneUsageEventEvenOnLaterFailure(t *testi
 	h.SendMessage(w, r)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500 (proving the turn failed after being accepted), got %d", w.Code)
+		t.Fatalf("expected 500 (proving the turn failed after being accepted), got %d: %s", w.Code, w.Body.String())
 	}
 
 	events := rec.snapshot()
@@ -407,8 +420,11 @@ func TestSendMessage_AcceptedTurnRecordsOneUsageEventEvenOnLaterFailure(t *testi
 	if events[0].APIKeyID != nil {
 		t.Errorf("api key id: got %q, want nil for a web turn", *events[0].APIKeyID)
 	}
-	if events[0].KbID == "" || events[0].UserID == "" {
-		t.Errorf("kb_id / user_id must be populated, got %+v", events[0])
+	if events[0].KbID != "kb1" {
+		t.Errorf("kb_id: got %q, want %q", events[0].KbID, "kb1")
+	}
+	if events[0].UserID != "user1" {
+		t.Errorf("user_id: got %q, want %q", events[0].UserID, "user1")
 	}
 }
 
@@ -438,5 +454,38 @@ func TestSendMessage_RejectedBodyRecordsNoUsageEvent(t *testing.T) {
 	}
 	if got := len(rec.snapshot()); got != 0 {
 		t.Errorf("usage events on a rejected request: got %d, want 0", got)
+	}
+}
+
+// TestSendMessage_NonOwnedChatIDRecordsNoUsageEvent pins that a chatId the
+// caller does not own — resolveOrCreateChat 403s ("access denied") — records
+// nothing. This is the guard for the Record call's placement AFTER
+// resolveOrCreateChat: moving it back above resolveOrCreateChat makes this
+// go red.
+func TestSendMessage_NonOwnedChatIDRecordsNoUsageEvent(t *testing.T) {
+	rec := &fakeUsageRecorder{}
+	store := newMockStore()
+	store.chats["chat-1"] = &ChatRow{ID: "chat-1", KbID: "kb1", UserID: "someone-else"}
+	h := &Handler{
+		store:         store,
+		aiResolver:    nil,
+		searchService: erroringSearcher{},
+		usageRecorder: rec,
+	}
+
+	body := `{"message": "hello", "chatId": "chat-1"}`
+	r := httptest.NewRequest(http.MethodPost, "/api/kb/kb1/chat", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = injectUser(r, "user1")
+	r.SetPathValue("id", "kb1")
+
+	w := httptest.NewRecorder()
+	h.SendMessage(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := len(rec.snapshot()); got != 0 {
+		t.Errorf("usage events on a non-owned chatId: got %d, want 0", got)
 	}
 }

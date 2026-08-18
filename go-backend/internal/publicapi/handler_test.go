@@ -404,8 +404,11 @@ func TestSendMessage_RecordsOneAPIv1UsageEvent(t *testing.T) {
 	if events[0].APIKeyID == nil || *events[0].APIKeyID != keyID {
 		t.Errorf("api key id: got %v, want %s", events[0].APIKeyID, keyID)
 	}
-	if events[0].KbID == "" || events[0].UserID == "" {
-		t.Errorf("kb_id / user_id must be populated, got %+v", events[0])
+	if events[0].KbID != "kb-1" {
+		t.Errorf("kb_id: got %q, want %q", events[0].KbID, "kb-1")
+	}
+	if events[0].UserID != "user-1" {
+		t.Errorf("user_id: got %q, want %q", events[0].UserID, "user-1")
 	}
 }
 

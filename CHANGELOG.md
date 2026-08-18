@@ -34,8 +34,13 @@ one-step rollback** (`cmd/migrate` is up-only).
   and MCP traffic cannot be recovered at all — it was never persisted.
 - `GET /api/admin/kb-overview` no longer returns `messageCount`; it returns
   `webTurns`, `apiTurns` and `lastTurnAt`.
-- The KB list endpoints return `turnCount` / `lastActivityAt` instead of
-  `messageCount` / `lastMessageAt`.
+- The KB list endpoints — including **`GET /api/v1/kb`**, the key-authenticated
+  external surface external scripts pin — return `turnCount` / `lastActivityAt`
+  instead of `messageCount` / `lastMessageAt`.
+- **Research sessions (`chats.type='research'`) are not counted**, in either
+  the migration 0066 backfill or the live recording path. An operator
+  reconciling spend against the LLM gateway's own usage view should expect
+  LLM-heavy research runs to be absent from this ledger.
 
 ## v0.8.0 — 2026-08-17
 

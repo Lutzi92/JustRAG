@@ -22,7 +22,7 @@ import (
 )
 
 // backfillStatement returns the INSERT ... SELECT from 0066, i.e. everything
-// between the last `INSERT INTO usage_events` and the `-- +goose Down` marker.
+// between the first `INSERT INTO usage_events` and the `-- +goose Down` marker.
 func backfillStatement(t *testing.T) string {
 	t.Helper()
 	raw, err := mainmigrations.FS.ReadFile("0066_usage_events.sql")

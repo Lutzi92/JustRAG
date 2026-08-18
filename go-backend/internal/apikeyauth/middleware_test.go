@@ -208,8 +208,9 @@ func TestAuthenticate_NoExpiry(t *testing.T) {
 // the handler. Before this, Authenticate injected only auth.Claims and the key
 // id never left the middleware, which made usage_events.api_key_id unfillable.
 func TestAuthenticate_ExposesAPIKeyID(t *testing.T) {
-	// Reuse whatever fixture helper the existing tests in this file use to
-	// build a Middleware with one valid key; name the key id below to match.
+	// newTestMiddlewareWithKey wires a Middleware over one valid key ("key-1")
+	// and returns its bearer token alongside that id, so the assertion below
+	// can check the exact value round-tripped through the context.
 	mw, token, wantKeyID := newTestMiddlewareWithKey(t)
 
 	var gotKeyID *string

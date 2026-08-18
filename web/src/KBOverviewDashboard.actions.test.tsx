@@ -178,3 +178,70 @@ describe('KBOverviewDashboard Aktivität column', () => {
         expect(cells.length).toBeGreaterThan(0);
     });
 });
+
+// Spec-mandated: "sorting orders by the sum" (webTurns + apiTurns), not by
+// either turn count alone.
+describe('KBOverviewDashboard Aktivität sort', () => {
+    // webTurns-only, apiTurns-only and (webTurns+apiTurns) sort orders are
+    // all made to disagree, so this only stays green if the sort is truly
+    // keyed on the sum:
+    //   webTurns:  Beta(0) < Gamma(1) < Alpha(10)  → Beta, Gamma, Alpha
+    //   apiTurns:  Alpha(0) < Gamma(2) < Beta(8)    → Alpha, Gamma, Beta
+    //   sum:       Gamma(3) < Beta(8) < Alpha(10)   → Gamma, Beta, Alpha
+    const sortOverview = {
+        rows: [
+            {
+                id: 'kb-1', name: 'Alpha KB', ownerName: 'Ada Lovelace', ownerId: 'user-1', ownerUsername: 'ada',
+                isGlobal: false, isPublished: true, fileCount: 1, totalSizeBytes: 100, failedFileCount: 0,
+                processingFileCount: 0, chatCount: 0, webTurns: 10, apiTurns: 0, createdAt: '2026-01-01T00:00:00Z',
+            },
+            {
+                id: 'kb-2', name: 'Beta KB', ownerName: 'Bob', ownerId: 'user-2', ownerUsername: 'bob',
+                isGlobal: false, isPublished: true, fileCount: 1, totalSizeBytes: 100, failedFileCount: 0,
+                processingFileCount: 0, chatCount: 0, webTurns: 0, apiTurns: 8, createdAt: '2026-01-01T00:00:00Z',
+            },
+            {
+                id: 'kb-3', name: 'Gamma KB', ownerName: 'Carol', ownerId: 'user-3', ownerUsername: 'carol',
+                isGlobal: false, isPublished: true, fileCount: 1, totalSizeBytes: 100, failedFileCount: 0,
+                processingFileCount: 0, chatCount: 0, webTurns: 1, apiTurns: 2, createdAt: '2026-01-01T00:00:00Z',
+            },
+        ],
+        queueSummary: {},
+        timestamp: '2026-01-01T00:00:00Z',
+    };
+
+    beforeEach(() => {
+        mockRole = 'superadmin';
+    });
+
+    it('clicking the Aktivität header sorts rows by webTurns + apiTurns', async () => {
+        installMemoryStorage();
+        mockedAxios.get = vi.fn().mockResolvedValue({ data: sortOverview });
+        mockedAxios.delete = vi.fn().mockResolvedValue({});
+        mockedAxios.patch = vi.fn().mockResolvedValue({ data: {} });
+        mockedAxios.post = vi.fn().mockResolvedValue({ status: 204 });
+        render(<KBOverviewDashboard />);
+
+        await screen.findByText('Alpha KB');
+
+        const rowNames = () =>
+            screen.getAllByRole('row')
+                .slice(1) // drop the header row
+                .map((row) => {
+                    if (row.textContent?.includes('Alpha KB')) return 'Alpha';
+                    if (row.textContent?.includes('Beta KB')) return 'Beta';
+                    return 'Gamma';
+                });
+
+        // Default sort is by name ascending: Alpha, Beta, Gamma.
+        expect(rowNames()).toEqual(['Alpha', 'Beta', 'Gamma']);
+
+        await userEvent.click(screen.getByRole('columnheader', { name: 'colActivity' }));
+
+        // Ascending by webTurns + apiTurns: Gamma(3), Beta(8), Alpha(10).
+        // The fixture above is chosen so a sort keyed on webTurns alone
+        // (Beta, Gamma, Alpha) or apiTurns alone (Alpha, Gamma, Beta) would
+        // both produce a different order, so this only passes for the sum.
+        expect(rowNames()).toEqual(['Gamma', 'Beta', 'Alpha']);
+    });
+});

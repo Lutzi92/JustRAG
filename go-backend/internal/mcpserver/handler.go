@@ -100,8 +100,20 @@ func (h *Handler) handleToolsCall(ctx context.Context, w http.ResponseWriter, kb
 		return
 	}
 
+	res, err := runAskKB(ctx, h.answerer, kbID, params.Arguments)
+	if err != nil {
+		writeRPCError(w, req.ID, codeInvalidParams, err.Error())
+		return
+	}
+
 	// Usage ledger (internal/usage). Only tools/call is a turn; initialize and
-	// tools/list are handshakes and are deliberately not counted.
+	// tools/list are handshakes and are deliberately not counted. Recorded
+	// after runAskKB returns a nil error — its parsing of `arguments` is the
+	// single source of truth for what counts as an ACCEPTED call, so a
+	// missing/blank "question" (nil answerer never invoked, non-nil error
+	// returned) records nothing. A call that IS accepted and then fails the
+	// RAG pipeline still returns a nil error (callResult.IsError, no error),
+	// so it still counts — it already spent model budget.
 	if h.usageRecorder != nil {
 		user := auth.UserFromContext(ctx)
 		userID := ""
@@ -116,10 +128,5 @@ func (h *Handler) handleToolsCall(ctx context.Context, w http.ResponseWriter, kb
 		})
 	}
 
-	res, err := runAskKB(ctx, h.answerer, kbID, params.Arguments)
-	if err != nil {
-		writeRPCError(w, req.ID, codeInvalidParams, err.Error())
-		return
-	}
 	writeResult(w, req.ID, res)
 }

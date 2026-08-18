@@ -518,3 +518,31 @@ func TestChatCompletions_AccessDeniedRecordsNothing(t *testing.T) {
 		t.Errorf("usage events on access denial: got %d, want 0", got)
 	}
 }
+
+// TestChatCompletions_NoUserMessageRecordsNothing: a body whose messages
+// contain only system/assistant entries passes checkKBAccess (the KB and
+// caller both resolve fine) but is then rejected for having no user turn to
+// answer. This is the guard for the Record call's placement AFTER that
+// check — moving Record back to right after checkKBAccess makes this go red.
+func TestChatCompletions_NoUserMessageRecordsNothing(t *testing.T) {
+	rec := &fakeUsageRecorder{}
+	store := accessibleKBStore()
+	h := openaicompat.NewHandler(store, nil, erroringSearcher{})
+	h.SetUsageRecorder(rec)
+
+	body := map[string]any{
+		"model":    "kb-" + testKBID,
+		"messages": []map[string]string{{"role": "system", "content": "you are a bot"}},
+	}
+	req := newRequest(http.MethodPost, "/openai/v1/chat/completions", body)
+	ctx := auth.WithUser(req.Context(), &auth.Claims{ID: testUserID, Username: "u", Role: "user"})
+	rr := httptest.NewRecorder()
+	h.ChatCompletions(rr, req.WithContext(ctx))
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400: %s", rr.Code, rr.Body.String())
+	}
+	if got := len(rec.snapshot()); got != 0 {
+		t.Errorf("usage events on a body with no user message: got %d, want 0", got)
+	}
+}
