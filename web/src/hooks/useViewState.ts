@@ -16,19 +16,30 @@ export type { ViewType, KbViewType };
 export function useViewState({ setView, setKbView, setShowSettings }: UseViewStateParams) {
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat');
 
-  const TAB_ORDER: MobileTab[] = useMemo(() => ['files', 'chat', 'studio'], []);
+  const TAB_ORDER: MobileTab[] = useMemo(() => ['history', 'chat', 'workspace', 'files'], []);
+
+  // 'chat' und 'workspace' rendern dieselbe ChatView und unterscheiden sich
+  // nur über kbView (siehe handleMobileTabChange in KbWorkspaceLayout, das
+  // dieselbe Regel für Tab-Klicks anwendet). setMobileTab wird hier von den
+  // Swipe-Handlern direkt aufgerufen statt über KbWorkspaceLayout zu gehen —
+  // ohne diesen Abgleich würde ein Swipe auf den Workspace-Reiter den zuletzt
+  // gesetzten kbView zeigen (z.B. 'research') statt den Workspace.
+  const applyTab = useCallback((tab: MobileTab) => {
+    if (tab === 'workspace') setKbView('workspace');
+    if (tab === 'chat') setKbView('chat');
+    setMobileTab(tab);
+  }, [setKbView]);
+
   const swipeLeft = useCallback(() => {
-    setMobileTab(prev => {
-      const i = TAB_ORDER.indexOf(prev);
-      return i < TAB_ORDER.length - 1 ? TAB_ORDER[i + 1] : prev;
-    });
-  }, [TAB_ORDER]);
+    const i = TAB_ORDER.indexOf(mobileTab);
+    const next = i < TAB_ORDER.length - 1 ? TAB_ORDER[i + 1] : mobileTab;
+    if (next !== mobileTab) applyTab(next);
+  }, [TAB_ORDER, mobileTab, applyTab]);
   const swipeRight = useCallback(() => {
-    setMobileTab(prev => {
-      const i = TAB_ORDER.indexOf(prev);
-      return i > 0 ? TAB_ORDER[i - 1] : prev;
-    });
-  }, [TAB_ORDER]);
+    const i = TAB_ORDER.indexOf(mobileTab);
+    const next = i > 0 ? TAB_ORDER[i - 1] : mobileTab;
+    if (next !== mobileTab) applyTab(next);
+  }, [TAB_ORDER, mobileTab, applyTab]);
   const swipeHandlers = useSwipeGesture(swipeLeft, swipeRight);
 
   const handleGoHome = useCallback(() => {

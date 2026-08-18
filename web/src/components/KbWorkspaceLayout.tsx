@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useIsMobileContext } from '../contexts/MobileContext';
 import { useKbCore } from '../contexts/KbCoreContext';
@@ -16,7 +17,7 @@ interface KbWorkspaceLayoutProps {
 export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: KbWorkspaceLayoutProps) {
   const { t } = useTheme();
   const isMobile = useIsMobileContext();
-  const { kbView } = useKbCore();
+  const { kbView, setKbView } = useKbCore();
   const { sidebar } = useKbLayout();
 
   // Die Quellenleiste wird im Workspace ausgeblendet, aber NICHT zugeklappt:
@@ -24,13 +25,24 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
   // Verlassen des Workspace zugeklappt zurück, weil niemand sie wieder öffnete.
   const showSources = kbView !== 'workspace';
 
+  // 'chat' und 'workspace' rendern beide ChatView; welcher Inhalt erscheint,
+  // entscheidet kbView. Ein Reiterwechsel muss kbView deshalb explizit
+  // mitziehen, sonst zeigt der Workspace-Reiter den zuletzt gesetzten kbView
+  // (z.B. 'research' aus dem Verlauf) statt den Workspace.
+  const handleMobileTabChange = useCallback((tab: MobileTab) => {
+    if (tab === 'workspace') setKbView('workspace');
+    if (tab === 'chat') setKbView('chat');
+    setMobileTab(tab);
+  }, [setKbView, setMobileTab]);
+
   if (isMobile) {
     return (
       <div className="notebook-container notebook-container--mobile" {...swipeHandlers}>
-        {mobileTab === 'files' && <SourcesPanel />}
+        {mobileTab === 'history' && <HistoryPanel />}
         {mobileTab === 'chat' && <ChatView />}
-        {mobileTab === 'studio' && <HistoryPanel />}
-        <MobileTabBar activeTab={mobileTab} onTabChange={setMobileTab} />
+        {mobileTab === 'workspace' && <ChatView />}
+        {mobileTab === 'files' && <SourcesPanel />}
+        <MobileTabBar activeTab={mobileTab} onTabChange={handleMobileTabChange} />
       </div>
     );
   }

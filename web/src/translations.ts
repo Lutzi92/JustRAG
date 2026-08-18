@@ -548,9 +548,10 @@ export const translations = {
     onboardingReopenTour: { de: 'Einführungstour öffnen', en: 'Open onboarding tour' },
 
     // Mobile Tab Bar
+    tabHistory: { de: 'Verlauf', en: 'History' },
     tabFiles: { de: 'Dateien', en: 'Files' },
     tabChat: { de: 'Chat', en: 'Chat' },
-    tabStudio: { de: 'Studio', en: 'Studio' },
+    tabWorkspace: { de: 'Workspace', en: 'Workspace' },
 
     // Footer & Legal Pages
     imprint: { de: 'Impressum', en: 'Imprint' },
