@@ -35,14 +35,26 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
     setMobileTab(tab);
   }, [setKbView, setMobileTab]);
 
+  // Der aktive Reiter wird ABGELEITET, nicht als zweiter Zustand geführt.
+  // 'history' und 'files' zeigen ein eigenes Panel, also gewinnt dort die
+  // Reiterwahl. 'chat' und 'workspace' rendern beide ChatView und
+  // unterscheiden sich nur durch kbView — deshalb entscheidet dort kbView.
+  // Ohne diese Ableitung konnte ChatViews eigene Kopfleiste (die auf Mobil
+  // unbedingt rendert und setKbView direkt ruft) den Inhalt umschalten,
+  // während die untere Leiste auf dem alten Reiter stehen blieb.
+  const activeMobileTab: MobileTab =
+    mobileTab === 'history' || mobileTab === 'files'
+      ? mobileTab
+      : kbView === 'workspace' ? 'workspace' : 'chat';
+
   if (isMobile) {
     return (
       <div className="notebook-container notebook-container--mobile" {...swipeHandlers}>
-        {mobileTab === 'history' && <HistoryPanel />}
-        {mobileTab === 'chat' && <ChatView />}
-        {mobileTab === 'workspace' && <ChatView />}
-        {mobileTab === 'files' && <SourcesPanel />}
-        <MobileTabBar activeTab={mobileTab} onTabChange={handleMobileTabChange} />
+        {activeMobileTab === 'history' && <HistoryPanel />}
+        {activeMobileTab === 'chat' && <ChatView />}
+        {activeMobileTab === 'workspace' && <ChatView />}
+        {activeMobileTab === 'files' && <SourcesPanel />}
+        <MobileTabBar activeTab={activeMobileTab} onTabChange={handleMobileTabChange} />
       </div>
     );
   }
