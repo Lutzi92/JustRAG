@@ -165,6 +165,27 @@ describe('invite links tab', () => {
     showConfirm.mockReset();
   });
 
+  it('does not fetch invite links until the tab is opened', async () => {
+    const user = userEvent.setup();
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith('/invite-links')) return { data: { links: [] } };
+      return { data: { members: [], pending: [] } };
+    });
+
+    render(<MembersModal show onClose={() => {}} sharingKb={kb} myRole="owner" {...noopProps} />);
+
+    // Let the mount-time members fetch settle before asserting nothing else fired.
+    await waitFor(() => expect(axios.get).toHaveBeenCalled());
+    const hasInviteLinksFetch = () => vi.mocked(axios.get).mock.calls.some(
+      ([url]) => String(url).endsWith('/invite-links'),
+    );
+    expect(hasInviteLinksFetch()).toBe(false);
+
+    await user.click(screen.getByRole('tab', { name: /inviteLinks/i }));
+
+    await waitFor(() => expect(hasInviteLinksFetch()).toBe(true));
+  });
+
   it('creates a link and shows it in the list', async () => {
     const user = userEvent.setup();
     vi.mocked(axios.get).mockImplementation(async (url: string) => {
@@ -182,12 +203,13 @@ describe('invite links tab', () => {
     render(<MembersModal show onClose={() => {}} sharingKb={kb} myRole="owner" {...noopProps} />);
 
     await user.click(screen.getByRole('tab', { name: /inviteLinks/i }));
+    await user.type(screen.getByLabelText(/inviteLinkLabel/i), 'Fall26 Cohort');
     await user.click(screen.getByRole('button', { name: /createInviteLink/i }));
 
     await waitFor(() => {
       expect(axios.post).toHaveBeenCalledWith(
         expect.stringContaining('/api/kb/kb-1/invite-links'),
-        expect.objectContaining({ role: 'view' }),
+        expect.objectContaining({ role: 'view', label: 'Fall26 Cohort' }),
       );
     });
     expect(await screen.findByText('WS26')).toBeInTheDocument();
