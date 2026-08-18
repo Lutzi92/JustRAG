@@ -81,7 +81,10 @@ func Logging(verbose bool) func(http.Handler) http.Handler {
 			// optional user_id, only included on authenticated requests.
 			attrs := [6]slog.Attr{
 				slog.String("method", r.Method),
-				slog.String("path", r.URL.Path),
+				// redactSecretPath (metrics.go) masks the invite-link token
+				// segment before it reaches the log line — the token is a
+				// permanent, non-expiring credential, not just an id.
+				slog.String("path", redactSecretPath(r.URL.Path)),
 				slog.Int("status", status),
 				slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 				slog.String("request_id", requestid.FromContext(ctx)),

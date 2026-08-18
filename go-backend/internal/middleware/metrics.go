@@ -19,6 +19,34 @@ import (
 var uuidRe = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 var numericRe = regexp.MustCompile(`/\d+(?:/|$)`)
 
+// inviteRedeemRe matches POST /api/invites/{token}/redeem (registered in
+// app/routes.go). The {token} segment is a permanent, non-expiring
+// credential (kbinvites.NewToken) granting up to admin on a KB — unlike a
+// UUID or numeric id it IS the secret, so it must never survive into a log
+// line, a Prometheus label, or (via NormalizeRoute) an OTel span name.
+// Anchored on both ends and requiring a literal "/redeem" suffix so a
+// merely-similar path like "/api/invitesfoo/x" is never caught.
+var inviteRedeemRe = regexp.MustCompile(`^(/api/invites/)[^/]+(/redeem)$`)
+
+// joinLinkRe matches the SPA entry route /join/{token}, served by the
+// static-file catch-all (setupStaticServing in app/routes.go) before any API
+// route matches — it carries the same secret as inviteRedeemRe.
+var joinLinkRe = regexp.MustCompile(`^/join/[^/]+$`)
+
+// redactSecretPath replaces the token segment of invite-link paths with a
+// literal {token} placeholder. It runs ahead of the UUID/numeric
+// normalization below because a bare high-entropy token is not a UUID or a
+// number — it would otherwise sail through unrecognized and unredacted.
+func redactSecretPath(path string) string {
+	if m := inviteRedeemRe.FindStringSubmatch(path); m != nil {
+		return m[1] + "{token}" + m[2]
+	}
+	if joinLinkRe.MatchString(path) {
+		return "/join/{token}"
+	}
+	return path
+}
+
 // routeCache memoizes path → normalized-route translations. The set of
 // distinct request paths is bounded by route templates (typically dozens),
 // and the per-path regex passes are otherwise repeated on every request
@@ -66,7 +94,8 @@ func normalizeRoute(path string) string {
 	if v, ok := routeCache.Load(path); ok {
 		return v.(string)
 	}
-	normalized := uuidRe.ReplaceAllString(path, "{id}")
+	normalized := redactSecretPath(path)
+	normalized = uuidRe.ReplaceAllString(normalized, "{id}")
 	normalized = numericRe.ReplaceAllStringFunc(normalized, func(m string) string {
 		if m[len(m)-1] == '/' {
 			return "/{id}/"

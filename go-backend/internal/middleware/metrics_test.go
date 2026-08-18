@@ -79,3 +79,81 @@ func TestNormalizeRoute(t *testing.T) {
 		}
 	}
 }
+
+// TestRedactSecretPath covers the invite-link token redaction that feeds
+// normalizeRoute (Prometheus labels + OTel span names) and the access log
+// (logging.go). The invite token is a permanent, non-expiring credential —
+// unlike a UUID or numeric id it must never survive into any of those sinks
+// verbatim.
+func TestRedactSecretPath(t *testing.T) {
+	const token = "kR3x9vQ2mN8pL5wZ7bT1cY6dF0hJ4sA-eG_uI2oK9rV3nB5"
+
+	tests := []struct {
+		name  string
+		input string
+		// want is the redactSecretPath output AND (since neither the token
+		// nor these plain paths contain a UUID or numeric segment) the
+		// normalizeRoute output too, so each case exercises both the raw
+		// helper and the full pipeline that feeds Prometheus labels, OTel
+		// span names, and (indirectly, same helper) the access log.
+		want string
+	}{
+		{
+			name:  "invite redeem path is redacted",
+			input: "/api/invites/" + token + "/redeem",
+			want:  "/api/invites/{token}/redeem",
+		},
+		{
+			name:  "join shell path is redacted",
+			input: "/join/" + token,
+			want:  "/join/{token}",
+		},
+		{
+			name:  "path that merely starts similarly is not caught",
+			input: "/api/invitesfoo/x",
+			want:  "/api/invitesfoo/x",
+		},
+		{
+			name:  "join-prefixed path that is not the shell route is not caught",
+			input: "/joined/" + token,
+			want:  "/joined/" + token,
+		},
+		{
+			name:  "invite path missing the /redeem suffix is not caught",
+			input: "/api/invites/" + token,
+			want:  "/api/invites/" + token,
+		},
+		{
+			name:  "empty path is unaffected",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactSecretPath(tt.input); got != tt.want {
+				t.Errorf("redactSecretPath(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+			// normalizeRoute must produce the same redaction (it feeds both
+			// Prometheus labels and, via NormalizeRoute, OTel span names).
+			if got := normalizeRoute(tt.input); got != tt.want {
+				t.Errorf("normalizeRoute(%q) = %q, want %q (redaction not applied)", tt.input, got, tt.want)
+			}
+		})
+	}
+
+	// Ordinary paths carrying a UUID or a numeric id must still be collapsed
+	// by normalizeRoute exactly as before (TestNormalizeRoute already covers
+	// this); redactSecretPath itself must leave them untouched since neither
+	// shape is an invite/join path.
+	ordinary := []string{
+		"/api/kb/550e8400-e29b-41d4-a716-446655440000/files",
+		"/api/users/12345",
+	}
+	for _, p := range ordinary {
+		if got := redactSecretPath(p); got != p {
+			t.Errorf("redactSecretPath(%q) = %q, want unchanged %q", p, got, p)
+		}
+	}
+}
