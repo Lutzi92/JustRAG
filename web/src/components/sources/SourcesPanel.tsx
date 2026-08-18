@@ -1,31 +1,31 @@
 import React, { memo, useState, useCallback } from 'react';
 import {
-    PanelLeftClose, BookOpen, Link, Globe, Bot, FileText, Search, ChevronLeft,
+    BookOpen, Link, Globe, Bot, FileText, Search, ChevronLeft,
     Rss
 } from 'lucide-react';
-import type { RssFeed } from '../types';
-import { API_BASE_URL } from '../api';
-import { useTheme } from '../contexts/ThemeContext';
-import { useAuth } from '../contexts/AuthContext';
-import { useIsMobileContext } from '../contexts/MobileContext';
-import { useKbCore } from '../contexts/KbCoreContext';
-import { useKbData } from '../contexts/KbDataContext';
-import { useKbLayout } from '../contexts/KbLayoutContext';
-import { viewportHeight } from '../utils/viewport';
-import './sidebar-primitives.css';
-import { RssFeedEntriesModal } from './RssFeedEntriesModal';
-import { SourcesSection } from './sidebar/SourcesSection';
-import { SourcesGrid } from './sidebar/SourcesGrid';
-import type { SourceType } from './sidebar/SourcesGrid';
-import { CrawlModal } from './sidebar/CrawlModal';
-import { RssModal } from './sidebar/RssModal';
-import { FileUploadModal } from './sidebar/FileUploadModal';
-import { ConfluenceModal } from './sidebar/ConfluenceModal';
-import { GitRepoModal } from './sidebar/GitRepoModal';
-import { ACCEPTED_FILE_TYPES } from '../constants';
-import './SidebarLeft.css';
+import type { RssFeed } from '../../types';
+import { API_BASE_URL } from '../../api';
+import { useTheme } from '../../contexts/ThemeContext';
+import { useAuth } from '../../contexts/AuthContext';
+import { useIsMobileContext } from '../../contexts/MobileContext';
+import { useKbCore } from '../../contexts/KbCoreContext';
+import { useKbData } from '../../contexts/KbDataContext';
+import { useKbLayout } from '../../contexts/KbLayoutContext';
+import { SidebarShell } from '../sidebar-shell/SidebarShell';
+import '../sidebar-primitives.css';
+import { RssFeedEntriesModal } from '../RssFeedEntriesModal';
+import { SourcesSection } from '../sidebar/SourcesSection';
+import { SourcesGrid } from '../sidebar/SourcesGrid';
+import type { SourceType } from '../sidebar/SourcesGrid';
+import { CrawlModal } from '../sidebar/CrawlModal';
+import { RssModal } from '../sidebar/RssModal';
+import { FileUploadModal } from '../sidebar/FileUploadModal';
+import { ConfluenceModal } from '../sidebar/ConfluenceModal';
+import { GitRepoModal } from '../sidebar/GitRepoModal';
+import { ACCEPTED_FILE_TYPES } from '../../constants';
+import './SourcesPanel.css';
 
-const SidebarLeftComp: React.FC = () => {
+const SourcesPanelComp: React.FC = () => {
     const { t } = useTheme();
     const { siteConfigs } = useAuth();
     const isMobile = useIsMobileContext();
@@ -61,8 +61,6 @@ const SidebarLeftComp: React.FC = () => {
         setShowWebWorkspace, sourcesAddedCount,
     } = webTools;
 
-    const isOpen = isMobile ? true : sidebar.isLeftSidebarOpen;
-    const width = isMobile ? 0 : sidebar.leftSidebarWidth;
     const isGlobal = currentKb?.isGlobal;
     const handleOpenWorkspace = useCallback(() => setShowWebWorkspace(true), [setShowWebWorkspace]);
 
@@ -106,40 +104,35 @@ const SidebarLeftComp: React.FC = () => {
     }
 
     return (
-        <aside
-            className={`sidebar sidebar-left sidebar-ui__panel${isMobile ? ' sidebar-left--mobile' : ''}`}
-            style={{
-                width: isMobile ? '100%' : (isOpen ? `${width}px` : '60px'),
-                height: isMobile ? viewportHeight('calc(100dvh - 60px)', 'calc(100vh - 60px)') : undefined,
-                borderRight: isMobile ? 'none' : undefined,
-            }}
-        >
-            {!isMobile && !isOpen && (
-                <button
-                    onClick={() => sidebar.setIsLeftSidebarOpen(true)}
-                    className="settings-toggle sidebar-left__collapsed sidebar-ui__collapsed"
-                    aria-label={t('expandSidebar')}
-                    aria-expanded={false}
-                >
-                    <div className="sidebar-left__collapsed-icon-wrap sidebar-ui__collapsed-icon-wrap">
-                        <PanelLeftClose size={20} />
-                    </div>
-                    <div className="sidebar-left__collapsed-divider sidebar-ui__collapsed-divider" />
+        <SidebarShell
+            side="right"
+            isOpen={sidebar.isRightSidebarOpen}
+            width={sidebar.rightSidebarWidth}
+            onExpand={() => sidebar.setIsRightSidebarOpen(true)}
+            onCollapse={() => sidebar.setIsRightSidebarOpen(false)}
+            expandLabel={t('expandSidebar')}
+            collapseLabel={t('collapseSidebar')}
+            collapsedPreview={
+                <>
+                    <div className="sidebar-ui__collapsed-divider" />
                     <BookOpen size={20} color="var(--accent-primary)" />
                     {nonRssFiles.slice(0, 5).map(f => (
                         <div key={f.id} title={f.name} className="sidebar-left__collapsed-file-icon">
-                            {f.origin === 'websearch' ? <Link size={16} aria-hidden="true" /> : f.origin === 'crawl' ? <Globe size={16} aria-hidden="true" /> : f.origin === 'research' ? <Bot size={16} aria-hidden="true" /> : f.origin === 'rss' ? <Rss size={16} aria-hidden="true" /> : <FileText size={16} aria-hidden="true" />}
+                            {f.origin === 'websearch' ? <Link size={16} aria-hidden="true" />
+                                : f.origin === 'crawl' ? <Globe size={16} aria-hidden="true" />
+                                : f.origin === 'research' ? <Bot size={16} aria-hidden="true" />
+                                : f.origin === 'rss' ? <Rss size={16} aria-hidden="true" />
+                                : <FileText size={16} aria-hidden="true" />}
                         </div>
                     ))}
                     <div className="sidebar-left__spacer" />
                     {!isGlobal && <Search size={20} color="var(--text-secondary)" />}
-                </button>
-            )}
-
+                </>
+            }
+        >
             <div
                 className="sidebar-left__sources"
                 style={{
-                    display: (isMobile || isOpen) ? 'flex' : 'none',
                     height: isMobile ? undefined : '100%',
                     flex: isMobile ? '1 1 auto' : undefined,
                     overflow: isMobile ? 'auto' : undefined,
@@ -170,17 +163,6 @@ const SidebarLeftComp: React.FC = () => {
                                 <ChevronLeft size={20} aria-hidden="true" />
                             </button>
                         </div>
-                        {!isMobile && (
-                            <button
-                                onClick={() => sidebar.setIsLeftSidebarOpen(false)}
-                                className="sidebar-left__collapse-btn"
-                                title={t('collapseSidebar')}
-                                aria-label={t('collapseSidebar')}
-                                aria-expanded={true}
-                            >
-                                <PanelLeftClose size={20} />
-                            </button>
-                        )}
                     </div>
                 </div>
 
@@ -299,8 +281,8 @@ const SidebarLeftComp: React.FC = () => {
                 onDrop={handleDrop}
                 isDragging={isDragging}
             />
-        </aside>
+        </SidebarShell>
     );
 };
 
-export const SidebarLeft = memo(SidebarLeftComp);
+export const SourcesPanel = memo(SourcesPanelComp);

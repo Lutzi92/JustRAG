@@ -2,7 +2,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useIsMobileContext } from '../contexts/MobileContext';
 import { useKbCore } from '../contexts/KbCoreContext';
 import { useKbLayout } from '../contexts/KbLayoutContext';
-import { SidebarLeft } from './SidebarLeft';
+import { SourcesPanel } from './sources/SourcesPanel';
 import { SidebarRight } from './SidebarRight';
 import { ChatView } from './ChatView';
 import { MobileTabBar, type MobileTab } from './MobileTabBar';
@@ -27,7 +27,7 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
   if (isMobile) {
     return (
       <div className="notebook-container notebook-container--mobile" {...swipeHandlers}>
-        {mobileTab === 'files' && <SidebarLeft />}
+        {mobileTab === 'files' && <SourcesPanel />}
         {mobileTab === 'chat' && <ChatView />}
         {mobileTab === 'studio' && <SidebarRight />}
         <MobileTabBar activeTab={mobileTab} onTabChange={setMobileTab} />
@@ -37,7 +37,7 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
 
   return (
     <div className="notebook-container">
-      <SidebarLeft />
+      <SidebarRight />
 
       {/* Resize Handle Left */}
       {sidebar.isLeftSidebarOpen && (
@@ -108,7 +108,7 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
         />
       )}
 
-      {showSources && <SidebarRight />}
+      {showSources && <SourcesPanel />}
     </div>
   );
 }
