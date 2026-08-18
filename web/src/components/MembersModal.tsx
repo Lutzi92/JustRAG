@@ -120,7 +120,7 @@ export const MembersModal: React.FC<MembersModalProps> = ({
     shareLoading, sharePermission, setSharePermission, onLookupUser, onConfirmShare,
     notFoundUsername, onPendingInvited, myRole,
 }) => {
-    const { t } = useTheme();
+    const { t, language } = useTheme();
     const { token } = useAuth();
     const { showConfirm } = useModalContext();
     const toast = useToast();
@@ -185,6 +185,15 @@ export const MembersModal: React.FC<MembersModalProps> = ({
     // The full URL is assembled client-side, so the backend never needs to
     // know its own public origin.
     const inviteLinkUrl = (link: KbInviteLink) => `${window.location.origin}/join/${link.token}`;
+
+    const formatInviteLinkLastUsed = (dateStr: string) =>
+        new Date(dateStr).toLocaleDateString(language === 'de' ? 'de-DE' : 'en-US', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
 
     const handleCreateInviteLink = async () => {
         if (!sharingKb) return;
@@ -561,6 +570,9 @@ export const MembersModal: React.FC<MembersModalProps> = ({
                                                     {link.redemptionCount === 0
                                                         ? t('inviteLinkNeverUsed')
                                                         : `${t('inviteLinkUses')}: ${link.redemptionCount}`}
+                                                    {link.lastUsedAt && (
+                                                        <> · {t('inviteLinkLastUsed')}: {formatInviteLinkLastUsed(link.lastUsedAt)}</>
+                                                    )}
                                                 </div>
                                             </div>
                                             <button onClick={() => handleCopyInviteLink(link)} className="icon-button" aria-label={t('copyToClipboard')}>
