@@ -10,15 +10,7 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
-## Unreleased
-
-<!-- Not a git-cliff section (every other heading below is a released, tagged
-     version). This one exists because the usage-events work landed its
-     hand-written upgrade notes before a release was cut. When cutting the
-     next release, `git cliff --unreleased --tag vX.Y.Z --prepend` will insert
-     the generated "## vX.Y.Z — <date>" section ABOVE this one — fold this
-     block's content into that new section's "### ⚠ Upgrade notes" and delete
-     this heading rather than leaving both. -->
+## v0.9.0 — 2026-08-18
 
 ### ⚠ Upgrade notes
 
@@ -41,6 +33,28 @@ one-step rollback** (`cmd/migrate` is up-only).
   the migration 0066 backfill or the live recording path. An operator
   reconciling spend against the LLM gateway's own usage view should expect
   LLM-heavy research runs to be absent from this ledger.
+
+### Documentation
+- Usage ledger, migration 0066, and upgrade notes (6251e93)
+
+
+### Features
+- Home KB cards count turns from the usage ledger (bd1e464)
+- KB overview Aktivität column and API-aware Letzte Aktivität (b948186)
+- Read Aktivität from usage_events, not messages (016cca6)
+- Total and 24h turn counts with the API share (0b262b6)
+- Record one usage event per ask_kb call (4720d24)
+- Record one usage event per accepted turn (f8c6f77)
+- Record one usage event per accepted /api/v1 turn (5738eed)
+- Record one usage event per accepted web turn (4c10eb7)
+- Expose the authenticating API key id on the request context (de6a6f8)
+- Usage.Recorder writing one usage_events row per accepted turn (c7d8513)
+- Usage_events ledger + backfill of historical web turns (a378f30)
+
+
+### Fixes
+- Record turns strictly after acceptance on all four surfaces (357406e)
+- Scope TestBackfill_IsIdempotent's count to the fixture KB (2d3edf6)
 
 ## v0.8.0 — 2026-08-17
 
