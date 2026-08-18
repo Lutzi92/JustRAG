@@ -279,6 +279,8 @@ export const translations = {
     history: { de: 'Verlauf', en: 'History' },
     noHistory: { de: 'Noch kein Chat-Verlauf.', en: 'No chat history.' },
     chat: { de: 'Chat', en: 'Chat' },
+    historyKindResearch: { de: 'Bericht', en: 'Report' },
+    historyKindAcademic: { de: 'Academic', en: 'Academic' },
     expandRightSidebar: { de: 'Rechte Leiste ausklappen', en: 'Expand right sidebar' },
 
     // Prompts & Alerts

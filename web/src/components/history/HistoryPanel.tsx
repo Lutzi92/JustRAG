@@ -48,11 +48,18 @@ const HistoryPanelComp: React.FC = () => {
             setKbView('workspace');
             return;
         }
-        handleSelectChat(item.source as ChatEntry);
+        // Den bereits offenen Chat NICHT neu laden: handleSelectChat setzt
+        // chatSwitchingRef, holt die Nachrichten neu und baut den Baum neu auf
+        // (useChat.ts) — bei einer laufenden Antwort überschreibt das lokalen
+        // State. Der Reiterwechsel muss trotzdem stattfinden, sonst käme man aus
+        // dem Workspace nicht in seinen offenen Chat zurück.
+        if (item.id !== activeChatId) {
+            handleSelectChat(item.source as ChatEntry);
+        }
         setKbView(item.kind === 'research' ? 'research'
             : item.kind === 'academic' ? 'academic_research'
             : 'chat');
-    }, [handleSelectContent, handleSelectChat, setKbView]);
+    }, [handleSelectContent, handleSelectChat, setKbView, activeChatId]);
 
     const deleteItem = useCallback((item: HistoryItem, e: React.MouseEvent) => {
         if (item.kind === 'artifact') handleDeleteGeneratedContent(item.id, e);
@@ -62,8 +69,8 @@ const HistoryPanelComp: React.FC = () => {
     const label = (item: HistoryItem) =>
         item.kind === 'artifact' && item.artifactType
             ? artifactTypeLabel(item.artifactType, t)
-            : item.kind === 'research' ? t('research')
-            : item.kind === 'academic' ? t('academicResearch')
+            : item.kind === 'research' ? t('historyKindResearch')
+            : item.kind === 'academic' ? t('historyKindAcademic')
             : t('chat');
 
     return (

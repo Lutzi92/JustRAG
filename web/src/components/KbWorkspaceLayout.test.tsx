@@ -52,4 +52,13 @@ describe('KbWorkspaceLayout Quellen-Sichtbarkeit', () => {
     expect(screen.getByTestId('sources-panel')).toBeInTheDocument();
     expect(setIsRightSidebarOpen).not.toHaveBeenCalled();
   });
+
+  it('rendert den Verlauf VOR dem Chat im DOM — "Verlauf nach links" ist sonst nur eine Behauptung', () => {
+    kbView = 'chat';
+    const { container } = render(
+      <KbWorkspaceLayout mobileTab="chat" setMobileTab={vi.fn()} swipeHandlers={noSwipe} />,
+    );
+    const testIds = Array.from(container.querySelectorAll('[data-testid]')).map(el => el.getAttribute('data-testid'));
+    expect(testIds.indexOf('history-panel')).toBeLessThan(testIds.indexOf('chat-view'));
+  });
 });
