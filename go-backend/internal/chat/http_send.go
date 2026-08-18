@@ -21,9 +21,7 @@ import (
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/prompts"
-	"github.com/justrag/go-backend/internal/siteconfig"
 	"github.com/justrag/go-backend/internal/usage"
-	"github.com/justrag/go-backend/internal/vector"
 )
 
 // ---------------------------------------------------------------------------
@@ -643,50 +641,19 @@ func (h *Handler) tryDeepChat(
 		}
 
 	case OrchTeam:
-		params := TeamParams{
-			KbID:                 kbID,
-			ChatID:               chatID,
-			Query:                searchQuery,
-			Language:             lang,
-			CurrentDateLine:      dateLine,
-			KbSystemPrompt:       kbSystemPrompt,
-			FileIDs:              body.SelectedFileIDs,
-			GraphChunkIDs:        graphChunkIDs,
-			BridgeChunks:         bridgeChunks,
-			HyPESearch:           HyPESearchEnabled(ctx, h.siteConfigReader),
-			RouterModel:          AgentTeamRouterModel(ctx, h.siteConfigReader),
-			PlanningModel:        EnrichmentModel(ctx, h.siteConfigReader),
-			ToolMaxRounds:        2,
-			AllowPrivilegedTools: AgentsAllowPrivilegedTools(ctx, h.siteConfigReader),
-		}
-		if teamSel.team != nil {
-			params.Team = teamSel.team.Team
-			params.Members = teamSel.team.Members
-		} else {
-			params.Members = []agentteams.AgentRecord{*teamSel.agent}
-		}
-		// Tools only when the deployment's MCP layer is wired + gated on.
-		if h.toolDispatcher != nil && ChatUseMCPTools(ctx, h.siteConfigReader) {
-			if mcpDisp, ok := h.toolDispatcher.(*MCPDispatcher); ok {
-				params.ToolDispatcher = mcpDisp
+		var dispatcher *MCPDispatcher
+		if h.toolDispatcher != nil {
+			if md, ok := h.toolDispatcher.(*MCPDispatcher); ok {
+				dispatcher = md
 			}
 		}
-		// Per-agent retrieval-knob overlay: agent config → (KB-overlaid)
-		// reader → global. Cloning the search service mirrors forKB.
-		params.SearcherForAgent = func(a agentteams.AgentRecord) vector.Searcher {
-			if len(a.Config) == 0 {
-				return h.searchService
-			}
-			overrides := make(map[string]*string, len(a.Config))
-			for k, v := range a.Config {
-				overrides[k] = &v
-			}
-			overlay := siteconfig.NewAgentOverlay(h.siteConfigReader, overrides)
-			if ss, ok := h.searchService.(*vector.SearchService); ok {
-				return ss.CloneWithSiteConfigReader(overlay)
-			}
-			return h.searchService
-		}
+		params := BuildTeamParams(ctx, TeamParamsInput{
+			KbID: kbID, ChatID: chatID, Query: searchQuery, Language: lang,
+			CurrentDateLine: dateLine, KbSystemPrompt: kbSystemPrompt,
+			FileIDs: body.SelectedFileIDs, GraphChunkIDs: graphChunkIDs, BridgeChunks: bridgeChunks,
+			Team: teamSel.team, Agent: teamSel.agent,
+			SiteCfg: h.siteConfigReader, SearchService: h.searchService, ToolDispatcher: dispatcher,
+		})
 		chatCtx, err = RunTeamChat(ctx, h.aiResolver, h.searchService, params, collectEmit)
 
 	case OrchCorpusTable:
