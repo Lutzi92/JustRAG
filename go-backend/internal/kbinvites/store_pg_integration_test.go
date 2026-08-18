@@ -14,6 +14,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/kbinvites"
@@ -170,5 +171,202 @@ func TestCreateRejectsOwnerRole(t *testing.T) {
 	tok, _ := kbinvites.NewToken()
 	if _, err := store.Create(ctx, kbID, tok, "owner", nil, ownerID); err == nil {
 		t.Fatal("Create with role=owner succeeded, want a CHECK-constraint error")
+	}
+}
+
+// A brand-new member gets exactly the link's role.
+func TestRedeemGrantsRole(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbinvites.NewStore(pool)
+
+	ownerID := insertUser(t, pool, "redeem-owner")
+	joinerID := insertUser(t, pool, "redeem-joiner")
+	kbID := insertKB(t, pool, ownerID, false, false)
+
+	tok, _ := kbinvites.NewToken()
+	link, err := store.Create(ctx, kbID, tok, "edit", nil, ownerID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, err := store.Redeem(ctx, tok, joinerID)
+	if err != nil {
+		t.Fatalf("Redeem: %v", err)
+	}
+	if res.Role != "edit" || res.AlreadyMember {
+		t.Fatalf("Redeem = %+v, want role edit and AlreadyMember false", res)
+	}
+	if res.KBID != kbID {
+		t.Fatalf("Redeem KBID = %q, want %q", res.KBID, kbID)
+	}
+
+	if got := memberRole(t, pool, kbID, joinerID); got != "edit" {
+		t.Fatalf("kb_members role = %q, want edit", got)
+	}
+
+	links, _ := store.List(ctx, kbID)
+	if links[0].ID != link.ID || links[0].RedemptionCount != 1 {
+		t.Fatalf("RedemptionCount = %d, want 1", links[0].RedemptionCount)
+	}
+	if links[0].LastUsedAt == nil {
+		t.Fatal("LastUsedAt is nil after a redemption")
+	}
+}
+
+// The core rule: a link may raise a role, never lower it.
+func TestRedeemNeverDowngrades(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbinvites.NewStore(pool)
+
+	ownerID := insertUser(t, pool, "downgrade-owner")
+	taID := insertUser(t, pool, "downgrade-ta")
+	kbID := insertKB(t, pool, ownerID, false, false)
+	setMemberRole(t, pool, kbID, taID, "edit")
+
+	tok, _ := kbinvites.NewToken()
+	if _, err := store.Create(ctx, kbID, tok, "view", nil, ownerID); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, err := store.Redeem(ctx, tok, taID)
+	if err != nil {
+		t.Fatalf("Redeem: %v", err)
+	}
+	if res.Role != "edit" || !res.AlreadyMember {
+		t.Fatalf("Redeem = %+v, want role edit and AlreadyMember true", res)
+	}
+	if got := memberRole(t, pool, kbID, taID); got != "edit" {
+		t.Fatalf("kb_members role = %q, want edit — the view link downgraded a member", got)
+	}
+}
+
+// ... and it may raise one.
+func TestRedeemUpgrades(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbinvites.NewStore(pool)
+
+	ownerID := insertUser(t, pool, "upgrade-owner")
+	memberID := insertUser(t, pool, "upgrade-member")
+	kbID := insertKB(t, pool, ownerID, false, false)
+	setMemberRole(t, pool, kbID, memberID, "view")
+
+	tok, _ := kbinvites.NewToken()
+	if _, err := store.Create(ctx, kbID, tok, "admin", nil, ownerID); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, err := store.Redeem(ctx, tok, memberID)
+	if err != nil {
+		t.Fatalf("Redeem: %v", err)
+	}
+	if res.Role != "admin" || !res.AlreadyMember {
+		t.Fatalf("Redeem = %+v, want role admin and AlreadyMember true", res)
+	}
+	if got := memberRole(t, pool, kbID, memberID); got != "admin" {
+		t.Fatalf("kb_members role = %q, want admin", got)
+	}
+}
+
+// The owner row is immutable outside the explicit transfer endpoint.
+func TestRedeemLeavesOwnerUntouched(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbinvites.NewStore(pool)
+
+	ownerID := insertUser(t, pool, "owner-untouched")
+	kbID := insertKB(t, pool, ownerID, false, false)
+
+	tok, _ := kbinvites.NewToken()
+	if _, err := store.Create(ctx, kbID, tok, "view", nil, ownerID); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, err := store.Redeem(ctx, tok, ownerID)
+	if err != nil {
+		t.Fatalf("Redeem: %v", err)
+	}
+	if res.Role != "owner" || !res.AlreadyMember {
+		t.Fatalf("Redeem = %+v, want role owner and AlreadyMember true", res)
+	}
+	if got := memberRole(t, pool, kbID, ownerID); got != "owner" {
+		t.Fatalf("kb_members role = %q, want owner — the owner was demoted", got)
+	}
+}
+
+// Opt-out beats membership in the overview queries, so a stale opted_out row
+// would leave the joiner a member of a KB they cannot see anywhere.
+func TestRedeemClearsOptOut(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbinvites.NewStore(pool)
+
+	ownerID := insertUser(t, pool, "optout-owner")
+	joinerID := insertUser(t, pool, "optout-joiner")
+	kbID := insertKB(t, pool, ownerID, true, true) // public + published
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO kb_subscriptions (kb_id, user_id, state)
+		VALUES ($1::uuid, $2::uuid, 'opted_out')`, kbID, joinerID); err != nil {
+		t.Fatalf("insert opt-out: %v", err)
+	}
+
+	tok, _ := kbinvites.NewToken()
+	if _, err := store.Create(ctx, kbID, tok, "edit", nil, ownerID); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Redeem(ctx, tok, joinerID); err != nil {
+		t.Fatalf("Redeem: %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM kb_subscriptions
+		WHERE kb_id = $1::uuid AND user_id = $2::uuid AND state = 'opted_out'`,
+		kbID, joinerID).Scan(&count); err != nil {
+		t.Fatalf("count opt-out: %v", err)
+	}
+	if count != 0 {
+		t.Fatal("opted_out subscription survived the redemption — the KB stays invisible")
+	}
+}
+
+func TestRedeemUnknownToken(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbinvites.NewStore(pool)
+
+	userID := insertUser(t, pool, "unknown-token-user")
+	if _, err := store.Redeem(ctx, "this-token-does-not-exist", userID); !errors.Is(err, kbinvites.ErrNotFound) {
+		t.Fatalf("Redeem with unknown token returned %v, want ErrNotFound", err)
+	}
+}
+
+// memberRole reads a user's kb_members role, or "" when there is no row.
+func memberRole(t *testing.T, pool *pgxpool.Pool, kbID, userID string) string {
+	t.Helper()
+	var role string
+	err := pool.QueryRow(context.Background(),
+		`SELECT role FROM kb_members WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
+		kbID, userID).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("memberRole: %v", err)
+	}
+	return role
+}
+
+// setMemberRole seeds an existing membership.
+func setMemberRole(t *testing.T, pool *pgxpool.Pool, kbID, userID, role string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO kb_members (kb_id, user_id, role)
+		VALUES ($1::uuid, $2::uuid, $3)
+		ON CONFLICT (kb_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+		kbID, userID, role); err != nil {
+		t.Fatalf("setMemberRole: %v", err)
 	}
 }

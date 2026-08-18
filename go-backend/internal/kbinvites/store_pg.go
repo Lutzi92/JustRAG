@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/pgxutil"
@@ -105,8 +106,89 @@ func (s *PGStore) Delete(ctx context.Context, kbID, linkID string) error {
 	return nil
 }
 
-// Redeem is implemented in the next task. Declared now so PGStore satisfies
-// Store and the package compiles.
+// roleRankSQL maps a role column onto its ordinal, mirroring
+// kbaccess.Rank. Inlined in SQL rather than compared in Go so the
+// never-downgrade rule holds inside the same statement that writes the row —
+// the same reason kbmembers.SetRole keeps the owner guard in its WHERE.
+const roleRankSQL = `CASE %s WHEN 'view' THEN 0 WHEN 'edit' THEN 1
+                              WHEN 'admin' THEN 2 WHEN 'owner' THEN 3 ELSE -1 END`
+
+// Redeem applies a token for userID: it raises the caller's KB role to the
+// link's role (never lowers it, never touches an owner row), clears a stale
+// opt-out so the KB actually shows up, and counts the redemption. All of it
+// in one transaction — a joiner who is granted membership but keeps an
+// opted_out row would be a member of a KB they cannot see anywhere, which is
+// exactly the state step 3 exists to prevent. kbmembers.LeaveKB is the
+// precedent for one package owning a kb_members + kb_subscriptions
+// transaction.
 func (s *PGStore) Redeem(ctx context.Context, token, userID string) (RedeemResult, error) {
-	return RedeemResult{}, errors.New("kbinvites: Redeem not implemented")
+	var res RedeemResult
+	err := pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var linkID, linkRole string
+		err := tx.QueryRow(ctx, `
+			SELECT l.id::text, l.kb_id::text, l.role, k.name
+			FROM kb_invite_links l
+			JOIN knowledge_bases k ON k.id = l.kb_id
+			WHERE l.token = $1`, token).Scan(&linkID, &res.KBID, &linkRole, &res.KBName)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("Redeem: lookup token: %w", err)
+		}
+
+		// Existing role decides both AlreadyMember and the role we report
+		// back: an existing stronger role survives the upsert below, so
+		// reading it first is what lets us answer accurately.
+		var existing string
+		err = tx.QueryRow(ctx,
+			`SELECT role FROM kb_members WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
+			res.KBID, userID).Scan(&existing)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			existing = ""
+		case err != nil:
+			return fmt.Errorf("Redeem: read membership: %w", err)
+		}
+		res.AlreadyMember = existing != ""
+
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+			INSERT INTO kb_members (kb_id, user_id, role, created_by)
+			VALUES ($1::uuid, $2::uuid, $3, NULL)
+			ON CONFLICT (kb_id, user_id) DO UPDATE
+			    SET role = EXCLUDED.role
+			    WHERE kb_members.role <> 'owner'
+			      AND (%s) < (%s)`,
+			fmt.Sprintf(roleRankSQL, "kb_members.role"),
+			fmt.Sprintf(roleRankSQL, "EXCLUDED.role")),
+			res.KBID, userID, linkRole); err != nil {
+			return fmt.Errorf("Redeem: grant role: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM kb_subscriptions
+			WHERE kb_id = $1::uuid AND user_id = $2::uuid AND state = 'opted_out'`,
+			res.KBID, userID); err != nil {
+			return fmt.Errorf("Redeem: clear opt-out: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx, `
+			UPDATE kb_invite_links
+			SET redemption_count = redemption_count + 1, last_used_at = NOW()
+			WHERE id = $1::uuid`, linkID); err != nil {
+			return fmt.Errorf("Redeem: count redemption: %w", err)
+		}
+
+		// Report the role the caller actually holds now.
+		if err := tx.QueryRow(ctx,
+			`SELECT role FROM kb_members WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
+			res.KBID, userID).Scan(&res.Role); err != nil {
+			return fmt.Errorf("Redeem: read resulting role: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return RedeemResult{}, err
+	}
+	return res, nil
 }
