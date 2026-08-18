@@ -53,6 +53,7 @@ import (
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/kbcategories"
 	"github.com/justrag/go-backend/internal/kbconfig"
+	"github.com/justrag/go-backend/internal/kbinvites"
 	"github.com/justrag/go-backend/internal/kbmembers"
 	"github.com/justrag/go-backend/internal/kbsubs"
 	"github.com/justrag/go-backend/internal/kbvisibility"
@@ -350,11 +351,17 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	apiRL := middleware.NewRedisRateLimiter(infra.rdb.Client, middleware.RedisRateLimitConfig{
 		Max: 100, Window: time.Minute, Category: "api",
 	})
+	// Invite-link redemption is guessing-resistant by entropy (43 base64url
+	// chars); this limiter is the second line of defence and keeps a leaked
+	// link from being hammered.
+	inviteRL := middleware.NewRedisRateLimiter(infra.rdb.Client, middleware.RedisRateLimitConfig{
+		Max: 10, Window: time.Minute, Category: "invite",
+	})
 
 	registerHealthRoutes(rc, buildVersion)
 	loginLimiter := registerAuthRoutes(ctx, rc, loginRL)
 	registerAdminRoutes(rc)
-	registerKBRoutes(rc)
+	registerKBRoutes(rc, inviteRL)
 	registerChatRoutes(ctx, rc, chatRL)
 	registerAgentTeamRoutes(rc)
 	registerFileRoutes(rc)
@@ -677,7 +684,7 @@ func (a pendingInviteAdapter) ListPendingInvites(ctx context.Context, kbID strin
 	return out, nil
 }
 
-func registerKBRoutes(rc *routeCtx) {
+func registerKBRoutes(rc *routeCtx, inviteRL *middleware.RedisRateLimiter) {
 	kbHandler := kb.NewHandler(rc.kbStore)
 	kbUpdateHandler := kb.NewUpdateHandler(rc.kbStore, func(kbID string) { rc.aiResolver.Invalidate(kbID) })
 	kbDeleteHandler := kb.NewDeleteHandler(rc.cascadeDeleter)
@@ -689,6 +696,11 @@ func registerKBRoutes(rc *routeCtx) {
 	// grant path.
 	kbMembersStore := kbmembers.NewStore(rc.infra.db.Main)
 	kbMembersHandler := kbmembers.NewHandler(kbMembersStore, pendingInviteAdapter{rc.kbStore})
+
+	// Invite links. The audit logger is adminkboverview's store, which is the
+	// same LogAuditAction implementation internal/kbvisibility uses.
+	kbInvitesHandler := kbinvites.NewHandler(
+		kbinvites.NewStore(rc.infra.db.Main), adminkboverview.NewStore(rc.infra.db.Main))
 
 	// KB listing (auth only)
 	rc.mux.Handle("GET /api/kb", rc.authMw.Authenticate(http.HandlerFunc(kbHandler.ListKnowledgeBases)))
@@ -744,6 +756,16 @@ func registerKBRoutes(rc *routeCtx) {
 	rc.mux.Handle("DELETE /api/kb/{id}/members/{userId}", rc.kbAdminChain(kbMembersHandler.RemoveMember))
 	rc.mux.Handle("POST /api/kb/{id}/members/bulk", rc.kbAdminChain(kbMembersHandler.BulkInvite))
 	rc.mux.Handle("DELETE /api/kb/{id}/members/pending/{username}", rc.kbAdminChain(kbMembersHandler.RevokePendingInvite))
+
+	// Invite links: minting and revoking are KB-admin decisions...
+	rc.mux.Handle("GET /api/kb/{id}/invite-links", rc.kbAdminChain(kbInvitesHandler.ListLinks))
+	rc.mux.Handle("POST /api/kb/{id}/invite-links", rc.kbAdminChain(kbInvitesHandler.CreateLink))
+	rc.mux.Handle("DELETE /api/kb/{id}/invite-links/{linkId}", rc.kbAdminChain(kbInvitesHandler.DeleteLink))
+	// ...but redeeming is not: the caller has no KB role yet, so kbViewChain
+	// would 403 them before they could join. Authenticated + rate-limited.
+	rc.mux.Handle("POST /api/invites/{token}/redeem",
+		inviteRL.Middleware(rc.authMw.Authenticate(http.HandlerFunc(kbInvitesHandler.Redeem))))
+
 	// transfer-owner and membership sit on kbViewChain, not kbAdminChain:
 	// RequireKBRole has no owner tier to gate on without also excluding
 	// superadmins (they resolve to RoleOwner and must be let through), and
