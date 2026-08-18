@@ -242,7 +242,12 @@ func TestRedeemNeverDowngrades(t *testing.T) {
 	}
 }
 
-// ... and it may raise one.
+// ... and it may raise one. Also the home for the already-member counter
+// assertion: RedemptionCount/LastUsedAt were previously only checked in
+// TestRedeemGrantsRole's brand-new-member path, leaving the AlreadyMember=true
+// path — an existing member redeeming a stronger-role link — untested for the
+// one behaviour the task singles out: the counter measures link usage, not
+// net new members, so it must still increment here.
 func TestRedeemUpgrades(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -254,7 +259,8 @@ func TestRedeemUpgrades(t *testing.T) {
 	setMemberRole(t, pool, kbID, memberID, "view")
 
 	tok, _ := kbinvites.NewToken()
-	if _, err := store.Create(ctx, kbID, tok, "admin", nil, ownerID); err != nil {
+	link, err := store.Create(ctx, kbID, tok, "admin", nil, ownerID)
+	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -267,6 +273,14 @@ func TestRedeemUpgrades(t *testing.T) {
 	}
 	if got := memberRole(t, pool, kbID, memberID); got != "admin" {
 		t.Fatalf("kb_members role = %q, want admin", got)
+	}
+
+	links, _ := store.List(ctx, kbID)
+	if links[0].ID != link.ID || links[0].RedemptionCount != 1 {
+		t.Fatalf("RedemptionCount = %d, want 1 — an already-member redemption must still count as link usage", links[0].RedemptionCount)
+	}
+	if links[0].LastUsedAt == nil {
+		t.Fatal("LastUsedAt is nil after an already-member redemption")
 	}
 }
 

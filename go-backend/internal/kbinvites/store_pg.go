@@ -140,6 +140,18 @@ func (s *PGStore) Redeem(ctx context.Context, token, userID string) (RedeemResul
 		// Existing role decides both AlreadyMember and the role we report
 		// back: an existing stronger role survives the upsert below, so
 		// reading it first is what lets us answer accurately.
+		//
+		// Deliberately no FOR UPDATE here. Under READ COMMITTED, two
+		// concurrent redemptions of the same link by the same user can both
+		// read "no row" and both report AlreadyMember=false for what was
+		// really one new join and one repeat — only the reported boolean can
+		// be stale. The persisted state cannot: the upsert below re-evaluates
+		// its WHERE against the actually-locked row at write time, so
+		// kb_members.role always lands correct regardless of this read's
+		// timing, and the redemption counter still increments once per call
+		// (it counts link usage, not net new members — see the UPDATE
+		// below). That is not worth a lock; do not add one to "fix" the
+		// boolean's accuracy without re-deriving this trade-off first.
 		var existing string
 		err = tx.QueryRow(ctx,
 			`SELECT role FROM kb_members WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
@@ -183,6 +195,9 @@ func (s *PGStore) Redeem(ctx context.Context, token, userID string) (RedeemResul
 			return fmt.Errorf("Redeem: clear opt-out: %w", err)
 		}
 
+		// Unconditional: the counter measures link usage, not net new
+		// members, so it increments on every successful redemption
+		// including an AlreadyMember=true repeat (see TestRedeemUpgrades).
 		if _, err := tx.Exec(ctx, `
 			UPDATE kb_invite_links
 			SET redemption_count = redemption_count + 1, last_used_at = NOW()
