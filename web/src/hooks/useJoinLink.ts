@@ -19,7 +19,7 @@ const JOIN_PATH = /^\/join\/([A-Za-z0-9_-]{20,64})$/;
 
 function storage(): Storage | null {
     try {
-        return window.sessionStorage ?? null;
+        return window.sessionStorage;
     } catch {
         // Safari in private mode throws on access.
         return null;

@@ -64,3 +64,27 @@ describe('takeJoinToken', () => {
     expect(takeJoinToken()).toBeNull();
   });
 });
+
+// Safari in private mode throws a SecurityError on *access* to
+// window.sessionStorage, not just on read/write calls. captureJoinToken()
+// runs at module scope in App.tsx, before React mounts anything, so an
+// unguarded throw here would white-screen the whole app for every Safari
+// private-mode visitor -- not just people arriving on an invite link.
+describe('when sessionStorage access throws (Safari private mode)', () => {
+  beforeEach(() => {
+    Object.defineProperty(window, 'sessionStorage', {
+      get() {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+      configurable: true,
+    });
+  });
+
+  it('degrades to a silent no-op instead of throwing', () => {
+    setPath('/join/AbCdEf0123456789AbCdEf0123456789AbCdEf012');
+
+    expect(() => captureJoinToken()).not.toThrow();
+    expect(peekJoinToken()).toBeNull();
+    expect(takeJoinToken()).toBeNull();
+  });
+});
