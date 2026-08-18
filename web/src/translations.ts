@@ -23,6 +23,9 @@ export const translations = {
     login: { de: 'Anmelden', en: 'Login' },
     invalidCredentials: { de: 'Ungültiger Benutzername oder Passwort', en: 'Invalid username or password' },
     joinLinkLoginHint: { de: 'Melden Sie sich an, um der geteilten Wissensdatenbank beizutreten.', en: 'Sign in to join the shared knowledge base.' },
+    joinLinkJoined: { de: '"{kb}" wurde zu Ihren Wissensdatenbanken hinzugefügt', en: 'You joined "{kb}"' },
+    joinLinkAlreadyMember: { de: 'Sie haben bereits Zugriff auf diese Wissensdatenbank', en: 'You already have access to this knowledge base' },
+    joinLinkInvalid: { de: 'Dieser Einladungslink ist ungültig oder wurde widerrufen', en: 'This invite link is invalid or has been revoked' },
 
     // Accessibility
     skipToChat: { de: 'Zum Chat springen', en: 'Skip to chat' },

@@ -23,6 +23,7 @@ import { useFileManagement } from './hooks/useFileManagement';
 import { useWebTools } from './hooks/useWebTools';
 import { useGeneratedContent } from './hooks/useGeneratedContent';
 import { useKnowledgeBases } from './hooks/useKnowledgeBases';
+import { useJoinRedeem } from './hooks/useJoinRedeem';
 import { useSharing } from './hooks/useSharing';
 import { useRssFeeds } from './hooks/useRssFeeds';
 import { useConfluenceSources } from './hooks/useConfluenceSources';
@@ -174,6 +175,9 @@ function AuthenticatedAppInner() {
     setSelectedContent: content.setSelectedContent,
     setGeneratedContent: content.setGeneratedContent,
   });
+
+  // Redeem an invite link the user arrived with, now that they are signed in.
+  useJoinRedeem({ openKbById: kbMgmt.handleOpenKbById });
 
   const sharing = useSharing({ username: user?.username });
 
