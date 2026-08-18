@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/justrag/go-backend/internal/agents"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/chatattach"
 	"github.com/justrag/go-backend/internal/logctx"
@@ -320,4 +321,30 @@ func RunComparisonChat(ctx context.Context, deps ComparisonDeps, attachmentID, u
 		FinalChunks: res.Sources,
 	}
 	return cc, res.Findings, nil
+}
+
+// comparisonSummaryPromptFor builds the system prompt for the comparison
+// summary. As its own function because two paths need it: the standard path
+// sets it directly on the ChatContext, and the team path hands it to
+// RunTeamChat as KbSystemPrompt so the specialists see the findings in their
+// system prompt.
+func comparisonSummaryPromptFor(kbSystemPrompt, lang string, findings []Finding) string {
+	var b strings.Builder
+	if kbSystemPrompt != "" {
+		b.WriteString(kbSystemPrompt)
+		b.WriteString("\n\n")
+	}
+	b.WriteString(prompts.ComparisonSummaryPrompt(lang))
+	b.WriteString("\n\n")
+	b.WriteString(renderFindingsForSummary(findings))
+	return b.String()
+}
+
+// mergeComparisonChunks merges the comparison stage's peer chunks with the
+// team's. As its own function so the merge is testable: without it,
+// RunTeamChat would fully overwrite the comparison stage's FinalChunks, and
+// every finding source it found would drop out of citation validation and
+// the source list.
+func mergeComparisonChunks(teamChunks, comparisonChunks []vector.SearchChunk) []vector.SearchChunk {
+	return agents.MergeChunksRRF(0, teamChunks, comparisonChunks)
 }

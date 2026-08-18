@@ -20,7 +20,6 @@ import (
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/observability"
-	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/usage"
 )
 
@@ -513,6 +512,12 @@ func (h *Handler) tryDeepChat(
 	// branch of SendMessage.)
 	var chatCtx *ChatContext
 	var err error
+	// comparisonTeamAnswered is true only when a selected team/agent
+	// actually WROTE the comparison summary (RunTeamChat succeeded). It
+	// feeds teamAuthoredTurn below, which decides message attribution —
+	// a team merely selected but whose summary run failed must not be
+	// attributed.
+	var comparisonTeamAnswered bool
 
 	agenticEnabled := ChatAgenticEnabled(ctx, h.siteConfigReader)
 	planExecuteEnabled := ChatPlanExecuteEnabled(ctx, h.siteConfigReader)
@@ -636,8 +641,50 @@ func (h *Handler) tryDeepChat(
 			// prompt here (ComparisonSummaryPrompt's wording refers to "the
 			// following findings"). The structured findings were already streamed
 			// as a comparisonFindings event; this prose is the gist.
-			chatCtx.SystemPrompt = prompts.ComparisonSummaryPrompt(lang) +
-				"\n\n" + renderFindingsForSummary(cmpFindings)
+			summaryPrompt := comparisonSummaryPromptFor(kbSystemPrompt, lang, cmpFindings)
+			if teamSel != nil {
+				// The findings extraction stays on chat_compare_model — a
+				// persona prompt does not help a structured-outputs call, and
+				// a team router per section would be expensive and pointless.
+				// Only the prose summary runs through the selected team/agent.
+				var dispatcher *MCPDispatcher
+				if h.toolDispatcher != nil {
+					if md, ok := h.toolDispatcher.(*MCPDispatcher); ok {
+						dispatcher = md
+					}
+				}
+				tp := BuildTeamParams(ctx, TeamParamsInput{
+					KbID: kbID, ChatID: chatID, Query: body.Message, Language: lang,
+					CurrentDateLine: dateLine, KbSystemPrompt: summaryPrompt,
+					FileIDs: body.SelectedFileIDs,
+					Team:    teamSel.team, Agent: teamSel.agent,
+					SiteCfg: h.siteConfigReader, SearchService: h.searchService, ToolDispatcher: dispatcher,
+				})
+				teamCtx, terr := RunTeamChat(ctx, h.aiResolver, h.searchService, tp, collectEmit)
+				if terr != nil {
+					// Fail-soft like everywhere else on the team path: the
+					// findings were already streamed as a comparisonFindings
+					// event, and a failure here must not discard them.
+					logctx.From(ctx).Warn("comparison.team_summary_failed", "error", terr)
+					emitTrajectory(collectEmit, TrajectoryEvent{
+						Stage: "decision", Decision: "team_unavailable",
+						Reason: terr.Error(),
+					}, nil)
+					chatCtx.SystemPrompt = summaryPrompt
+					comparisonTeamAnswered = false
+				} else {
+					// Merge the comparison stage's peer chunks with the
+					// team's: citation validation and the source list must
+					// see both stages, or every finding source from stage 1
+					// drops out.
+					teamCtx.FinalChunks = mergeComparisonChunks(teamCtx.FinalChunks, chatCtx.FinalChunks)
+					teamCtx.Sources, teamCtx.Context = buildChatSourcesAndContext(teamCtx.FinalChunks)
+					chatCtx = teamCtx
+					comparisonTeamAnswered = true
+				}
+			} else {
+				chatCtx.SystemPrompt = summaryPrompt
+			}
 		}
 
 	case OrchTeam:
@@ -955,7 +1002,7 @@ func (h *Handler) tryDeepChat(
 		reasoningPtr = &fullReasoning
 	}
 	// Derive team/agent attribution for AI message (reused for recordAgentDecision below).
-	decTeamID, decAgentID := attributionIDs(orch == OrchTeam, teamSel)
+	decTeamID, decAgentID := attributionIDs(teamAuthoredTurn(orch, comparisonTeamAnswered), teamSel)
 	aiMsg, err := h.store.AddMessage(ctx, AddMessageParams{
 		ChatID:          chatID,
 		Role:            "ai",
@@ -1045,12 +1092,16 @@ type teamSelection struct {
 }
 
 // attributionIDs derives the team/agent ids to attribute an AI message (and
-// its agent_decisions row) to. willRunTeam must be true — i.e. the team
-// actually answered this turn — or both returns are nil, even when teamSel
-// is non-nil: a resolved-but-unused pick (comparison turns win over team
-// selection, or Enhance forces the standard path) must not be written to
-// messages.team_id / agent_decisions.team_id, per the DecisionRecorder
-// contract ("nil otherwise").
+// its agent_decisions row) to. The first argument must be true only when the
+// team actually WROTE something on this turn — either as the orchestrator
+// (OrchTeam) or as the author of a comparison turn's summary (since 2026-08;
+// before that, comparison turns always won over the team selection and the
+// pick was resolved-but-unused). A resolved-but-unused pick — Enhance forces
+// the standard path, or a comparison whose team summary failed — must not be
+// written to messages.team_id / agent_decisions.team_id, per the
+// DecisionRecorder contract ("nil otherwise"). Callers should pass
+// teamAuthoredTurn(orch, comparisonTeamAnswered) rather than reimplementing
+// the condition.
 func attributionIDs(willRunTeam bool, teamSel *teamSelection) (teamID, agentID *string) {
 	if !willRunTeam || teamSel == nil {
 		return nil, nil
@@ -1064,6 +1115,16 @@ func attributionIDs(willRunTeam bool, teamSel *teamSelection) (teamID, agentID *
 		agentID = &id
 	}
 	return teamID, agentID
+}
+
+// teamAuthoredTurn reports whether a team/agent actually wrote something on
+// this turn — as the orchestrator, or as the author of a comparison turn's
+// summary. Extracted as a named function (rather than an inline `||` at the
+// attributionIDs call site) so the condition itself is directly testable: a
+// unit test of attributionIDs alone stays green even when the call site's
+// condition regresses, because it never exercises the call site.
+func teamAuthoredTurn(orch Orchestrator, comparisonTeamAnswered bool) bool {
+	return orch == OrchTeam || comparisonTeamAnswered
 }
 
 // resolveTeamSelection loads and authorizes the request's team/agent pick.
