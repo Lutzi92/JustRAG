@@ -641,12 +641,28 @@ func (h *Handler) tryDeepChat(
 			// prompt here (ComparisonSummaryPrompt's wording refers to "the
 			// following findings"). The structured findings were already streamed
 			// as a comparisonFindings event; this prose is the gist.
-			summaryPrompt := comparisonSummaryPromptFor(kbSystemPrompt, lang, cmpFindings)
+			// Plain path: byte-identical to the pre-2026-08 behaviour (see
+			// 669ae5e) — deliberately built with an EMPTY kbSystemPrompt.
+			// This task is about agent routing, not about the comparison
+			// prompt's composition; changing what this shipping opt-in
+			// feature emits, as a side effect of sharing a builder with the
+			// new team path, would need its own decision and its own
+			// baseline, not a ride-along here. Also used as the fail-soft
+			// fallback when a selected team's RunTeamChat call fails: a
+			// resolved-but-unused pick degrades to exactly what a comparison
+			// turn without any team selection would have produced.
+			plainSummaryPrompt := comparisonSummaryPromptFor("", lang, cmpFindings)
 			if teamSel != nil {
 				// The findings extraction stays on chat_compare_model — a
 				// persona prompt does not help a structured-outputs call, and
 				// a team router per section would be expensive and pointless.
 				// Only the prose summary runs through the selected team/agent.
+				//
+				// Unlike the plain path above, this path is NEW — it has no
+				// prior behaviour to preserve — so it carries kbSystemPrompt,
+				// matching the OrchTeam case's own convention of passing
+				// kbSystemPrompt through as KbSystemPrompt.
+				teamSummaryPrompt := comparisonSummaryPromptFor(kbSystemPrompt, lang, cmpFindings)
 				var dispatcher *MCPDispatcher
 				if h.toolDispatcher != nil {
 					if md, ok := h.toolDispatcher.(*MCPDispatcher); ok {
@@ -655,7 +671,7 @@ func (h *Handler) tryDeepChat(
 				}
 				tp := BuildTeamParams(ctx, TeamParamsInput{
 					KbID: kbID, ChatID: chatID, Query: body.Message, Language: lang,
-					CurrentDateLine: dateLine, KbSystemPrompt: summaryPrompt,
+					CurrentDateLine: dateLine, KbSystemPrompt: teamSummaryPrompt,
 					FileIDs: body.SelectedFileIDs,
 					Team:    teamSel.team, Agent: teamSel.agent,
 					SiteCfg: h.siteConfigReader, SearchService: h.searchService, ToolDispatcher: dispatcher,
@@ -664,13 +680,16 @@ func (h *Handler) tryDeepChat(
 				if terr != nil {
 					// Fail-soft like everywhere else on the team path: the
 					// findings were already streamed as a comparisonFindings
-					// event, and a failure here must not discard them.
+					// event, and a failure here must not discard them. Falls
+					// back to the PLAIN prompt (not teamSummaryPrompt) — a
+					// team that never wrote anything must not leave its
+					// kbSystemPrompt-carrying prompt behind either.
 					logctx.From(ctx).Warn("comparison.team_summary_failed", "error", terr)
 					emitTrajectory(collectEmit, TrajectoryEvent{
 						Stage: "decision", Decision: "team_unavailable",
 						Reason: terr.Error(),
 					}, nil)
-					chatCtx.SystemPrompt = summaryPrompt
+					chatCtx.SystemPrompt = plainSummaryPrompt
 					comparisonTeamAnswered = false
 				} else {
 					// Merge the comparison stage's peer chunks with the
@@ -683,7 +702,7 @@ func (h *Handler) tryDeepChat(
 					comparisonTeamAnswered = true
 				}
 			} else {
-				chatCtx.SystemPrompt = summaryPrompt
+				chatCtx.SystemPrompt = plainSummaryPrompt
 			}
 		}
 
@@ -901,9 +920,14 @@ func (h *Handler) tryDeepChat(
 	}
 	// Team synthesis carries user-authored, persona-influenced findings in its
 	// system prompt (a prompt-injection amplifier if handed the full,
-	// unrestricted answer-tool catalog) — answer tools stay off on team turns
-	// until per-team catalog restriction lands (follow-up).
-	useAnswerTools := orch != OrchTeam && ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
+	// unrestricted answer-tool catalog) — answer tools stay off on any turn a
+	// team actually authored, until per-team catalog restriction lands
+	// (follow-up). That now includes a comparison turn whose summary a team
+	// wrote (OrchComparison + comparisonTeamAnswered): its system prompt
+	// carries the same kind of team-synthesised content via KbSystemPrompt,
+	// so it needs the same exclusion as a pure OrchTeam turn — not just
+	// "orch != OrchTeam", which teamAuthoredTurn is what makes this drop.
+	useAnswerTools := !teamAuthoredTurn(orch, comparisonTeamAnswered) && ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
 	if useAnswerTools {
 		answerTrace := func(stage, decision, reason string, details map[string]any) {
 			payload := map[string]any{
