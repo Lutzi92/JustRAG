@@ -378,6 +378,10 @@ export const translations = {
     openKb: { de: 'Knowledge Base öffnen', en: 'Open Knowledge Base' },
     // Entry point for KbSettingsPanel (RAG-Einstellungen / Evals / Workflow).
     kbAdvancedSettings: { de: 'RAG-Einstellungen und Workflow', en: 'RAG settings and workflow' },
+    // KB rename (owner of a private KB / system admin on a public KB).
+    renameKb: { de: 'Knowledge Base umbenennen', en: 'Rename Knowledge Base' },
+    renameKbPrompt: { de: 'Neuer Name für die Knowledge Base:', en: 'New name for the Knowledge Base:' },
+    kbRenameError: { de: 'Fehler beim Umbenennen der Knowledge Base', en: 'Error renaming knowledge base' },
 
     // KB Catalog Modal
     discoverKbs: { de: 'KBs entdecken', en: 'Discover KBs' },

@@ -371,6 +371,7 @@ function AuthenticatedAppInner() {
           onDeleteGlobalKB={kbMgmt.handleDeleteGlobalKB}
           onOpenGlobalKbSettings={kbMgmt.handleOpenGlobalKbSettings}
           onOpenKbSettings={kbMgmt.handleOpenKbSettings}
+          onRenameKB={kbMgmt.handleRenameKB}
           onOpenShare={sharing.handleOpenShare}
           onUpdateKBSettings={handleUpdateKBSettings}
           showShareModal={sharing.showShareModal}

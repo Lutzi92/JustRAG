@@ -62,3 +62,25 @@ export function canOpenKbAdvancedSettings(
   if (kb == null) return false;
   return hasAdvancedSystemRole(systemRole) && hasKbAdminRole(kb, systemRole);
 }
+
+/**
+ * canRenameKb is the client-side twin of kbaccess.CanRename (the gate on the
+ * `name` field of PATCH /api/kb/{id}). Renaming is stricter than the KB role
+ * admin that governs the rest of that endpoint:
+ *
+ *   - private KB: only the owner (superadmin resolves to owner)
+ *   - public KB (no owner): only a system admin / superadmin
+ *
+ * A kb_members admin row alone — curator, demoted ex-owner — is never enough,
+ * on either kind of KB. As with canOpenKbAdvancedSettings this only decides
+ * whether to offer the control; the server enforces the same rule.
+ */
+export function canRenameKb(
+  kb: Pick<KnowledgeBase, 'myRole' | 'isGlobal' | 'visibility'> | null | undefined,
+  systemRole?: string,
+): boolean {
+  if (kb == null) return false;
+  if (systemRole === 'superadmin') return true;
+  if (kb.isGlobal || kb.visibility === 'public') return systemRole === 'admin';
+  return kb.myRole === 'owner';
+}

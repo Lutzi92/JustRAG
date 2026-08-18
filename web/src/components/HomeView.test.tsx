@@ -137,6 +137,7 @@ const noopProps = {
   onDeleteGlobalKB: vi.fn(),
   onOpenGlobalKbSettings: vi.fn(),
   onOpenKbSettings: vi.fn(),
+  onRenameKB: vi.fn(),
   onOpenShare: vi.fn(),
   onUpdateKBSettings: vi.fn(),
   showShareModal: false,
@@ -266,6 +267,55 @@ describe('HomeView KB-settings trigger', () => {
     renderView(<HomeView kbs={[kb]} {...noopProps} />);
     await expandSection(translations.homeSharedWithMe.en);
     expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
+  });
+});
+
+// Renaming is owner-only on a private KB (kbaccess.CanRename on the server;
+// canRenameKb here). The pencil must not appear on a shared card whose caller
+// is a mere admin member — that role edits everything else, not the name.
+describe('HomeView rename trigger', () => {
+  const label = translations.renameKb.en;
+
+  it('shows the pencil to the owner and hands the KB to onRenameKB', async () => {
+    authState.role = 'user';
+    const onRenameKB = vi.fn();
+    const kb: KnowledgeBase = { ...baseKb, myRole: 'owner' };
+    renderView(<HomeView kbs={[kb]} {...noopProps} onRenameKB={onRenameKB} />);
+    await userEvent.click(screen.getByRole('button', { name: label }));
+    expect(onRenameKB).toHaveBeenCalledWith(kb, expect.anything());
+  });
+
+  it('does not open the KB when the pencil is clicked', async () => {
+    authState.role = 'user';
+    const onSelectKB = vi.fn();
+    const kb: KnowledgeBase = { ...baseKb, myRole: 'owner' };
+    renderView(<HomeView kbs={[kb]} {...noopProps} onSelectKB={onSelectKB} onRenameKB={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: label }));
+    expect(onSelectKB).not.toHaveBeenCalled();
+  });
+
+  it.each(['admin', 'edit', 'view'] as const)('hides the pencil from a %s member', async (role) => {
+    authState.role = 'user';
+    const kb: KnowledgeBase = { ...baseKb, myRole: role };
+    renderView(<HomeView kbs={[kb]} {...noopProps} />);
+    await expandSection(translations.homeSharedWithMe.en);
+    expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
+  });
+
+  it('hides the pencil from a system admin who is only an admin member of a private KB', async () => {
+    authState.role = 'admin';
+    const kb: KnowledgeBase = { ...baseKb, myRole: 'admin' };
+    renderView(<HomeView kbs={[kb]} {...noopProps} />);
+    await expandSection(translations.homeSharedWithMe.en);
+    expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
+  });
+
+  it('shows the pencil to a superadmin on a shared private KB', async () => {
+    authState.role = 'superadmin';
+    const kb: KnowledgeBase = { ...baseKb, myRole: 'admin' };
+    renderView(<HomeView kbs={[kb]} {...noopProps} />);
+    await expandSection(translations.homeSharedWithMe.en);
+    expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
   });
 });
 

@@ -10,7 +10,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { KBCardSkeleton } from './Skeleton';
 import { KbAccordion } from './KbAccordion';
-import { canOpenKbAdvancedSettings } from '../utils/kbAccess';
+import { canOpenKbAdvancedSettings, canRenameKb } from '../utils/kbAccess';
 import KbCatalogPanel from './KbCatalogPanel';
 import './HomeView.css';
 
@@ -41,6 +41,8 @@ export interface HomeViewProps {
   onOpenGlobalKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   /** Opens KbSettingsPanel (RAG settings / evals / workflow) for a KB the caller administers. */
   onOpenKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
+  /** Rename prompt; the card only offers it when canRenameKb allows. */
+  onRenameKB: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onOpenShare: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onUpdateKBSettings: (data: Record<string, unknown>) => void;
   showShareModal: boolean;
@@ -287,6 +289,7 @@ interface PrivateKbCardProps {
   onSelectKB: (kb: KnowledgeBase) => void;
   onOpenShare: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onOpenKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
+  onRenameKB: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onDeleteKB: (kb: KnowledgeBase, e: React.MouseEvent) => void;
 }
 
@@ -294,7 +297,7 @@ interface PrivateKbCardProps {
 // card in both, since the only difference between the sections is the
 // caller's own role, which the card already reads off myRole.
 function PrivateKbCard({
-  kb, currentUserId, systemRole, removingKb, rtf, t, onSelectKB, onOpenShare, onOpenKbSettings, onDeleteKB,
+  kb, currentUserId, systemRole, removingKb, rtf, t, onSelectKB, onOpenShare, onOpenKbSettings, onRenameKB, onDeleteKB,
 }: PrivateKbCardProps) {
   return (
     // Card-level click is a mouse convenience (role="presentation"); the
@@ -318,6 +321,22 @@ function PrivateKbCard({
               aria-label={t('share')}
             >
               <UserPlus size={16} aria-hidden="true" />
+            </button>
+          )}
+
+          {/* Rename: owner-only (superadmin resolves to owner). Stricter than
+              the members/settings buttons beside it — a KB admin member edits
+              everything about a KB except its name. canRenameKb is the
+              shared predicate with ChatView's header trigger, mirroring
+              kbaccess.CanRename on the server. */}
+          {canRenameKb(kb, systemRole) && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onRenameKB(kb, e); }}
+              className="home-view__mini-icon"
+              title={t('renameKb')}
+              aria-label={t('renameKb')}
+            >
+              <Pencil size={16} aria-hidden="true" />
             </button>
           )}
 
@@ -401,7 +420,7 @@ export function HomeView(props: HomeViewProps) {
     kbs, globalKbs, currentKb, availableConfigs,
     copySuccess, onCopyUserId, onLogout, onViewProfile, onViewAdmin, onViewAgents,
     onCreateKB, onSelectKB, onDeleteKB, removingKb, onCreateGlobalKB, onSubscriptionChange, onOpenKbById, onDeleteGlobalKB,
-    onOpenGlobalKbSettings, onOpenKbSettings, onOpenShare, onUpdateKBSettings,
+    onOpenGlobalKbSettings, onOpenKbSettings, onRenameKB, onOpenShare, onUpdateKBSettings,
     showShareModal, setShowShareModal, sharingKb, shareUserId, setShareUserId,
     shareTargetUser, shareLoading, sharePermission, setSharePermission,
     onLookupUser, onConfirmShare, notFoundUsername, onPendingInvited,
@@ -582,6 +601,7 @@ export function HomeView(props: HomeViewProps) {
                 onSelectKB={onSelectKB}
                 onOpenShare={onOpenShare}
                 onOpenKbSettings={onOpenKbSettings}
+                onRenameKB={onRenameKB}
                 onDeleteKB={onDeleteKB}
               />
             ))}
@@ -621,6 +641,7 @@ export function HomeView(props: HomeViewProps) {
               onSelectKB={onSelectKB}
               onOpenShare={onOpenShare}
               onOpenKbSettings={onOpenKbSettings}
+              onRenameKB={onRenameKB}
               onDeleteKB={onDeleteKB}
             />
           ))}

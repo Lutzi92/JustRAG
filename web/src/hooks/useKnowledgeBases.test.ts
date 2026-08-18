@@ -68,11 +68,13 @@ const subscribedGlobalKb: KnowledgeBase = {
 
 const handleGoHome = vi.fn();
 
+const setCurrentKb = vi.fn();
+
 function setup() {
   return renderHook(() => useKnowledgeBases({
     onKBSelected: vi.fn(),
     handleGoHome,
-    setCurrentKb: vi.fn(),
+    setCurrentKb,
     setIsPro: vi.fn(),
     setKbView: vi.fn(),
     setView: vi.fn(),
@@ -165,5 +167,85 @@ describe('useKnowledgeBases handleDeleteKB', () => {
 
     expect(result.current.kbs).toEqual([personalKb]);
     expect(mockedAxios.get).not.toHaveBeenCalled();
+  });
+});
+
+describe('useKnowledgeBases handleRenameKB', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('prompts with the current name, PATCHes the trimmed new name and updates the list', async () => {
+    showPrompt.mockResolvedValue('  Neues Handbuch ');
+    const renamed = { ...personalKb, name: 'Neues Handbuch' };
+    mockedAxios.patch.mockResolvedValue({ data: renamed });
+
+    const { result } = setup();
+    act(() => { result.current.setKbs([personalKb]); });
+
+    await act(async () => { await result.current.handleRenameKB(personalKb, fakeEvent); });
+
+    expect(fakeEvent.stopPropagation).toHaveBeenCalled();
+    expect(showPrompt).toHaveBeenCalledWith('renameKbPrompt', 'Handbuch');
+    expect(mockedAxios.patch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/kb\/kb-1$/), { name: 'Neues Handbuch' });
+    expect(result.current.kbs).toEqual([renamed]);
+  });
+
+  it('propagates the renamed row into the current KB only when it is the same KB', async () => {
+    showPrompt.mockResolvedValue('Neu');
+    const renamed = { ...personalKb, name: 'Neu' };
+    mockedAxios.patch.mockResolvedValue({ data: renamed });
+
+    const { result } = setup();
+    await act(async () => { await result.current.handleRenameKB(personalKb); });
+
+    // setCurrentKb is React's state setter; the hook must use the functional
+    // form so a rename from the Home card of a KB that is NOT open never
+    // hijacks currentKb.
+    expect(setCurrentKb).toHaveBeenCalledTimes(1);
+    const updater = setCurrentKb.mock.calls[0][0] as (prev: KnowledgeBase | null) => KnowledgeBase | null;
+    expect(typeof updater).toBe('function');
+    expect(updater(null)).toBeNull();
+    expect(updater(subscribedGlobalKb)).toBe(subscribedGlobalKb);
+    expect(updater(personalKb)).toEqual(renamed);
+  });
+
+  it('updates a public KB in globalKbs', async () => {
+    showPrompt.mockResolvedValue('Katalog 2');
+    const renamed = { ...subscribedGlobalKb, name: 'Katalog 2' };
+    mockedAxios.patch.mockResolvedValue({ data: renamed });
+
+    const { result } = setup();
+    act(() => { result.current.setGlobalKbs([subscribedGlobalKb]); });
+
+    await act(async () => { await result.current.handleRenameKB(subscribedGlobalKb); });
+
+    expect(result.current.globalKbs).toEqual([renamed]);
+  });
+
+  it.each([null, '', '   ', 'Handbuch', ' Handbuch '])('does nothing when the prompt yields %j', async (answer) => {
+    showPrompt.mockResolvedValue(answer);
+
+    const { result } = setup();
+    act(() => { result.current.setKbs([personalKb]); });
+
+    await act(async () => { await result.current.handleRenameKB(personalKb); });
+
+    expect(mockedAxios.patch).not.toHaveBeenCalled();
+    expect(result.current.kbs).toEqual([personalKb]);
+  });
+
+  it('toasts and leaves the list untouched when the PATCH fails', async () => {
+    showPrompt.mockResolvedValue('Neu');
+    mockedAxios.patch.mockRejectedValue(new Error('403'));
+
+    const { result } = setup();
+    act(() => { result.current.setKbs([personalKb]); });
+
+    await act(async () => { await result.current.handleRenameKB(personalKb); });
+
+    expect(toastError).toHaveBeenCalledWith('kbRenameError');
+    expect(result.current.kbs).toEqual([personalKb]);
+    expect(setCurrentKb).not.toHaveBeenCalled();
   });
 });

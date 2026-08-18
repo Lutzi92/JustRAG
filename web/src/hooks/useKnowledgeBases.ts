@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, type Dispatch, type SetStateAction } from 'react';
 import axios from 'axios';
 import type { KnowledgeBase, GeneratedContent } from '../types';
 import { API_BASE_URL } from '../api';
@@ -10,7 +10,8 @@ import { useKbRemoval } from './useKbRemoval';
 interface UseKnowledgeBasesParams {
   onKBSelected: () => void;
   handleGoHome: () => void;
-  setCurrentKb: (kb: KnowledgeBase | null) => void;
+  // React state setter (functional form needed by handleRenameKB).
+  setCurrentKb: Dispatch<SetStateAction<KnowledgeBase | null>>;
   setIsPro: (isPro: boolean) => void;
   setKbView: (view: 'chat' | 'dashboard' | 'research' | 'studio' | 'mindmap') => void;
   setView: (view: 'home' | 'kb' | 'admin' | 'profile' | 'global-kb-settings' | 'kb-settings' | 'privacy' | 'accessibility') => void;
@@ -96,6 +97,30 @@ export function useKnowledgeBases({
     }
   };
 
+  // Rename via the same prompt dialog KB creation uses, prefilled with the
+  // current name. Owner-only on private KBs, system-admin-only on public ones
+  // — canRenameKb decides whether a trigger is shown, the server (kbaccess.
+  // CanRename on PATCH /api/kb/{id}) enforces it. The response row replaces
+  // the KB in whichever list holds it, and in currentKb only if that IS the
+  // renamed KB (functional setter — a rename from the Home card of a KB that
+  // is not open must not hijack the open one).
+  const handleRenameKB = useCallback(async (kb: KnowledgeBase, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const answer = await showPrompt(t('renameKbPrompt'), kb.name);
+    const name = (answer ?? '').trim();
+    if (!name || name === kb.name) return;
+    try {
+      const res = await axios.patch(`${API_BASE_URL}/api/kb/${kb.id}`, { name });
+      const updated: KnowledgeBase = res.data;
+      setKbs(prev => prev.map(k => k.id === updated.id ? updated : k));
+      setGlobalKbs(prev => prev.map(k => k.id === updated.id ? updated : k));
+      setCurrentKb(prev => (prev && prev.id === updated.id ? updated : prev));
+    } catch (err: unknown) {
+      console.error('Failed to rename KB:', err);
+      toast.error(t('kbRenameError'));
+    }
+  }, [showPrompt, t, toast, setCurrentKb]);
+
   // Thin caller: removeKb (useKbRemoval) owns the delete-vs-leave decision,
   // the confirmation dialog(s), and the request. This only reacts to the
   // outcome — updating the local list and navigating home on success,
@@ -178,7 +203,7 @@ export function useKnowledgeBases({
 
   return {
     kbs, setKbs, globalKbs, setGlobalKbs,
-    fetchKBs, handleCreateKB, handleSelectKB, handleOpenKbById, handleDeleteKB, removingKb,
+    fetchKBs, handleCreateKB, handleSelectKB, handleOpenKbById, handleRenameKB, handleDeleteKB, removingKb,
     handleCreateGlobalKB, handleDeleteGlobalKB, handleOpenGlobalKbSettings, handleOpenKbSettings,
   };
 }

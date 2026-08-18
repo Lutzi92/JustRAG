@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { KnowledgeBase } from '../types';
-import { canOpenKbAdvancedSettings, hasAdvancedSystemRole, hasKbAdminRole } from './kbAccess';
+import { canOpenKbAdvancedSettings, canRenameKb, hasAdvancedSystemRole, hasKbAdminRole } from './kbAccess';
 
 type KbShape = Pick<KnowledgeBase, 'myRole' | 'isGlobal' | 'visibility'>;
 
@@ -75,5 +75,44 @@ describe('canOpenKbAdvancedSettings', () => {
   it('refuses when there is no KB at all', () => {
     expect(canOpenKbAdvancedSettings(null, 'superadmin')).toBe(false);
     expect(canOpenKbAdvancedSettings(undefined, 'superadmin')).toBe(false);
+  });
+});
+
+describe('canRenameKb', () => {
+  it('grants the owner of a private KB', () => {
+    expect(canRenameKb({ ...privateKb, myRole: 'owner' }, 'user')).toBe(true);
+  });
+
+  it('grants a superadmin without any kb_members row', () => {
+    expect(canRenameKb({ ...privateKb }, 'superadmin')).toBe(true);
+  });
+
+  it.each(['admin', 'edit', 'view'] as const)('denies a private-KB %s member', (role) => {
+    expect(canRenameKb({ ...privateKb, myRole: role }, 'user')).toBe(false);
+  });
+
+  it('denies a private-KB admin member even with system role admin', () => {
+    expect(canRenameKb({ ...privateKb, myRole: 'admin' }, 'admin')).toBe(false);
+  });
+
+  it('grants a system admin on a public KB', () => {
+    expect(canRenameKb({ ...publicKb }, 'admin')).toBe(true);
+  });
+
+  it('grants a system admin on a public KB even when they hold an admin member row', () => {
+    expect(canRenameKb({ ...publicKb, myRole: 'admin' }, 'admin')).toBe(true);
+  });
+
+  it('denies a public-KB admin member without a system admin role', () => {
+    expect(canRenameKb({ ...publicKb, myRole: 'admin' }, 'user')).toBe(false);
+  });
+
+  it('denies a public-KB viewer', () => {
+    expect(canRenameKb({ ...publicKb }, 'user')).toBe(false);
+  });
+
+  it('denies when the KB is absent', () => {
+    expect(canRenameKb(null, 'superadmin')).toBe(false);
+    expect(canRenameKb(undefined, 'superadmin')).toBe(false);
   });
 });
