@@ -115,7 +115,7 @@ func (h *Handler) CreateLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.log(ctx, createdBy, "kb_invite_link_create", kbID, map[string]any{"role": body.Role})
+	h.log(ctx, createdBy, "kb_invite_link_create", kbID, map[string]any{"linkId": link.ID, "role": body.Role})
 	httputil.WriteJSONCtx(ctx, w, http.StatusCreated, link)
 }
 
@@ -158,7 +158,7 @@ func (h *Handler) Redeem(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to redeem invite link: %w", err))
 	default:
-		h.log(ctx, u.ID, "kb_invite_link_redeem", res.KBID, map[string]any{"role": res.Role})
+		h.log(ctx, u.ID, "kb_invite_link_redeem", res.KBID, map[string]any{"linkId": res.LinkID, "role": res.Role})
 		httputil.WriteJSONCtx(ctx, w, http.StatusOK, res)
 	}
 }

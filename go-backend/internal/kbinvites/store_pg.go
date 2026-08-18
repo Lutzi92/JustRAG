@@ -33,8 +33,11 @@ type Link struct {
 
 // RedeemResult describes the outcome of redeeming a token. Role is the
 // caller's role on the KB AFTER redeeming, which is not necessarily the
-// link's role — an existing stronger role wins.
+// link's role — an existing stronger role wins. LinkID lets the audit trail
+// answer "a link leaked — who joined through it?" instead of only "someone
+// joined this KB somehow".
 type RedeemResult struct {
+	LinkID        string `json:"linkId"`
 	KBID          string `json:"kbId"`
 	KBName        string `json:"kbName"`
 	Role          string `json:"role"`
@@ -124,12 +127,12 @@ const roleRankSQL = `CASE %s WHEN 'view' THEN 0 WHEN 'edit' THEN 1
 func (s *PGStore) Redeem(ctx context.Context, token, userID string) (RedeemResult, error) {
 	var res RedeemResult
 	err := pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var linkID, linkRole string
+		var linkRole string
 		err := tx.QueryRow(ctx, `
 			SELECT l.id::text, l.kb_id::text, l.role, k.name
 			FROM kb_invite_links l
 			JOIN knowledge_bases k ON k.id = l.kb_id
-			WHERE l.token = $1`, token).Scan(&linkID, &res.KBID, &linkRole, &res.KBName)
+			WHERE l.token = $1`, token).Scan(&res.LinkID, &res.KBID, &linkRole, &res.KBName)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -201,7 +204,7 @@ func (s *PGStore) Redeem(ctx context.Context, token, userID string) (RedeemResul
 		if _, err := tx.Exec(ctx, `
 			UPDATE kb_invite_links
 			SET redemption_count = redemption_count + 1, last_used_at = NOW()
-			WHERE id = $1::uuid`, linkID); err != nil {
+			WHERE id = $1::uuid`, res.LinkID); err != nil {
 			return fmt.Errorf("Redeem: count redemption: %w", err)
 		}
 
