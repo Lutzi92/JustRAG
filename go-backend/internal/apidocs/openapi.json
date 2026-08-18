@@ -484,10 +484,6 @@
             "type": "integer",
             "nullable": true
           },
-          "studioConfig": {
-            "type": "object",
-            "nullable": true
-          },
           "createdAt": {
             "type": "string",
             "format": "date-time"

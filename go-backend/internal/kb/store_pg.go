@@ -52,21 +52,21 @@ type kbFullRow struct {
 	IsGlobal    bool    `db:"is_global"`
 	// Visibility ist die gespeicherte Wahrheit; IsGlobal daneben ist der aus
 	// ihr berechnete Alias, den bestehende Konsumenten weiter lesen.
-	Visibility     string          `db:"visibility"`
-	IsPublished    bool            `db:"is_published"`
-	Language       string          `db:"language"`
-	AIConfigID     *string         `db:"ai_config_id"`
-	ChatModel      *string         `db:"chat_model"`
-	EmbeddingModel *string         `db:"embedding_model"`
-	RerankModel    *string         `db:"rerank_model"`
-	TTSModel       *string         `db:"tts_model"`
-	SttModel       *string         `db:"stt_model"`
-	SystemPrompt   *string         `db:"system_prompt"`
-	HeaderText     *string         `db:"header_text"`
-	ExamplePrompts *string         `db:"example_prompts"`
-	ChunkSize      *int            `db:"chunk_size"`
-	ChunkOverlap   *int            `db:"chunk_overlap"`
-	CreatedAt      time.Time       `db:"created_at"`
+	Visibility     string    `db:"visibility"`
+	IsPublished    bool      `db:"is_published"`
+	Language       string    `db:"language"`
+	AIConfigID     *string   `db:"ai_config_id"`
+	ChatModel      *string   `db:"chat_model"`
+	EmbeddingModel *string   `db:"embedding_model"`
+	RerankModel    *string   `db:"rerank_model"`
+	TTSModel       *string   `db:"tts_model"`
+	SttModel       *string   `db:"stt_model"`
+	SystemPrompt   *string   `db:"system_prompt"`
+	HeaderText     *string   `db:"header_text"`
+	ExamplePrompts *string   `db:"example_prompts"`
+	ChunkSize      *int      `db:"chunk_size"`
+	ChunkOverlap   *int      `db:"chunk_overlap"`
+	CreatedAt      time.Time `db:"created_at"`
 	// Optional owner attribution — only populated by queries that LEFT JOIN
 	// the users table (e.g. ListKnowledgeBases). Other queries leave these nil.
 	OwnerFirstName *string `db:"owner_first_name"`

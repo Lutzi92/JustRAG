@@ -38,22 +38,22 @@ var _ Store = (*PGStore)(nil)
 
 // globalKBDBRow is an internal struct with db tags for scanning global KB rows.
 type globalKBDBRow struct {
-	ID             string          `db:"id"`
-	Name           string          `db:"name"`
-	Description    *string         `db:"description"`
-	Language       string          `db:"language"`
-	IsPublished    bool            `db:"is_published"`
-	AutoSubscribe  bool            `db:"auto_subscribe"`
-	SystemPrompt   *string         `db:"system_prompt"`
-	HeaderText     *string         `db:"header_text"`
-	ExamplePrompts *string         `db:"example_prompts"`
-	AIConfigID     *string         `db:"ai_config_id"`
-	ChatModel      *string         `db:"chat_model"`
-	EmbeddingModel *string         `db:"embedding_model"`
-	RerankModel    *string         `db:"rerank_model"`
-	TTSModel       *string         `db:"tts_model"`
-	SttModel       *string         `db:"stt_model"`
-	CreatedAt      time.Time       `db:"created_at"`
+	ID             string    `db:"id"`
+	Name           string    `db:"name"`
+	Description    *string   `db:"description"`
+	Language       string    `db:"language"`
+	IsPublished    bool      `db:"is_published"`
+	AutoSubscribe  bool      `db:"auto_subscribe"`
+	SystemPrompt   *string   `db:"system_prompt"`
+	HeaderText     *string   `db:"header_text"`
+	ExamplePrompts *string   `db:"example_prompts"`
+	AIConfigID     *string   `db:"ai_config_id"`
+	ChatModel      *string   `db:"chat_model"`
+	EmbeddingModel *string   `db:"embedding_model"`
+	RerankModel    *string   `db:"rerank_model"`
+	TTSModel       *string   `db:"tts_model"`
+	SttModel       *string   `db:"stt_model"`
+	CreatedAt      time.Time `db:"created_at"`
 }
 
 // globalKBSelectCols is the column list every GlobalKBRow query selects.

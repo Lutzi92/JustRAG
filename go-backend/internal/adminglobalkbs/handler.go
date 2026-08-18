@@ -25,22 +25,22 @@ import (
 // this row must include every column the admin UI renders — otherwise the
 // PATCH response wipes local state and the next render shows stale values.
 type GlobalKBRow struct {
-	ID             string          `json:"id"             db:"id"`
-	Name           string          `json:"name"           db:"name"`
-	Description    *string         `json:"description"    db:"description"`
-	Language       string          `json:"language"       db:"language"`
-	IsPublished    bool            `json:"isPublished"    db:"is_published"`
-	AutoSubscribe  bool            `json:"autoSubscribe"  db:"auto_subscribe"`
-	SystemPrompt   *string         `json:"systemPrompt"   db:"system_prompt"`
-	HeaderText     *string         `json:"headerText"     db:"header_text"`
-	ExamplePrompts *string         `json:"examplePrompts" db:"example_prompts"`
-	AIConfigID     *string         `json:"aiConfigId"     db:"ai_config_id"`
-	ChatModel      *string         `json:"chatModel"      db:"chat_model"`
-	EmbeddingModel *string         `json:"embeddingModel" db:"embedding_model"`
-	RerankModel    *string         `json:"rerankModel"    db:"rerank_model"`
-	TTSModel       *string         `json:"ttsModel"       db:"tts_model"`
-	SttModel       *string         `json:"sttModel"       db:"stt_model"`
-	CreatedAt      time.Time       `json:"createdAt"      db:"created_at"`
+	ID             string    `json:"id"             db:"id"`
+	Name           string    `json:"name"           db:"name"`
+	Description    *string   `json:"description"    db:"description"`
+	Language       string    `json:"language"       db:"language"`
+	IsPublished    bool      `json:"isPublished"    db:"is_published"`
+	AutoSubscribe  bool      `json:"autoSubscribe"  db:"auto_subscribe"`
+	SystemPrompt   *string   `json:"systemPrompt"   db:"system_prompt"`
+	HeaderText     *string   `json:"headerText"     db:"header_text"`
+	ExamplePrompts *string   `json:"examplePrompts" db:"example_prompts"`
+	AIConfigID     *string   `json:"aiConfigId"     db:"ai_config_id"`
+	ChatModel      *string   `json:"chatModel"      db:"chat_model"`
+	EmbeddingModel *string   `json:"embeddingModel" db:"embedding_model"`
+	RerankModel    *string   `json:"rerankModel"    db:"rerank_model"`
+	TTSModel       *string   `json:"ttsModel"       db:"tts_model"`
+	SttModel       *string   `json:"sttModel"       db:"stt_model"`
+	CreatedAt      time.Time `json:"createdAt"      db:"created_at"`
 }
 
 // GlobalKBEditorRow is the shape returned for an editor of a global KB — a
