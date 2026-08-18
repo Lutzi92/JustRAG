@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -154,6 +155,46 @@ func TestRedactSecretPath(t *testing.T) {
 	for _, p := range ordinary {
 		if got := redactSecretPath(p); got != p {
 			t.Errorf("redactSecretPath(%q) = %q, want unchanged %q", p, got, p)
+		}
+	}
+}
+
+// TestNormalizeRoute_DoesNotRetainRawInviteTokensInCache guards the
+// process-lifetime retention concern: routeCache must be keyed on the
+// REDACTED path, not the raw request path, or every distinct redeemed
+// invite/join token would be held as a sync.Map key (up to routeCacheMax)
+// for the life of the process. Feeding many distinct tokens through
+// normalizeRoute must collapse into (at most) one cache entry per route
+// shape, not one entry per token.
+func TestNormalizeRoute_DoesNotRetainRawInviteTokensInCache(t *testing.T) {
+	before := routeCacheSize.Load()
+
+	const n = 25
+	for i := range n {
+		token := fmt.Sprintf("distinct-invite-token-%02d-abcdefghijklmnop", i)
+		normalizeRoute("/api/invites/" + token + "/redeem")
+	}
+
+	grown := routeCacheSize.Load() - before
+	if grown > 1 {
+		t.Fatalf("routeCache grew by %d entries for %d distinct invite tokens; want <= 1 "+
+			"(cache must key on the redacted path, not the raw token)", grown, n)
+	}
+
+	const wantKey = "/api/invites/{token}/redeem"
+	v, ok := routeCache.Load(wantKey)
+	if !ok {
+		t.Fatalf("expected routeCache to hold the redacted key %q", wantKey)
+	}
+	if v.(string) != wantKey {
+		t.Errorf("cached value = %q, want %q", v, wantKey)
+	}
+
+	// None of the raw tokens themselves should be present as cache keys.
+	for i := range n {
+		token := fmt.Sprintf("distinct-invite-token-%02d-abcdefghijklmnop", i)
+		if _, ok := routeCache.Load("/api/invites/" + token + "/redeem"); ok {
+			t.Errorf("routeCache retained a raw invite token as a key: %s", token)
 		}
 	}
 }

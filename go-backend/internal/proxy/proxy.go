@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+
+	"github.com/justrag/go-backend/internal/middleware"
 )
 
 type Proxy struct {
@@ -35,7 +37,12 @@ func New(target string) (*Proxy, error) {
 	}
 
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		slog.Error("proxy error", "path", r.URL.Path, "error", err)
+		// This proxy only runs in dev mode (registerFrontendServing in
+		// app/routes.go), forwarding everything, including /join/{token},
+		// to the dev frontend server — so the invite-link secret can reach
+		// this error path too. Reuse middleware's single redaction
+		// definition rather than a second implementation.
+		slog.Error("proxy error", "path", middleware.RedactSecretPath(r.URL.Path), "error", err)
 		http.Error(w, `{"error":"Backend service unavailable"}`, http.StatusBadGateway)
 	}
 
