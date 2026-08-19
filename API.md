@@ -83,6 +83,10 @@ and `/kb/{id}/share[/{userId}]` endpoints.
 | DELETE | `/kb/{id}/members/{userId}` | admin |
 | POST | `/kb/{id}/members/bulk` | admin |
 | DELETE | `/kb/{id}/members/pending/{username}` | admin |
+| GET | `/kb/{id}/invite-links` | admin |
+| POST | `/kb/{id}/invite-links` | admin |
+| DELETE | `/kb/{id}/invite-links/{linkId}` | admin |
+| POST | `/invites/{token}/redeem` | authenticated (no KB role) |
 | POST | `/kb/{id}/transfer-owner` | owner |
 | DELETE | `/kb/{id}/membership` | view (self) |
 | GET | `/kb/{id}/membership/impact` | view (self) |
@@ -95,6 +99,11 @@ deletes them, and `GET /membership/impact` returns the chat count backing the
 confirmation dialog. The member list sits behind `admin`, not `view`: on a
 published global KB every authenticated caller resolves to `view`, and the
 roster is not theirs to read.
+
+An invite link is a permanent, revocable credential that grants the role it
+was minted with. `POST /invites/{token}/redeem` is deliberately not KB-gated —
+the caller has no role on the KB yet — and is rate-limited to 10 requests per
+minute. Redeeming never lowers an existing role and never touches the owner.
 
 ### Files and source ingestion
 

@@ -252,7 +252,11 @@ func logRateLimitRejection(r *http.Request, ip, source string, count, max int) {
 	logctx.From(r.Context()).Warn("middleware.ratelimit.rejected",
 		slog.String("ip", ip),
 		slog.String("source", source),
-		slog.String("path", r.URL.Path),
+		// redactSecretPath (metrics.go) masks the invite-link token: this
+		// WARN line is emitted precisely when someone is hammering a leaked
+		// link, i.e. exactly the log an operator would export or paste into
+		// a ticket while investigating.
+		slog.String("path", redactSecretPath(r.URL.Path)),
 		slog.String("method", r.Method),
 		slog.Int("count", count),
 		slog.Int("limit", max),

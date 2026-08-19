@@ -26,7 +26,9 @@ func Recovery(next http.Handler) http.Handler {
 				"error", err,
 				"stack", string(debug.Stack()),
 				"method", r.Method,
-				"path", r.URL.Path,
+				// redactSecretPath (metrics.go) masks the invite-link token
+				// before it lands next to a full stack trace.
+				"path", redactSecretPath(r.URL.Path),
 			)
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "Internal Server Error")
 		}()

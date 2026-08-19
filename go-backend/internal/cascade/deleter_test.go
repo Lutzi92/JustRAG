@@ -402,6 +402,39 @@ func TestCascadeDropsTabularTables(t *testing.T) {
 	}
 }
 
+// Ein Einladungslink haengt an der KB und muss mit ihr verschwinden — das ist
+// die Anforderung, die dieser Test als Regression pinnt. Heute wird das von
+// ZWEI voneinander unabhaengigen Mechanismen garantiert, von denen jeder
+// allein ausreicht: dem FK (kb_id ... ON DELETE CASCADE) und der expliziten
+// DELETE-Zeile in deleteKBTransaction. Beide laufen in derselben Transaktion,
+// es gibt keinen beobachtbaren Zwischenzustand — dieser Test kann deshalb
+// NICHT erkennen, wenn die explizite Zeile allein entfernt wird (mutationsgetestet:
+// sie bleibt gruen). Das ist hier akzeptabel, weil die Zeile ohnehin nur die
+// Aufzaehlungs-Konvention dieser Datei erfuellt, nicht die Faelligkeit der
+// Loeschung selbst — die haengt am FK. Ein Test, der beide Mechanismen
+// zugleich pruefen will, muesste den FK vorruebergehend auf NO ACTION
+// umstellen; das ist keine Aussage ueber den Produktionscode und wird bewusst
+// nicht als staendiger Test gefuehrt (siehe Mutationsnachweis im Task-1-Report).
+func TestDeleteKB_RemovesInviteLinks(t *testing.T) {
+	mainPool, vectorPool := openTestPools(t)
+	_, kbID, _ := seedFixture(t, mainPool, false)
+	stor := localFS(t, mainPool, kbID)
+
+	ctx := context.Background()
+	if _, err := mainPool.Exec(ctx, `
+		INSERT INTO kb_invite_links (kb_id, token, role)
+		VALUES ($1::uuid, 'cascade-test-token', 'view')`, kbID); err != nil {
+		t.Fatalf("insert invite link: %v", err)
+	}
+
+	d := cascade.New(mainPool, vectorPool, stor)
+	if err := d.DeleteKB(ctx, kbID); err != nil {
+		t.Fatalf("DeleteKB: %v", err)
+	}
+
+	assertCountZero(t, mainPool, `SELECT count(*) FROM kb_invite_links WHERE kb_id = $1::uuid`, kbID)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

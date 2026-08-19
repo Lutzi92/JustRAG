@@ -1,9 +1,13 @@
 package middleware_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,6 +105,67 @@ func TestRateLimiter_IsolatesClients(t *testing.T) {
 
 	if rec2.Code != http.StatusOK {
 		t.Errorf("expected second client to be allowed, got %d", rec2.Code)
+	}
+}
+
+// TestRateLimiter_RedactsInviteTokenInRejectionLog guards against
+// logRateLimitRejection's "path" field (ratelimit.go) regressing back to the
+// raw r.URL.Path. This is the log an operator would export or paste into a
+// ticket while investigating someone hammering a leaked invite link, so it
+// must never carry the raw, permanent, non-expiring token.
+//
+// This test proves the CALL SITE redacts, not just that the helper works
+// (TestRedactSecretPath in metrics_test.go already covers the helper in
+// isolation). Mutation-tested: reverting the call site to r.URL.Path turns
+// this RED (verified manually; see the second-fix report).
+func TestRateLimiter_RedactsInviteTokenInRejectionLog(t *testing.T) {
+	const token = "kR3x9vQ2mN8pL5wZ7bT1cY6dF0hJ4sA-eG_uI2oK9rV3nB5"
+	path := "/api/invites/" + token + "/redeem"
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	cfg := config.RateLimitConfig{Window: 60 * time.Second, Max: 1}
+	limiter := middleware.NewRateLimiter(t.Context(), cfg)
+
+	handler := limiter.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// First request establishes the bucket.
+	req1 := httptest.NewRequest("POST", path, nil)
+	req1.RemoteAddr = "192.168.9.9:12345"
+	handler.ServeHTTP(httptest.NewRecorder(), req1)
+
+	// Second request from the same IP is rejected — this is what triggers
+	// logRateLimitRejection.
+	req2 := httptest.NewRequest("POST", path, nil)
+	req2.RemoteAddr = "192.168.9.9:12345"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req2)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d", rec.Code)
+	}
+
+	out := buf.String()
+	if out == "" {
+		t.Fatal("expected a rate-limit rejection log line, got none")
+	}
+	if strings.Contains(out, token) {
+		t.Fatalf("rate-limit rejection log leaked the invite token verbatim: %s", out)
+	}
+
+	var logLine struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &logLine); err != nil {
+		t.Fatalf("rejection log line is not valid JSON (%q): %v", out, err)
+	}
+	if logLine.Path != "/api/invites/{token}/redeem" {
+		t.Errorf("path = %q, want %q", logLine.Path, "/api/invites/{token}/redeem")
 	}
 }
 

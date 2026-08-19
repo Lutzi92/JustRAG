@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, User, Eye, Edit3, Loader2, Trash2, Clock, Users, Crown, Shield } from 'lucide-react';
-import type { KnowledgeBase, KbMember, KbRole, KbAssignableRole } from '../types';
+import { X, User, Eye, Edit3, Loader2, Trash2, Clock, Users, Crown, Shield, Link2, Copy } from 'lucide-react';
+import type { KnowledgeBase, KbMember, KbRole, KbAssignableRole, KbInviteLink } from '../types';
 import { motion } from 'framer-motion';
 import axios from 'axios';
 import { API_BASE_URL } from '../api';
@@ -11,6 +11,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useReducedMotion, getMotionProps } from '../hooks/useReducedMotion';
 import { useFormValidation } from '../hooks/useFormValidation';
 import { splitUsernames } from '../utils/splitUsernames';
+import { copyToClipboard } from '../utils/clipboard';
 
 // PendingInvite mirrors GET /api/kb/{id}/members' `pending` array
 // (kbmembers.PendingInvite: username/role/createdAt).
@@ -119,7 +120,7 @@ export const MembersModal: React.FC<MembersModalProps> = ({
     shareLoading, sharePermission, setSharePermission, onLookupUser, onConfirmShare,
     notFoundUsername, onPendingInvited, myRole,
 }) => {
-    const { t } = useTheme();
+    const { t, language } = useTheme();
     const { token } = useAuth();
     const { showConfirm } = useModalContext();
     const toast = useToast();
@@ -130,7 +131,7 @@ export const MembersModal: React.FC<MembersModalProps> = ({
     const [members, setMembers] = useState<KbMember[]>([]);
     const [loadingMembers, setLoadingMembers] = useState(false);
     const [pendingInvites, setPendingInvites] = useState<PendingMemberInvite[]>([]);
-    const [mode, setMode] = useState<'single' | 'bulk'>('single');
+    const [mode, setMode] = useState<'single' | 'bulk' | 'link'>('single');
     const [bulkText, setBulkText] = useState('');
     const [bulkPermission, setBulkPermission] = useState<KbAssignableRole>('view');
     const [bulkLoading, setBulkLoading] = useState(false);
@@ -158,6 +159,83 @@ export const MembersModal: React.FC<MembersModalProps> = ({
             fetchMembers();
         }
     }, [show, sharingKb, fetchMembers]);
+
+    const [inviteLinks, setInviteLinks] = useState<KbInviteLink[]>([]);
+    const [linkLabel, setLinkLabel] = useState('');
+    const [linkPermission, setLinkPermission] = useState<KbAssignableRole>('view');
+    const [linkLoading, setLinkLoading] = useState(false);
+
+    const fetchInviteLinks = useCallback(async () => {
+        if (!sharingKb || !token) return;
+        try {
+            const res = await axios.get(`${API_BASE_URL}/api/kb/${sharingKb.id}/invite-links`);
+            setInviteLinks(res.data.links ?? []);
+        } catch (err: unknown) {
+            console.error('Failed to fetch invite links:', err);
+            toast.error(t('inviteLinkFetchError'));
+        }
+    }, [sharingKb, token, toast, t]);
+
+    // Only fetched when the tab is actually opened: most sessions never touch
+    // invite links, and the modal already does one round trip on mount.
+    useEffect(() => {
+        if (show && mode === 'link') void fetchInviteLinks();
+    }, [show, mode, fetchInviteLinks]);
+
+    // The full URL is assembled client-side, so the backend never needs to
+    // know its own public origin.
+    const inviteLinkUrl = (link: KbInviteLink) => `${window.location.origin}/join/${link.token}`;
+
+    const formatInviteLinkLastUsed = (dateStr: string) =>
+        new Date(dateStr).toLocaleDateString(language === 'de' ? 'de-DE' : 'en-US', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+
+    const handleCreateInviteLink = async () => {
+        if (!sharingKb) return;
+        setLinkLoading(true);
+        try {
+            const res = await axios.post(`${API_BASE_URL}/api/kb/${sharingKb.id}/invite-links`, {
+                role: linkPermission,
+                label: linkLabel.trim(),
+            });
+            setInviteLinks(prev => [res.data, ...prev]);
+            setLinkLabel('');
+            toast.success(t('inviteLinkCreated'));
+        } catch (err: unknown) {
+            console.error('Failed to create invite link:', err);
+            toast.error(t('inviteLinkCreateError'));
+        } finally {
+            setLinkLoading(false);
+        }
+    };
+
+    const handleCopyInviteLink = async (link: KbInviteLink) => {
+        if (await copyToClipboard(inviteLinkUrl(link))) {
+            toast.success(t('inviteLinkCopied'));
+        } else {
+            toast.error(t('clipboardCopyFailed'));
+        }
+    };
+
+    // Optimistic with rollback, like handleRemoveMember. Unlike a pending
+    // invite this destroys something people already hold, so it confirms.
+    const handleRevokeInviteLink = async (linkId: string) => {
+        if (!sharingKb) return;
+        if (!await showConfirm(t('confirmRevokeInviteLink'))) return;
+        const prev = inviteLinks;
+        setInviteLinks(inviteLinks.filter(l => l.id !== linkId));
+        try {
+            await axios.delete(`${API_BASE_URL}/api/kb/${sharingKb.id}/invite-links/${linkId}`);
+        } catch {
+            setInviteLinks(prev);
+            toast.error(t('inviteLinkRevokeError'));
+        }
+    };
 
     // Parent closes the modal on successful share, so the member list refreshes on re-open.
     const handleConfirmShare = async () => {
@@ -297,6 +375,15 @@ export const MembersModal: React.FC<MembersModalProps> = ({
                     >
                         <Users size={16} aria-hidden="true" /> {t('bulkInvite')}
                     </button>
+                    <button
+                        role="tab"
+                        aria-selected={mode === 'link'}
+                        onClick={() => { setMode('link'); setBulkSummary(null); }}
+                        className={mode === 'link' ? 'search-button' : 'secondary-button'}
+                        style={{ flex: 1, padding: '0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}
+                    >
+                        <Link2 size={16} aria-hidden="true" /> {t('inviteLinks')}
+                    </button>
                 </div>
 
                 {mode === 'single' && (<>
@@ -432,6 +519,72 @@ export const MembersModal: React.FC<MembersModalProps> = ({
                                     .replace('{pending}', String(bulkSummary.pending.length))
                                     .replace('{already}', String(bulkSummary.alreadyHadAccess.length))}
                             </p>
+                        )}
+                    </div>
+                )}
+
+                {mode === 'link' && (
+                    <div>
+                        <div className="input-group" style={{ marginBottom: '1rem' }}>
+                            <label htmlFor="invite-link-label" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', display: 'block' }}>
+                                {t('inviteLinkLabel')}
+                            </label>
+                            <input
+                                id="invite-link-label"
+                                value={linkLabel}
+                                onChange={e => setLinkLabel(e.target.value)}
+                                maxLength={100}
+                                placeholder={t('inviteLinkLabelPlaceholder')}
+                            />
+                        </div>
+
+                        <RolePicker value={linkPermission} onChange={setLinkPermission} t={t} compact />
+
+                        <button
+                            onClick={handleCreateInviteLink}
+                            disabled={linkLoading}
+                            className="search-button"
+                            style={{ width: '100%', marginBottom: '1.5rem' }}
+                        >
+                            {linkLoading ? <Loader2 size={16} className="animate-spin" /> : <Link2 size={16} aria-hidden="true" />}
+                            {t('createInviteLink')}
+                        </button>
+
+                        {inviteLinks.length === 0 ? (
+                            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{t('noInviteLinks')}</p>
+                        ) : (
+                            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                {inviteLinks.map(link => {
+                                    const Icon = ROLE_ICON[link.role];
+                                    return (
+                                        <li key={link.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                    <Icon size={14} aria-hidden="true" />
+                                                    <span style={{ fontWeight: 500 }}>{link.label || t('inviteLinkUnnamed')}</span>
+                                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                                        {t(ROLE_LABEL_KEY[link.role])}
+                                                    </span>
+                                                </div>
+                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                                    {link.redemptionCount === 0
+                                                        ? t('inviteLinkNeverUsed')
+                                                        : `${t('inviteLinkUses')}: ${link.redemptionCount}`}
+                                                    {link.lastUsedAt && (
+                                                        <> · {t('inviteLinkLastUsed')}: {formatInviteLinkLastUsed(link.lastUsedAt)}</>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <button onClick={() => handleCopyInviteLink(link)} className="icon-button" aria-label={t('copyToClipboard')}>
+                                                <Copy size={16} />
+                                            </button>
+                                            <button onClick={() => handleRevokeInviteLink(link.id)} className="icon-button" aria-label={t('revokeInviteLink')}>
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </li>
+                                    );
+                                })}
+                            </ul>
                         )}
                     </div>
                 )}

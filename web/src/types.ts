@@ -238,6 +238,22 @@ export interface KbMember {
     createdAt: string;
 }
 
+// KbInviteLink mirrors one element of GET /api/kb/{id}/invite-links' `links`
+// array (kbinvites.Link). The token is returned in full on every read — the
+// link has to stay re-copyable, which is why it is stored in plaintext
+// server-side.
+export interface KbInviteLink {
+    id: string;
+    kbId: string;
+    token: string;
+    role: KbAssignableRole;
+    label: string | null;
+    createdByName: string | null;
+    createdAt: string;
+    redemptionCount: number;
+    lastUsedAt: string | null;
+}
+
 export interface KnowledgeBase {
     id: string;
     name: string;
