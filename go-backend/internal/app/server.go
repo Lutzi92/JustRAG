@@ -55,7 +55,7 @@ func RunServer(cfg *config.Config, version string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tracingShutdown, err := observability.InitTracing(ctx, "justrag-server", version)
+	tracingShutdown, err := observability.InitTracing(ctx, "justrag-server", version, middleware.RedactSecretPath)
 	if err != nil {
 		return fmt.Errorf("init tracing: %w", err)
 	}

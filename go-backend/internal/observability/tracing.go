@@ -34,7 +34,12 @@ type ShutdownFunc func(context.Context) error
 // OTEL_EXPORTER_OTLP_TRACES_HEADERS, OTEL_RESOURCE_ATTRIBUTES, etc.).
 //
 // serviceName is used as the default if OTEL_SERVICE_NAME is unset.
-func InitTracing(ctx context.Context, serviceName, version string) (ShutdownFunc, error) {
+//
+// redactPath, when non-nil, installs a span processor that rewrites the
+// url.path attribute otelhttp records from the raw request — see
+// pathRedactingProcessor for why the span-name formatter is not enough.
+// Callers without an HTTP surface (the worker) pass nil.
+func InitTracing(ctx context.Context, serviceName, version string, redactPath PathRedactor) (ShutdownFunc, error) {
 	// Honor both the signal-specific and the general OTLP endpoint env vars.
 	// The OTel SDK respects either; we only short-circuit when both are empty.
 	if os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") == "" && os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" {
@@ -62,10 +67,17 @@ func InitTracing(ctx context.Context, serviceName, version string) (ShutdownFunc
 		return nil, fmt.Errorf("otel resource: %w", err)
 	}
 
-	tp := sdktrace.NewTracerProvider(
+	opts := []sdktrace.TracerProviderOption{
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),
-	)
+	}
+	// Registered ahead of the batcher so the rewrite happens at span start,
+	// long before anything is exported.
+	if redactPath != nil {
+		opts = append(opts, sdktrace.WithSpanProcessor(pathRedactingProcessor{redact: redactPath}))
+	}
+
+	tp := sdktrace.NewTracerProvider(opts...)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},

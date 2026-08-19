@@ -72,7 +72,9 @@ func RunWorker(cfg *config.Config) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tracingShutdown, err := observability.InitTracing(ctx, "justrag-worker", "")
+	// nil redactor: the worker serves no HTTP surface, so no URL path — and
+	// therefore no invite token — ever reaches a span here.
+	tracingShutdown, err := observability.InitTracing(ctx, "justrag-worker", "", nil)
 	if err != nil {
 		return fmt.Errorf("init tracing: %w", err)
 	}

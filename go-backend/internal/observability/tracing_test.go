@@ -25,7 +25,7 @@ func installTestExporter(t *testing.T) (*tracetest.InMemoryExporter, func()) {
 
 func TestInitTracing_NoEndpointReturnsNoopShutdown(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
-	shutdown, err := InitTracing(context.Background(), "justrag-test", "0.0.0")
+	shutdown, err := InitTracing(context.Background(), "justrag-test", "0.0.0", nil)
 	if err != nil {
 		t.Fatalf("expected no error when endpoint empty, got %v", err)
 	}
