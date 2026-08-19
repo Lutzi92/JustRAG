@@ -37,7 +37,7 @@ require (
 	github.com/rs/cors v1.11.1
 	github.com/xuri/excelize/v2 v2.10.1
 	golang.org/x/crypto v0.53.0
-	golang.org/x/net v0.55.0
+	golang.org/x/net v0.56.0
 	golang.org/x/sync v0.21.0
 	golang.org/x/text v0.39.0
 	golang.org/x/time v0.14.0
@@ -46,7 +46,7 @@ require (
 require (
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/extrame/xls v0.0.1
-	github.com/go-git/go-git/v5 v5.19.1
+	github.com/go-git/go-git/v5 v5.19.2
 	github.com/imroc/req/v3 v3.57.0
 	github.com/klauspost/compress v1.18.4
 	github.com/pgvector/pgvector-go v0.4.0
