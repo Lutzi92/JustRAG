@@ -26,7 +26,8 @@ export const translations = {
     joinLinkJoined: { de: '"{kb}" wurde zu Ihren Wissensdatenbanken hinzugefügt', en: 'You joined "{kb}"' },
     joinLinkAlreadyMember: { de: 'Sie haben bereits Zugriff auf diese Wissensdatenbank', en: 'You already have access to this knowledge base' },
     joinLinkInvalid: { de: 'Dieser Einladungslink ist ungültig oder wurde widerrufen', en: 'This invite link is invalid or has been revoked' },
-    joinLinkRetry: { de: 'Beitritt konnte nicht abgeschlossen werden. Bitte versuchen Sie es erneut.', en: 'Could not complete the join. Please try again.' },
+    joinLinkRetry: { de: 'Beitritt konnte nicht abgeschlossen werden. Bitte laden Sie die Seite neu.', en: 'Could not complete the join. Please reload the page.' },
+    joinLinkFailed: { de: 'Beitritt fehlgeschlagen. Bitte öffnen Sie den Einladungslink erneut oder wenden Sie sich an die Person, die ihn geteilt hat.', en: 'Joining failed. Please open the invite link again or contact whoever shared it.' },
 
     // Accessibility
     skipToChat: { de: 'Zum Chat springen', en: 'Skip to chat' },

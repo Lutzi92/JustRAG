@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import axios from 'axios';
 import { useJoinRedeem } from './useJoinRedeem';
-import { JOIN_TOKEN_KEY } from './useJoinLink';
+import { JOIN_TOKEN_KEY, JOIN_ATTEMPTS_KEY, MAX_JOIN_ATTEMPTS } from './useJoinLink';
 
 vi.mock('axios');
 const mockedAxios = axios as unknown as {
@@ -116,5 +116,78 @@ describe('useJoinRedeem', () => {
 
     await waitFor(() => expect(openKbById).toHaveBeenCalledTimes(1));
     expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  // The re-park introduced for retryable failures is unconditional per mount,
+  // so without a budget a DURABLE non-404 error re-fires a request and an
+  // error toast on every page load for the rest of the session. Each mount is
+  // one page load; after MAX_JOIN_ATTEMPTS the token must be dropped.
+  it('stops re-parking once the attempt budget is spent', async () => {
+    window.sessionStorage.setItem(JOIN_TOKEN_KEY, 'tok');
+    vi.mocked(axios.post).mockRejectedValue(axiosErr(500));
+    const openKbById = vi.fn();
+
+    // Each renderHook is a fresh mount, i.e. a fresh page load.
+    for (let attempt = 1; attempt < MAX_JOIN_ATTEMPTS; attempt++) {
+      renderHook(() => useJoinRedeem({ openKbById }));
+      await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('joinLinkRetry'));
+      expect(window.sessionStorage.getItem(JOIN_TOKEN_KEY)).toBe('tok');
+      vi.clearAllMocks();
+    }
+
+    renderHook(() => useJoinRedeem({ openKbById }));
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('joinLinkFailed'));
+    expect(toastMock.error).not.toHaveBeenCalledWith('joinLinkRetry');
+    expect(window.sessionStorage.getItem(JOIN_TOKEN_KEY)).toBeNull();
+
+    // A further page load must do nothing at all — no token, no request.
+    vi.clearAllMocks();
+    renderHook(() => useJoinRedeem({ openKbById }));
+    await waitFor(() => expect(axios.post).not.toHaveBeenCalled());
+    expect(toastMock.error).not.toHaveBeenCalled();
+  });
+
+  it('clears the attempt budget after a success, so a later failure gets its full retries', async () => {
+    window.sessionStorage.setItem(JOIN_TOKEN_KEY, 'tok');
+    window.sessionStorage.setItem(JOIN_ATTEMPTS_KEY, String(MAX_JOIN_ATTEMPTS - 1));
+    vi.mocked(axios.post).mockResolvedValue({
+      data: { kbId: 'kb-9', kbName: 'Kurs', role: 'view', alreadyMember: false },
+    });
+
+    renderHook(() => useJoinRedeem({ openKbById: vi.fn().mockResolvedValue(undefined) }));
+
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalled());
+    expect(window.sessionStorage.getItem(JOIN_ATTEMPTS_KEY)).toBeNull();
+  });
+
+  it('clears the attempt budget on a terminal 404', async () => {
+    window.sessionStorage.setItem(JOIN_TOKEN_KEY, 'bad');
+    window.sessionStorage.setItem(JOIN_ATTEMPTS_KEY, '1');
+    vi.mocked(axios.post).mockRejectedValue(axiosErr(404));
+
+    renderHook(() => useJoinRedeem({ openKbById: vi.fn() }));
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('joinLinkInvalid'));
+    expect(window.sessionStorage.getItem(JOIN_ATTEMPTS_KEY)).toBeNull();
+  });
+
+  // An AxiosError carries config.url, which contains the token. Printing the
+  // error object would put a live credential in the browser console — and in
+  // any error-reporting SDK wired up later.
+  it('does not print the token when logging a failure', async () => {
+    const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const token = 'AbCdEf0123456789AbCdEf0123456789AbCdEf012';
+    window.sessionStorage.setItem(JOIN_TOKEN_KEY, token);
+    vi.mocked(axios.post).mockRejectedValue(Object.assign(axiosErr(500), {
+      config: { url: `/api/invites/${token}/redeem` },
+    }));
+
+    renderHook(() => useJoinRedeem({ openKbById: vi.fn() }));
+
+    await waitFor(() => expect(consoleErr).toHaveBeenCalled());
+    for (const call of consoleErr.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain(token);
+    }
+    consoleErr.mockRestore();
   });
 });

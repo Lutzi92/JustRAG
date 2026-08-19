@@ -60,3 +60,34 @@ export function takeJoinToken(): string | null {
 export function parkJoinToken(token: string): void {
     storage()?.setItem(JOIN_TOKEN_KEY, token);
 }
+
+// Attempt budget for re-parked tokens. Re-parking is unconditional for every
+// non-404 failure, so a DURABLE error — an invite row pointing at a
+// half-deleted KB, a backend stuck returning 500 — would otherwise re-fire a
+// request and an error toast on every page load for the rest of the tab
+// session, with no way for the user to stop it. Two attempts survives a
+// genuine blip (a dropped connection, one rate-limited burst) without turning
+// a permanent failure into a permanent loop.
+export const JOIN_ATTEMPTS_KEY = 'pendingJoinAttempts';
+export const MAX_JOIN_ATTEMPTS = 2;
+
+/**
+ * Records one failed attempt and reports whether another is allowed.
+ * Returns true while the budget lasts, false once it is spent.
+ */
+export function recordJoinAttempt(): boolean {
+    const s = storage();
+    if (!s) return false;
+    const attempts = Number(s.getItem(JOIN_ATTEMPTS_KEY) ?? '0') + 1;
+    if (attempts >= MAX_JOIN_ATTEMPTS) {
+        s.removeItem(JOIN_ATTEMPTS_KEY);
+        return false;
+    }
+    s.setItem(JOIN_ATTEMPTS_KEY, String(attempts));
+    return true;
+}
+
+/** Clears the attempt budget — on success, and on a terminal 404. */
+export function clearJoinAttempts(): void {
+    storage()?.removeItem(JOIN_ATTEMPTS_KEY);
+}

@@ -3,7 +3,7 @@ import axios from 'axios';
 import { API_BASE_URL } from '../api';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { takeJoinToken, parkJoinToken } from './useJoinLink';
+import { takeJoinToken, parkJoinToken, recordJoinAttempt, clearJoinAttempts } from './useJoinLink';
 
 interface RedeemResponse {
     kbId: string;
@@ -27,6 +27,11 @@ interface UseJoinRedeemParams {
  * limit, 5xx, a dropped connection) is not a verdict on the link, so the
  * token is re-parked for a retry and the user gets a distinct, retryable
  * message instead of being told the link is broken.
+ *
+ * Re-parking is budgeted (MAX_JOIN_ATTEMPTS). Without a budget a durable
+ * non-404 error would re-fire a request and an error toast on every page load
+ * for the rest of the session; once the budget is spent the token is dropped
+ * and the user is told plainly that it did not work.
  */
 export function useJoinRedeem({ openKbById }: UseJoinRedeemParams): void {
     const toast = useToast();
@@ -51,12 +56,23 @@ export function useJoinRedeem({ openKbById }: UseJoinRedeemParams): void {
                     `${API_BASE_URL}/api/invites/${encodeURIComponent(token)}/redeem`);
                 result = res.data;
             } catch (err: unknown) {
-                console.error('Invite-link redemption failed:', err);
-                if (axios.isAxiosError(err) && err.response?.status === 404) {
+                // Logged without the error object: an AxiosError carries
+                // config.url, which contains the token — printing it would put
+                // a live credential in the browser console (and in any
+                // error-reporting SDK wired up later).
+                const status = axios.isAxiosError(err) ? err.response?.status ?? 0 : 0;
+                console.error('Invite-link redemption failed with status', status);
+
+                if (status === 404) {
+                    clearJoinAttempts();
                     toast.error(t('joinLinkInvalid'));
-                } else {
+                } else if (recordJoinAttempt()) {
                     parkJoinToken(token);
                     toast.error(t('joinLinkRetry'));
+                } else {
+                    // Budget spent — stop re-parking, or this repeats on every
+                    // page load for the rest of the session.
+                    toast.error(t('joinLinkFailed'));
                 }
                 return;
             }
@@ -66,6 +82,7 @@ export function useJoinRedeem({ openKbById }: UseJoinRedeemParams): void {
             // threw, catching it above would produce a contradictory
             // "invalid link" toast right after the success toast for a join
             // that actually succeeded.
+            clearJoinAttempts();
             toast.success(result.alreadyMember
                 ? t('joinLinkAlreadyMember')
                 : t('joinLinkJoined').replace('{kb}', result.kbName));
