@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -317,5 +318,66 @@ func TestRunComparisonChatAuthz(t *testing.T) {
 	}
 	if called {
 		t.Fatal("engine must not run for a non-owner (authz must precede the engine)")
+	}
+}
+
+// --- Follow-up over a prior upload -----------------------------------------
+//
+// The whole reason the document comparison stayed a chat turn (rather than
+// becoming a workspace artifact) is that the user can keep asking about the
+// uploaded document afterwards. That promise rests on two pieces which had no
+// test at all: the gate that decides a turn carries a prior upload, and the
+// block that renders the document into the system prompt.
+
+func TestShouldInjectFollowUpContext(t *testing.T) {
+	cases := []struct {
+		name          string
+		attachmentID  string
+		runComparison bool
+		hasStore      bool
+		want          bool
+	}{
+		{"follow-up turn over a prior upload", "att1", false, true, true},
+		{"fresh comparison run gets the document from the orchestrator", "att1", true, true, false},
+		{"no attachment at all", "", false, true, false},
+		{"store not wired", "att1", false, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldInjectFollowUpContext(tc.attachmentID, tc.runComparison, tc.hasStore); got != tc.want {
+				t.Errorf("shouldInjectFollowUpContext(%q, %v, %v) = %v, want %v",
+					tc.attachmentID, tc.runComparison, tc.hasStore, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildFollowUpContextCarriesDocumentAndFindings(t *testing.T) {
+	att := chatattach.Attachment{
+		Filename: "entwurf_v3.docx",
+		FullText: "Die Frist betraegt vier Wochen.",
+		Findings: []chatattach.Finding{{Mode: "contradiction", Severity: "high", Issue: "Frist weicht ab"}},
+	}
+	got := buildFollowUpContext(att)
+
+	for _, want := range []string{"entwurf_v3.docx", "Die Frist betraegt vier Wochen.", "Frist weicht ab"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("follow-up context is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBuildFollowUpContextCapsLongDocuments(t *testing.T) {
+	att := chatattach.Attachment{
+		Filename: "gross.docx",
+		FullText: strings.Repeat("ä", 10000),
+	}
+	got := buildFollowUpContext(att)
+
+	if len([]rune(got)) > 5000 {
+		t.Errorf("uncapped follow-up context (%d runes) would crowd out the KB prompt", len([]rune(got)))
+	}
+	if !strings.Contains(got, "…") {
+		t.Error("a truncated document should say so, otherwise the model treats a cut-off text as complete")
 	}
 }

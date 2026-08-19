@@ -299,7 +299,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// and foreign-owned attachments are silently skipped. Threads through both
 	// the deep-chat path and the standard PrepareChatContext path because both
 	// receive kbSystemPrompt below.
-	if body.AttachmentID != "" && !runCompare && h.attachmentStore != nil {
+	if shouldInjectFollowUpContext(body.AttachmentID, runCompare, h.attachmentStore != nil) {
 		if att, aerr := h.attachmentStore.Get(ctx, body.AttachmentID); aerr == nil && att.UserID == user.ID {
 			kbSystemPrompt = prependBlock(buildFollowUpContext(att), kbSystemPrompt)
 		}
