@@ -821,3 +821,104 @@ func TestGetWorkspacePresetsDegradesToGlobalWhenKBOverrideLoadFails(t *testing.T
 		t.Fatalf("analysis[0].Label = %q, want the global value %q (degrade on load failure)", got, "Global")
 	}
 }
+
+// TestGenerateAnalysisAgentPathCarriesDateLine pins that an agent-driven
+// analysis knows what "today" is. The chat path supplies CurrentDateLine
+// (http_send.go) and chat_date_awareness_enabled defaults ON, so without it an
+// agent analysis cannot resolve "seit Mai" while the same agent can in chat —
+// an inconsistency in a path this rework introduced.
+func TestGenerateAnalysisAgentPathCarriesDateLine(t *testing.T) {
+	var requests []ai.ChatRequest
+	srv := buildCapturingLLMServer(t, "## Analyse", &requests)
+
+	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
+	called := false
+	h.SetAgentDeps(
+		mockTeamLoader{agent: &agentteams.AgentRecord{ID: "a1", Name: "Prüfer", ChatModel: "gpt-test"}},
+		mockTeamSearcher{called: &called, chunks: []vector.SearchChunk{
+			{ID: "c1", Content: "evidence", FileID: "f1", FileName: "f.pdf", Score: 0.8},
+		}},
+	)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/analysis",
+		map[string]string{"topic": "Budget", "agentId": "a1"})
+	rec := httptest.NewRecorder()
+	h.GenerateAnalysis(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if len(requests) == 0 {
+		t.Fatal("no model request captured")
+	}
+	var sys string
+	for _, m := range requests[len(requests)-1].Messages {
+		if m.Role == "system" {
+			sys = m.Content
+		}
+	}
+	// Assert on today's ISO date rather than a German label: CurrentDateLine
+	// renders several date anchors, and pinning one wording would break the
+	// moment that copy is reworded.
+	today := time.Now().Format("2006-01-02")
+	if !strings.Contains(sys, today) {
+		t.Errorf("assembled system prompt carries no current-date line (looking for %s):\n%s", today, sys)
+	}
+}
+
+// TestGenerateAnalysisRejectsEmptyAgentOutput: a persona that answers with
+// nothing used to be stored as an artifact with empty text and an empty
+// degradedReason — for the user indistinguishable from a real result.
+func TestGenerateAnalysisRejectsEmptyAgentOutput(t *testing.T) {
+	srv := buildLLMServer(t, "")
+
+	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
+	called := false
+	h.SetAgentDeps(
+		mockTeamLoader{agent: &agentteams.AgentRecord{ID: "a1", Name: "Prüfer", ChatModel: "gpt-test"}},
+		mockTeamSearcher{called: &called, chunks: []vector.SearchChunk{
+			{ID: "c1", Content: "evidence", FileID: "f1", FileName: "f.pdf", Score: 0.8},
+		}},
+	)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/analysis",
+		map[string]string{"topic": "Budget", "agentId": "a1"})
+	rec := httptest.NewRecorder()
+	h.GenerateAnalysis(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("empty model output must not become an artifact, got 200: %s", rec.Body.String())
+	}
+}
+
+// TestGenerateAnalysisWithNilSearcherDegrades pins the behaviour of a
+// half-wired handler: SetAgentDeps with a loader but no searcher. RunTeamChat's
+// specialists then panic on the nil interface, safego.RecoverError catches it,
+// every specialist fails, and the handler falls through to run_failed. That
+// degradation was correct but unguarded, so a later change could turn it into
+// a 500 — or a panic escaping to the user — without anything noticing.
+func TestGenerateAnalysisWithNilSearcherDegrades(t *testing.T) {
+	srv := buildLLMServer(t, "## Analyse ohne Agent")
+
+	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
+	h.SetAgentDeps(mockTeamLoader{agent: &agentteams.AgentRecord{ID: "a1", Name: "Prüfer"}}, nil)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/analysis",
+		map[string]string{"topic": "Budget", "agentId": "a1"})
+	rec := httptest.NewRecorder()
+	h.GenerateAnalysis(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (fail-soft): %s", rec.Code, rec.Body.String())
+	}
+	var resp generateAnalysisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.DegradedReason != "run_failed" {
+		t.Errorf("degradedReason = %q, want \"run_failed\"", resp.DegradedReason)
+	}
+	if resp.Record.ID == "" {
+		t.Error("an artifact must still be produced without the agent")
+	}
+}

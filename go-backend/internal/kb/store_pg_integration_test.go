@@ -348,8 +348,8 @@ func TestListKnowledgeBases_TurnStatsFromUsageLedger(t *testing.T) {
 		t.Fatalf("insert kb: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(ctx, `DELETE FROM usage_events WHERE kb_id = $1::uuid`, kbID)      //nolint:errcheck
-		pool.Exec(ctx, `DELETE FROM knowledge_bases WHERE id = $1::uuid`, kbID)      //nolint:errcheck
+		pool.Exec(ctx, `DELETE FROM usage_events WHERE kb_id = $1::uuid`, kbID) //nolint:errcheck
+		pool.Exec(ctx, `DELETE FROM knowledge_bases WHERE id = $1::uuid`, kbID) //nolint:errcheck
 	})
 
 	// ListKnowledgeBases selects purely on kb_members since migration 0064

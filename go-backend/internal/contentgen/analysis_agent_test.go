@@ -77,3 +77,18 @@ func TestResolveAnalysisAgentRejectsEmptyTeam(t *testing.T) {
 		t.Error("ein leeres Team MUSS einen Degradationsgrund melden")
 	}
 }
+
+// TestResolveAnalysisAgentWithoutLoader covers the "unavailable" arm: the
+// handler was wired without SetAgentDeps but the request still names an agent.
+// Unreachable in production (routes.go always wires the deps), which is why it
+// was deferred — but the arm exists and must keep reporting a reason rather
+// than silently running without the agent.
+func TestResolveAnalysisAgentWithoutLoader(t *testing.T) {
+	sel, reason := resolveAnalysisAgent(context.Background(), nil, "kb1", "a1", "")
+	if sel != nil {
+		t.Errorf("no loader must yield no selection, got %+v", sel)
+	}
+	if reason == "" {
+		t.Error("no loader MUST report a degradation reason — otherwise the run degrades silently")
+	}
+}
