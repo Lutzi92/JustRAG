@@ -9,10 +9,18 @@ import type { ChatAttachment } from './useChatAttachment';
 // hook pulls in ThemeContext/ModalContext/ToastContext plus the useChatStream
 // and useChatAttachment sub-hooks, so a *minimal* harness is built here
 // (mirrors the vi.mock pattern already used in useKnowledgeBases.test.ts /
-// useKbRemoval.test.ts) rather than skipping hook-level coverage entirely —
-// the `setAgentSelection` wiring the controller ruling calls for is a
-// behavioral effect (a callback invocation), not something a pure function
-// extraction alone could prove.
+// useKbRemoval.test.ts) rather than skipping hook-level coverage entirely.
+//
+// Fix round 1: the selection now travels through `opts.agentSelection` on
+// the outgoing send, NOT (only) through `setAgentSelection` state —
+// `useChatStream.handleSendMessage` builds its request synchronously from a
+// closure captured before any `setAgentSelection` call can take effect, so
+// the state write alone silently sent the *previous* selection for the
+// comparison turn itself. `setAgentSelection` is still called too, but only
+// to make the choice stick for FOLLOW-UP turns in the new chat — see the
+// comment on that call in `useChat.ts`. The test below asserts on the send,
+// not just the state write, because the state-write-only assertion is
+// exactly what let the original (wrong) fix pass its own test.
 //
 // `buildComparisonSend` (below) still gets its own pure-function tests: it's
 // the one piece of `startComparison`'s logic dense enough to be worth testing
@@ -82,17 +90,28 @@ describe('useChat.startComparison', () => {
       });
     });
 
-    // The controller ruling: without this call, useChatStream keeps sending
-    // whatever team/agent was selected before, silently dropping the
-    // dialog's choice.
-    expect(setAgentSelection).toHaveBeenCalledWith({ teamId: 't1' });
+    // Fix round 1: the FIRST fix (setAgentSelection alone) shipped a test that
+    // only asserted setAgentSelection was called — that would have passed
+    // against the broken version too, since setAgentSelection was always
+    // called; it just didn't affect *this* request. The real guard is on the
+    // outgoing send: `streamSend`'s opts must carry the selection, because
+    // `useChatStream` reads it from `opts.agentSelection` (falling back to
+    // its own closure state) to build the request that goes out THIS turn.
     expect(streamSend).toHaveBeenCalledWith(
       expect.anything(),
       'Fasse die Abweichungen zusammen.',
       null,
       undefined,
-      expect.objectContaining({ attachmentId: 'att1', comparisonModes: ['contradiction'] }),
+      expect.objectContaining({
+        attachmentId: 'att1',
+        comparisonModes: ['contradiction'],
+        agentSelection: { teamId: 't1' },
+      }),
     );
+    // Still expected — this is the SEPARATE write that makes the choice
+    // stick for follow-up questions in the chat handleNewChat() just
+    // created, not the one that governs this turn's own request.
+    expect(setAgentSelection).toHaveBeenCalledWith({ teamId: 't1' });
   });
 
   it('sendet nicht und wendet keine Agent-Auswahl an, wenn der Upload fehlschlägt', async () => {
@@ -117,15 +136,20 @@ describe('buildComparisonSend', () => {
   const attachment: ChatAttachment = { attachmentId: 'att1', filename: 'x.docx', sectionCount: 2, charCount: 50 };
 
   it('verwendet die getrimmte Instruktion als Nachricht', () => {
-    const result = buildComparisonSend(attachment, ['contradiction', 'formal'], '  Fasse zusammen.  ', 'Fallback');
+    const result = buildComparisonSend(attachment, ['contradiction', 'formal'], '  Fasse zusammen.  ', 'Fallback', { teamId: 't1' });
     expect(result).toEqual({
       message: 'Fasse zusammen.',
-      opts: { attachmentId: 'att1', comparisonModes: ['contradiction', 'formal'] },
+      opts: { attachmentId: 'att1', comparisonModes: ['contradiction', 'formal'], agentSelection: { teamId: 't1' } },
     });
   });
 
   it('fällt bei leerer (oder nur Leerzeichen-) Instruktion auf die Standardnachricht zurück', () => {
-    const result = buildComparisonSend(attachment, ['completeness'], '   ', 'Vergleiche dieses Dokument mit der Wissensbasis');
+    const result = buildComparisonSend(attachment, ['completeness'], '   ', 'Vergleiche dieses Dokument mit der Wissensbasis', {});
     expect(result.message).toBe('Vergleiche dieses Dokument mit der Wissensbasis');
+  });
+
+  it('gibt die Agent-/Team-Auswahl unverändert in opts zurück (statt sie zu verwerfen)', () => {
+    const result = buildComparisonSend(attachment, ['formal'], 'x', 'Fallback', { agentId: 'a9' });
+    expect(result.opts.agentSelection).toEqual({ agentId: 'a9' });
   });
 });

@@ -19,19 +19,28 @@ type ComparisonMode = 'contradiction' | 'formal' | 'completeness';
 
 /**
  * Pure helper for `startComparison`: turns an uploaded attachment + chosen
- * modes + free-text instruction into the (message, send-options) pair
- * `useChatStream.handleSendMessage` expects. Extracted so it is testable
- * without a `useChat` render harness (none exists yet for this hook).
+ * modes + free-text instruction + agent/team choice into the
+ * (message, send-options) pair `useChatStream.handleSendMessage` expects.
+ * Extracted so it is testable without a `useChat` render harness (none
+ * exists yet for this hook).
+ *
+ * `agentSelection` travels in `opts`, not (only) through `setAgentSelection`
+ * state: `useChatStream.handleSendMessage`'s outgoing request is built
+ * synchronously from a closure captured before any `setAgentSelection` call
+ * can take effect (state updates land on the *next* render), so the state
+ * write alone would silently send the *previous* selection for this turn.
+ * See `useChatStream`'s `effectiveSelection`.
  */
 export function buildComparisonSend(
   attachment: ChatAttachment,
   modes: string[],
   instruction: string,
   fallbackMessage: string,
-): { message: string; opts: { attachmentId: string; comparisonModes: string[] } } {
+  agentSelection: AgentSelection,
+): { message: string; opts: { attachmentId: string; comparisonModes: string[]; agentSelection: AgentSelection } } {
   return {
     message: instruction.trim() || fallbackMessage,
-    opts: { attachmentId: attachment.attachmentId, comparisonModes: modes },
+    opts: { attachmentId: attachment.attachmentId, comparisonModes: modes, agentSelection },
   };
 }
 
@@ -385,12 +394,21 @@ export function useChat({
     if (!uploaded) return; // upload() already reported the failure via attachmentState.error
 
     handleNewChat();
-    // Apply the dialog's agent/team choice before sending — handleNewChat()
-    // just reset the selection to {}, and useChatStream sends teamId/agentId
-    // from this state, not from the send options.
+    // Two separate writes for two separate turns:
+    //  - `opts.agentSelection` (via buildComparisonSend below) makes THIS
+    //    turn — the comparison itself — use the dialog's choice. It has to
+    //    travel through the send options because `setAgentSelection` only
+    //    takes effect on the next render, after this request is already
+    //    built (see buildComparisonSend's doc comment / useChatStream's
+    //    `effectiveSelection`).
+    //  - `setAgentSelection(input.agentSelection)` makes the choice STICK
+    //    for follow-up questions in the chat `handleNewChat()` just created
+    //    (e.g. "and what does policy 4 say about this?" after the findings
+    //    should get the same agent) — that's a later render/turn, where the
+    //    state write has long since landed.
     setAgentSelection(input.agentSelection);
 
-    const { message, opts } = buildComparisonSend(uploaded, input.modes, input.instruction, t('comparisonDefaultMessage'));
+    const { message, opts } = buildComparisonSend(uploaded, input.modes, input.instruction, t('comparisonDefaultMessage'), input.agentSelection);
     await stream.handleSendMessage(
       { preventDefault: () => {} } as React.FormEvent,
       message,

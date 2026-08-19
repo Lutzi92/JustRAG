@@ -55,11 +55,16 @@ export function useChatStream({
     userMessage: string,
     activeLeafId: string | null,
     editParentId?: string,
-    opts?: { attachmentId?: string; comparisonModes?: string[] },
+    opts?: { attachmentId?: string; comparisonModes?: string[]; agentSelection?: AgentSelection },
   ) => {
     const selectedFiles = files.filter(f => f.selected !== false);
     if (!userMessage.trim() || !currentKb || loading || selectedFiles.length === 0) return;
     triggerHaptic(HAPTIC_PATTERNS.send);
+
+    // Die Auswahl aus den Sende-Optionen schlägt den Hook-State: setAgentSelection
+    // wirkt erst ab dem nächsten Render, der Vergleichs-Turn wird aber sofort
+    // abgeschickt und liefe sonst mit der vorherigen Auswahl.
+    const effectiveSelection = opts?.agentSelection ?? agentSelection;
 
     // The active leaf can be an unpersisted temp id (e.g. a temp-error node from
     // a failed send). Resolve to the nearest persisted ancestor so we never post
@@ -115,9 +120,11 @@ export function useChatStream({
           language,
           selectedFileIds: selectedFiles.map(f => f.id),
           // Sticky agent/team selection for this chat session (Standard omits
-          // both). Sent with every chat POST when set.
-          ...(agentSelection?.teamId ? { teamId: agentSelection.teamId } : {}),
-          ...(agentSelection?.agentId ? { agentId: agentSelection.agentId } : {}),
+          // both). Sent with every chat POST when set. `effectiveSelection`
+          // prefers `opts.agentSelection` over the hook-state closure — see
+          // the comment above its declaration.
+          ...(effectiveSelection?.teamId ? { teamId: effectiveSelection.teamId } : {}),
+          ...(effectiveSelection?.agentId ? { agentId: effectiveSelection.agentId } : {}),
           // In-chat document comparison: when an attachment is present the
           // backend injects it; non-empty `comparisonModes` makes the turn a
           // comparison (otherwise it's a normal follow-up over the attachment).
@@ -257,12 +264,14 @@ export function useChatStream({
             // to prevent an intermediate render where activeLeafId points to a non-existent node
             setMessageTree(prev => remapMessageId(prev, prevAiTempId, event.aiMessageId as string));
             setActiveLeafId(event.aiMessageId as string);
-            // Stamp attribution from the CURRENT selection so the chip renders
-            // immediately, without waiting for a chat reload to pick up the
-            // backend-persisted teamId/agentId columns.
+            // Stamp attribution from the CURRENT selection (`effectiveSelection`,
+            // not the closure-only `agentSelection` — see above) so the chip
+            // renders immediately, without waiting for a chat reload to pick up
+            // the backend-persisted teamId/agentId columns, and so the persisted
+            // attribution matches the agent that actually answered this turn.
             setMessageTree(prev => updateMessageInTree(prev, event.aiMessageId as string, {
-              teamId: agentSelection?.teamId ?? null,
-              agentId: agentSelection?.agentId ?? null,
+              teamId: effectiveSelection?.teamId ?? null,
+              agentId: effectiveSelection?.agentId ?? null,
             }));
           }
 
