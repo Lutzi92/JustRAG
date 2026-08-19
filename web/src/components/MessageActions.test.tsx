@@ -77,6 +77,15 @@ describe('MessageActions', () => {
     expect(screen.queryByLabelText('Regenerate response')).not.toBeInTheDocument();
   });
 
+  // A regenerate names the answer it replaces, so the answer has to exist in
+  // the database. On an unsaved one — a failed send leaves a `temp-error-*`
+  // bubble behind — the button could only ever do nothing.
+  it('does not show Regenerate for an unsaved ai message', () => {
+    const tempMsg: Message = { id: 'temp-error-1787133382351', role: 'ai', content: 'Fehler' };
+    render(<MessageActions message={tempMsg} onRegenerate={() => {}} />);
+    expect(screen.queryByLabelText('Regenerate response')).not.toBeInTheDocument();
+  });
+
   it('shows Compare button for both roles when onCompare provided', () => {
     const { unmount } = render(<MessageActions message={userMsg} onCompare={() => {}} />);
     expect(screen.getByLabelText('Compare branches')).toBeInTheDocument();

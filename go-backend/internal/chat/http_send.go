@@ -58,6 +58,11 @@ type sendMessageRequest struct {
 	ReasoningLevel   string   `json:"reasoningLevel"` // "low", "medium", "high"
 	AttachmentID     string   `json:"attachmentId"`
 	ComparisonModes  []string `json:"comparisonModes"`
+	// RegenerateOfMessageID names an AI message to answer again. The turn
+	// then carries no question of its own: the stored question is re-answered
+	// and the new answer becomes a sibling of the named one. Overrides
+	// Message, Enhance and ParentMessageID — see internal/chat/regenerate.go.
+	RegenerateOfMessageID string `json:"regenerateOfMessageId"`
 	// TeamID / AgentID select a user-created agent team (or single agent)
 	// for this turn — sticky per chat session (persisted on the chat row).
 	// Mutually exclusive; TeamID wins if both are set.
@@ -193,7 +198,14 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, kbID = h.maybeRouteKB(ctx, r, user.ID, kbID, body.Message)
+	// Never on a regenerate: the KB was decided when the question was first
+	// answered, and re-routing would either move the answer to a different
+	// corpus than the one above it in the thread, or — since the chat is bound
+	// to its KB — 403 in resolveOrCreateChat. The router would also be reading
+	// the CLIENT's message, which a regenerate is about to discard.
+	if body.RegenerateOfMessageID == "" {
+		ctx, kbID = h.maybeRouteKB(ctx, r, user.ID, kbID, body.Message)
+	}
 
 	// Per-KB config: once kb_id is final, swap to a request-local handler whose
 	// reader + SearchService overlay this KB's kb_site_configs overrides. No-op
@@ -235,10 +247,33 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// back to full-chat history instead.
 	parentMsgID := SanitizeParentMessageID(body.ParentMessageID)
 
+	// "Antwort neu generieren": no new question is written, the answer becomes
+	// a sibling of the one being replaced, and the turn re-answers the STORED
+	// question — resolveRegenerate rewrites body.Message/body.Enhance for it.
+	anchor := turnAnchor{ParentMessageID: parentMsgID}
+	if body.RegenerateOfMessageID != "" {
+		regen, ok := h.resolveRegenerate(ctx, w, chatID, &body)
+		if !ok {
+			return
+		}
+		anchor.Regenerate = regen
+		parentMsgID = regen.HistoryParentID
+	}
+
 	// Recent turns, loaded once: the answer-history block (every answer
 	// path) and the transform-follow-up route both need them. CondenseFollowUp
 	// keeps its own load because its signature is shared with publicapi.
-	convRows := h.loadConversationRows(ctx, chatID, parentMsgID)
+	//
+	// A regenerate carries its own history rather than re-loading it: both
+	// loaders read a nil parent as "no anchor given" and fall back to the
+	// WHOLE chat, which for a regenerate at the start of a chat would hand
+	// the answer being replaced straight back to the answer LLM.
+	var convRows []MessageRow
+	if anchor.Regenerate != nil {
+		convRows = anchor.Regenerate.HistoryRows
+	} else {
+		convRows = h.loadConversationRows(ctx, chatID, parentMsgID)
+	}
 	answerHistory := h.answerHistory(ctx, convRows)
 
 	// Transform follow-up: "kannst du das als Tabelle erstellen?" asks to
@@ -250,12 +285,18 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// positive saves the condense LLM call.
 	if body.Enhance == "" && ChatTransformFollowupEnabled(ctx, h.siteConfigReader) && IsTransformFollowUpQuery(body.Message) {
 		if prev := lastAIMessage(convRows); prev != nil {
-			h.handleTransformFollowUp(ctx, w, span, body, chatID, kbID, lang, user.ID, parentMsgID, prev, convRows, streamMode)
+			h.handleTransformFollowUp(ctx, w, span, body, chatID, kbID, lang, user.ID, anchor, prev, convRows, streamMode)
 			return
 		}
 	}
 
-	searchQuery, _ := CondenseFollowUp(ctx, h.aiResolver, h.store, chatID, parentMsgID, body.Message, kbID, lang)
+	// Condensing needs a preceding turn. A regenerate at the start of a chat
+	// has none, and its nil anchor would send CondenseFollowUp back to the
+	// whole-chat fallback — see the convRows note above.
+	searchQuery := body.Message
+	if anchor.Regenerate == nil || anchor.Regenerate.HistoryParentID != nil {
+		searchQuery, _ = CondenseFollowUp(ctx, h.aiResolver, h.store, chatID, parentMsgID, body.Message, kbID, lang)
+	}
 
 	cls := h.classifyQuery(ctx, searchQuery, body.Enhance, kbID, lang)
 
@@ -310,7 +351,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// the comparison orchestrator) regardless of complexity classification.
 	isComplex := cls.UseHyDE && cls.UseMultiQuery
 	if (isComplex || runCompare || teamSel != nil) && streamMode {
-		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, dateLine, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, parentMsgID, graphDec, graphChunkIDs, bridgeChunks, answerHistory, teamSel, teamSelReason); handled {
+		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, dateLine, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, anchor, graphDec, graphChunkIDs, bridgeChunks, answerHistory, teamSel, teamSelReason); handled {
 			return
 		}
 		// Deep chat failed — fall through to standard path.
@@ -378,14 +419,13 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	if hasEnhanced {
 		enhancedQueryPtr = &enhancedQuery
 	}
-	userMsg, err := h.store.AddMessage(ctx, AddMessageParams{
-		ChatID:          chatID,
-		Role:            "user",
-		Content:         body.Message,
-		IsEnhanced:      hasEnhanced,
-		EnhancedQuery:   enhancedQueryPtr,
-		ParentMessageID: parentMsgID,
-	})
+	userMsg, err := h.resolveTurnUserMessage(ctx, AddMessageParams{
+		ChatID:        chatID,
+		Role:          "user",
+		Content:       body.Message,
+		IsEnhanced:    hasEnhanced,
+		EnhancedQuery: enhancedQueryPtr,
+	}, anchor)
 	if err != nil {
 		logctx.From(ctx).Error("chat.send: save user message", "error", err, "chat_id", chatID, "user_id", user.ID, "kb_id", kbID)
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to save user message")
@@ -425,7 +465,7 @@ func (h *Handler) tryDeepChat(
 	r *http.Request,
 	chatID, kbID, lang, dateLine, searchQuery, queryType, kbSystemPrompt, reasoningLevel string,
 	body sendMessageRequest,
-	parentMsgID *string,
+	anchor turnAnchor,
 	graphDec GraphTraversalDecision,
 	graphChunkIDs []string,
 	bridgeChunks map[string]int,
@@ -866,14 +906,13 @@ func (h *Handler) tryDeepChat(
 		enhancedQueryPtr = &enhancedQuery
 	}
 
-	userMsg, err := h.store.AddMessage(ctx, AddMessageParams{
-		ChatID:          chatID,
-		Role:            "user",
-		Content:         body.Message,
-		IsEnhanced:      hasEnhanced,
-		EnhancedQuery:   enhancedQueryPtr,
-		ParentMessageID: parentMsgID,
-	})
+	userMsg, err := h.resolveTurnUserMessage(ctx, AddMessageParams{
+		ChatID:        chatID,
+		Role:          "user",
+		Content:       body.Message,
+		IsEnhanced:    hasEnhanced,
+		EnhancedQuery: enhancedQueryPtr,
+	}, anchor)
 	if err != nil {
 		// Can't save user message — fall through to standard path which
 		// will also fail, but at least it will write a proper error.

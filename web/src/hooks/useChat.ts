@@ -6,7 +6,7 @@ import { useTheme } from '../contexts/ThemeContext';
 
 import { useModalContext } from '../contexts/ModalContext';
 import { useToast } from '../contexts/ToastContext';
-import { buildMessageMap, findDefaultLeaf } from '../utils/messageTree';
+import { buildMessageMap, findDefaultLeaf, isTempMessageId, nearestPersistedAncestorId } from '../utils/messageTree';
 import { useMessageTree } from './useMessageTree';
 import { useChatStream } from './useChatStream';
 import { useChatAttachment, type ChatAttachment } from './useChatAttachment';
@@ -332,7 +332,7 @@ export function useChat({
   }, [handleNewChat, showConfirm, t, toast]);
 
   // Orchestrating send: clears input, resets UI state, delegates to stream hook
-  const handleSendMessage = useCallback(async (e: React.FormEvent | React.KeyboardEvent, editParentId?: string) => {
+  const handleSendMessage = useCallback(async (e: React.FormEvent | React.KeyboardEvent, editParentId?: string | null) => {
     e.preventDefault();
     setIsAtBottom(true);
     if (!currentKb || loading || chatSwitchingRef.current) return;
@@ -461,17 +461,38 @@ export function useChat({
     }, 50);
   }, [setActiveLeafId]);
 
-  const handleRegenerate = useCallback((aiMessageId: string) => {
-    const aiMsg = messageTreeRef.current.get(aiMessageId);
-    if (!aiMsg || aiMsg.role !== 'ai' || !aiMsg.parentMessageId) return;
+  /**
+   * "Antwort neu generieren" — a second answer under the SAME question.
+   *
+   * This deliberately does NOT go through the composer. Re-typing the
+   * question into the input and re-sending it (what this used to do) made the
+   * backend persist a second copy of it: a sibling branch mid-conversation,
+   * and a plain duplicate on the first turn of a chat, where there was no
+   * parent to branch from. The turn now names the answer to replace, and the
+   * new one hangs under the existing question — so the prompt stays on screen
+   * exactly once and the ‹1/2› switcher sits on the answers.
+   */
+  const handleRegenerate = useCallback(async (aiMessageId: string) => {
+    if (chatSwitchingRef.current) return;
 
-    const userMsg = messageTreeRef.current.get(aiMsg.parentMessageId);
+    const aiMsg = messageTreeRef.current.get(aiMessageId);
+    if (!aiMsg || aiMsg.role !== 'ai' || isTempMessageId(aiMessageId)) return;
+
+    // An enhanced turn carries a display-only "✨ …" node between question and
+    // answer, so the answer's parent is not always the persisted question.
+    const userMessageId = nearestPersistedAncestorId(messageTreeRef.current, aiMsg.parentMessageId);
+    if (!userMessageId) return;
+    const userMsg = messageTreeRef.current.get(userMessageId);
     if (!userMsg || userMsg.role !== 'user') return;
 
-    const parentOfUser = userMsg.parentMessageId;
-    setUserMessageInput(userMsg.content);
-    pendingEditRef.current = parentOfUser || null;
-  }, [messageTreeRef]);
+    await stream.handleSendMessage(
+      { preventDefault: () => {} } as React.FormEvent,
+      userMsg.content,
+      activeLeafId,
+      undefined,
+      { regenerateOf: { aiMessageId, userMessageId } },
+    );
+  }, [messageTreeRef, stream, activeLeafId]);
 
   const handleFollowUpClick = useCallback((question: string) => {
     pendingFollowUpRef.current = question;
@@ -509,7 +530,11 @@ export function useChat({
       const parentId = pendingEditRef.current;
       pendingEditRef.current = undefined;
       const syntheticEvent = { preventDefault: () => { } } as React.FormEvent;
-      handleSendMessage(syntheticEvent, parentId || undefined);
+      // `null` is passed through, not collapsed to undefined: editing the
+      // first question of a chat has no parent, and "no parent" must not be
+      // read as "no opinion" — that fell back to the active leaf and appended
+      // the edited question to the answer it was replacing.
+      handleSendMessage(syntheticEvent, parentId);
     }
   }, [userMessageInput, handleSendMessage]);
 
