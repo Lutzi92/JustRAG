@@ -10,6 +10,119 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## v0.10.0 — 2026-08-19
+
+### ⚠ Upgrade notes
+
+- **Migration required: `0067_kb_invite_links.sql`** (highest migration in this
+  release). Compose applies it automatically via the `migrate` one-shot
+  service. **Kubernetes does not** — run `/app/migrate` out of the release
+  image as a one-shot pod *before* `kubectl apply`, per
+  `docs/runbooks/release.md`. As always, a release carrying a migration has no
+  one-step rollback: re-pointing the image tag alone does not undo it.
+
+- **Per-KB workspace toggles are gone.** The `studio_config` mechanism — which
+  let an operator switch individual workspace functions off for a single
+  public KB — has been removed. Every tile is now available on every KB and is
+  gated only by real feature flags (`chat_compare_enabled` for the document
+  comparison, and so on). If you had switched tiles off for a KB through that
+  mechanism, they reappear after this upgrade. There is no replacement and no
+  action to take; the flags are the only gate now.
+
+- **The `knowledge_bases.studio_config` column survives this release unread.**
+  No Go code selects or writes it as of v0.10.0. Its `DROP COLUMN` is
+  deliberately held back for the *next* release, so that a rollback from
+  v0.10.0 to v0.9.0 — whose code still selects the column — keeps working. Do
+  not drop it by hand.
+
+- **Two new optional `site_config` keys**, both in the new **Workspace** group
+  and both empty by default: `workspace_analysis_presets` and
+  `workspace_comparison_presets`. They carry a JSON list of
+  `{"label": …, "prompt": …}` entries that pre-fill the prompt field in the
+  "Neue Analyse" and "Dokumentenvergleich" dialogs. Empty means the built-in
+  presets apply, so no action is required.
+
+- **No `site_config` default was flipped, no re-ingest is required, and no new
+  environment variable or database grant is needed.**
+
+
+### Documentation
+- Note the invite-link redemption shadowing gotcha for public KBs (a96ca94)
+- Describe KB invite links in the permission-model section (f5526aa)
+- Clarify that the owner conjunct is redundant under the current rank order (bfefd22)
+- Clarify invite-link cascade test's actual coverage (0e19d87)
+- Update the privacy policy to the HRZ version of 2026-07-13 (77475a1)
+- Rename is owner-only within the KB permission model (3c5569a)
+- Re-point the golden set at the rebuilt KB, record the qwen3-8b baseline (78c1a2c)
+
+
+### Features
+- Offer your own agents' persona prompts as templates (d0b39c1)
+- Dokumentenvergleich als Workspace-Kachel, Composer aufgeräumt (0a97867)
+- Neue Analyse mit Preset- und Agent-Auswahl (80d953b)
+- Gemeinsamer Prompt-Dialog mit Presets und Agent-Auswahl (d6af6c0)
+- Comparison summary via selected team/agent, attribution updated (6b7cb25)
+- Analyse über gewählten Agent/Team, fail-soft mit sichtbarem Grund (1485959)
+- Prompt-Presets mit KB-Override und Preset-Endpoint (0d00a00)
+- Mobile Tab-Leiste auf Verlauf/Chat/Workspace/Quellen (27259d6)
+- Vereinter Verlauf links, Studio-Hälfte der Seitenleiste entfällt (a269a43)
+- Workspace-Reiter statt Studio-View, Quellenleiste berechnet ausblenden (bb4547e)
+- Show lastUsedAt on each invite-link row (ffbbb13)
+- Include the invite-link id in create/redeem audit entries (1a0fac2)
+- Redeem invite links after sign-in and open the KB (0ea56e9)
+- Capture /join/<token> links across the login round trip (d7e9da5)
+- Invite-link tab in the members modal (d51c44c)
+- Wire invite-link routes with a dedicated rate limiter (ba3fd0d)
+- HTTP handlers for invite-link create/list/revoke/redeem (8e016f5)
+- Redeem invite links, raising membership without ever downgrading (c195baa)
+- Invite-link store with token minting, create/list/revoke (a3b2e4e)
+- Add kb_invite_links table and cascade wiring (1fc1303)
+- Add terms of use to the footer legal pages (d689b3c)
+- Rename KBs from the Home card and the workspace header (9a12c50)
+- Owner-only rename gate on PATCH /api/kb/{id} (f368bed)
+
+
+### Fixes
+- Bueroklammer statt Waage fuer den Dokumentenvergleich (51e4dab)
+- Zurueckknopf von den Quellen in die KB-Kopfleiste (d68111e)
+- Regenerate an answer as a sibling, not a second question (904c25e)
+- Date awareness, empty output, and the unguarded arms (13854e9)
+- Give the dialog buttons the house shape (49869e8)
+- Open generated content once it is ready (bc18416)
+- Refresh the history when a research stream ends (45fdc84)
+- Stop truncating research findings in the messages API (acd268b)
+- Wire onStartComparison's return value through ChatView (0770a42)
+- Keep the comparison attachment alive for follow-up turns (822b804)
+- Final review fix wave for the UI workspace rework (b71659a)
+- Carry comparison agent/team selection through send opts (133a8d9)
+- Revert plain comparison prompt, exclude team-authored answer tools, cover call-site wiring (4febdfa)
+- Analysis agent path uses the analysis prompt, cover run_failed + answer provenance (669ae5e)
+- Cover KB-override wiring, log load failures, fix log noise (7b4a698)
+- Gofmt struct-tag alignment and drop stale studioConfig from OpenAPI schema (81e5126)
+- Derive mobile active tab from kbView; add swipe + mobile-branch tests (197fb06)
+- Stale-chat reselect, sidebar-wiring/delete-branch/order test gaps, history label keys, mobile border (f94a8cb)
+- Sichtbarkeits-Test und CSS-Spezifizität für SidebarShell (fa08bb6)
+- Bound invite-link retries and keep the token out of the console (b5f81f4)
+- Redact the invite token from OTel span attributes (5ffb549)
+- Redact invite-link token at every remaining log sink (6ab8f9c)
+- Distinguish invalid invite links from retryable redemption failures (8a7e5f2)
+- Redact invite-link tokens from logs, metrics, and traces (3c3c454)
+- Merge only the name after a KB rename, add title + 255-char guard (7ac5ca1)
+- Propagate FileName in the retrieval-only search adapter (084a116)
+
+
+### Refactoring
+- Make the team tool policy opt-in; drop studio_config column (4535581)
+- TeamParams-Aufbau als BuildTeamParams extrahieren (e38f170)
+- Studio_config als Mechanismus entfernen (Spalte bleibt bis Cleanup-Release) (42b19e0)
+- Workspace ohne eigene Artefaktliste, Auswahl kommt aus dem Verlauf (12f95c8)
+- Quellen als SourcesPanel in die rechte Spalte (dbfc8f6)
+- Seitenleisten-Rahmen als SidebarShell extrahieren (1e429b7)
+
+
+### revert
+- Pull the studio_config drop out of this branch (4b52063)
+
 ## v0.9.0 — 2026-08-18
 
 ### ⚠ Upgrade notes

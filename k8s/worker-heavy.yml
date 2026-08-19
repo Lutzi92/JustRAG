@@ -28,7 +28,7 @@ spec:
           # this to deploy; revert it to roll back. imagePullPolicy is
           # explicit because k8s defaults to Always for floating tags, which
           # is how a node eviction used to move prod forward on its own.
-          image: ghcr.io/lutzi92/justrag:v0.9.0
+          image: ghcr.io/lutzi92/justrag:v0.10.0
           imagePullPolicy: IfNotPresent
           command: ["/app/worker"]
           envFrom:
