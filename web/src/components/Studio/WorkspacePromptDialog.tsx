@@ -140,10 +140,10 @@ export function WorkspacePromptDialog({
         />
 
         <div className="workspace-dialog__actions">
-          <button type="button" className="secondary-button" onClick={onClose}>{t('cancel')}</button>
+          <button type="button" className="btn btn--secondary" onClick={onClose}>{t('cancel')}</button>
           <button
             type="button"
-            className="send-button"
+            className="btn btn--primary"
             disabled={busy || submitDisabled || (requirePrompt && !prompt.trim())}
             onClick={() => onSubmit({ prompt: prompt.trim(), agentSelection: selection })}
           >

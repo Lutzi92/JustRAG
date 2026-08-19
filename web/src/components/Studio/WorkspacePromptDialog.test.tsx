@@ -143,3 +143,24 @@ describe('WorkspacePromptDialog', () => {
     expect(screen.getByLabelText('agentPicker')).toHaveValue('team:t0');
   });
 });
+
+// The Start button used the composer's `send-button` class — a 40x40 circle
+// (border-radius: 50%) built for an icon — while its Cancel sibling used a
+// normal text button. Rendered side by side that put a round button next to a
+// rectangular one. The repo's convention is `btn btn--primary` /
+// `btn btn--secondary`, so this pins the classes rather than the pixels
+// (jsdom does not resolve stylesheets).
+describe('WorkspacePromptDialog: Button-Form', () => {
+  it('nutzt die Haus-Button-Klassen statt des runden Composer-Knopfs', () => {
+    render(<WorkspacePromptDialog {...base} />);
+    const start = screen.getByRole('button', { name: 'start' });
+    const cancel = screen.getByRole('button', { name: 'cancel' });
+
+    expect(start.className).toContain('btn');
+    expect(start.className).toContain('btn--primary');
+    expect(start.className).not.toContain('send-button');
+
+    expect(cancel.className).toContain('btn');
+    expect(cancel.className).toContain('btn--secondary');
+  });
+});
