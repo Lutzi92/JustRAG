@@ -1,6 +1,6 @@
 import React, { memo, useState, useCallback } from 'react';
 import {
-    BookOpen, Link, Globe, Bot, FileText, Search, ChevronLeft,
+    BookOpen, Link, Globe, Bot, FileText, Search,
     Rss
 } from 'lucide-react';
 import type { RssFeed } from '../../types';
@@ -29,7 +29,7 @@ const SourcesPanelComp: React.FC = () => {
     const { t } = useTheme();
     const { siteConfigs } = useAuth();
     const isMobile = useIsMobileContext();
-    const { currentKb, setKbView, handleGoHome, handleViewHome } = useKbCore();
+    const { currentKb, setKbView, handleGoHome } = useKbCore();
     const {
         fileMgmt, webTools,
         rssFeeds, rssLoading, addRssFeed, updateRssFeed, deleteRssFeed, pollFeedNow,
@@ -153,14 +153,6 @@ const SourcesPanelComp: React.FC = () => {
                                         <BookOpen size={24} aria-hidden="true" />
                                     </div>
                                 )}
-                            </button>
-                            <button
-                                onClick={handleViewHome}
-                                className="secondary-button sidebar-left__overview-btn sidebar-left__overview-btn--icon-only"
-                                title={t('backToOverview')}
-                                aria-label={t('backToOverview')}
-                            >
-                                <ChevronLeft size={20} aria-hidden="true" />
                             </button>
                         </div>
                     </div>
