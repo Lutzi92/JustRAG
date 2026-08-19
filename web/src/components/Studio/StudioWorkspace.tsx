@@ -27,9 +27,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 
 interface StudioWorkspaceProps {
     kbId: string;
-    generatedContent: GeneratedContent[];
     onGenerate: (type: 'cards' | 'presentation' | 'podcast' | 'chart' | 'abstract' | 'briefing_doc' | 'faq' | 'study_guide' | 'timeline' | 'quiz') => void;
-    onDeleteContent: (id: string, e: React.MouseEvent) => void;
     onClose: () => void;
     selectedItem: GeneratedContent | null;
     hasFiles?: boolean;
@@ -44,9 +42,6 @@ interface StudioWorkspaceProps {
     onStartComparison?: (v: { file: File; modes: string[]; instruction: string; agentSelection: AgentSelection }) => Promise<boolean> | boolean | void;
 }
 
-// `generatedContent` and `onDeleteContent` are accepted for interface
-// stability with callers (the history panel now owns both the artifact list
-// and its delete affordance) but are not consumed inside this component.
 export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     kbId,
     onGenerate: onGenerateParent,

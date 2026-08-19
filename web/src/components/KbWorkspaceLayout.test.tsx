@@ -39,7 +39,7 @@ beforeEach(() => {
 });
 
 describe('KbWorkspaceLayout Quellen-Sichtbarkeit', () => {
-  it('blendet die Quellenleiste im Workspace aus und danach wieder ein, ohne den Öffnen-Setter zu rufen', () => {
+  it('blendet die Quellenleiste im Workspace aus und danach wieder ein, ohne selbst am Aufklapp-Zustand zu drehen', () => {
     // Diese Assertion deckt NUR den Codepfad von KbWorkspaceLayout.tsx selbst
     // ab (es ruft `setIsRightSidebarOpen` an keiner Stelle auf) — nicht das
     // Verhalten von HistoryPanel oder SourcesPanel, die hier gemockt sind.
