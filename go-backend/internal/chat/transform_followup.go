@@ -109,7 +109,7 @@ func BuildTransformChatContext(prev MessageRow, kbSystemPrompt, lang string) *Ch
 	sb.WriteString(answer)
 	return &ChatContext{
 		SystemPrompt: sb.String(),
-		Sources:      prev.Sources,
+		Sources:      prev.DecodedSources(),
 		Context:      answer,
 	}
 }

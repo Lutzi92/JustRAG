@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -103,7 +104,7 @@ func TestBuildTransformChatContext_CarriesAnswerAndSources(t *testing.T) {
 	prev := MessageRow{
 		Role:    "ai",
 		Content: "Es gibt drei KI-Veranstaltungen: A, B und C.",
-		Sources: []ChatSource{{Index: 1, FileID: "f1", FileName: "events.pdf"}},
+		Sources: json.RawMessage(`[{"index":1,"fileId":"f1","fileName":"events.pdf"}]`),
 	}
 	got := BuildTransformChatContext(prev, "KB PROMPT", "de")
 	if !strings.Contains(got.SystemPrompt, prev.Content) {

@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -133,12 +134,17 @@ type ChatRow struct {
 // the message hasn't run through the corresponding pipeline stage. The
 // frontend's `Message` interface depends on that shape (see web/src/types.ts).
 type MessageRow struct {
-	ID                string               `json:"id" db:"id"`
-	ChatID            string               `json:"chatId" db:"chat_id"`
-	ParentMessageID   *string              `json:"parentMessageId" db:"parent_message_id"`
-	Role              string               `json:"role" db:"role"`
-	Content           string               `json:"content" db:"content"`
-	Sources           []ChatSource         `json:"sources" db:"sources"`
+	ID              string  `json:"id" db:"id"`
+	ChatID          string  `json:"chatId" db:"chat_id"`
+	ParentMessageID *string `json:"parentMessageId" db:"parent_message_id"`
+	Role            string  `json:"role" db:"role"`
+	Content         string  `json:"content" db:"content"`
+	// Sources is passed through as stored, not re-encoded from a typed
+	// value. Research/academic sessions reuse this column for their
+	// findings ([{content, sources, relevanceScore}]), which a []ChatSource
+	// round-trip silently truncated. toMessageRow still decodes it into
+	// []ChatSource as a validation step, so schema drift is caught.
+	Sources           json.RawMessage      `json:"sources" db:"sources"`
 	IsEnhanced        bool                 `json:"isEnhanced" db:"is_enhanced"`
 	EnhancedQuery     *string              `json:"enhancedQuery" db:"enhanced_query"`
 	Reasoning         *string              `json:"reasoning" db:"reasoning"`
@@ -151,6 +157,22 @@ type MessageRow struct {
 	TeamID            *string              `json:"teamId,omitempty" db:"team_id"`
 	AgentID           *string              `json:"agentId,omitempty" db:"agent_id"`
 	CreatedAt         time.Time            `json:"createdAt" db:"created_at"`
+}
+
+// DecodedSources returns Sources as typed chat sources for the few callers
+// that need to read individual fields (as opposed to forwarding the column to
+// the client). Returns nil when the column is absent or does not hold chat
+// sources — rows loaded through toMessageRow have already been validated, so
+// in practice this only yields nil for genuinely empty columns.
+func (m MessageRow) DecodedSources() []ChatSource {
+	if len(m.Sources) == 0 {
+		return nil
+	}
+	var out []ChatSource
+	if err := json.Unmarshal(m.Sources, &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 // AddMessageParams collects the inputs for Store.AddMessage. Using a struct

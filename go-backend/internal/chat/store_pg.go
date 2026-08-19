@@ -125,11 +125,14 @@ func toMessageRow(r messageDBRow) (MessageRow, error) {
 		CreatedAt:         r.CreatedAt,
 	}
 	if len(r.Sources) > 0 && !isJSONNull(r.Sources) {
+		// Decode purely to validate: a malformed or type-drifted column must
+		// still surface as an error rather than reaching the client. The
+		// decoded value is deliberately discarded — see MessageRow.Sources.
 		var sources []ChatSource
 		if err := json.Unmarshal(r.Sources, &sources); err != nil {
 			return MessageRow{}, fmt.Errorf("decode sources for message %s: %w", r.ID, err)
 		}
-		out.Sources = sources
+		out.Sources = r.Sources
 	}
 	if len(r.Verification) > 0 && !isJSONNull(r.Verification) {
 		var v MessageVerification
