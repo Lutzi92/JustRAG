@@ -3,6 +3,7 @@ import { Pencil, GitBranch, Columns, RefreshCw, ThumbsUp, ThumbsDown, ExternalLi
 import type { Message } from '../types';
 import { HAPTIC_PATTERNS, triggerHaptic } from '../utils/haptics';
 import { openExternal } from '../utils/openExternal';
+import { isTempMessageId } from '../utils/messageTree';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { AnswerExportMenu } from './AnswerExportMenu';
@@ -252,7 +253,10 @@ export function MessageActions({ message, onEdit, onFork, onCompare, onRegenerat
                     <GitBranch size={iconSize} />
                 </button>
             )}
-            {!isUser && onRegenerate && (
+            {/* Not on an unsaved answer (a failed send leaves a `temp-error-*`
+                bubble): a regenerate names the answer it replaces, so there
+                would be nothing for the backend to hang the new one under. */}
+            {!isUser && onRegenerate && message.id && !isTempMessageId(message.id) && (
                 <button
                     type="button"
                     onClick={(e) => { e.stopPropagation(); triggerHaptic(HAPTIC_PATTERNS.action); onRegenerate(); }}

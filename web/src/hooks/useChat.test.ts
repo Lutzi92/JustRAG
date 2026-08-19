@@ -270,6 +270,130 @@ describe('useChat.startComparison', () => {
   });
 });
 
+// A regenerate must not travel through the composer. The old implementation
+// typed the question back into the input and re-sent it, which persisted a
+// second copy of the user's prompt — visible as the same question twice in
+// one thread whenever the turn was the first of the chat.
+describe('useChat.handleRegenerate', () => {
+  const U1 = '11111111-1111-4111-8111-111111111111';
+  const A1 = '22222222-2222-4222-8222-222222222222';
+
+  function withAnsweredTurn(result: { current: ReturnType<typeof useChat> }) {
+    act(() => {
+      result.current.setMessageTree(new Map([
+        [U1, { id: U1, role: 'user', content: 'Wie funktioniert X?', childIds: [A1] }],
+        [A1, { id: A1, role: 'ai', content: 'Antwort 1', parentMessageId: U1, childIds: [] }],
+      ]));
+      result.current.setActiveLeafId(A1);
+    });
+  }
+
+  it('sendet die gespeicherte Frage als Regeneration der genannten Antwort', async () => {
+    const { result } = renderUseChat();
+    withAnsweredTurn(result);
+
+    await act(async () => {
+      await result.current.handleRegenerate(A1);
+    });
+
+    expect(streamSend).toHaveBeenCalledTimes(1);
+    const [, message, , editParentId, opts] = streamSend.mock.calls[0];
+    expect(message).toBe('Wie funktioniert X?');
+    expect(opts).toEqual(expect.objectContaining({
+      regenerateOf: { aiMessageId: A1, userMessageId: U1 },
+    }));
+    expect(editParentId).toBeUndefined();
+  });
+
+  // The old implementation typed the question into the composer and let the
+  // send effect pick it up. When the send was refused — here: no file
+  // selected — the question stayed behind in the input box as if the user had
+  // typed it. Asserting on an *unblocked* send would not catch that, since
+  // handleSendMessage clears the input on its way out either way.
+  it('hinterlässt die Frage nicht im Eingabefeld, wenn der Turn abgelehnt wird', async () => {
+    const { result } = renderUseChat([{ id: 'f1', selected: false } as FileEntry]);
+    withAnsweredTurn(result);
+
+    await act(async () => {
+      await result.current.handleRegenerate(A1);
+    });
+
+    expect(result.current.userMessageInput).toBe('');
+  });
+
+  // An enhanced turn renders the rewritten query as a display-only "✨" bubble
+  // between question and answer, so the answer's local parent is a
+  // `temp-enhanced-*` id. The server never returns that node (it stores
+  // `is_enhanced` on the question row instead), so no reload reproduces it —
+  // the regenerate has to hop over it to the persisted question.
+  it('überspringt den Anzeige-Knoten eines Enhance-Turns', async () => {
+    const { result } = renderUseChat();
+    act(() => {
+      result.current.setMessageTree(new Map([
+        [U1, { id: U1, role: 'user', content: 'Wie funktioniert X?', childIds: ['temp-enhanced-1'] }],
+        ['temp-enhanced-1', { id: 'temp-enhanced-1', role: 'user', content: '✨ Wie funktioniert X genau?', isEnhanced: true, parentMessageId: U1, childIds: [A1] }],
+        [A1, { id: A1, role: 'ai', content: 'Antwort 1', parentMessageId: 'temp-enhanced-1', childIds: [] }],
+      ]));
+      result.current.setActiveLeafId(A1);
+    });
+
+    await act(async () => {
+      await result.current.handleRegenerate(A1);
+    });
+
+    expect(streamSend).toHaveBeenCalledTimes(1);
+    const [, message, , , opts] = streamSend.mock.calls[0];
+    expect(opts.regenerateOf.userMessageId).toBe(U1);
+    expect(message).toBe('Wie funktioniert X?');
+  });
+
+  it('sendet nichts für eine noch nicht gespeicherte Antwort', async () => {
+    const { result } = renderUseChat();
+    act(() => {
+      result.current.setMessageTree(new Map([
+        ['temp-user-1', { id: 'temp-user-1', role: 'user', content: 'Frage', childIds: ['temp-ai-1'] }],
+        ['temp-ai-1', { id: 'temp-ai-1', role: 'ai', content: 'Antwort', parentMessageId: 'temp-user-1', childIds: [] }],
+      ]));
+      result.current.setActiveLeafId('temp-ai-1');
+    });
+
+    await act(async () => {
+      await result.current.handleRegenerate('temp-ai-1');
+    });
+
+    // Posting a temp id would hit the uuid `messages` columns (SQLSTATE
+    // 22P02) and drop the whole conversation history.
+    expect(streamSend).not.toHaveBeenCalled();
+  });
+});
+
+// Editing the FIRST question of a chat produces a parent of `null` — "this is
+// the root" — which must reach useChatStream as null, not be flattened to
+// undefined. Flattened, it fell through to the active leaf and appended the
+// edited question to the answer it was replacing.
+describe('useChat.handleEditSubmit', () => {
+  const U1 = '11111111-1111-4111-8111-111111111111';
+
+  it('gibt für die erste Frage eines Chats null als Parent weiter', async () => {
+    const { result } = renderUseChat();
+    act(() => {
+      result.current.setMessageTree(new Map([
+        [U1, { id: U1, role: 'user', content: 'Alte Frage', childIds: [] }],
+      ]));
+      result.current.setActiveLeafId(U1);
+    });
+
+    await act(async () => {
+      result.current.handleEditSubmit(U1, 'Neu formulierte Frage');
+    });
+
+    expect(streamSend).toHaveBeenCalledTimes(1);
+    const [, message, , editParentId] = streamSend.mock.calls[0];
+    expect(message).toBe('Neu formulierte Frage');
+    expect(editParentId).toBeNull();
+  });
+});
+
 describe('buildComparisonSend', () => {
   const attachment: ChatAttachment = { attachmentId: 'att1', filename: 'x.docx', sectionCount: 2, charCount: 50 };
 

@@ -81,6 +81,22 @@ func parseAndValidateMessage(w http.ResponseWriter, r *http.Request, userID stri
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "message contains disallowed content")
 		return body, false
 	}
+	// Regenerate is shape-checked here rather than where it is resolved,
+	// because resolving it needs a chat — and by then the caller has already
+	// created one and recorded a usage event. A regenerate that cannot
+	// possibly be answered must not leave either behind. It names an existing
+	// answer, so an absent chatId or a client placeholder id ("temp-ai-…") is
+	// malformed, not a normal turn.
+	if body.RegenerateOfMessageID != "" {
+		if body.ChatID == "" {
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "regenerateOfMessageId requires chatId")
+			return body, false
+		}
+		if SanitizeParentMessageID(body.RegenerateOfMessageID) == nil {
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "regenerateOfMessageId must be a message id")
+			return body, false
+		}
+	}
 	return body, true
 }
 
@@ -449,7 +465,7 @@ func (h *Handler) handleTransformFollowUp(
 	span trace.Span,
 	body sendMessageRequest,
 	chatID, kbID, lang, userID string,
-	parentMsgID *string,
+	anchor turnAnchor,
 	prev *MessageRow,
 	convRows []MessageRow,
 	streamMode bool,
@@ -462,12 +478,11 @@ func (h *Handler) handleTransformFollowUp(
 		"prev_answer_len", len(prev.Content),
 		"source_count", len(chatCtx.Sources))
 
-	userMsg, err := h.store.AddMessage(ctx, AddMessageParams{
-		ChatID:          chatID,
-		Role:            "user",
-		Content:         body.Message,
-		ParentMessageID: parentMsgID,
-	})
+	userMsg, err := h.resolveTurnUserMessage(ctx, AddMessageParams{
+		ChatID:  chatID,
+		Role:    "user",
+		Content: body.Message,
+	}, anchor)
 	if err != nil {
 		logctx.From(ctx).Error("chat.send: save user message (transform)", "error", err, "chat_id", chatID, "kb_id", kbID)
 		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to save user message")

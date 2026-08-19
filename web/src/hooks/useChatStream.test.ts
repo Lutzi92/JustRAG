@@ -3,6 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useState, useRef, useEffect } from 'react';
 import { useChatStream } from './useChatStream';
 import type { KnowledgeBase, FileEntry, Message } from '../types';
+import { getBranchInfo } from '../utils/messageTree';
 
 // Fix round 1: `useChatStream.handleSendMessage` builds its outgoing request
 // (and the attribution it later stamps onto the AI message) from a closure
@@ -74,7 +75,7 @@ function useHarness(overrides: { agentSelection?: { teamId?: string; agentId?: s
     t: (k: string) => k,
   });
 
-  return { stream, messageTree };
+  return { stream, messageTree, setMessageTree };
 }
 
 beforeEach(() => {
@@ -139,5 +140,147 @@ describe('useChatStream.handleSendMessage — opts.agentSelection precedence', (
     const body = JSON.parse(init.body as string);
     expect(body.agentId).toBe('a-default');
     expect(result.current.messageTree.get('ai2')?.agentId).toBe('a-default');
+  });
+});
+
+// "Antwort neu generieren" used to re-send the question, which put a second
+// copy of the user's prompt into the thread. A regenerate now carries no
+// question of its own: the new answer hangs under the EXISTING user message
+// as a sibling, so the prompt stays on screen exactly once and the ‹1/2›
+// switcher lands on the answers.
+describe('useChatStream.handleSendMessage — regenerate', () => {
+  const regenerateOf = { aiMessageId: 'ai-old', userMessageId: 'u1' };
+
+  /** The answered turn a regenerate starts from: u1 -> ai-old. */
+  function seedAnsweredTurn(result: { current: ReturnType<typeof useHarness> }) {
+    act(() => {
+      result.current.setMessageTree(new Map<string, Message>([
+        ['u1', { id: 'u1', role: 'user', content: 'Wie funktioniert X?', childIds: ['ai-old'] }],
+        ['ai-old', { id: 'ai-old', role: 'ai', content: 'Antwort 1', parentMessageId: 'u1', childIds: [] }],
+      ]));
+    });
+  }
+
+  it('macht die neue Antwort zu einem Geschwister der alten', async () => {
+    authFetchMock.mockResolvedValueOnce(okResponse([{ aiMessageId: 'ai-new' }]));
+    const { result } = renderHook(() => useHarness());
+    seedAnsweredTurn(result);
+
+    await act(async () => {
+      await result.current.stream.handleSendMessage(
+        { preventDefault: () => {} } as React.FormEvent,
+        'Wie funktioniert X?',
+        'ai-old',
+        undefined,
+        { regenerateOf },
+      );
+    });
+
+    // This is requirement "‹1/2› sits on the answers": both answers are
+    // children of the one question, so getBranchInfo reports two siblings.
+    const info = getBranchInfo(result.current.messageTree, 'ai-new');
+    expect(info?.total).toBe(2);
+    expect(info?.siblingIds).toEqual(['ai-old', 'ai-new']);
+  });
+
+  it('legt keine zweite Frage im Nachrichtenbaum an', async () => {
+    authFetchMock.mockResolvedValueOnce(okResponse([{ aiMessageId: 'ai-new' }]));
+    const { result } = renderHook(() => useHarness());
+
+    await act(async () => {
+      await result.current.stream.handleSendMessage(
+        { preventDefault: () => {} } as React.FormEvent,
+        'Wie funktioniert X?',
+        'ai-old',
+        undefined,
+        { regenerateOf },
+      );
+    });
+
+    const roles = [...result.current.messageTree.values()].map(m => m.role);
+    expect(roles).not.toContain('user');
+  });
+
+  it('hängt die neue Antwort unter die bestehende Frage', async () => {
+    authFetchMock.mockResolvedValueOnce(okResponse([{ aiMessageId: 'ai-new' }]));
+    const { result } = renderHook(() => useHarness());
+
+    await act(async () => {
+      await result.current.stream.handleSendMessage(
+        { preventDefault: () => {} } as React.FormEvent,
+        'Wie funktioniert X?',
+        'ai-old',
+        undefined,
+        { regenerateOf },
+      );
+    });
+
+    expect(result.current.messageTree.get('ai-new')?.parentMessageId).toBe('u1');
+  });
+
+  it('schickt regenerateOfMessageId statt eines parentMessageId', async () => {
+    authFetchMock.mockResolvedValueOnce(okResponse([{ aiMessageId: 'ai-new' }]));
+    const { result } = renderHook(() => useHarness());
+
+    await act(async () => {
+      await result.current.stream.handleSendMessage(
+        { preventDefault: () => {} } as React.FormEvent,
+        'Wie funktioniert X?',
+        'ai-old',
+        undefined,
+        { regenerateOf },
+      );
+    });
+
+    const [, init] = authFetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.regenerateOfMessageId).toBe('ai-old');
+    // Sending the active leaf as a parent is what appended the duplicate
+    // prompt: the backend would insert a fresh question under the old answer.
+    expect(body.parentMessageId).toBeUndefined();
+  });
+
+  it('hängt eine fehlgeschlagene Regeneration an die bestehende Frage, nicht an eine Kopie', async () => {
+    authFetchMock.mockResolvedValueOnce({ ok: false, json: async () => ({}) } as unknown as Response);
+    const { result } = renderHook(() => useHarness());
+
+    await act(async () => {
+      await result.current.stream.handleSendMessage(
+        { preventDefault: () => {} } as React.FormEvent,
+        'Wie funktioniert X?',
+        'ai-old',
+        undefined,
+        { regenerateOf },
+      );
+    });
+
+    const errorNode = [...result.current.messageTree.values()].find(m => m.id?.startsWith('temp-error-'));
+    expect(errorNode?.parentMessageId).toBe('u1');
+  });
+});
+
+// The edit path shares the parent-resolution code below. `editParentId` used
+// to be `string | undefined`, so "this question is the root of the chat"
+// (no parent) was indistinguishable from "no parent given" and fell through
+// to the active leaf — appending the edited question to the very answer it
+// was meant to replace.
+describe('useChatStream.handleSendMessage — editing the first question of a chat', () => {
+  it('verzweigt an der Wurzel statt an das aktive Blatt anzuhängen', async () => {
+    authFetchMock.mockResolvedValueOnce(okResponse([{ userMessageId: 'u-new' }, { aiMessageId: 'ai-new' }]));
+    const { result } = renderHook(() => useHarness());
+
+    await act(async () => {
+      await result.current.stream.handleSendMessage(
+        { preventDefault: () => {} } as React.FormEvent,
+        'Neu formulierte Frage',
+        'ai-old',
+        null,
+      );
+    });
+
+    const [, init] = authFetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.parentMessageId).toBeUndefined();
+    expect(result.current.messageTree.get('u-new')?.parentMessageId).toBeUndefined();
   });
 });

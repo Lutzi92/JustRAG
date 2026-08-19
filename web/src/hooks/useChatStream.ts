@@ -54,8 +54,21 @@ export function useChatStream({
     _e: React.FormEvent | React.KeyboardEvent,
     userMessage: string,
     activeLeafId: string | null,
-    editParentId?: string,
-    opts?: { attachmentId?: string; comparisonModes?: string[]; agentSelection?: AgentSelection },
+    // `null` means "this message is the root of the chat" and is NOT the same
+    // as `undefined` ("caller has no opinion, use the active leaf"). Editing
+    // the first question of a chat produces the former; collapsing the two
+    // appended the edited question to the very answer it replaces.
+    editParentId?: string | null,
+    opts?: {
+      attachmentId?: string;
+      comparisonModes?: string[];
+      agentSelection?: AgentSelection;
+      // "Antwort neu generieren": no new question is written. The answer
+      // hangs under the named, already-persisted question as a sibling of
+      // `aiMessageId`, so the prompt appears exactly once and the ‹1/2›
+      // switcher lands on the answers.
+      regenerateOf?: { aiMessageId: string; userMessageId: string };
+    },
   ) => {
     const selectedFiles = files.filter(f => f.selected !== false);
     if (!userMessage.trim() || !currentKb || loading || selectedFiles.length === 0) return;
@@ -66,26 +79,35 @@ export function useChatStream({
     // abgeschickt und liefe sonst mit der vorherigen Auswahl.
     const effectiveSelection = opts?.agentSelection ?? agentSelection;
 
+    const regenerateOf = opts?.regenerateOf;
+
     // The active leaf can be an unpersisted temp id (e.g. a temp-error node from
     // a failed send). Resolve to the nearest persisted ancestor so we never post
     // a temp id as parentMessageId — doing so hits the uuid `messages` columns
     // and drops the whole conversation history (SQLSTATE 22P02).
-    const rawParentId = editParentId || activeLeafId || undefined;
+    const rawParentId = editParentId !== undefined ? editParentId : activeLeafId;
     const parentId = nearestPersistedAncestorId(messageTreeRef.current, rawParentId) ?? undefined;
     const tempUserMsgId = `temp-user-${Date.now()}`;
     const tempAiMsgId = `temp-ai-${Date.now()}`;
 
-    const userMsg: Message = {
-      id: tempUserMsgId,
-      parentMessageId: parentId,
-      role: 'user',
-      content: userMessage,
-    };
+    // Everything below hangs off the turn's question. On a regenerate that is
+    // the existing, already-persisted one; otherwise it is the placeholder we
+    // are about to insert.
+    const userNodeId = regenerateOf?.userMessageId ?? tempUserMsgId;
+
     setMessageTree(prev => {
-      let tree = addMessageToTree(prev, userMsg);
+      let tree = prev;
+      if (!regenerateOf) {
+        tree = addMessageToTree(tree, {
+          id: tempUserMsgId,
+          parentMessageId: parentId,
+          role: 'user',
+          content: userMessage,
+        });
+      }
       const aiMsg: Message = {
         id: tempAiMsgId,
-        parentMessageId: tempUserMsgId,
+        parentMessageId: userNodeId,
         role: 'ai',
         content: '',
       };
@@ -114,7 +136,12 @@ export function useChatStream({
           method: 'semantic',
           enhance: enhance,
           chatId: activeChatIdRef.current,
-          parentMessageId: parentId,
+          // Mutually exclusive: a regenerate names the answer to replace and
+          // the backend derives the question (and its parent) from it. Sending
+          // a parent alongside would insert a second copy of the question.
+          ...(regenerateOf
+            ? { regenerateOfMessageId: regenerateOf.aiMessageId }
+            : { parentMessageId: parentId }),
           reasoningEnabled: reasoningEnabled,
           reasoningLevel: reasoningLevel,
           language,
@@ -164,7 +191,11 @@ export function useChatStream({
         onEvent: (data: unknown) => {
           const event = data as Record<string, unknown>;
 
-          if (event.enhancedQuery && !enhancedShown) {
+          // Never on a regenerate: the enhanced query renders as a second
+          // user bubble under the question, which is precisely the duplicate
+          // prompt this path exists to avoid. The backend suppresses the
+          // enhancer for a regenerate; this is the client-side half of it.
+          if (event.enhancedQuery && !enhancedShown && !regenerateOf) {
             enhancedShown = true;
             const enhancedMsgId = `temp-enhanced-${Date.now()}`;
             const aiTempId = currentAiTempIdRef.current;
@@ -333,7 +364,7 @@ export function useChatStream({
       const errorMsgId = `temp-error-${Date.now()}`;
       setMessageTree(prev => addMessageToTree(prev, {
         id: errorMsgId,
-        parentMessageId: tempUserMsgId,
+        parentMessageId: userNodeId,
         role: 'ai',
         content: t('aiGenericError'),
       }));
