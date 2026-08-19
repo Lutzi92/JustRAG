@@ -44,16 +44,19 @@ beforeEach(() => {
 describe('StudioWorkspace', () => {
   it('führt keine eigene Artefaktliste mehr', () => {
     render(
-      <StudioWorkspace kbId="kb1" generatedContent={[item]} onGenerate={vi.fn()}
-        onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={item} />,
+      <StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={item} />,
     );
-    expect(screen.queryByText('generatedContentHeader')).not.toBeInTheDocument();
+    // Die frühere Assertion suchte hier den Text 'generatedContentHeader'.
+    // Dieser Übersetzungsschlüssel ist mitsamt der inneren Artefaktliste
+    // gelöscht, also konnte sie nicht mehr fehlschlagen. Was tatsächlich
+    // regressieren könnte, ist eine zweite Liste neben dem Verlauf — dafür
+    // ist die Abwesenheit eines listbox/list-Elements der belastbare Test.
+    expect(screen.queryAllByRole('list')).toHaveLength(0);
   });
 
   it('zeigt das über die Prop gewählte Artefakt', () => {
     render(
-      <StudioWorkspace kbId="kb1" generatedContent={[item]} onGenerate={vi.fn()}
-        onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={item} />,
+      <StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={item} />,
     );
     expect(screen.getByTestId('md-editor')).toBeInTheDocument();
   });
@@ -64,14 +67,12 @@ describe('StudioWorkspace', () => {
     // prop-follow from a stale-effect bug, so the editor value is checked too.
     const other = { ...(item as object), id: 'g2', title: 'FAQ', type: 'faq', content: { text: 'Andere Notiz' } } as never;
     const { rerender } = render(
-      <StudioWorkspace kbId="kb1" generatedContent={[item, other]} onGenerate={vi.fn()}
-        onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={item} />,
+      <StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={item} />,
     );
     expect(screen.getByRole('heading', { name: 'Analyse' })).toBeInTheDocument();
     expect(screen.getByTestId('md-editor')).toHaveTextContent('Hallo');
     rerender(
-      <StudioWorkspace kbId="kb1" generatedContent={[item, other]} onGenerate={vi.fn()}
-        onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={other} />,
+      <StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={other} />,
     );
     expect(screen.getByRole('heading', { name: 'FAQ' })).toBeInTheDocument();
     expect(screen.getByTestId('md-editor')).toHaveTextContent('Andere Notiz');
@@ -79,8 +80,7 @@ describe('StudioWorkspace', () => {
 
   it('zeigt ohne Auswahl das Kachelgrid', () => {
     render(
-      <StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
-        onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={null} />,
+      <StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={null} />,
     );
     // Two matches by design, unrelated to this task: the always-visible tile
     // in studio-workspace__tiles plus the contextual hint button rendered by
@@ -90,8 +90,7 @@ describe('StudioWorkspace', () => {
 
   it('zeigt alle Kacheln, unabhängig von jeder KB-Einstellung', () => {
     render(
-      <StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
-        onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={null} />,
+      <StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={null} />,
     );
     for (const key of ['newAnalysis', 'flashcards', 'slides', 'podcast', 'abstract',
                        'chart', 'briefingDoc', 'faq', 'studyGuide', 'timeline', 'quiz']) {
@@ -107,8 +106,7 @@ describe('StudioWorkspace', () => {
 
   it('schickt Prompt und Agent-Auswahl an die Analyse', async () => {
     const post = vi.mocked(axios.post).mockResolvedValue({ data: { record: { id: 'g9', type: 'analysis', title: 'A', content: { text: 'x' }, createdAt: '2026-08-18T00:00:00Z' }, degradedReason: '' } });
-    render(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
-      onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={null} />);
+    render(<StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={null} />);
 
     // Two "newAnalysis" buttons render with no selection (tile grid + the
     // empty-state hint button, see 'zeigt ohne Auswahl das Kachelgrid' above)
@@ -125,8 +123,7 @@ describe('StudioWorkspace', () => {
 
   it('zeigt den Degradationshinweis, wenn der Agent nicht verfügbar war', async () => {
     vi.mocked(axios.post).mockResolvedValue({ data: { record: { id: 'g9', type: 'analysis', title: 'A', content: { text: 'x' }, createdAt: '2026-08-18T00:00:00Z' }, degradedReason: 'load_failed' } });
-    render(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
-      onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={null} />);
+    render(<StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={null} />);
 
     await userEvent.click(screen.getAllByRole('button', { name: /newAnalysis/ })[0]);
     await userEvent.type(screen.getByLabelText('prompt'), 'Frage');
@@ -147,8 +144,7 @@ describe('StudioWorkspace', () => {
 
   it('behält den Degradationshinweis, wenn das gerade erzeugte Artefakt ausgewählt wird', async () => {
     vi.mocked(axios.post).mockResolvedValue({ data: { record: createdRecord, degradedReason: 'load_failed' } });
-    const { rerender } = render(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
-      onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={null} />);
+    const { rerender } = render(<StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={null} />);
 
     await userEvent.click(screen.getAllByRole('button', { name: /newAnalysis/ })[0]);
     await userEvent.type(screen.getByLabelText('prompt'), 'Frage');
@@ -156,23 +152,20 @@ describe('StudioWorkspace', () => {
     expect(await screen.findByText('analysisDegradedNoAgent')).toBeInTheDocument();
 
     // Simulates ChatView's onAnalysisCreated selecting the new artifact.
-    rerender(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
-      onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={createdRecord} />);
+    rerender(<StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={createdRecord} />);
     expect(screen.getByText('analysisDegradedNoAgent')).toBeInTheDocument();
   });
 
   it('verwirft den Degradationshinweis, sobald ein anderes Artefakt gewählt wird', async () => {
     vi.mocked(axios.post).mockResolvedValue({ data: { record: createdRecord, degradedReason: 'load_failed' } });
-    const { rerender } = render(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
-      onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={null} />);
+    const { rerender } = render(<StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={null} />);
 
     await userEvent.click(screen.getAllByRole('button', { name: /newAnalysis/ })[0]);
     await userEvent.type(screen.getByLabelText('prompt'), 'Frage');
     await userEvent.click(screen.getByRole('button', { name: 'start' }));
     expect(await screen.findByText('analysisDegradedNoAgent')).toBeInTheDocument();
 
-    rerender(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
-      onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={item} />);
+    rerender(<StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={item} />);
     expect(screen.queryByText('analysisDegradedNoAgent')).not.toBeInTheDocument();
   });
 
@@ -195,8 +188,7 @@ describe('StudioWorkspace', () => {
     it('bleibt offen, wenn onStartComparison false zurückgibt (fehlgeschlagener Upload)', async () => {
       mockedUseWorkspacePresets.mockReturnValue({ analysis: [], comparison: [], compareEnabled: true });
       const onStartComparison = vi.fn().mockResolvedValue(false);
-      render(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
-        onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={null} onStartComparison={onStartComparison} />);
+      render(<StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={null} onStartComparison={onStartComparison} />);
 
       await openComparisonDialog();
       await userEvent.click(screen.getByRole('button', { name: 'start' }));
@@ -209,8 +201,7 @@ describe('StudioWorkspace', () => {
     it('schließt sich, wenn onStartComparison true zurückgibt (erfolgreich gestartet)', async () => {
       mockedUseWorkspacePresets.mockReturnValue({ analysis: [], comparison: [], compareEnabled: true });
       const onStartComparison = vi.fn().mockResolvedValue(true);
-      render(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
-        onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={null} onStartComparison={onStartComparison} />);
+      render(<StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={null} onStartComparison={onStartComparison} />);
 
       await openComparisonDialog();
       await userEvent.click(screen.getByRole('button', { name: 'start' }));
@@ -228,8 +219,7 @@ describe('StudioWorkspace', () => {
   // dropped it for 'quiz' specifically (it kept it for every other type).
   it('zeigt einen JSON-Dump für ein Quiz-Artefakt mit fehlerhaftem content (kein Array)', () => {
     const malformedQuiz = { id: 'g6', kbId: 'kb1', userId: 'u1', title: 'Kaputtes Quiz', createdAt: '2026-08-19T00:00:00Z', type: 'quiz', content: { not: 'an-array' } } as never;
-    render(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
-      onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={malformedQuiz} />);
+    render(<StudioWorkspace kbId="kb1" onGenerate={vi.fn()} onClose={vi.fn()} selectedItem={malformedQuiz} />);
     expect(screen.getByText(/an-array/)).toBeInTheDocument();
   });
 });

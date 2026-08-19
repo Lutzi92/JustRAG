@@ -176,7 +176,6 @@ export const translations = {
     chatFooter: { de: 'Antworten werden basierend auf deinen hochgeladenen Quellen generiert. Die KI kann Fehler machen, überprüfe wichtige Informationen.', en: 'Answers are generated based on your uploaded sources. The AI can make mistakes, check important information.' },
 
     // Studio
-    studio: { de: 'Studio', en: 'Studio' },
     flashcards: { de: 'Lernkarten', en: 'Flashcards' },
     slides: { de: 'Folien', en: 'Slides' },
     podcast: { de: 'Podcast', en: 'Podcast' },
@@ -284,7 +283,7 @@ export const translations = {
     noHistory: { de: 'Noch kein Verlauf vorhanden.', en: 'No history yet.' },
     chat: { de: 'Chat', en: 'Chat' },
     historyKindResearch: { de: 'Bericht', en: 'Report' },
-    historyKindAcademic: { de: 'Akademisch', en: 'Academic' },
+    historyKindAcademic: { de: 'Akad. Recherche', en: 'Academic' },
 
     // Prompts & Alerts
     enterGenerationTopic: { de: 'Thema für die Generierung eingeben:', en: 'Enter topic for generation:' },
@@ -686,7 +685,6 @@ export const translations = {
     // as-is for anything still using it as an action label. The Workspace
     // dialog's file field needs a noun, matching its siblings ("Vorlage",
     // "Prompt", "Vergleichsmodi"), hence the separate key below.
-    comparisonAttach: { de: 'Dokument zum Vergleich anhängen', en: 'Attach a document to compare' },
     comparisonFileLabel: { de: 'Dokument', en: 'Document' },
     documentComparison: { de: 'Dokumentenvergleich', en: 'Document comparison' },
     deleteFileError: { de: 'Fehler beim Löschen der Datei', en: 'Error deleting file' },

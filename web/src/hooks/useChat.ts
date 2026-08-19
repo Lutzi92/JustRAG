@@ -12,11 +12,6 @@ import { useChatStream } from './useChatStream';
 import { useChatAttachment, type ChatAttachment } from './useChatAttachment';
 import type { AgentSelection } from './useKbSettings';
 
-// Kept local (not imported from the Workspace comparison dialog): this hook
-// sits below the dialog layer and must not import its union type (see
-// `startComparison`'s `modes: string[]` parameter below).
-type ComparisonMode = 'contradiction' | 'formal' | 'completeness';
-
 /**
  * Pure helper for `startComparison`: turns an uploaded attachment + chosen
  * modes + free-text instruction + agent/team choice into the
@@ -101,12 +96,12 @@ export function useChat({
   // Input state
   const [userMessageInput, setUserMessageInput] = useState('');
 
-  // In-chat document comparison: attachment lifecycle + selected modes.
-  // The attachment persists across the chat session (so follow-up turns keep
-  // sending its id), while selectedModes are cleared after a comparison send
-  // so a follow-up is a normal question rather than a re-comparison.
+  // In-chat document comparison: the attachment persists across the chat
+  // session so follow-up turns keep sending its id (the backend injects the
+  // document via buildFollowUpContext). The comparison MODES are not held
+  // here — they are chosen in the Workspace dialog and travel with that one
+  // turn's send options; nothing in the chat UI can change them afterwards.
   const attachmentState = useChatAttachment(currentKb?.id ?? '', t);
-  const [selectedModes, setSelectedModes] = useState<ComparisonMode[]>([]);
 
   // Chat history state
   const [chats, setChats] = useState<ChatEntry[]>([]);
@@ -296,11 +291,11 @@ export function useChat({
     }
   }, [onResearchLoaded, onAcademicResearchLoaded, setActiveChatId, setAgentSelection, setMessageTree, setActiveLeafId, setComparisonMode, setComparisonLeafId, toast, t]);
 
-  // Clears the comparison attachment + selected modes (e.g. on new chat or the
-  // user pressing the chip's remove button).
+  // Drops the comparison attachment so it cannot leak from one chat into the
+  // next. Called by handleNewChat; startComparison re-adopts the upload right
+  // after, which is what keeps follow-up turns working.
   const clearComparison = useCallback(() => {
     attachmentState.clear();
-    setSelectedModes([]);
   }, [attachmentState]);
 
   const handleNewChat = useCallback(() => {
@@ -346,34 +341,31 @@ export function useChat({
     // we substitute a localized default message because the backend rejects an
     // empty message with 400 before running the comparison. Don't start a
     // comparison while the attachment is still uploading.
-    const isComparison = !!attachmentState.attachment && selectedModes.length > 0;
-    if (isComparison && attachmentState.uploading) return;
-    if (!userMessageInput.trim() && !isComparison) return;
+    if (!userMessageInput.trim()) return;
 
     // Guard: require at least one selected file before clearing input
     const selectedFiles = files.filter(f => f.selected !== false);
     if (selectedFiles.length === 0) return;
 
-    const userMessage = userMessageInput.trim() || (isComparison ? t('comparisonDefaultMessage') : '');
-    if (!userMessage) return;
+    const userMessage = userMessageInput.trim();
 
     const sendOpts = attachmentState.attachment
-      ? { attachmentId: attachmentState.attachment.attachmentId, comparisonModes: selectedModes }
+      // Empty modes deliberately: a follow-up turn must carry the uploaded
+      // document as context (buildFollowUpContext) without re-running the
+      // per-section comparison. willRunComparison requires non-empty modes.
+      ? { attachmentId: attachmentState.attachment.attachmentId, comparisonModes: [] }
       : undefined;
 
     setUserMessageInput('');
     setEditingMessageId(null);
     setForkPointId(null);
-    // Clear modes after a comparison send so a follow-up turn is a normal
-    // question; keep the attachment until the user removes it.
-    if (selectedModes.length > 0) setSelectedModes([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
 
     // Delegate actual streaming to useChatStream
     await stream.handleSendMessage(e, userMessage, activeLeafId, editParentId, sendOpts);
-  }, [userMessageInput, currentKb, loading, files, activeLeafId, stream, attachmentState.attachment, attachmentState.uploading, selectedModes, t]);
+  }, [userMessageInput, currentKb, loading, files, activeLeafId, stream, attachmentState.attachment, t]);
 
   /**
    * Starts a document comparison from the Workspace tile.
@@ -545,11 +537,6 @@ export function useChat({
     loading,
     // Document comparison
     attachment: attachmentState.attachment,
-    attachmentUploading: attachmentState.uploading,
-    attachmentError: attachmentState.error,
-    uploadAttachment: attachmentState.upload,
-    selectedComparisonModes: selectedModes,
-    setSelectedComparisonModes: setSelectedModes,
     clearComparison,
     // Chat history
     chats,
@@ -599,7 +586,6 @@ export function useChat({
     userMessageInput,
     loading,
     attachmentState,
-    selectedModes,
     clearComparison,
     chats,
     activeChatId,

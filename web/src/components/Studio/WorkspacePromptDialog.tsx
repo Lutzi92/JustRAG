@@ -149,6 +149,7 @@ export function WorkspacePromptDialog({
 
         <AgentPicker
           kbId={kbId}
+          options={options}
           selection={selection}
           onSelect={setTouchedSelection}
         />

@@ -22,6 +22,20 @@ type TeamParamsInput struct {
 	Team  *agentteams.TeamForChat
 	Agent *agentteams.AgentRecord
 
+	// DeriveToolPolicy makes BuildTeamParams fill the SiteCfg-derived tool and
+	// retrieval-arm knobs: HyPESearch, ToolMaxRounds, AllowPrivilegedTools.
+	// The ZERO VALUE deliberately means "leave them off". The eval harness
+	// relies on that: it has never run the HyPE arm or a tool budget, and a
+	// silent change there would alter what an eval measures rather than what
+	// production does.
+	//
+	// This is an opt-IN rather than a deny-list on purpose. A deny-list (the
+	// caller resetting fields afterwards) goes stale the moment a further
+	// SiteCfg-derived knob is added here — the new one would reach eval
+	// unnoticed. With the derivation gated as a block, anything added inside
+	// stays off for callers that never opted in.
+	DeriveToolPolicy bool
+
 	SiteCfg        SiteConfigReader
 	SearchService  vector.Searcher
 	ToolDispatcher *MCPDispatcher
@@ -36,20 +50,22 @@ type TeamParamsInput struct {
 // its own prior behaviour for the fields where they disagreed.
 func BuildTeamParams(ctx context.Context, in TeamParamsInput) TeamParams {
 	p := TeamParams{
-		KbID:                 in.KbID,
-		ChatID:               in.ChatID,
-		Query:                in.Query,
-		Language:             in.Language,
-		CurrentDateLine:      in.CurrentDateLine,
-		KbSystemPrompt:       in.KbSystemPrompt,
-		FileIDs:              in.FileIDs,
-		GraphChunkIDs:        in.GraphChunkIDs,
-		BridgeChunks:         in.BridgeChunks,
-		HyPESearch:           HyPESearchEnabled(ctx, in.SiteCfg),
-		RouterModel:          AgentTeamRouterModel(ctx, in.SiteCfg),
-		PlanningModel:        EnrichmentModel(ctx, in.SiteCfg),
-		ToolMaxRounds:        2,
-		AllowPrivilegedTools: AgentsAllowPrivilegedTools(ctx, in.SiteCfg),
+		KbID:            in.KbID,
+		ChatID:          in.ChatID,
+		Query:           in.Query,
+		Language:        in.Language,
+		CurrentDateLine: in.CurrentDateLine,
+		KbSystemPrompt:  in.KbSystemPrompt,
+		FileIDs:         in.FileIDs,
+		GraphChunkIDs:   in.GraphChunkIDs,
+		BridgeChunks:    in.BridgeChunks,
+		RouterModel:     AgentTeamRouterModel(ctx, in.SiteCfg),
+		PlanningModel:   EnrichmentModel(ctx, in.SiteCfg),
+	}
+	if in.DeriveToolPolicy {
+		p.HyPESearch = HyPESearchEnabled(ctx, in.SiteCfg)
+		p.ToolMaxRounds = 2
+		p.AllowPrivilegedTools = AgentsAllowPrivilegedTools(ctx, in.SiteCfg)
 	}
 	if in.Team != nil {
 		p.Team = in.Team.Team

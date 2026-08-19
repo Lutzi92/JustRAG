@@ -62,3 +62,16 @@ func TestResolvePresetsPrefersOverrideThenGlobalThenDefault(t *testing.T) {
 		}
 	})
 }
+
+// TestResolvePresetsUnknownKeyFallsBack exercises fetchPresetRaw's default
+// arm, which existed as defensive future-proofing but had no test — inside the
+// very helper the registry-consistency guard depends on.
+func TestResolvePresetsUnknownKeyFallsBack(t *testing.T) {
+	def := DefaultAnalysisPresets("de")
+	cfg := fakeCfg{vals: map[string]string{"some_other_key": `[{"label":"X","prompt":"P"}]`}}
+
+	got := resolvePresets(context.Background(), cfg, "some_other_key", def)
+	if len(got) != 1 || got[0].Label != "X" {
+		t.Fatalf("the default arm must still read the key it was given, got %+v", got)
+	}
+}

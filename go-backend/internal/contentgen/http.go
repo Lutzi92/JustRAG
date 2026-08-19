@@ -215,16 +215,13 @@ func (h *Handler) readerForKB(ctx context.Context, kbID string) SiteConfigReader
 // hier hätte die Kachel inkonsistent zu dem gemacht, was das Backend
 // tatsächlich freischaltet.
 //
-// FALLE für später: hier wird chat_compare_enabled über cfg gelesen, also
-// über readerForKB's KB-Overlay. internal/chat/http_attachment.go's
-// UploadAttachment (der eigentliche 503-Gate) ruft dagegen niemals forKB auf
-// und liest chat_compare_enabled ausschließlich vom globalen Reader. Das ist
-// heute folgenlos, NUR weil chat_compare_enabled keine kbConfigRegistry-Zeile
-// hat — das Overlay fällt für jeden Key ohne Registry-Eintrag immer auf den
-// globalen Wert zurück, die beiden Lesarten liefern also zwangsläufig
-// dasselbe. Sobald jemand chat_compare_enabled zur Registry hinzufügt (per-KB
-// überschreibbar macht), laufen Kachel-Sichtbarkeit hier und der 503-Gate in
-// UploadAttachment auseinander, ohne dass irgendein Test das bemerkt.
+// compareEnabled wird bewusst vom GLOBALEN Reader gelesen, nicht von cfg:
+// internal/chat/http_attachment.go's UploadAttachment — der Gate, der den 503
+// tatsächlich auslöst — ruft niemals forKB auf und liest ausschließlich global.
+// Läse die Kachel stattdessen das KB-Overlay, würden beide auseinanderlaufen,
+// sobald jemand chat_compare_enabled per-KB überschreibbar macht: die Kachel
+// verspräche etwas, das der Upload verweigert. Die Presets darüber lesen sehr
+// wohl das Overlay — sie sind ausdrücklich per-KB gedacht.
 func (h *Handler) GetWorkspacePresets(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	kbID := kbIDFromContext(r)
@@ -234,7 +231,7 @@ func (h *Handler) GetWorkspacePresets(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSONCtx(ctx, w, http.StatusOK, map[string]any{
 		"analysis":       resolvePresets(ctx, cfg, "workspace_analysis_presets", DefaultAnalysisPresets(lang)),
 		"comparison":     resolvePresets(ctx, cfg, "workspace_comparison_presets", DefaultComparisonPresets(lang)),
-		"compareEnabled": chat.CompareEnabled(ctx, cfg),
+		"compareEnabled": chat.CompareEnabled(ctx, h.siteCfg),
 	})
 }
 
@@ -719,14 +716,20 @@ func (h *Handler) GenerateAnalysis(w http.ResponseWriter, r *http.Request) {
 	var analysis string
 	if sel != nil {
 		params := chat.BuildTeamParams(ctx, chat.TeamParamsInput{
-			KbID:           kbID,
-			Query:          req.Topic,
-			Language:       lang,
-			KbSystemPrompt: prompts.AnalysisSystemPrompt(lang),
-			Team:           sel.Team,
-			Agent:          sel.Agent,
-			SiteCfg:        h.readerForKB(ctx, kbID),
-			SearchService:  h.teamSearcher,
+			KbID:     kbID,
+			Query:    req.Topic,
+			Language: lang,
+			// Same source the chat path uses (http_send.go). Without it an
+			// agent analysis cannot resolve "seit Mai" while the same agent
+			// can in chat, and chat_date_awareness_enabled defaults ON.
+
+			CurrentDateLine:  chat.SystemPromptDateLine(ctx, h.readerForKB(ctx, kbID), lang),
+			KbSystemPrompt:   prompts.AnalysisSystemPrompt(lang),
+			Team:             sel.Team,
+			Agent:            sel.Agent,
+			DeriveToolPolicy: true,
+			SiteCfg:          h.readerForKB(ctx, kbID),
+			SearchService:    h.teamSearcher,
 		})
 		// RunTeamChat liefert einen SystemPrompt, KEINE fertige Antwort — die
 		// Chat-Sendestrecke streamt sie im Anschluss selbst. Hier gibt es
@@ -740,6 +743,14 @@ func (h *Handler) GenerateAnalysis(w http.ResponseWriter, r *http.Request) {
 			res, gerr := ai.GenerateCompletion(ctx, h.aiResolver, req.Topic, chatCtx.SystemPrompt, kbID, false)
 			if gerr != nil {
 				httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "LLM generation failed")
+				return
+			}
+			if strings.TrimSpace(res.Content) == "" {
+				// Storing this would produce an artifact with empty text and an
+				// empty degradedReason — for the user indistinguishable from a
+				// real result.
+				logctx.From(ctx).Warn("workspace.analysis.empty_output", "kb_id", kbID)
+				httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "the agent returned an empty analysis")
 				return
 			}
 			analysis = res.Content

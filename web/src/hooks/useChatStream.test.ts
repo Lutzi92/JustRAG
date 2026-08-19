@@ -141,3 +141,71 @@ describe('useChatStream.handleSendMessage — opts.agentSelection precedence', (
     expect(result.current.messageTree.get('ai2')?.agentId).toBe('a-default');
   });
 });
+
+// The comparison round trip: a user uploads a document, gets findings, then
+// asks a follow-up about that same document. Both halves were only ever tested
+// in pieces (the dialog, the outgoing call, the backend stages), and the
+// follow-up half was silently broken once already — `handleNewChat` cleared the
+// attachment, so the second turn arrived without it and the backend had nothing
+// to inject. This covers the SSE stretch: findings must land ON the message
+// (that is what MessageBubble gates its findings panel on), and a follow-up
+// turn must still carry the attachment id while NOT re-running the comparison.
+describe('useChatStream — Vergleichs-Rundlauf', () => {
+  const findings = [
+    { mode: 'contradiction', severity: 'high', issue: 'Frist weicht ab', uploadQuote: 'vier Wochen', citedQuote: 'sechs Wochen', citedFileIds: ['f1'], sectionIdx: 0 },
+  ];
+
+  it('legt die Findings des Vergleichs-Turns auf der KI-Nachricht ab', async () => {
+    authFetchMock.mockResolvedValueOnce(okResponse([
+      { aiMessageId: 'ai-cmp' },
+      { comparisonFindings: findings },
+      { content: 'Ich habe einen Widerspruch gefunden.' },
+    ]));
+    const { result } = renderHook(() => useHarness());
+
+    await act(async () => {
+      await result.current.stream.handleSendMessage(
+        { preventDefault: () => {} } as React.FormEvent,
+        'Vergleiche das Dokument.',
+        null,
+        undefined,
+        { attachmentId: 'att1', comparisonModes: ['contradiction'] },
+      );
+    });
+
+    const aiMsg = result.current.messageTree.get('ai-cmp');
+    // MessageBubble renders <ComparisonFindings> exactly on this field being a
+    // non-empty array; an event that arrives but never reaches the message
+    // leaves the user with an answer and no findings panel.
+    expect(aiMsg?.comparisonFindings).toHaveLength(1);
+    expect(aiMsg?.comparisonFindings?.[0].issue).toBe('Frist weicht ab');
+    expect(aiMsg?.content).toContain('Widerspruch');
+  });
+
+  it('schickt bei der Folgefrage den Anhang weiter, ohne den Vergleich erneut zu starten', async () => {
+    authFetchMock.mockResolvedValueOnce(okResponse([
+      { aiMessageId: 'ai-follow' },
+      { content: 'Die Frist im Dokument sind vier Wochen.' },
+    ]));
+    const { result } = renderHook(() => useHarness());
+
+    await act(async () => {
+      await result.current.stream.handleSendMessage(
+        { preventDefault: () => {} } as React.FormEvent,
+        'Welche Frist steht im Dokument?',
+        null,
+        undefined,
+        { attachmentId: 'att1' },
+      );
+    });
+
+    const [, init] = authFetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    // Both halves matter: without attachmentId the backend has no document to
+    // inject; with comparisonModes it would re-run the whole comparison
+    // instead of answering the question.
+    expect(body.attachmentId).toBe('att1');
+    expect(body.comparisonModes).toBeUndefined();
+    expect(result.current.messageTree.get('ai-follow')?.content).toContain('vier Wochen');
+  });
+});

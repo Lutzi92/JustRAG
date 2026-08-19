@@ -112,15 +112,12 @@ func (a *TeamDispatchAdapter) Search(ctx context.Context, q Question, k int) ([]
 		KbID: q.KbID, Query: q.Question, Language: q.Language, KbSystemPrompt: kbSystemPrompt,
 		Team: tfc, SiteCfg: a.siteCfg, SearchService: a.searchService,
 	})
-	// BuildTeamParams also derives HyPESearch/ToolMaxRounds/AllowPrivilegedTools
-	// from SiteCfg, matching the chat send path's defaults. The eval path never
-	// computed those three pre-extraction (ToolDispatcher is nil here too, so
-	// eval historically ran without HyPE-search or a tool round budget); reset
-	// them to their old zero values so extracting the shared builder does not
-	// change eval behaviour.
-	params.HyPESearch = false
-	params.ToolMaxRounds = 0
-	params.AllowPrivilegedTools = false
+	// DeriveToolPolicy is deliberately NOT set: eval has never run the HyPE
+	// arm or a tool budget (ToolDispatcher is nil here too). Leaving the
+	// opt-in unset keeps that true even if further SiteCfg-derived knobs are
+	// added to BuildTeamParams later — see TeamParamsInput.DeriveToolPolicy.
+	// Aligning eval with production is a separate change with its own
+	// baseline, not a side effect of a refactor.
 	chatCtx, err := a.runTeam(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("team eval: %s: %w", q.ID, err)

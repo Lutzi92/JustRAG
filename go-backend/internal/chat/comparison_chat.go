@@ -45,6 +45,20 @@ func renderFindingsForSummary(findings []Finding) string {
 	return b.String()
 }
 
+// shouldInjectFollowUpContext decides whether a turn carries a prior upload
+// that must be injected into the system prompt. Named rather than inline so
+// the rule is testable on its own: a test of buildFollowUpContext alone stays
+// green when the call site's condition is wrong, which is how the "follow-up
+// questions keep working" promise could break silently.
+//
+// Three parts, all required: an attachment id rides along; this is NOT a fresh
+// comparison run (fresh runs get the document through the comparison
+// orchestrator instead, and re-injecting would duplicate it); and an
+// attachment store is actually wired.
+func shouldInjectFollowUpContext(attachmentID string, runComparison, hasStore bool) bool {
+	return attachmentID != "" && !runComparison && hasStore
+}
+
 // buildFollowUpContext renders a capped block of the uploaded document + prior
 // findings, injected into follow-up turns so the user can ask about the upload
 // without re-uploading.

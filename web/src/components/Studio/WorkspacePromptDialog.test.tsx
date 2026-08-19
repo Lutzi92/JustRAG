@@ -219,3 +219,14 @@ describe('WorkspacePromptDialog: Vorlagen aus eigenen Agenten', () => {
     expect(opts.getByRole('option', { name: 'Risiken' })).toBeInTheDocument();
   });
 });
+
+// The dialog and the AgentPicker it renders both used to call useKbAgents,
+// firing the same request twice per open. The dialog now hands its options
+// down; the picker only fetches when nobody supplied them.
+describe('WorkspacePromptDialog: kein doppelter Agenten-Abruf', () => {
+  it('ruft useKbAgents genau einmal mit der kbId auf', () => {
+    render(<WorkspacePromptDialog {...base} />);
+    const withKbId = mockedUseKbAgents.mock.calls.filter(([id]) => id === 'kb1');
+    expect(withKbId).toHaveLength(1);
+  });
+});
