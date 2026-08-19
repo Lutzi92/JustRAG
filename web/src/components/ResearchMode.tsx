@@ -266,8 +266,13 @@ export default function ResearchMode({ kbId, onClose, loadedSession, onSessionSa
                     if (line.startsWith('data: ')) {
                         const data = line.slice(6);
                         if (data === '[DONE]') {
+                            // Defensive only: this endpoint relays a worker
+                            // stream that signals completion by closing the
+                            // connection (the worker publishes an internal
+                            // `__done__` marker after persisting the results),
+                            // so no [DONE] line actually arrives here. The
+                            // refresh lives in the finally block below.
                             setIsRunning(false);
-                            onSessionSaved?.();
                             break;
                         }
 
@@ -312,6 +317,13 @@ export default function ResearchMode({ kbId, onClose, loadedSession, onSessionSa
             }
         } finally {
             setIsRunning(false);
+            // The chat row is created by the backend before the first event and
+            // the worker persists report + findings before closing the stream,
+            // so by the time we get here the session is on disk and belongs in
+            // the history. Runs that were aborted or errored still have their
+            // row, and showing them is honest — hiding them until a reload is
+            // what the old [DONE]-only refresh did.
+            onSessionSaved?.();
         }
     };
 
