@@ -57,11 +57,15 @@ export function useGeneratedContent({
     try {
       const res = await axios.get(`${API_BASE_URL}/api/kb/${kbId}/generated-content`, { signal });
       setGeneratedContent(res.data);
+      // Returned so callers that just created an artifact can select it from
+      // the refreshed list. Additive: every existing caller ignores it.
+      return res.data as GeneratedContent[];
     } catch (err: unknown) {
-      if (axios.isCancel(err)) return;
+      if (axios.isCancel(err)) return null;
       console.error('Failed to fetch generated content:', err);
       toast.error(t('contentFetchError'));
     }
+    return null;
   }, [t, toast]);
 
   const startPodcastPolling = useCallback((kbId: string, jobId: string) => {
@@ -83,7 +87,14 @@ export function useGeneratedContent({
           pollRef.current = null;
           setPodcastProgress(null);
           setGenerating(false);
-          fetchGeneratedContent(kbId);
+          // The status endpoint reports only {state, progress}, so the freshly
+          // fetched list is the only place the new artifact exists.
+          void fetchGeneratedContent(kbId).then(list => {
+            const newest = (list ?? [])
+              .filter(c => c.type === 'podcast')
+              .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+            if (newest) setSelectedContent(newest);
+          });
           toast.success(t('successGenerate'));
         } else if (state === 'failed') {
           if (pollRef.current) clearInterval(pollRef.current);
@@ -139,8 +150,11 @@ export function useGeneratedContent({
         startPodcastPolling(currentKb.id, jobId);
       } else {
         // Sync: wait for completion
-        await axios.post(`${API_BASE_URL}/api/kb/${currentKb.id}/generate/${type}`, { topic, language });
-        fetchGeneratedContent(currentKb.id);
+        const res = await axios.post(`${API_BASE_URL}/api/kb/${currentKb.id}/generate/${type}`, { topic, language });
+        await fetchGeneratedContent(currentKb.id);
+        // Open what was just created instead of leaving the user on an empty
+        // workspace with only a toast to tell them something happened.
+        if (res.data?.id) setSelectedContent(res.data as GeneratedContent);
         toast.success(t('successGenerate'));
         setGenerating(false);
       }
@@ -156,12 +170,13 @@ export function useGeneratedContent({
     setGenerating(true);
     setShowChartGenerationModal(false);
     try {
-      await axios.post(`${API_BASE_URL}/api/kb/${currentKb.id}/generate/chart`, {
+      const res = await axios.post(`${API_BASE_URL}/api/kb/${currentKb.id}/generate/chart`, {
         topic: chartPrompt,
         fileId: selectedFileId || undefined,
         language
       });
-      fetchGeneratedContent(currentKb.id);
+      await fetchGeneratedContent(currentKb.id);
+      if (res.data?.id) setSelectedContent(res.data as GeneratedContent);
       toast.success(t('chartSuccess'));
       setChartPrompt('');
       setSelectedFileId('');
@@ -178,12 +193,13 @@ export function useGeneratedContent({
     setGenerating(true);
     setShowAbstractModal(false);
     try {
-      await axios.post(`${API_BASE_URL}/api/kb/${currentKb.id}/generate/abstract`, {
+      const res = await axios.post(`${API_BASE_URL}/api/kb/${currentKb.id}/generate/abstract`, {
         fileId: abstractFileId,
         abstractType,
         language,
       });
-      fetchGeneratedContent(currentKb.id);
+      await fetchGeneratedContent(currentKb.id);
+      if (res.data?.id) setSelectedContent(res.data as GeneratedContent);
       toast.success(t('abstractSuccess'));
       setAbstractFileId('');
       setAbstractType('academic');
