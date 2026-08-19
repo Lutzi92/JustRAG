@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
+import { useState } from 'react';
 import { useChat, buildComparisonSend } from './useChat';
 import type { KnowledgeBase, FileEntry } from '../types';
 import type { ChatAttachment } from './useChatAttachment';
@@ -30,6 +31,7 @@ const setAgentSelection = vi.fn();
 const streamSend = vi.fn();
 const uploadMock = vi.fn();
 const clearMock = vi.fn();
+const adoptMock = vi.fn();
 const toastError = vi.fn();
 // A real ref-like object (not a vi.fn()) — `startComparison` reads
 // `errorRef.current` synchronously right after `await upload()` resolves.
@@ -53,23 +55,48 @@ vi.mock('./useChatStream', () => ({
     chatAbortRef: { current: null },
   }),
 }));
+// Backs `attachment` with real React state (like `useChatAttachment` itself
+// does), not a bare vi.fn() return — the follow-up-send test below needs
+// `adopt`'s write to actually be visible to the NEXT `handleSendMessage`
+// call, which a static mock object can't provide.
 vi.mock('./useChatAttachment', () => ({
-  useChatAttachment: () => ({
-    attachment: null,
-    uploading: false,
-    error: null,
-    errorRef: attachmentErrorRef,
-    upload: uploadMock,
-    clear: clearMock,
-  }),
+  useChatAttachment: () => {
+    const [attachment, setAttachment] = useState<ChatAttachment | null>(null);
+    const upload = async (file: File) => {
+      const result = await uploadMock(file);
+      if (result) setAttachment(result);
+      return result;
+    };
+    const clear = () => {
+      clearMock();
+      setAttachment(null);
+    };
+    const adopt = (att: ChatAttachment) => {
+      adoptMock(att);
+      setAttachment(att);
+    };
+    return {
+      attachment,
+      uploading: false,
+      error: null,
+      errorRef: attachmentErrorRef,
+      upload,
+      clear,
+      adopt,
+    };
+  },
 }));
 
 const kb = { id: 'kb1', name: 'Handbuch' } as KnowledgeBase;
 
-function renderUseChat() {
+// One selected file by default: handleSendMessage's own
+// "at least one selected file" guard would otherwise block every send,
+// including the follow-up-send test below, which sends through
+// handleSendMessage (not startComparison, which has no such guard).
+function renderUseChat(files: FileEntry[] = [{ id: 'f1', selected: true } as FileEntry]) {
   return renderHook(() => useChat({
     currentKb: kb,
-    files: [] as FileEntry[],
+    files,
     enhance: null,
     reasoningEnabled: false,
     reasoningLevel: 'low',
@@ -180,6 +207,66 @@ describe('useChat.startComparison', () => {
     });
 
     expect(started).toBe(true);
+  });
+
+  // Regression fix: pre-rework (78c1a2c), handleSendMessage deliberately kept
+  // the attachment after a comparison send ("keep the attachment until the
+  // user removes it") so follow-up turns still carried attachmentId. This
+  // branch's startComparison called handleNewChat() (clears the attachment,
+  // needed so it can't leak from the PREVIOUS chat) AFTER uploading, which
+  // silently wiped it for the NEW chat too — every follow-up question about
+  // the uploaded document went out with no attachmentId, and the backend's
+  // buildFollowUpContext injection never fired. Fixed via
+  // attachmentState.adopt(uploaded) right after handleNewChat().
+  it('behält den Anhang nach dem Vergleich (nicht null)', async () => {
+    uploadMock.mockResolvedValueOnce({ attachmentId: 'att1', filename: 'x.docx', sectionCount: 1, charCount: 10 });
+    const { result } = renderUseChat();
+
+    await act(async () => {
+      await result.current.startComparison({
+        file: new File(['x'], 'x.docx'),
+        modes: ['contradiction'],
+        instruction: 'x',
+        agentSelection: {},
+      });
+    });
+
+    expect(result.current.attachment).toEqual({ attachmentId: 'att1', filename: 'x.docx', sectionCount: 1, charCount: 10 });
+  });
+
+  // This is the test that actually encodes the spec's promise: it asserts on
+  // the outgoing SEND of a follow-up turn, not just on hook state — hook
+  // state alone could be right while the send still omits attachmentId (that
+  // was exactly the bug: `attachmentState.attachment` becomes non-null again
+  // via adopt, but only a real follow-up send proves it is actually used).
+  it('ein Folge-Turn nach dem Vergleich sendet weiterhin die attachmentId', async () => {
+    uploadMock.mockResolvedValueOnce({ attachmentId: 'att1', filename: 'x.docx', sectionCount: 1, charCount: 10 });
+    const { result } = renderUseChat();
+
+    await act(async () => {
+      await result.current.startComparison({
+        file: new File(['x'], 'x.docx'),
+        modes: ['contradiction'],
+        instruction: 'x',
+        agentSelection: {},
+      });
+    });
+
+    streamSend.mockClear();
+    act(() => {
+      result.current.setUserMessageInput('Und was sagt Richtlinie 4 dazu?');
+    });
+    await act(async () => {
+      await result.current.handleSendMessage({ preventDefault: () => {} } as React.FormEvent);
+    });
+
+    expect(streamSend).toHaveBeenCalledWith(
+      expect.anything(),
+      'Und was sagt Richtlinie 4 dazu?',
+      null,
+      undefined,
+      expect.objectContaining({ attachmentId: 'att1' }),
+    );
   });
 });
 

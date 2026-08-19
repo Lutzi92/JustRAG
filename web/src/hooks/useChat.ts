@@ -381,7 +381,20 @@ export function useChat({
    * The comparison stays a real chat turn — only its entry point moved 2026-08
    * from the composer into a Workspace tile. That keeps follow-up questions
    * about the uploaded document working unchanged in the resulting chat
-   * (backend: buildFollowUpContext).
+   * (backend: buildFollowUpContext) — the same property `handleSendMessage`
+   * preserved pre-rework by deliberately NOT clearing the attachment after a
+   * comparison send ("keep the attachment until the user removes it").
+   *
+   * Order here matters and is upload -> handleNewChat -> adopt -> send:
+   *  - upload FIRST, so a failed upload (413/415/422/503, see below) never
+   *    wipes the user's current chat for nothing;
+   *  - handleNewChat clears any attachment left over from the PREVIOUS chat
+   *    (via clearComparison) — required so an attachment can't leak across
+   *    chats — which also wipes the one we just uploaded;
+   *  - adopt immediately re-establishes it from the `uploaded` result
+   *    already in hand (no re-upload), so `attachmentState.attachment` is
+   *    populated again before any later render, and every follow-up
+   *    `handleSendMessage` in this new chat keeps sending its id.
    *
    * Returns whether the turn actually started, so the caller (the Workspace
    * dialog) can keep itself open — and the composer's tab-switch un-done — on
@@ -406,6 +419,9 @@ export function useChat({
     }
 
     handleNewChat();
+    // Restore the attachment handleNewChat just cleared — see the ordering
+    // note in this function's doc comment above.
+    attachmentState.adopt(uploaded);
     // Two separate writes for two separate turns:
     //  - `opts.agentSelection` (via buildComparisonSend below) makes THIS
     //    turn — the comparison itself — use the dialog's choice. It has to

@@ -85,5 +85,17 @@ export function useChatAttachment(kbId: string, t?: Translator) {
     errorRef.current = null;
   }, []);
 
-  return { attachment, uploading, error, errorRef, upload, clear };
+  // Re-establishes `attachment` state from a result `upload()` already
+  // returned, without re-uploading. Needed because `startComparison`
+  // (useChat.ts) calls `handleNewChat()` — which must clear any attachment
+  // left over from the PREVIOUS chat — between uploading and sending the
+  // comparison turn; `adopt` restores the state that clear just wiped so
+  // follow-up turns in the new chat still carry the attachment id.
+  const adopt = useCallback((att: ChatAttachment) => {
+    setAttachment(att);
+    setError(null);
+    errorRef.current = null;
+  }, []);
+
+  return { attachment, uploading, error, errorRef, upload, clear, adopt };
 }
