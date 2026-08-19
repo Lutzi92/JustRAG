@@ -15,7 +15,8 @@ import (
 func TestBuildTeamParamsMirrorsInlineConstruction(t *testing.T) {
 	agent := agentteams.AgentRecord{ID: "a1", Name: "Prüfer"}
 	in := TeamParamsInput{
-		KbID: "kb1", ChatID: "c1", Query: "Frage", Language: "de",
+		DeriveToolPolicy: true,
+		KbID:             "kb1", ChatID: "c1", Query: "Frage", Language: "de",
 		CurrentDateLine: "Heute ist der 18.08.2026.", KbSystemPrompt: "KB-Prompt",
 		FileIDs: []string{"f1"}, Agent: &agent, SiteCfg: &fakeSiteConfigReader{},
 	}
@@ -41,7 +42,8 @@ func TestBuildTeamParamsPrefersTeamOverAgent(t *testing.T) {
 		Members: []agentteams.AgentRecord{{ID: "m1"}, {ID: "m2"}},
 	}
 	p := BuildTeamParams(context.Background(), TeamParamsInput{
-		KbID: "kb1", Team: team, Agent: &agentteams.AgentRecord{ID: "a1"}, SiteCfg: &fakeSiteConfigReader{},
+		DeriveToolPolicy: true,
+		KbID:             "kb1", Team: team, Agent: &agentteams.AgentRecord{ID: "a1"}, SiteCfg: &fakeSiteConfigReader{},
 	})
 	if p.Team.ID != "t1" || len(p.Members) != 2 {
 		t.Errorf("team must beat the single agent, got Team=%q Members=%d", p.Team.ID, len(p.Members))
@@ -111,7 +113,8 @@ func TestBuildTeamParamsReadsSiteConfigDerivedFlags(t *testing.T) {
 		"contextual_enrichment_model":   strPtr("planning-model-y"),
 	}}
 	p := BuildTeamParams(context.Background(), TeamParamsInput{
-		KbID: "kb1", Agent: &agentteams.AgentRecord{ID: "a1"}, SiteCfg: cfg,
+		DeriveToolPolicy: true,
+		KbID:             "kb1", Agent: &agentteams.AgentRecord{ID: "a1"}, SiteCfg: cfg,
 	})
 	if !p.HyPESearch {
 		t.Error("HyPESearch = false, want true — hype_search_enabled=true in SiteCfg was not read")
@@ -137,7 +140,8 @@ func TestBuildTeamParamsReadsSiteConfigDerivedFlags(t *testing.T) {
 func TestBuildTeamParamsSearcherForAgentAppliesOverlay(t *testing.T) {
 	base := &vector.SearchService{}
 	p := BuildTeamParams(context.Background(), TeamParamsInput{
-		KbID: "kb1", Agent: &agentteams.AgentRecord{ID: "a1"},
+		DeriveToolPolicy: true,
+		KbID:             "kb1", Agent: &agentteams.AgentRecord{ID: "a1"},
 		SiteCfg: &fakeSiteConfigReader{}, SearchService: base,
 	})
 	if p.SearcherForAgent == nil {
@@ -156,5 +160,31 @@ func TestBuildTeamParamsSearcherForAgentAppliesOverlay(t *testing.T) {
 	}
 	if _, ok := got.(*vector.SearchService); !ok {
 		t.Fatalf("expected the overlay result to still be a *vector.SearchService, got %T", got)
+	}
+}
+
+// TestBuildTeamParamsToolPolicyIsOptIn pins the property the opt-in exists
+// for: a caller that does not set DeriveToolPolicy gets the zero values, no
+// matter what site config says. That is what keeps the eval harness measuring
+// what it has always measured, and — unlike the caller-side reset it replaced
+// — it also covers knobs added to the derivation later.
+func TestBuildTeamParamsToolPolicyIsOptIn(t *testing.T) {
+	cfg := &fakeSiteConfigReader{values: map[string]*string{
+		"hype_search_enabled":           strPtr("true"),
+		"agents_allow_privileged_tools": strPtr("true"),
+	}}
+	in := TeamParamsInput{KbID: "kb1", Agent: &agentteams.AgentRecord{ID: "a1"}, SiteCfg: cfg}
+
+	off := BuildTeamParams(context.Background(), in)
+	if off.HyPESearch || off.AllowPrivilegedTools || off.ToolMaxRounds != 0 {
+		t.Errorf("without the opt-in nothing may be derived, got HyPE=%v tools=%v rounds=%d",
+			off.HyPESearch, off.AllowPrivilegedTools, off.ToolMaxRounds)
+	}
+
+	in.DeriveToolPolicy = true
+	on := BuildTeamParams(context.Background(), in)
+	if !on.HyPESearch || !on.AllowPrivilegedTools || on.ToolMaxRounds != 2 {
+		t.Errorf("with the opt-in all three must be derived, got HyPE=%v tools=%v rounds=%d",
+			on.HyPESearch, on.AllowPrivilegedTools, on.ToolMaxRounds)
 	}
 }

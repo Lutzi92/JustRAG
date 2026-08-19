@@ -723,12 +723,13 @@ func (h *Handler) GenerateAnalysis(w http.ResponseWriter, r *http.Request) {
 			// agent analysis cannot resolve "seit Mai" while the same agent
 			// can in chat, and chat_date_awareness_enabled defaults ON.
 
-			CurrentDateLine: chat.SystemPromptDateLine(ctx, h.readerForKB(ctx, kbID), lang),
-			KbSystemPrompt:  prompts.AnalysisSystemPrompt(lang),
-			Team:            sel.Team,
-			Agent:           sel.Agent,
-			SiteCfg:         h.readerForKB(ctx, kbID),
-			SearchService:   h.teamSearcher,
+			CurrentDateLine:  chat.SystemPromptDateLine(ctx, h.readerForKB(ctx, kbID), lang),
+			KbSystemPrompt:   prompts.AnalysisSystemPrompt(lang),
+			Team:             sel.Team,
+			Agent:            sel.Agent,
+			DeriveToolPolicy: true,
+			SiteCfg:          h.readerForKB(ctx, kbID),
+			SearchService:    h.teamSearcher,
 		})
 		// RunTeamChat liefert einen SystemPrompt, KEINE fertige Antwort — die
 		// Chat-Sendestrecke streamt sie im Anschluss selbst. Hier gibt es

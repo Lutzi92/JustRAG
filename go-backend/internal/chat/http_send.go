@@ -674,7 +674,8 @@ func (h *Handler) tryDeepChat(
 					CurrentDateLine: dateLine, KbSystemPrompt: teamSummaryPrompt,
 					FileIDs: body.SelectedFileIDs,
 					Team:    teamSel.team, Agent: teamSel.agent,
-					SiteCfg: h.siteConfigReader, SearchService: h.searchService, ToolDispatcher: dispatcher,
+					DeriveToolPolicy: true,
+					SiteCfg:          h.siteConfigReader, SearchService: h.searchService, ToolDispatcher: dispatcher,
 				})
 				teamCtx, terr := RunTeamChat(ctx, h.aiResolver, h.searchService, tp, collectEmit)
 				if terr != nil {
@@ -718,7 +719,8 @@ func (h *Handler) tryDeepChat(
 			CurrentDateLine: dateLine, KbSystemPrompt: kbSystemPrompt,
 			FileIDs: body.SelectedFileIDs, GraphChunkIDs: graphChunkIDs, BridgeChunks: bridgeChunks,
 			Team: teamSel.team, Agent: teamSel.agent,
-			SiteCfg: h.siteConfigReader, SearchService: h.searchService, ToolDispatcher: dispatcher,
+			DeriveToolPolicy: true,
+			SiteCfg:          h.siteConfigReader, SearchService: h.searchService, ToolDispatcher: dispatcher,
 		})
 		chatCtx, err = RunTeamChat(ctx, h.aiResolver, h.searchService, params, collectEmit)
 

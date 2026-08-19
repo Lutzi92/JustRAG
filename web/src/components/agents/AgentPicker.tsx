@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useKbAgents } from '../../hooks/useKbAgents';
 import type { KbAgents } from './api';
@@ -26,6 +27,10 @@ interface Props {
  */
 export function AgentPicker({ kbId, selection, onSelect, options: provided }: Props) {
   const { t } = useTheme();
+  // Unique per mount: a hardcoded id would collide the moment two pickers
+  // are on screen at once, and a colliding id silently breaks the label's
+  // htmlFor association for both.
+  const selectId = useId();
   // The hook is called unconditionally — hooks cannot be skipped — but its
   // result is ignored when the parent supplied options. Passing `undefined`
   // as the kbId keeps it from firing a request in that case.
@@ -40,11 +45,11 @@ export function AgentPicker({ kbId, selection, onSelect, options: provided }: Pr
 
   return (
     <div style={{ marginTop: '0.75rem' }}>
-      <label htmlFor="kb-agent-picker" className="form-hint" style={{ display: 'block', fontWeight: 600 }}>
+      <label htmlFor={selectId} className="form-hint" style={{ display: 'block', fontWeight: 600 }}>
         {t('agentPicker')}
       </label>
       <select
-        id="kb-agent-picker"
+        id={selectId}
         value={value}
         onChange={(e) => {
           const v = e.target.value;
