@@ -1,8 +1,9 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { StudioWorkspace } from './StudioWorkspace';
+import { useWorkspacePresets } from '../../hooks/useWorkspacePresets';
 
 // Renders `value` so the "folgt einem Wechsel der Prop" test can observe the
 // editor-content effect (StudioWorkspace.tsx) rather than only the header
@@ -13,13 +14,12 @@ vi.mock('./QuizView', () => ({ QuizView: () => null }));
 vi.mock('../../contexts/ThemeContext', () => ({ useTheme: () => ({ t: (k: string) => k, language: 'de' }) }));
 vi.mock('../../contexts/ToastContext', () => ({ useToast: () => ({ error: vi.fn(), success: vi.fn() }) }));
 vi.mock('axios');
-vi.mock('../../hooks/useWorkspacePresets', () => ({
-  useWorkspacePresets: () => ({
-    analysis: [{ label: 'Risiken', prompt: 'Nenne die Risiken.' }],
-    comparison: [],
-    compareEnabled: false,
-  }),
-}));
+// vi.fn() (not a static factory) so the two new "Dokumentenvergleich"
+// dialog tests below can turn compareEnabled on per-test without disturbing
+// every other test in this file, which relies on the false default (no
+// comparison tile rendered).
+vi.mock('../../hooks/useWorkspacePresets', () => ({ useWorkspacePresets: vi.fn() }));
+const mockedUseWorkspacePresets = vi.mocked(useWorkspacePresets);
 // Both WorkspacePromptDialog and the AgentPicker it renders call
 // useKbAgents(kbId) directly, so mocking the hook (rather than mocking
 // AgentPicker away) is what actually produces the `teamId: 't1'` default —
@@ -32,6 +32,14 @@ vi.mock('../../hooks/useKbAgents', () => ({
 }));
 
 const item = { id: 'g1', kbId: 'kb1', userId: 'u1', title: 'Analyse', createdAt: '2026-08-16T00:00:00Z', type: 'analysis', content: { text: 'Hallo' } } as never;
+
+beforeEach(() => {
+  mockedUseWorkspacePresets.mockReturnValue({
+    analysis: [{ label: 'Risiken', prompt: 'Nenne die Risiken.' }],
+    comparison: [],
+    compareEnabled: false,
+  });
+});
 
 describe('StudioWorkspace', () => {
   it('führt keine eigene Artefaktliste mehr', () => {
@@ -166,5 +174,62 @@ describe('StudioWorkspace', () => {
     rerender(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
       onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={item} />);
     expect(screen.queryByText('analysisDegradedNoAgent')).not.toBeInTheDocument();
+  });
+
+  // Fix wave item 3 follow-up (coordinator re-review): the "dialog stays
+  // open on a failed comparison" behaviour lives at this layer, not in
+  // ChatView — StudioWorkspace is the one that awaits onStartComparison and
+  // decides whether to close the dialog (`started !== false`). The
+  // production caller (ChatView.tsx) is exercised separately by
+  // ChatView.composer.test.ts-adjacent coverage; here we drive the contract
+  // directly against onStartComparison's return value.
+  describe('Dokumentenvergleich-Dialog bleibt bei Fehlschlag offen', () => {
+    const openComparisonDialog = async () => {
+      await userEvent.click(screen.getByRole('button', { name: /documentComparison/ }));
+      await userEvent.upload(
+        screen.getByLabelText('comparisonFileLabel'),
+        new File(['x'], 'entwurf.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+      );
+    };
+
+    it('bleibt offen, wenn onStartComparison false zurückgibt (fehlgeschlagener Upload)', async () => {
+      mockedUseWorkspacePresets.mockReturnValue({ analysis: [], comparison: [], compareEnabled: true });
+      const onStartComparison = vi.fn().mockResolvedValue(false);
+      render(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
+        onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={null} onStartComparison={onStartComparison} />);
+
+      await openComparisonDialog();
+      await userEvent.click(screen.getByRole('button', { name: 'start' }));
+
+      expect(onStartComparison).toHaveBeenCalled();
+      // The dialog (its own "Abbrechen" button) is still mounted.
+      expect(await screen.findByRole('button', { name: 'cancel' })).toBeInTheDocument();
+    });
+
+    it('schließt sich, wenn onStartComparison true zurückgibt (erfolgreich gestartet)', async () => {
+      mockedUseWorkspacePresets.mockReturnValue({ analysis: [], comparison: [], compareEnabled: true });
+      const onStartComparison = vi.fn().mockResolvedValue(true);
+      render(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
+        onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={null} onStartComparison={onStartComparison} />);
+
+      await openComparisonDialog();
+      await userEvent.click(screen.getByRole('button', { name: 'start' }));
+
+      expect(onStartComparison).toHaveBeenCalled();
+      await screen.findByRole('button', { name: /documentComparison/ });
+      expect(screen.queryByRole('button', { name: 'cancel' })).not.toBeInTheDocument();
+    });
+  });
+
+  // Fix wave item 2 follow-up (coordinator re-review, low-priority): a
+  // malformed quiz artifact (content is not an array, so QuizView can't
+  // render it) must still fall back to the JSON dump — ContentModal had
+  // this fallback, and the array-exclusion-list refactor in this file
+  // dropped it for 'quiz' specifically (it kept it for every other type).
+  it('zeigt einen JSON-Dump für ein Quiz-Artefakt mit fehlerhaftem content (kein Array)', () => {
+    const malformedQuiz = { id: 'g6', kbId: 'kb1', userId: 'u1', title: 'Kaputtes Quiz', createdAt: '2026-08-19T00:00:00Z', type: 'quiz', content: { not: 'an-array' } } as never;
+    render(<StudioWorkspace kbId="kb1" generatedContent={[]} onGenerate={vi.fn()}
+      onDeleteContent={vi.fn()} onClose={vi.fn()} selectedItem={malformedQuiz} />);
+    expect(screen.getByText(/an-array/)).toBeInTheDocument();
   });
 });

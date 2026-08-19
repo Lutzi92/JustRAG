@@ -500,7 +500,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             {selectedItem.type === 'chart' && (
                                 <ChartArtifact content={selectedItem.content} title={selectedItem.title} />
                             )}
-                            {!['flashcards', 'quiz', 'podcast', 'presentation', 'chart'].includes(selectedItem.type) && (
+                            {!['flashcards', 'podcast', 'presentation', 'chart'].includes(selectedItem.type) &&
+                                !(selectedItem.type === 'quiz' && Array.isArray(selectedItem.content)) && (
                                 <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.9rem', fontFamily: 'inherit' }}>
                                     {JSON.stringify(selectedItem.content, null, 2)}
                                 </pre>
