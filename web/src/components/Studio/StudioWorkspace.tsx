@@ -6,7 +6,7 @@ import axios from 'axios';
 import {
     Minimize2,
     Type, Layout, Mic, Check,
-    FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks, BarChart3, Scale
+    FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks, BarChart3, Paperclip
 } from 'lucide-react';
 import type { GeneratedContent } from '../../types';
 import { isMarkdownArtifact } from '../../utils/artifactTypes';
@@ -339,7 +339,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 </button>
                 {presets.compareEnabled && (
                     <button onClick={() => setShowComparison(true)} disabled={!hasFiles} className="studio-gen-btn">
-                        <Scale size={16} /> {t('documentComparison')}
+                        <Paperclip size={16} /> {t('documentComparison')}
                     </button>
                 )}
                 <button onClick={() => onGenerateParent('cards')} disabled={!hasFiles} className="studio-gen-btn">
