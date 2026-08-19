@@ -1,0 +1,54 @@
+.workspace-dialog {
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.workspace-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.workspace-dialog__header h3 {
+  margin: 0;
+}
+
+.workspace-dialog__close {
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.workspace-dialog__label {
+  display: block;
+  margin-top: 0.6rem;
+  font-weight: 600;
+}
+
+.workspace-dialog__input {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.workspace-dialog__textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+
+.workspace-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}

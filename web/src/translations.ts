@@ -2095,6 +2095,10 @@ export const translations = {
     agentPickerStandard: { de: 'Standard (kein Agent)', en: 'Standard (no agent)' },
     agentPickerTeamsGroup: { de: 'Teams', en: 'Teams' },
     agentPickerAgentsGroup: { de: 'Agenten', en: 'Agents' },
+    promptPreset: { de: 'Vorlage', en: 'Preset' },
+    promptPresetOwn: { de: 'Eigene Eingabe', en: 'Custom' },
+    prompt: { de: 'Prompt', en: 'Prompt' },
+    start: { de: 'Starten', en: 'Start' },
     agentActiveChip: { de: 'Antwortet mit', en: 'Answering with' },
     membersCount: { de: 'Mitglieder', en: 'members' },
 };
