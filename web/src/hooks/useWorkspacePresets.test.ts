@@ -14,6 +14,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+/** Lets a real unhandled-rejection check (if any) surface before we assert on it. */
+function flushMacrotask() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe('useWorkspacePresets', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -50,27 +55,48 @@ describe('useWorkspacePresets', () => {
     expect(get).toHaveBeenCalledTimes(2);
   });
 
-  it('ruft setState nicht mehr auf, nachdem der Hook vor der Antwort demontiert wurde', async () => {
-    const pending = deferred<{ data: typeof presetsA }>();
-    vi.spyOn(axios, 'get').mockReturnValueOnce(pending.promise);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  it('ignoriert eine verspätet eintreffende Antwort für eine bereits verlassene kbId', async () => {
+    // A's request is still in flight when the caller switches to B; A's
+    // response then lands *after* B's — the out-of-order case the `cancelled`
+    // closure exists for. If this were unguarded, A's stale data would
+    // silently overwrite B's, and nobody would report it as a bug — they'd
+    // just wonder why the wrong KB's presets showed up.
+    const pendingA = deferred<{ data: typeof presetsA }>();
+    const pendingB = deferred<{ data: typeof presetsB }>();
+    vi.spyOn(axios, 'get')
+      .mockReturnValueOnce(pendingA.promise)
+      .mockReturnValueOnce(pendingB.promise);
 
-    const { unmount } = renderHook(() => useWorkspacePresets('kb1', 'de'));
-    unmount();
+    const { result, rerender } = renderHook(
+      ({ kbId }) => useWorkspacePresets(kbId, 'de'),
+      { initialProps: { kbId: 'kb-a' } },
+    );
+    rerender({ kbId: 'kb-b' });
 
-    // If the effect's cleanup didn't guard the .then with `cancelled`, this
-    // would trigger React's "Can't perform a React state update on an
-    // unmounted component" warning via console.error.
-    await act(async () => { pending.resolve({ data: presetsA }); });
+    // B's response arrives first.
+    await act(async () => { pendingB.resolve({ data: presetsB }); });
+    await waitFor(() => expect(result.current).toEqual(presetsB));
 
-    expect(errorSpy).not.toHaveBeenCalled();
+    // A's response arrives late, for a kbId the hook has already left.
+    await act(async () => { pendingA.resolve({ data: presetsA }); });
+    expect(result.current).toEqual(presetsB);
   });
 
-  it('degradiert bei einem Fehler auf leere Listen', async () => {
+  it('degradiert bei einem Fehler auf leere Listen, ohne die Ablehnung entkommen zu lassen', async () => {
     vi.spyOn(axios, 'get').mockRejectedValue(new Error('network'));
+    const unhandledRejection = vi.fn();
+    process.on('unhandledRejection', unhandledRejection);
 
-    const { result } = renderHook(() => useWorkspacePresets('kb1', 'de'));
-
-    await waitFor(() => expect(result.current).toEqual(EMPTY));
+    try {
+      const { result } = renderHook(() => useWorkspacePresets('kb1', 'de'));
+      await waitFor(() => expect(result.current).toEqual(EMPTY));
+      // Node only fires 'unhandledRejection' once the microtask queue has
+      // drained without a handler attached — give it a macrotask to do so
+      // before asserting it never fired.
+      await flushMacrotask();
+      expect(unhandledRejection).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandledRejection);
+    }
   });
 });

@@ -24,7 +24,14 @@ export function useWorkspacePresets(kbId: string | undefined, lang: string): Wor
     let cancelled = false;
     axios.get<WorkspacePresets>(`${API_BASE_URL}/api/kb/${kbId}/workspace/presets`, { params: { lang } })
       .then(res => { if (!cancelled) setData(res.data); })
-      .catch(() => { if (!cancelled) setData(EMPTY); });
+      .catch(() => {
+        // No setData here: the unconditional reset above already put `data`
+        // back to EMPTY before this request could even settle, so there is
+        // nothing left to (re)set on a rejection. This catch stays anyway —
+        // without it, a rejected request becomes an unhandled promise
+        // rejection instead of the fail-soft degradation this hook promises
+        // callers.
+      });
     return () => { cancelled = true; };
   }, [kbId, lang]);
   return data;
