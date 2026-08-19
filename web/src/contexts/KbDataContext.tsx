@@ -43,7 +43,6 @@ export interface KbDataContextValue {
   syncGitRepoNow: (sourceId: string) => void;
   // Actions
   handleSelectContent: (item: GeneratedContent) => void;
-  handleExpandStudio: () => void;
 }
 
 const KbDataContext = createContext<KbDataContextValue | null>(null);

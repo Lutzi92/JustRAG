@@ -3,7 +3,6 @@ import axios from 'axios';
 import { motion } from 'framer-motion';
 import { Loader2, HelpCircle, ArrowLeft } from 'lucide-react';
 import type { KnowledgeBase, GeneratedContent } from './types';
-import { isMarkdownArtifact } from './utils/artifactTypes';
 import { API_BASE_URL } from './api';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
@@ -123,7 +122,7 @@ function AuthenticatedAppInner() {
 
   // New extracted hooks
   const kbSettings = useKbSettings();
-  const viewState = useViewState({ setView, setKbView, setShowSettings: kbSettings.setShowSettings });
+  const viewState = useViewState({ setView, kbView, setKbView, setShowSettings: kbSettings.setShowSettings });
 
   // Onboarding Tour
   const [showOnboarding, setShowOnboarding] = useState(() => !localStorage.getItem('onboardingCompleted'));
@@ -219,27 +218,12 @@ function AuthenticatedAppInner() {
   // Cross-hook handlers. The setters are destructured into stable locals so
   // the useCallback dep arrays don't have to depend on the whole hook objects
   // (which are recreated each render and would defeat the memoization).
-  const { setIsRightSidebarOpen } = sidebar;
-  const { setSelectedContent, setCurrentCardIndex, setIsAnswerVisible, setShowContentModal } = content;
-
-  const handleExpandStudio = useCallback(() => {
-    setKbView('studio');
-    setIsRightSidebarOpen(false);
-  }, [setIsRightSidebarOpen]);
+  const { setSelectedContent } = content;
 
   const handleSelectContent = useCallback((item: GeneratedContent) => {
     setSelectedContent(item);
-    if (isMarkdownArtifact(item.type)) {
-      setKbView('studio');
-      setIsRightSidebarOpen(false);
-    } else {
-      if (item.type === 'flashcards') {
-        setCurrentCardIndex(0);
-        setIsAnswerVisible(false);
-      }
-      setShowContentModal(true);
-    }
-  }, [setSelectedContent, setCurrentCardIndex, setIsAnswerVisible, setShowContentModal, setIsRightSidebarOpen]);
+    setKbView('workspace');
+  }, [setSelectedContent]);
 
   const handleUpdateKBSettings = async (data: Record<string, unknown>) => {
     if (!currentKb) return;
@@ -478,7 +462,6 @@ function AuthenticatedAppInner() {
     deleteGitRepoSource: gitRepoHook.deleteGitRepoSource,
     syncGitRepoNow: gitRepoHook.syncGitRepoNow,
     handleSelectContent,
-    handleExpandStudio,
   };
 
   const layoutValue: KbLayoutContextValue = {

@@ -28,9 +28,6 @@ export function useGeneratedContent({
   const [generatedContent, setGeneratedContent] = useState<GeneratedContent[]>([]);
   const [generating, setGenerating] = useState(false);
   const [selectedContent, setSelectedContent] = useState<GeneratedContent | null>(null);
-  const [showContentModal, setShowContentModal] = useState(false);
-  const [currentCardIndex, setCurrentCardIndex] = useState(0);
-  const [isAnswerVisible, setIsAnswerVisible] = useState(false);
 
   const [showChartGenerationModal, setShowChartGenerationModal] = useState(false);
   const [chartPrompt, setChartPrompt] = useState('');
@@ -214,9 +211,6 @@ export function useGeneratedContent({
   return useMemo(() => ({
     generatedContent, setGeneratedContent, generating,
     selectedContent, setSelectedContent,
-    showContentModal, setShowContentModal,
-    currentCardIndex, setCurrentCardIndex,
-    isAnswerVisible, setIsAnswerVisible,
     showChartGenerationModal, setShowChartGenerationModal,
     chartPrompt, setChartPrompt,
     selectedFileId, setSelectedFileId,
@@ -228,8 +222,7 @@ export function useGeneratedContent({
     submitAbstractGeneration,
   }), [
     generatedContent, generating,
-    selectedContent, showContentModal,
-    currentCardIndex, isAnswerVisible,
+    selectedContent,
     showChartGenerationModal, chartPrompt, selectedFileId,
     fetchGeneratedContent, handleGenerate, submitChartGeneration, handleDeleteGeneratedContent,
     podcastProgress,

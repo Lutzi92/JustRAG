@@ -20,27 +20,26 @@ import (
 
 // KBRow is the full knowledge-base shape returned to API consumers.
 type KBRow struct {
-	ID             string          `json:"id"             db:"id"`
-	Name           string          `json:"name"           db:"name"`
-	UserID         *string         `json:"userId"         db:"user_id"`
-	Description    *string         `json:"description"    db:"description"`
-	IsGlobal       bool            `json:"isGlobal"       db:"is_global"`
-	Visibility     string          `json:"visibility"     db:"visibility"`
-	IsPublished    bool            `json:"isPublished"    db:"is_published"`
-	Language       string          `json:"language"       db:"language"`
-	SystemPrompt   *string         `json:"systemPrompt"   db:"system_prompt"`
-	HeaderText     *string         `json:"headerText"     db:"header_text"`
-	ExamplePrompts *string         `json:"examplePrompts" db:"example_prompts"`
-	AIConfigID     *string         `json:"aiConfigId"     db:"ai_config_id"`
-	ChatModel      *string         `json:"chatModel"      db:"chat_model"`
-	EmbeddingModel *string         `json:"embeddingModel" db:"embedding_model"`
-	RerankModel    *string         `json:"rerankModel"    db:"rerank_model"`
-	TTSModel       *string         `json:"ttsModel"       db:"tts_model"`
-	SttModel       *string         `json:"sttModel"       db:"stt_model"`
-	ChunkSize      *int            `json:"chunkSize"      db:"chunk_size"`
-	ChunkOverlap   *int            `json:"chunkOverlap"   db:"chunk_overlap"`
-	StudioConfig   json.RawMessage `json:"studioConfig"   db:"studio_config"`
-	CreatedAt      time.Time       `json:"createdAt"      db:"created_at"`
+	ID             string    `json:"id"             db:"id"`
+	Name           string    `json:"name"           db:"name"`
+	UserID         *string   `json:"userId"         db:"user_id"`
+	Description    *string   `json:"description"    db:"description"`
+	IsGlobal       bool      `json:"isGlobal"       db:"is_global"`
+	Visibility     string    `json:"visibility"     db:"visibility"`
+	IsPublished    bool      `json:"isPublished"    db:"is_published"`
+	Language       string    `json:"language"       db:"language"`
+	SystemPrompt   *string   `json:"systemPrompt"   db:"system_prompt"`
+	HeaderText     *string   `json:"headerText"     db:"header_text"`
+	ExamplePrompts *string   `json:"examplePrompts" db:"example_prompts"`
+	AIConfigID     *string   `json:"aiConfigId"     db:"ai_config_id"`
+	ChatModel      *string   `json:"chatModel"      db:"chat_model"`
+	EmbeddingModel *string   `json:"embeddingModel" db:"embedding_model"`
+	RerankModel    *string   `json:"rerankModel"    db:"rerank_model"`
+	TTSModel       *string   `json:"ttsModel"       db:"tts_model"`
+	SttModel       *string   `json:"sttModel"       db:"stt_model"`
+	ChunkSize      *int      `json:"chunkSize"      db:"chunk_size"`
+	ChunkOverlap   *int      `json:"chunkOverlap"   db:"chunk_overlap"`
+	CreatedAt      time.Time `json:"createdAt"      db:"created_at"`
 
 	// Owner attribution — populated by ListKnowledgeBases so the UI can show
 	// "shared by …" for KBs the current user does not own. Null when the KB

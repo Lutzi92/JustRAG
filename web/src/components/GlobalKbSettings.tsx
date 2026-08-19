@@ -4,7 +4,7 @@ import {
     ArrowLeft, Save, Globe, FileText, Sparkles, Users, Trash2, Plus, Loader2,
     Upload, BookOpen, ToggleLeft, ToggleRight, X, Search, Rss, Link
 } from 'lucide-react';
-import type { KnowledgeBase, StudioConfig, FileEntry, GlobalKbEditor, SafeAIConfig, RssFeed, ConfluenceSource, ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath } from '../types';
+import type { KnowledgeBase, FileEntry, GlobalKbEditor, SafeAIConfig, RssFeed, ConfluenceSource, ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath } from '../types';
 import { API_BASE_URL } from '../api';
 import { MAX_FILES_PER_GLOBAL_KB, ACCEPTED_FILE_TYPES } from '../constants';
 import { useTheme } from '../contexts/ThemeContext';
@@ -33,9 +33,6 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
     const [headerText, setHeaderText] = useState(kb.headerText || '');
     const [examplePrompts, setExamplePrompts] = useState(kb.examplePrompts || '');
     const [systemPrompt, setSystemPrompt] = useState(kb.systemPrompt || '');
-    const [studioConfig, setStudioConfig] = useState<StudioConfig>(
-        { cards: true, presentation: true, podcast: true, chart: true, abstract: true, briefingDoc: true, faq: true, studyGuide: true, timeline: true, quiz: true, ...kb.studioConfig }
-    );
     const [files, setFiles] = useState<FileEntry[]>([]);
     const [editors, setEditors] = useState<GlobalKbEditor[]>([]);
     const [editorUsername, setEditorUsername] = useState('');
@@ -113,7 +110,6 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
             headerText: headerText || null,
             examplePrompts: examplePrompts || null,
             systemPrompt: systemPrompt || null,
-            studioConfig,
             aiConfigId: aiConfigId || null,
             chatModel: chatModel || null,
             embeddingModel: embeddingModel || null,
@@ -129,7 +125,6 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
                 headerText: headerText || null,
                 examplePrompts: examplePrompts || null,
                 systemPrompt: systemPrompt || null,
-                studioConfig,
                 aiConfigId: aiConfigId || null,
                 chatModel: chatModel || null,
                 embeddingModel: embeddingModel || null,
@@ -572,37 +567,6 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
                     />
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textAlign: 'right', marginTop: '0.25rem' }}>
                         {systemPrompt.length} / 8000
-                    </div>
-                </section>
-
-                {/* Studio Configuration */}
-                <section style={{ background: 'var(--bg-secondary)', borderRadius: '12px', padding: '1.5rem', border: '1px solid var(--border-color)' }}>
-                    <h2 style={{ margin: '0 0 1rem', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <Sparkles size={18} /> {t('studioConfigLabel')}
-                    </h2>
-                    <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '0 0 0.75rem' }}>{t('studioConfigDescription')}</p>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
-                        {(['cards', 'presentation', 'podcast', 'chart', 'abstract', 'briefingDoc', 'faq', 'studyGuide', 'timeline', 'quiz'] as const).map(key => (
-                            <button
-                                key={key}
-                                type="button"
-                                onClick={() => setStudioConfig(prev => ({ ...prev, [key]: !prev[key] }))}
-                                style={{
-                                    display: 'flex', alignItems: 'center', gap: '8px',
-                                    padding: '0.75rem', borderRadius: '8px',
-                                    border: '1px solid var(--border-color)',
-                                    background: studioConfig[key] ? 'var(--tag-bg)' : 'var(--bg-primary)',
-                                    cursor: 'pointer', color: 'var(--text-primary)'
-                                }}
-                            >
-                                <span className="icon-swap" key={studioConfig[key] ? 'on' : 'off'}>{studioConfig[key]
-                                    ? <ToggleRight size={20} color="var(--accent-primary)" />
-                                    : <ToggleLeft size={20} color="var(--text-secondary)" />}</span>
-                                <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>
-                                    {t(key === 'cards' ? 'flashcards' : key === 'presentation' ? 'slides' : key)}
-                                </span>
-                            </button>
-                        ))}
                     </div>
                 </section>
 

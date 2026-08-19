@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/contentgen"
@@ -145,6 +149,47 @@ func buildLLMServer(t *testing.T, content string) *httptest.Server {
 	return srv
 }
 
+// buildCapturingLLMServer is buildLLMServer plus request capture: every
+// decoded ai.ChatRequest is appended to *captured, in call order. Used to
+// assert on the messages actually sent (system/user role, content) rather
+// than just on the response — a test that only checks the stored output
+// text cannot tell "correct call, correct answer" apart from "arguments
+// swapped, but the fake server echoes the same content regardless".
+func buildCapturingLLMServer(t *testing.T, content string, captured *[]ai.ChatRequest) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err == nil {
+			var req ai.ChatRequest
+			if json.Unmarshal(body, &req) == nil {
+				*captured = append(*captured, req)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": content}},
+			},
+		}
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// chatMessage returns the content of the first message with the given role
+// in req, or "" if none. Test helper for asserting on captured requests.
+func chatMessage(req ai.ChatRequest, role string) string {
+	for _, m := range req.Messages {
+		if m.Role == role {
+			return m.Content
+		}
+	}
+	return ""
+}
+
 // resolverFor creates a ConfigResolver pointing at the given test server.
 func resolverFor(srv *httptest.Server) *ai.ConfigResolver {
 	cs := &mockConfigStore{baseURL: srv.URL, model: "gpt-test"}
@@ -227,6 +272,14 @@ func TestGenerateCards_NoAuth_Returns401(t *testing.T) {
 // Tests: GenerateAnalysis
 // ---------------------------------------------------------------------------
 
+// generateAnalysisResponse mirrors GenerateAnalysis's response envelope
+// ({record, degradedReason}) — it stopped returning the record directly once
+// GenerateAnalysis could run through an agent/team (Task 11).
+type generateAnalysisResponse struct {
+	Record         gencontent.GenContentRow `json:"record"`
+	DegradedReason string                   `json:"degradedReason"`
+}
+
 func TestGenerateAnalysis_Returns200(t *testing.T) {
 	llmContent := "## Analysis\n\nThis is a detailed analysis."
 	srv := buildLLMServer(t, llmContent)
@@ -241,12 +294,199 @@ func TestGenerateAnalysis_Returns200(t *testing.T) {
 		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp gencontent.GenContentRow
+	var resp generateAnalysisResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp.Type != "analysis" {
-		t.Errorf("expected type analysis, got %s", resp.Type)
+	if resp.Record.Type != "analysis" {
+		t.Errorf("expected type analysis, got %s", resp.Record.Type)
+	}
+	if resp.DegradedReason != "" {
+		t.Errorf("degradedReason = %q, want \"\" (no selection made, h.teams is nil)", resp.DegradedReason)
+	}
+}
+
+// mockTeamLoader is a minimal contentgen.TeamLoader for the handler-level
+// tests below. Defined here (package contentgen_test) rather than reusing
+// analysis_agent_test.go's unexported fakeTeamLoader, which lives in the
+// internal contentgen package and isn't visible from this external test
+// package.
+type mockTeamLoader struct {
+	agent *agentteams.AgentRecord
+	team  *agentteams.TeamForChat
+	err   error
+}
+
+func (m mockTeamLoader) LoadAgentForChat(context.Context, string, string) (*agentteams.AgentRecord, error) {
+	return m.agent, m.err
+}
+func (m mockTeamLoader) LoadTeamForChat(context.Context, string, string) (*agentteams.TeamForChat, error) {
+	return m.team, m.err
+}
+
+// mockTeamSearcher implements vector.Searcher (Search + ExpandNeighbors —
+// contentgen.Searcher only requires Search, which is why SetAgentDeps takes
+// a second, separately typed field; see http.go). called is set on every
+// Search invocation so tests can assert whether the agent/team path (which
+// alone uses this searcher, via RunTeamChat) actually ran.
+type mockTeamSearcher struct {
+	called *bool
+	chunks []vector.SearchChunk
+	err    error
+}
+
+func (m mockTeamSearcher) Search(_ context.Context, _, _ string, _ int, _ vector.SearchOptions) (*vector.SearchResult, error) {
+	if m.called != nil {
+		*m.called = true
+	}
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &vector.SearchResult{Chunks: m.chunks}, nil
+}
+
+func (m mockTeamSearcher) ExpandNeighbors(_ context.Context, chunks []vector.SearchChunk, _ int, _, _ string) []vector.SearchChunk {
+	return chunks
+}
+
+var _ vector.Searcher = mockTeamSearcher{}
+
+// Positive guard: a resolvable agentId must actually run the team/agent
+// pipeline (RunTeamChat), not just resolve without error, and the stored
+// artifact must be built from what that run actually produced — not a
+// coincidentally-matching fixed string, and not the topic/prompt swapped
+// into the wrong role. buildCapturingLLMServer records every request the
+// handler sends to the (fake) provider; the final one is the answer-
+// generation call (ai.GenerateCompletion(ctx, resolver, req.Topic,
+// chatCtx.SystemPrompt, kbID, false)) — its system message must be the
+// assembled team/analysis prompt (proven by two independent markers: the
+// "TEAM FINDINGS" section RunTeamChat always emits, and a fragment of
+// prompts.AnalysisSystemPrompt("de") this task wires in as KbSystemPrompt so
+// the agent produces an analysis rather than a chat reply) and its user
+// message must be the plain topic.
+func TestGenerateAnalysisWithAgentRunsTeamChat(t *testing.T) {
+	llmContent := "## Analysis\n\nSynthesized by the agent."
+	var requests []ai.ChatRequest
+	srv := buildCapturingLLMServer(t, llmContent, &requests)
+
+	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
+
+	var called bool
+	searcher := mockTeamSearcher{
+		called: &called,
+		chunks: []vector.SearchChunk{
+			{ID: "c1", Content: "evidence", FileID: "f1", FileName: "f.pdf", Score: 0.8},
+		},
+	}
+	h.SetAgentDeps(mockTeamLoader{agent: &agentteams.AgentRecord{ID: "a1", Name: "Prüfer", ChatModel: "gpt-test"}}, searcher)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/analysis",
+		map[string]string{"topic": "Budget 2026", "agentId": "a1"})
+	rec := httptest.NewRecorder()
+	h.GenerateAnalysis(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var resp generateAnalysisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.DegradedReason != "" {
+		t.Errorf("degradedReason = %q, want \"\" (agent resolved and ran)", resp.DegradedReason)
+	}
+	if !called {
+		t.Error("with agentId, RunTeamChat is called — the team searcher was never invoked, so the agent path did not run")
+	}
+
+	// The stored text must be exactly what the (fake) agent LLM returned —
+	// not a discarded answer replaced with something else.
+	content, ok := resp.Record.Content.(map[string]any)
+	if !ok {
+		t.Fatalf("record.content is not an object: %#v", resp.Record.Content)
+	}
+	if content["text"] != llmContent {
+		t.Errorf("stored text = %q, want the agent's actual answer %q", content["text"], llmContent)
+	}
+
+	if len(requests) == 0 {
+		t.Fatal("no requests reached the LLM server")
+	}
+	final := requests[len(requests)-1]
+	sysMsg := chatMessage(final, "system")
+	userMsg := chatMessage(final, "user")
+	if !strings.Contains(sysMsg, "TEAM FINDINGS") {
+		t.Errorf("final call's system message doesn't contain RunTeamChat's assembled prompt (no \"TEAM FINDINGS\" marker); got: %q", sysMsg)
+	}
+	if !strings.Contains(sysMsg, "Analyseexperte") {
+		t.Errorf("final call's system message doesn't carry the analysis instruction (KbSystemPrompt); the agent path is producing a chat reply, not an analysis; got: %q", sysMsg)
+	}
+	if userMsg != "Budget 2026" {
+		t.Errorf("final call's user message = %q, want the plain topic %q", userMsg, "Budget 2026")
+	}
+}
+
+// The RunTeamChat-fails branch (http.go: rerr != nil) has its own reason
+// string and its own fall-through to the standard path — distinct code from
+// the sibling ai.GenerateCompletion-fails branch twenty lines below, which
+// is a hard 500. A resolvable selection whose run then fails must NOT 500:
+// it degrades to the standard (non-agent) path and reports "run_failed".
+func TestGenerateAnalysisWithAgentRunFailureDegrades(t *testing.T) {
+	llmContent := "## Analysis\n\nStandard-path fallback."
+	srv := buildLLMServer(t, llmContent)
+
+	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
+	// A valid agent resolves, but its specialist retrieval fails, so
+	// RunTeamChat itself returns an error ("all specialists failed").
+	searcher := mockTeamSearcher{err: errors.New("search backend down")}
+	h.SetAgentDeps(mockTeamLoader{agent: &agentteams.AgentRecord{ID: "a1", Name: "Prüfer", ChatModel: "gpt-test"}}, searcher)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/analysis",
+		map[string]string{"topic": "Budget 2026", "agentId": "a1"})
+	rec := httptest.NewRecorder()
+	h.GenerateAnalysis(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (fail-soft on run failure): %s", rec.Code, rec.Body.String())
+	}
+	var resp generateAnalysisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Record.Type != "analysis" {
+		t.Errorf("a run failure must still produce an artifact via the standard path, got type %q", resp.Record.Type)
+	}
+	if resp.DegradedReason != "run_failed" {
+		t.Errorf("degradedReason = %q, want %q", resp.DegradedReason, "run_failed")
+	}
+}
+
+// Fail-soft-Wächter: eine im Dialog getroffene, inzwischen ungültige Auswahl
+// kostet den Lauf nicht — sie MUSS aber sichtbar werden.
+func TestGenerateAnalysisWithUnresolvableAgentDegrades(t *testing.T) {
+	llmContent := "## Analysis\n\nThis is a detailed analysis."
+	srv := buildLLMServer(t, llmContent)
+
+	h := contentgen.NewHandler(&mockStore{}, resolverFor(srv), defaultSearcher(), nil, nil, nil)
+	h.SetAgentDeps(mockTeamLoader{err: errors.New("not attached")}, nil)
+
+	req := postJSON(t, "/api/kb/"+testKBID+"/generate/analysis",
+		map[string]string{"topic": "test analysis", "agentId": "a1"})
+	rec := httptest.NewRecorder()
+	h.GenerateAnalysis(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (fail-soft): %s", rec.Code, rec.Body.String())
+	}
+	var resp generateAnalysisResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Record.Type != "analysis" {
+		t.Errorf("trotz Degradation muss ein Artefakt entstehen, got type %q", resp.Record.Type)
+	}
+	if resp.DegradedReason == "" {
+		t.Error("degradedReason ist leer — der Lauf degradiert stumm, genau das soll ausgeschlossen sein")
 	}
 }
 
@@ -434,5 +674,150 @@ func TestGeneratePodcast_Returns202(t *testing.T) {
 	}
 	if resp["jobId"] == "" {
 		t.Error("expected non-empty jobId")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: GetWorkspacePresets
+// ---------------------------------------------------------------------------
+
+func TestGetWorkspacePresetsFallsBackToDefaults(t *testing.T) {
+	h := contentgen.NewHandler(nil, nil, nil, nil, nil, nil) // ohne SetPresetDeps
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/"+testKBID+"/workspace/presets?lang=de", nil)
+	req.SetPathValue("id", testKBID)
+	rec := httptest.NewRecorder()
+	h.GetWorkspacePresets(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body struct {
+		Analysis       []contentgen.Preset `json:"analysis"`
+		Comparison     []contentgen.Preset `json:"comparison"`
+		CompareEnabled bool                `json:"compareEnabled"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Analysis) != len(contentgen.DefaultAnalysisPresets("de")) {
+		t.Errorf("analysis = %d presets, want the %d defaults", len(body.Analysis), len(contentgen.DefaultAnalysisPresets("de")))
+	}
+	// DE and EN default lists happen to have the same length (4 and 3), so a
+	// length-only check would not catch ?lang=de being resolved as English
+	// (or vice versa). Compare an actual label too.
+	if len(body.Analysis) == 0 || body.Analysis[0].Label != contentgen.DefaultAnalysisPresets("de")[0].Label {
+		t.Errorf("analysis[0].Label = %q, want the DE default %q", firstLabel(body.Analysis), contentgen.DefaultAnalysisPresets("de")[0].Label)
+	}
+	if len(body.Comparison) == 0 {
+		t.Error("comparison presets must not be empty")
+	}
+	if body.CompareEnabled {
+		t.Error("compareEnabled must be false when no reader is wired")
+	}
+}
+
+func firstLabel(presets []contentgen.Preset) string {
+	if len(presets) == 0 {
+		return "<empty>"
+	}
+	return presets[0].Label
+}
+
+// ---------------------------------------------------------------------------
+// Tests: SetPresetDeps / readerForKB overlay wiring
+// ---------------------------------------------------------------------------
+//
+// TestGetWorkspacePresetsFallsBackToDefaults above only ever exercises the
+// handler with SetPresetDeps unset — it proves the code-default fallback,
+// not that a KB override actually reaches the response. The tests below are
+// what "mit KB-Override" in the commit message needs: a fake global reader
+// AND a fake per-KB override lister wired together via SetPresetDeps, so the
+// KBOverlayReader construction in readerForKB is on the exercised path.
+
+// fakeGlobalReader satisfies contentgen.SiteConfigReader for these tests.
+type fakeGlobalReader struct{ vals map[string]string }
+
+func (f fakeGlobalReader) GetSiteConfigValue(_ context.Context, key string) (*string, error) {
+	if v, ok := f.vals[key]; ok {
+		return &v, nil
+	}
+	return nil, nil
+}
+
+// fakeKBOverrides satisfies contentgen.KBConfigOverrideLister for these
+// tests. err, when set, simulates a failed per-KB override load.
+type fakeKBOverrides struct {
+	overrides map[string]*string
+	err       error
+}
+
+func (f fakeKBOverrides) ListKBOverrides(_ context.Context, _ string) (map[string]*string, error) {
+	return f.overrides, f.err
+}
+
+func strPtr(s string) *string { return &s }
+
+func getWorkspacePresetsAnalysisLabel(t *testing.T, h *contentgen.Handler) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/"+testKBID+"/workspace/presets?lang=de", nil)
+	req.SetPathValue("id", testKBID)
+	rec := httptest.NewRecorder()
+	h.GetWorkspacePresets(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Analysis []contentgen.Preset `json:"analysis"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Analysis) == 0 {
+		t.Fatal("analysis presets must not be empty")
+	}
+	return body.Analysis[0].Label
+}
+
+func TestGetWorkspacePresetsUsesKBOverrideOverGlobal(t *testing.T) {
+	global := fakeGlobalReader{vals: map[string]string{
+		"workspace_analysis_presets": `[{"label":"Global","prompt":"G"}]`,
+	}}
+	kbOverrides := fakeKBOverrides{overrides: map[string]*string{
+		"workspace_analysis_presets": strPtr(`[{"label":"Override","prompt":"O"}]`),
+	}}
+	h := contentgen.NewHandler(nil, nil, nil, nil, nil, nil)
+	h.SetPresetDeps(global, kbOverrides)
+
+	got := getWorkspacePresetsAnalysisLabel(t, h)
+	if got != "Override" {
+		t.Fatalf("analysis[0].Label = %q, want the KB override %q (not the global value or a code default)", got, "Override")
+	}
+}
+
+func TestGetWorkspacePresetsFallsBackToGlobalWhenKBHasNoOverride(t *testing.T) {
+	global := fakeGlobalReader{vals: map[string]string{
+		"workspace_analysis_presets": `[{"label":"Global","prompt":"G"}]`,
+	}}
+	kbOverrides := fakeKBOverrides{overrides: map[string]*string{}} // KB set nothing
+	h := contentgen.NewHandler(nil, nil, nil, nil, nil, nil)
+	h.SetPresetDeps(global, kbOverrides)
+
+	got := getWorkspacePresetsAnalysisLabel(t, h)
+	if got != "Global" {
+		t.Fatalf("analysis[0].Label = %q, want the global value %q", got, "Global")
+	}
+}
+
+func TestGetWorkspacePresetsDegradesToGlobalWhenKBOverrideLoadFails(t *testing.T) {
+	global := fakeGlobalReader{vals: map[string]string{
+		"workspace_analysis_presets": `[{"label":"Global","prompt":"G"}]`,
+	}}
+	kbOverrides := fakeKBOverrides{err: errors.New("db unreachable")}
+	h := contentgen.NewHandler(nil, nil, nil, nil, nil, nil)
+	h.SetPresetDeps(global, kbOverrides)
+
+	got := getWorkspacePresetsAnalysisLabel(t, h)
+	if got != "Global" {
+		t.Fatalf("analysis[0].Label = %q, want the global value %q (degrade on load failure)", got, "Global")
 	}
 }

@@ -85,6 +85,13 @@ var scannedPackages = []string{
 	filepath.Join("..", "vector"),
 	filepath.Join("..", "processor"),
 	filepath.Join("..", "pipeline"),
+	// internal/contentgen reads workspace_analysis_presets and
+	// workspace_comparison_presets over Route 5
+	// (reader.GetSiteConfigValue(ctx, "<literal>")). The four typed helpers
+	// are private to internal/chat, so internal/contentgen cannot call them,
+	// and neither key belongs in a "*Keys" slice or a siteConfigParsers map
+	// either — same reasoning as internal/processor's route-5 entry above.
+	filepath.Join("..", "contentgen"),
 }
 
 // minExpectedKeys guards against a silently broken parse. If a refactor

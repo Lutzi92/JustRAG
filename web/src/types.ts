@@ -200,21 +200,6 @@ export interface User {
     authMethod?: string;
 }
 
-export interface StudioConfig {
-    cards: boolean;
-    presentation: boolean;
-    podcast: boolean;
-    chart: boolean;
-    abstract: boolean;
-    // Phase-2 study artifacts. Optional so legacy stored configs (which omit
-    // them) keep working; absent ⇒ enabled by default in the sc spreads.
-    briefingDoc?: boolean;
-    faq?: boolean;
-    studyGuide?: boolean;
-    timeline?: boolean;
-    quiz?: boolean;
-}
-
 // KbRole is the caller's role on a KB, per kb_members: 'view' < 'edit' <
 // 'admin' < 'owner'. A KnowledgeBase.myRole of undefined means the caller has
 // no kb_members row — an implicit viewer on a published global KB.
@@ -268,7 +253,6 @@ export interface KnowledgeBase {
     isPublished?: boolean;
     headerText?: string | null;
     examplePrompts?: string | null;
-    studioConfig?: StudioConfig | null;
     aiConfigId: string | null;
     chatModel: string | null;
     embeddingModel: string | null;
@@ -563,7 +547,7 @@ export interface AcademicFinding {
     relevanceScore: number;
 }
 
-export type KbConfigFieldType = 'bool' | 'int' | 'float' | 'string' | 'enum';
+export type KbConfigFieldType = 'bool' | 'int' | 'float' | 'string' | 'enum' | 'json';
 
 export interface KbConfigField {
   key: string;

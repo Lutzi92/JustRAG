@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { API_BASE_URL } from '../api';
 import { getApiErrorMessage } from '../utils/apiError';
@@ -28,10 +28,16 @@ export function useChatAttachment(kbId: string, t?: Translator) {
   const [attachment, setAttachment] = useState<ChatAttachment | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Mirrors `error`, but readable synchronously right after `await upload()`
+  // resolves — a caller in the same tick (e.g. `startComparison`) still holds
+  // the pre-upload closure, so the `error` *state* it captured is always
+  // stale until the next render. Refs don't have that lag.
+  const errorRef = useRef<string | null>(null);
 
-  const upload = useCallback(async (file: File) => {
+  const upload = useCallback(async (file: File): Promise<ChatAttachment | null> => {
     setUploading(true);
     setError(null);
+    errorRef.current = null;
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -40,6 +46,7 @@ export function useChatAttachment(kbId: string, t?: Translator) {
         fd,
       );
       setAttachment(res.data);
+      return res.data;
     } catch (err: unknown) {
       const tr = (key: string, fallback: string) => (t ? t(key) : fallback);
       let msg = tr('comparisonUploadFailed', 'Upload failed');
@@ -65,6 +72,8 @@ export function useChatAttachment(kbId: string, t?: Translator) {
       }
       console.error('Attachment upload failed:', err);
       setError(msg);
+      errorRef.current = msg;
+      return null;
     } finally {
       setUploading(false);
     }
@@ -73,7 +82,20 @@ export function useChatAttachment(kbId: string, t?: Translator) {
   const clear = useCallback(() => {
     setAttachment(null);
     setError(null);
+    errorRef.current = null;
   }, []);
 
-  return { attachment, uploading, error, upload, clear };
+  // Re-establishes `attachment` state from a result `upload()` already
+  // returned, without re-uploading. Needed because `startComparison`
+  // (useChat.ts) calls `handleNewChat()` — which must clear any attachment
+  // left over from the PREVIOUS chat — between uploading and sending the
+  // comparison turn; `adopt` restores the state that clear just wiped so
+  // follow-up turns in the new chat still carry the attachment id.
+  const adopt = useCallback((att: ChatAttachment) => {
+    setAttachment(att);
+    setError(null);
+    errorRef.current = null;
+  }, []);
+
+  return { attachment, uploading, error, errorRef, upload, clear, adopt };
 }

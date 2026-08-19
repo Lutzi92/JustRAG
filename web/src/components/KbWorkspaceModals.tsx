@@ -8,7 +8,6 @@ const MembersModal = lazy(() => import('./MembersModal').then(module => ({ defau
 const SettingsModal = lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
 const ChartModal = lazy(() => import('./ChartModal').then(module => ({ default: module.ChartModal })));
 const AbstractGenerationModal = lazy(() => import('./AbstractGenerationModal').then(module => ({ default: module.AbstractGenerationModal })));
-const ContentModal = lazy(() => import('./ContentModal').then(module => ({ default: module.ContentModal })));
 const PreviewModal = lazy(() => import('./PreviewModal').then(module => ({ default: module.PreviewModal })));
 const PdfPreviewModal = lazy(() => import('./PdfPreviewModal').then(module => ({ default: module.PdfPreviewModal })));
 const WebWorkspace = lazy(() => import('./WebWorkspace').then(module => ({ default: module.WebWorkspace })));
@@ -72,18 +71,6 @@ export function KbWorkspaceModals() {
           setAbstractType={content.setAbstractType}
           files={fileMgmt.files}
           onSubmit={content.submitAbstractGeneration}
-        />}
-      </Suspense>
-
-      <Suspense fallback={null}>
-        {content.showContentModal && <ContentModal
-          show={content.showContentModal}
-          onClose={() => content.setShowContentModal(false)}
-          selectedContent={content.selectedContent}
-          currentCardIndex={content.currentCardIndex}
-          setCurrentCardIndex={content.setCurrentCardIndex}
-          isAnswerVisible={content.isAnswerVisible}
-          setIsAnswerVisible={content.setIsAnswerVisible}
         />}
       </Suspense>
 

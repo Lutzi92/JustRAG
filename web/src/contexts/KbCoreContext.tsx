@@ -7,7 +7,7 @@ export interface KbCoreContextValue {
   isPro: boolean;
   availableConfigs: SafeAIConfig[];
   kbView: string;
-  setKbView: (view: 'chat' | 'dashboard' | 'research' | 'academic_research' | 'studio' | 'mindmap') => void;
+  setKbView: (view: 'chat' | 'dashboard' | 'research' | 'academic_research' | 'workspace' | 'mindmap') => void;
   // Query-scoped mindmap: the message id whose per-answer subgraph the mindmap
   // view should load (null = whole-KB graph). Owned by AuthenticatedApp.
   scopedMindmapMessageId: string | null;

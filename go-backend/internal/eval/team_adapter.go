@@ -10,7 +10,6 @@ import (
 	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/chat"
-	"github.com/justrag/go-backend/internal/siteconfig"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -102,38 +101,26 @@ func (a *TeamDispatchAdapter) Search(ctx context.Context, q Question, k int) ([]
 	if a.kbSystemPrompt != nil {
 		kbSystemPrompt = a.kbSystemPrompt(ctx, q.KbID)
 	}
-	params := chat.TeamParams{
-		KbID:           q.KbID,
-		Query:          q.Question,
-		Language:       q.Language,
-		KbSystemPrompt: kbSystemPrompt,
-		Team:           tfc.Team,
-		Members:        tfc.Members,
-		RouterModel:    chat.AgentTeamRouterModel(ctx, a.siteCfg),
-		PlanningModel:  chat.EnrichmentModel(ctx, a.siteCfg),
-		// Per-agent retrieval-knob overlay, built the same way tryDeepChat
-		// builds it (internal/chat/http_send.go ~656-670): agent config →
-		// overlay reader → global. Unlike production, eval has no
-		// KB-overlaid reader layer underneath — a.siteCfg is the GLOBAL
-		// site_config reader (pre-existing eval-wide convention: no
-		// kb_site_configs overlay anywhere in the eval path, not a new gap
-		// introduced here). v1: still no tools in eval (see the plan) — that
-		// omission remains deliberately deferred.
-		SearcherForAgent: func(ag agentteams.AgentRecord) vector.Searcher {
-			if len(ag.Config) == 0 {
-				return a.searchService
-			}
-			overrides := make(map[string]*string, len(ag.Config))
-			for k, v := range ag.Config {
-				overrides[k] = &v
-			}
-			overlay := siteconfig.NewAgentOverlay(a.siteCfg, overrides)
-			if ss, ok := a.searchService.(*vector.SearchService); ok {
-				return ss.CloneWithSiteConfigReader(overlay)
-			}
-			return a.searchService
-		},
-	}
+	// Per-agent retrieval-knob overlay, built the same way tryDeepChat builds
+	// it (internal/chat.BuildTeamParams): agent config → overlay reader →
+	// global. Unlike production, eval has no KB-overlaid reader layer
+	// underneath — a.siteCfg is the GLOBAL site_config reader (pre-existing
+	// eval-wide convention: no kb_site_configs overlay anywhere in the eval
+	// path, not a new gap introduced here). v1: still no tools in eval (see
+	// the plan) — that omission remains deliberately deferred.
+	params := chat.BuildTeamParams(ctx, chat.TeamParamsInput{
+		KbID: q.KbID, Query: q.Question, Language: q.Language, KbSystemPrompt: kbSystemPrompt,
+		Team: tfc, SiteCfg: a.siteCfg, SearchService: a.searchService,
+	})
+	// BuildTeamParams also derives HyPESearch/ToolMaxRounds/AllowPrivilegedTools
+	// from SiteCfg, matching the chat send path's defaults. The eval path never
+	// computed those three pre-extraction (ToolDispatcher is nil here too, so
+	// eval historically ran without HyPE-search or a tool round budget); reset
+	// them to their old zero values so extracting the shared builder does not
+	// change eval behaviour.
+	params.HyPESearch = false
+	params.ToolMaxRounds = 0
+	params.AllowPrivilegedTools = false
 	chatCtx, err := a.runTeam(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("team eval: %s: %w", q.ID, err)

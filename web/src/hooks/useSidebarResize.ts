@@ -47,56 +47,6 @@ export function useSidebarResize() {
     };
   }, [isResizingLeft, isResizingRight]);
 
-  const [leftSidebarSplit, setLeftSidebarSplit] = useState(75);
-  const [rightSidebarSplit, setRightSidebarSplit] = useState(50);
-  const [isResizingLeftVertical, setIsResizingLeftVertical] = useState(false);
-  const [isResizingRightVertical, setIsResizingRightVertical] = useState(false);
-
-  useEffect(() => {
-    const handleMouseMoveVertical = (e: MouseEvent) => {
-      if (isResizingLeftVertical) {
-        const sidebarHeight = window.innerHeight;
-        const newSplit = (e.clientY / sidebarHeight) * 100;
-        if (newSplit > 20 && newSplit < 80) {
-          setLeftSidebarSplit(newSplit);
-        }
-      }
-      if (isResizingRightVertical) {
-        const sidebarHeight = window.innerHeight;
-        const newSplit = (e.clientY / sidebarHeight) * 100;
-        if (newSplit > 20 && newSplit < 80) {
-          setRightSidebarSplit(newSplit);
-        }
-      }
-    };
-
-    const handleMouseUpVertical = () => {
-      setIsResizingLeftVertical(false);
-      setIsResizingRightVertical(false);
-    };
-
-    if (isResizingLeftVertical || isResizingRightVertical) {
-      document.addEventListener('mousemove', handleMouseMoveVertical);
-      document.addEventListener('mouseup', handleMouseUpVertical);
-      document.body.style.cursor = 'row-resize';
-      document.body.style.userSelect = 'none';
-    } else {
-      if (!isResizingLeft && !isResizingRight) {
-        document.body.style.cursor = 'default';
-        document.body.style.userSelect = 'auto';
-      }
-    }
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMoveVertical);
-      document.removeEventListener('mouseup', handleMouseUpVertical);
-      if (!isResizingLeft && !isResizingRight) {
-        document.body.style.cursor = 'default';
-        document.body.style.userSelect = 'auto';
-      }
-    };
-  }, [isResizingLeftVertical, isResizingRightVertical, isResizingLeft, isResizingRight]);
-
   return {
     leftSidebarWidth,
     rightSidebarWidth,
@@ -108,12 +58,6 @@ export function useSidebarResize() {
     setIsResizingLeft,
     isResizingRight,
     setIsResizingRight,
-    leftSidebarSplit,
-    setLeftSidebarSplit,
-    rightSidebarSplit,
-    setRightSidebarSplit,
-    setIsResizingLeftVertical,
-    setIsResizingRightVertical,
     setLeftSidebarWidth,
     setRightSidebarWidth,
   };

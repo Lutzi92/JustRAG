@@ -13,7 +13,7 @@ interface UseKnowledgeBasesParams {
   // React state setter (functional form needed by handleRenameKB).
   setCurrentKb: Dispatch<SetStateAction<KnowledgeBase | null>>;
   setIsPro: (isPro: boolean) => void;
-  setKbView: (view: 'chat' | 'dashboard' | 'research' | 'studio' | 'mindmap') => void;
+  setKbView: (view: 'chat' | 'dashboard' | 'research' | 'workspace' | 'mindmap') => void;
   setView: (view: 'home' | 'kb' | 'admin' | 'profile' | 'global-kb-settings' | 'kb-settings' | 'terms' | 'privacy' | 'accessibility') => void;
   setSelectedContent: (content: GeneratedContent | null) => void;
   setGeneratedContent: (content: GeneratedContent[]) => void;

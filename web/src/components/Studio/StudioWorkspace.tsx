@@ -1,18 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import axios from 'axios';
 import {
-    Trash2, Minimize2,
-    Type, Layout, Mic, X, Check,
-    FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks, BarChart3
+    Minimize2,
+    Type, Layout, Mic, Check,
+    FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks, BarChart3, Scale
 } from 'lucide-react';
-import type { GeneratedContent, StudioConfig } from '../../types';
-import { isMarkdownArtifact, artifactTypeLabel } from '../../utils/artifactTypes';
+import type { GeneratedContent } from '../../types';
+import { isMarkdownArtifact } from '../../utils/artifactTypes';
 import { QuizView } from './QuizView';
+import { FlashcardsArtifact } from './FlashcardsArtifact';
+import { PresentationArtifact } from './PresentationArtifact';
+import { PodcastArtifact } from './PodcastArtifact';
+import { ChartArtifact } from './ChartArtifact';
 import { API_BASE_URL } from '../../api';
 import { MarkdownEditor } from './MarkdownEditor';
+import { WorkspacePromptDialog } from './WorkspacePromptDialog';
+import { ComparisonDialog } from './ComparisonDialog';
+import { useWorkspacePresets } from '../../hooks/useWorkspacePresets';
+import type { AgentSelection } from '../../hooks/useKbSettings';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useToast } from '../../contexts/ToastContext';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -23,39 +31,36 @@ interface StudioWorkspaceProps {
     onGenerate: (type: 'cards' | 'presentation' | 'podcast' | 'chart' | 'abstract' | 'briefing_doc' | 'faq' | 'study_guide' | 'timeline' | 'quiz') => void;
     onDeleteContent: (id: string, e: React.MouseEvent) => void;
     onClose: () => void;
-    studioConfig?: StudioConfig;
-    initialSelectedItem?: GeneratedContent | null;
+    selectedItem: GeneratedContent | null;
     hasFiles?: boolean;
+    /** Called after a successful "New analysis" run with the created record;
+     * the caller owns reloading the artifact list and opening the item. */
+    onAnalysisCreated?: (item: GeneratedContent) => void;
+    /** Called when the "Document comparison" tile's dialog is submitted; the
+     * caller owns starting the comparison chat turn (`chat.startComparison`)
+     * and switching to the chat view. Resolves to whether the turn actually
+     * started — `false` on an upload failure (413/415/422/503), in which case
+     * the dialog stays open instead of closing on a silent failure. */
+    onStartComparison?: (v: { file: File; modes: string[]; instruction: string; agentSelection: AgentSelection }) => Promise<boolean> | boolean | void;
 }
 
+// `generatedContent` and `onDeleteContent` are accepted for interface
+// stability with callers (the history panel now owns both the artifact list
+// and its delete affordance) but are not consumed inside this component.
 export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     kbId,
-    generatedContent,
     onGenerate: onGenerateParent,
-    onDeleteContent,
     onClose,
-    studioConfig,
-    initialSelectedItem,
-    hasFiles = true
+    selectedItem,
+    hasFiles = true,
+    onAnalysisCreated,
+    onStartComparison,
 }) => {
     const { t, language } = useTheme();
     const toast = useToast();
-    // We treat 'analysis' items as the editable notes.
-    const [selectedItem, setSelectedItem] = useState<GeneratedContent | null>(initialSelectedItem || null);
     const [editorContent, setEditorContent] = useState('');
-    const [localGeneratedContent, setLocalGeneratedContent] = useState<GeneratedContent[]>([]);
-
-    // Sync props to local state to allow immediate UI updates
-    useEffect(() => {
-        setLocalGeneratedContent(generatedContent);
-    }, [generatedContent]);
-
-    // Update selected item if initialSelectedItem changes (e.g. re-opening studio with different item)
-    useEffect(() => {
-        if (initialSelectedItem) {
-            setSelectedItem(initialSelectedItem);
-        }
-    }, [initialSelectedItem]);
+    const [showComparison, setShowComparison] = useState(false);
+    const [isComparing, setIsComparing] = useState(false);
 
     // When selection changes, update editor content if it's an analysis or abstract
     useEffect(() => {
@@ -67,38 +72,53 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     // Analysis State
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
-    const [analysisInstruction, setAnalysisInstruction] = useState('');
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-
-    const sc = { cards: true, presentation: true, podcast: true, chart: true, abstract: true, briefingDoc: true, faq: true, studyGuide: true, timeline: true, quiz: true, ...studioConfig };
+    const presets = useWorkspacePresets(kbId, language || 'de');
 
     const handleAnalyzeRequest = () => {
         setShowAnalysisModal(true);
-        setAnalysisInstruction('');
     };
 
-    const performAnalysis = async () => {
-        if (!analysisInstruction.trim()) return;
+    // Fail-soft hint: the backend still produces an analysis even when the
+    // requested agent/team could no longer be used, and reports why via
+    // `degradedReason`. It is bound to the id of the artifact it describes
+    // (`degradedForId`), not shown unconditionally, so that:
+    //  - selecting the freshly created artifact (which `onAnalysisCreated`
+    //    drives from the parent, landing here as a `selectedItem` prop change
+    //    in the same update as the reason itself) does NOT wipe the hint —
+    //    without the id check, the effect below would race the prop change
+    //    and clear the hint before it is ever seen;
+    //  - navigating to any OTHER artifact afterwards does clear it, so the
+    //    warning can never end up attached to an unrelated item.
+    const [degradedReason, setDegradedReason] = useState('');
+    const degradedForId = useRef<string | null>(null);
+    useEffect(() => {
+        if ((selectedItem?.id ?? null) !== degradedForId.current) {
+            setDegradedReason('');
+        }
+    }, [selectedItem?.id]);
+
+    const runAnalysis = async ({ prompt, agentSelection }: { prompt: string; agentSelection: AgentSelection }) => {
         setIsAnalyzing(true);
         setShowAnalysisModal(false);
-
+        setDegradedReason('');
+        degradedForId.current = null;
         try {
             const res = await axios.post(`${API_BASE_URL}/api/kb/${kbId}/generate/analysis`, {
-                topic: analysisInstruction,
-                language: language || 'de'
+                topic: prompt,
+                language: language || 'de',
+                ...(agentSelection.teamId ? { teamId: agentSelection.teamId } : {}),
+                ...(agentSelection.agentId ? { agentId: agentSelection.agentId } : {}),
             });
-
-            const newItem = res.data;
-            if (!newItem?.id) {
+            const record = res.data?.record;
+            if (!record?.id) {
                 toast.error(t('analysisError'));
                 return;
             }
-            // Optimistic update
-            const updatedList = [newItem, ...localGeneratedContent];
-            setLocalGeneratedContent(updatedList);
-            setSelectedItem(newItem);
-
-            // Optimistic local state; parent syncs on next fetch
+            const reason = res.data?.degradedReason || '';
+            setDegradedReason(reason);
+            degradedForId.current = reason ? record.id : null;
+            onAnalysisCreated?.(record);
         } catch (err: unknown) {
             console.error('Analysis failed:', err);
             const axiosErr = err as { response?: { data?: { error?: string } } };
@@ -117,11 +137,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 content: { ...selectedItem.content, text: editorContent }
             });
 
-            // Update local state item
-            const updatedItem = { ...selectedItem, content: { ...selectedItem.content, text: editorContent } } as GeneratedContent;
-            setSelectedItem(updatedItem);
-            setLocalGeneratedContent(prev => prev.map(item => item.id === updatedItem.id ? updatedItem : item));
-
             setSaveStatus('saved');
             setTimeout(() => setSaveStatus('idle'), 2000);
         } catch (err: unknown) {
@@ -130,15 +145,6 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             setSaveStatus('error');
             setTimeout(() => setSaveStatus('idle'), 3000);
         }
-    };
-
-    const handleDelete = (id: string, e: React.MouseEvent) => {
-        e.stopPropagation();
-        if (selectedItem?.id === id) {
-            setSelectedItem(null);
-        }
-        onDeleteContent(id, e);
-        setLocalGeneratedContent(prev => prev.filter(item => item.id !== id));
     };
 
     const [isCopied, setIsCopied] = useState(false);
@@ -316,137 +322,67 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     return (
         <div className="studio-workspace" style={{
             display: 'flex',
+            flexDirection: 'column',
             height: '100%',
             background: 'var(--bg-primary)',
             position: 'relative',
             overflow: 'hidden'
         }}>
-            {/* Left Sidebar: Content List */}
-            <div style={{
-                width: '300px',
-                borderRight: '1px solid var(--border-color)',
+            <div className="studio-workspace__tiles" style={{
+                padding: '1rem',
                 display: 'flex',
-                flexDirection: 'column',
-                background: 'var(--bg-secondary)'
-            }}>
-                <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)' }}>
-                    <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>{t('studio')}</h2>
-                    <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                        {t('researchWorkspace')}
-                    </p>
-                </div>
-
-                <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', opacity: hasFiles ? 1 : 0.4 }}
-                     title={!hasFiles ? t('sourcesRequiredHint') : undefined}
-                >
-                    <button onClick={handleAnalyzeRequest} disabled={!hasFiles || isAnalyzing} className="studio-gen-btn">
-                        <FileText size={16} /> {t('newAnalysis')}
+                flexWrap: 'wrap',
+                gap: '0.5rem',
+                borderBottom: '1px solid var(--border-color)',
+                background: 'var(--bg-secondary)',
+                opacity: hasFiles ? 1 : 0.4
+            }}
+                 title={!hasFiles ? t('sourcesRequiredHint') : undefined}
+            >
+                <button onClick={handleAnalyzeRequest} disabled={!hasFiles || isAnalyzing} className="studio-gen-btn">
+                    <FileText size={16} /> {t('newAnalysis')}
+                </button>
+                {presets.compareEnabled && (
+                    <button onClick={() => setShowComparison(true)} disabled={!hasFiles} className="studio-gen-btn">
+                        <Scale size={16} /> {t('documentComparison')}
                     </button>
-                    {sc.cards && (
-                        <button onClick={() => onGenerateParent('cards')} disabled={!hasFiles} className="studio-gen-btn">
-                            <Type size={16} /> {t('flashcards')}
-                        </button>
-                    )}
-                    {sc.presentation && (
-                        <button onClick={() => onGenerateParent('presentation')} disabled={!hasFiles} className="studio-gen-btn">
-                            <Layout size={16} /> {t('slides')}
-                        </button>
-                    )}
-                    {sc.podcast && (
-                        <button onClick={() => onGenerateParent('podcast')} disabled={!hasFiles} className="studio-gen-btn">
-                            <Mic size={16} /> {t('podcast')}
-                        </button>
-                    )}
+                )}
+                <button onClick={() => onGenerateParent('cards')} disabled={!hasFiles} className="studio-gen-btn">
+                    <Type size={16} /> {t('flashcards')}
+                </button>
+                <button onClick={() => onGenerateParent('presentation')} disabled={!hasFiles} className="studio-gen-btn">
+                    <Layout size={16} /> {t('slides')}
+                </button>
+                <button onClick={() => onGenerateParent('podcast')} disabled={!hasFiles} className="studio-gen-btn">
+                    <Mic size={16} /> {t('podcast')}
+                </button>
 
-                    {sc.abstract && (
-                        <button onClick={() => onGenerateParent('abstract')} disabled={!hasFiles} className="studio-gen-btn">
-                            <FileText size={16} /> {t('abstract')}
-                        </button>
-                    )}
-                    {sc.chart && (
-                        <button onClick={() => onGenerateParent('chart')} disabled={!hasFiles} className="studio-gen-btn">
-                            <BarChart3 size={16} /> {t('chart')}
-                        </button>
-                    )}
+                <button onClick={() => onGenerateParent('abstract')} disabled={!hasFiles} className="studio-gen-btn">
+                    <FileText size={16} /> {t('abstract')}
+                </button>
+                <button onClick={() => onGenerateParent('chart')} disabled={!hasFiles} className="studio-gen-btn">
+                    <BarChart3 size={16} /> {t('chart')}
+                </button>
 
-                    {sc.briefingDoc && (
-                        <button onClick={() => onGenerateParent('briefing_doc')} disabled={!hasFiles} className="studio-gen-btn">
-                            <Newspaper size={16} /> {t('briefingDoc')}
-                        </button>
-                    )}
-                    {sc.faq && (
-                        <button onClick={() => onGenerateParent('faq')} disabled={!hasFiles} className="studio-gen-btn">
-                            <HelpCircle size={16} /> {t('faq')}
-                        </button>
-                    )}
-                    {sc.studyGuide && (
-                        <button onClick={() => onGenerateParent('study_guide')} disabled={!hasFiles} className="studio-gen-btn">
-                            <GraduationCap size={16} /> {t('studyGuide')}
-                        </button>
-                    )}
-                    {sc.timeline && (
-                        <button onClick={() => onGenerateParent('timeline')} disabled={!hasFiles} className="studio-gen-btn">
-                            <Clock size={16} /> {t('timeline')}
-                        </button>
-                    )}
-                    {sc.quiz && (
-                        <button onClick={() => onGenerateParent('quiz')} disabled={!hasFiles} className="studio-gen-btn">
-                            <ListChecks size={16} /> {t('quiz')}
-                        </button>
-                    )}
-                </div>
-
-                <div style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
-                    <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 0 }}>
-                        {t('generatedContentHeader')}
-                    </h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        {localGeneratedContent.map(item => (
-                            <div
-                                key={item.id}
-                                className={`source-card ${selectedItem?.id === item.id ? 'active' : ''}`}
-                                role="button"
-                                tabIndex={0}
-                                onClick={() => setSelectedItem(item)}
-                                onKeyDown={(e) => {
-                                    // Ignore keys bubbling from the nested delete button.
-                                    if (e.target !== e.currentTarget) return;
-                                    if (e.key === 'Enter' || e.key === ' ') {
-                                        e.preventDefault();
-                                        setSelectedItem(item);
-                                    }
-                                }}
-                                style={{
-                                    cursor: 'pointer',
-                                    border: selectedItem?.id === item.id ? '1px solid var(--accent-primary)' : undefined,
-                                    padding: '0.75rem'
-                                }}
-                            >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ overflow: 'hidden' }}>
-                                        <div style={{ fontWeight: 500, fontSize: '0.9rem', marginBottom: '0.25rem' }}>
-                                            {item.title}
-                                        </div>
-                                        <div className="source-meta">
-                                            {artifactTypeLabel(item.type, t)} • {new Date(item.createdAt).toLocaleDateString()}
-                                        </div>
-                                    </div>
-                                    <button
-                                        onClick={(e) => handleDelete(item.id, e)}
-                                        className="settings-toggle"
-                                        style={{ padding: '4px' }}
-                                    >
-                                        <Trash2 size={14} />
-                                    </button>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
+                <button onClick={() => onGenerateParent('briefing_doc')} disabled={!hasFiles} className="studio-gen-btn">
+                    <Newspaper size={16} /> {t('briefingDoc')}
+                </button>
+                <button onClick={() => onGenerateParent('faq')} disabled={!hasFiles} className="studio-gen-btn">
+                    <HelpCircle size={16} /> {t('faq')}
+                </button>
+                <button onClick={() => onGenerateParent('study_guide')} disabled={!hasFiles} className="studio-gen-btn">
+                    <GraduationCap size={16} /> {t('studyGuide')}
+                </button>
+                <button onClick={() => onGenerateParent('timeline')} disabled={!hasFiles} className="studio-gen-btn">
+                    <Clock size={16} /> {t('timeline')}
+                </button>
+                <button onClick={() => onGenerateParent('quiz')} disabled={!hasFiles} className="studio-gen-btn">
+                    <ListChecks size={16} /> {t('quiz')}
+                </button>
             </div>
 
             {/* Main Area */}
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div className="studio-workspace__body" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <header style={{
                     padding: '1rem 2rem',
                     borderBottom: '1px solid var(--border-color)',
@@ -456,7 +392,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     background: 'var(--bg-primary)'
                 }}>
                     <h3 style={{ margin: 0 }}>
-                        {selectedItem ? selectedItem.title : t('studio')}
+                        {selectedItem ? selectedItem.title : t('workspace')}
                     </h3>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -514,6 +450,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     </div>
                 </header>
 
+                {degradedReason && (
+                    <div className="workspace-degraded" role="status">
+                        {t('analysisDegradedNoAgent')}
+                    </div>
+                )}
+
                 <div style={{ flex: 1, display: 'flex', overflow: 'hidden', padding: '2rem' }}>
                     {(selectedItem && isMarkdownArtifact(selectedItem.type)) ? (
                         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -544,27 +486,22 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             width: '100%'
                         }}>
                             {selectedItem.type === 'flashcards' && (
-                                <div>
-                                    {(selectedItem.content as Array<{ front: string; back: string }>).map((card, idx) => (
-                                        <div key={idx} style={{
-                                            background: 'var(--bg-primary)',
-                                            padding: '1rem',
-                                            marginBottom: '1rem',
-                                            borderRadius: '8px',
-                                            border: '1px solid var(--border-color)'
-                                        }}>
-                                            <strong>F: {card.front}</strong>
-                                            <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px dashed var(--border-color)' }}>
-                                                A: {card.back}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
+                                <FlashcardsArtifact id={selectedItem.id} content={selectedItem.content} />
                             )}
                             {selectedItem.type === 'quiz' && Array.isArray(selectedItem.content) && (
                                 <QuizView items={selectedItem.content} />
                             )}
-                            {selectedItem.type !== 'flashcards' && !(selectedItem.type === 'quiz' && Array.isArray(selectedItem.content)) && (
+                            {selectedItem.type === 'podcast' && (
+                                <PodcastArtifact id={selectedItem.id} content={selectedItem.content} />
+                            )}
+                            {selectedItem.type === 'presentation' && (
+                                <PresentationArtifact id={selectedItem.id} content={selectedItem.content} />
+                            )}
+                            {selectedItem.type === 'chart' && (
+                                <ChartArtifact content={selectedItem.content} title={selectedItem.title} />
+                            )}
+                            {!['flashcards', 'podcast', 'presentation', 'chart'].includes(selectedItem.type) &&
+                                !(selectedItem.type === 'quiz' && Array.isArray(selectedItem.content)) && (
                                 <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.9rem', fontFamily: 'inherit' }}>
                                     {JSON.stringify(selectedItem.content, null, 2)}
                                 </pre>
@@ -621,122 +558,36 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 </div>
             </div>
 
-            {/* Analysis Modal */}
-            {showAnalysisModal && (
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    background: 'rgba(0,0,0,0.5)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 1000
+            <WorkspacePromptDialog
+                open={showAnalysisModal}
+                title={t('newAnalysis')}
+                submitLabel={t('start')}
+                presets={presets.analysis}
+                kbId={kbId}
+                busy={isAnalyzing}
+                onSubmit={runAnalysis}
+                onClose={() => setShowAnalysisModal(false)}
+            />
+
+            <ComparisonDialog
+                open={showComparison}
+                kbId={kbId}
+                presets={presets.comparison}
+                busy={isComparing}
+                onStart={async (v) => {
+                    setIsComparing(true);
+                    try {
+                        // Keep the dialog open on a failed upload (413/415/422/503)
+                        // instead of closing silently — onStartComparison resolves
+                        // to whether the turn actually started.
+                        const started = await onStartComparison?.(v);
+                        if (started !== false) setShowComparison(false);
+                    } finally {
+                        setIsComparing(false);
+                    }
                 }}
-                    // Backdrop click-to-close is a mouse convenience redundant with the
-                    // modal's close button; only clicks on the backdrop itself dismiss.
-                    role="presentation"
-                    onClick={(e) => { if (e.target === e.currentTarget) setShowAnalysisModal(false); }}
-                >
-                    <div style={{
-                        background: 'var(--bg-primary)',
-                        padding: '2rem',
-                        borderRadius: '12px',
-                        width: '500px',
-                        maxWidth: '90%',
-                        boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
-                        border: '1px solid var(--border-color)'
-                    }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                            <h3 style={{ margin: 0 }}>{t('deepAnalysis')}</h3>
-                            <button onClick={() => setShowAnalysisModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-                                <X size={20} />
-                            </button>
-                        </div>
-
-                        <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                            {t('deepAnalysisDescription')}
-                        </p>
-
-                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-                            {[
-                                { label: t('compareSources'), value: "Vergleiche Quellen" },
-                                { label: t('criticalAnalysis'), value: "Kritische Analyse" },
-                                { label: t('extractMethodology'), value: "Methodik extrahieren" },
-                                { label: t('summary'), value: "Zusammenfassung" }
-                            ].map(p => (
-                                <button
-                                    key={p.value}
-                                    onClick={() => setAnalysisInstruction(p.value)}
-                                    className="studio-gen-btn"
-                                    style={{
-                                        justifyContent: 'center',
-                                        flex: '1 1 auto'
-                                    }}
-                                >
-                                    {p.label}
-                                </button>
-                            ))}
-                        </div>
-
-                        <textarea
-                            value={analysisInstruction}
-                            onChange={(e) => setAnalysisInstruction(e.target.value)}
-                            placeholder={t('deepAnalysisPlaceholder')}
-                            style={{
-                                width: '100%',
-                                height: '100px',
-                                padding: '0.75rem',
-                                marginBottom: '1.5rem',
-                                borderRadius: '8px',
-                                border: '1px solid var(--border-color)',
-                                background: 'var(--bg-secondary)',
-                                color: 'var(--text-primary)',
-                                resize: 'none'
-                            }}
-                            // eslint-disable-next-line jsx-a11y/no-autofocus -- focus first field on dialog open (WAI-ARIA dialog pattern)
-                            autoFocus
-                        />
-
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-                            <button
-                                onClick={() => setShowAnalysisModal(false)}
-                                style={{
-                                    padding: '0.75rem 1.5rem',
-                                    borderRadius: '8px',
-                                    border: '1px solid var(--border-color)',
-                                    background: 'transparent',
-                                    cursor: 'pointer',
-                                    color: 'var(--text-primary)'
-                                }}
-                            >
-                                {t('cancel')}
-                            </button>
-                            <button
-                                onClick={performAnalysis}
-                                disabled={!analysisInstruction.trim()}
-                                style={{
-                                    padding: '0.75rem 1.5rem',
-                                    borderRadius: '8px',
-                                    border: 'none',
-                                    background: 'var(--accent-primary)',
-                                    color: '#fff',
-                                    cursor: 'pointer',
-                                    opacity: analysisInstruction.trim() ? 1 : 0.5,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '8px'
-                                }}
-                            >
-                                <Check size={16} />
-                                {t('startAnalysis')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+                onClose={() => setShowComparison(false)}
+            />
         </div>
     );
 };

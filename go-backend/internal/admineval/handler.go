@@ -204,6 +204,13 @@ var snapshotConfigKeys = []string{
 	// snapshot must still capture it so a snapshotted eval run reproduces a
 	// KB's exact per-KB config surface, marker included.
 	"workflow_preset",
+	// Workspace prompt presets (Task 8/9, ui-workspace-rework). Per-KB
+	// registry keys (cross-checked by snapshot_registry_test.go like the
+	// blocks above); no eval code branches on their content, but a
+	// snapshotted eval run must still reproduce a KB's exact per-KB config
+	// surface, presets included.
+	"workspace_analysis_presets",
+	"workspace_comparison_presets",
 }
 
 // ---------------------------------------------------------------------------

@@ -1147,6 +1147,17 @@ func registerContentGenRoutes(rc *routeCtx, generateRL *middleware.RedisRateLimi
 	if rc.infra.sqlToolDB != nil {
 		contentGenHandler.SetChartDeps(tabular.NewCatalog(rc.infra.db.Main), rc.infra.sqlToolDB)
 	}
+	// Workspace prompt presets: global reader is the deployment-wide
+	// site_config store (rc.chatStore, *chat.PGStore); per-KB overrides come
+	// from rc.kbConfigStore (*kbconfig.Store). Both are always non-nil at
+	// startup, unlike the chart deps above.
+	contentGenHandler.SetPresetDeps(rc.chatStore, rc.kbConfigStore)
+	// Workspace "New analysis" over an agent/team pick: rc.agentTeamsStore
+	// (*agentteams.Store) loads and authorizes the dialog's selection;
+	// rc.searchService (*vector.SearchService) is the same production
+	// searcher the chat send path and eval hand to RunTeamChat.
+	contentGenHandler.SetAgentDeps(rc.agentTeamsStore, rc.searchService)
+	rc.mux.Handle("GET /api/kb/{id}/workspace/presets", rc.kbViewChain(contentGenHandler.GetWorkspacePresets))
 
 	rc.mux.Handle("POST /api/kb/{id}/generate/cards", generateRL.Middleware(rc.kbViewChain(contentGenHandler.GenerateCards)))
 	rc.mux.Handle("POST /api/kb/{id}/generate/quiz", generateRL.Middleware(rc.kbViewChain(contentGenHandler.GenerateQuiz)))

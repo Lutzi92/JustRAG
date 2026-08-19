@@ -189,6 +189,7 @@ export const translations = {
     timeline: { de: 'Zeitleiste', en: 'Timeline' },
     quiz: { de: 'Quiz', en: 'Quiz' },
     mindMap: { de: 'Mindmap', en: 'Mind Map' },
+    workspace: { de: 'Workspace', en: 'Workspace' },
     mindMapLoading: { de: 'Wissensgraph wird geladen…', en: 'Loading knowledge graph…' },
     mindMapBuilding: { de: 'Wissensgraph wird aktualisiert…', en: 'Updating knowledge graph…' },
     graphExport: { de: 'Exportieren', en: 'Export' },
@@ -244,8 +245,6 @@ export const translations = {
     deleteAnalysis: { de: 'Analyse löschen', en: 'Delete Analysis' },
     saveSuccess: { de: 'Analyse erfolgreich gespeichert', en: 'Analysis saved successfully' },
     saveError: { de: 'Fehler beim Speichern', en: 'Error saving analysis' },
-    researchWorkspace: { de: 'Forschungs-Arbeitsplatz', en: 'Research Workspace' },
-    generatedContentHeader: { de: 'Generierte Inhalte', en: 'Generated Content' },
     close: { de: 'Schließen', en: 'Close' },
 
     // Research
@@ -282,8 +281,10 @@ export const translations = {
 
     // History
     history: { de: 'Verlauf', en: 'History' },
-    noHistory: { de: 'Noch kein Chat-Verlauf.', en: 'No chat history.' },
-    expandRightSidebar: { de: 'Rechte Leiste ausklappen', en: 'Expand right sidebar' },
+    noHistory: { de: 'Noch kein Verlauf vorhanden.', en: 'No history yet.' },
+    chat: { de: 'Chat', en: 'Chat' },
+    historyKindResearch: { de: 'Bericht', en: 'Report' },
+    historyKindAcademic: { de: 'Akademisch', en: 'Academic' },
 
     // Prompts & Alerts
     enterGenerationTopic: { de: 'Thema für die Generierung eingeben:', en: 'Enter topic for generation:' },
@@ -433,8 +434,6 @@ export const translations = {
     systemPromptLabel: { de: 'System-Prompt', en: 'System Prompt' },
     systemPromptDescription: { de: 'Gib dem Assistenten eine Persona, definiere den Ton oder lege fachspezifische Regeln fest. Die RAG-Anweisungen werden automatisch angewendet.', en: 'Give the assistant a persona, define its tone, or set domain-specific rules. The RAG retrieval instructions are applied automatically.' },
     systemPromptPlaceholder: { de: 'z.B. Du bist ein freundlicher Experte für Personalrecht. Antworte immer in einfacher Sprache und vermeide Fachjargon.', en: 'e.g. You are a friendly expert in employment law. Always answer in plain language and avoid jargon.' },
-    studioConfigLabel: { de: 'Studio-Funktionen', en: 'Studio Features' },
-    studioConfigDescription: { de: 'Wähle aus, welche Studio-Funktionen den Benutzern dieser Knowledge Base zur Verfügung stehen.', en: 'Choose which studio features are available to users of this Knowledge Base.' },
     fileManagement: { de: 'Dateiverwaltung', en: 'File Management' },
     uploadFiles: { de: 'Dateien hochladen', en: 'Upload files' },
     noFiles: { de: 'Noch keine Dateien hochgeladen.', en: 'No files uploaded yet.' },
@@ -488,6 +487,11 @@ export const translations = {
     copyToClipboard: { de: 'In Zwischenablage kopieren', en: 'Copy to clipboard' },
     exportDocx: { de: 'DOCX exportieren', en: 'Export DOCX' },
     downloadPdf: { de: 'PDF herunterladen', en: 'Download PDF' },
+    downloadAudio: { de: 'Audio herunterladen', en: 'Download Audio' },
+    downloadPptx: { de: 'PPTX herunterladen', en: 'Download PPTX' },
+    downloadSvg: { de: 'SVG herunterladen', en: 'Download SVG' },
+    presentationCreated: { de: 'Präsentation erstellt', en: 'Presentation created' },
+    noDataAvailable: { de: 'Keine Daten verfügbar', en: 'No data available' },
     analyzeWithAi: { de: 'Mit KI analysieren', en: 'Analyze with AI' },
     saveChanges: { de: 'Änderungen speichern', en: 'Save changes' },
     filters: { de: 'Filter', en: 'Filters' },
@@ -571,9 +575,10 @@ export const translations = {
     onboardingReopenTour: { de: 'Einführungstour öffnen', en: 'Open onboarding tour' },
 
     // Mobile Tab Bar
+    tabHistory: { de: 'Verlauf', en: 'History' },
     tabFiles: { de: 'Dateien', en: 'Files' },
     tabChat: { de: 'Chat', en: 'Chat' },
-    tabStudio: { de: 'Studio', en: 'Studio' },
+    tabWorkspace: { de: 'Workspace', en: 'Workspace' },
 
     // Footer & Legal Pages
     imprint: { de: 'Impressum', en: 'Imprint' },
@@ -608,8 +613,13 @@ export const translations = {
     switchLanguage: { de: 'Switch to English', en: 'Zu Deutsch wechseln' },
 
     // Sidebar
-    expandSidebar: { de: 'Seitenleiste ausklappen', en: 'Expand sidebar' },
-    collapseSidebar: { de: 'Leiste einklappen', en: 'Collapse sidebar' },
+    // Distinct per panel (not a shared expandSidebar/collapseSidebar) so a
+    // screen-reader user doesn't get two identically-named buttons — one for
+    // history (left), one for sources (right).
+    expandHistorySidebar: { de: 'Verlaufsleiste ausklappen', en: 'Expand history sidebar' },
+    collapseHistorySidebar: { de: 'Verlaufsleiste einklappen', en: 'Collapse history sidebar' },
+    expandSourcesSidebar: { de: 'Quellenleiste ausklappen', en: 'Expand sources sidebar' },
+    collapseSourcesSidebar: { de: 'Quellenleiste einklappen', en: 'Collapse sources sidebar' },
     goToHome: { de: 'Zur Startseite', en: 'Go to home' },
     sources: { de: 'Quellen', en: 'Sources' },
     selectSource: { de: 'Quelle auswählen', en: 'Select source' },
@@ -665,17 +675,20 @@ export const translations = {
     comparisonFileTooLarge: { de: 'Datei zu groß', en: 'File too large' },
     comparisonUnsupportedType: { de: 'Nicht unterstützter Dateityp', en: 'Unsupported file type' },
     comparisonNoText: { de: 'Konnte keinen Text aus der Datei extrahieren', en: 'Could not extract text from file' },
-    comparisonRemoveAttachment: { de: 'Anhang entfernen', en: 'Remove attachment' },
     comparisonModesLabel: { de: 'Vergleichsmodi', en: 'Comparison modes' },
-    comparisonSections: { de: 'Abschnitte', en: 'sections' },
     comparisonModeContradiction: { de: 'Widerspruch', en: 'Contradiction' },
     comparisonModeFormal: { de: 'Formal', en: 'Formal' },
     comparisonModeCompleteness: { de: 'Vollständigkeit', en: 'Completeness' },
     comparisonCitedKb: { de: 'WB', en: 'KB' },
     comparisonCitedFiles: { de: 'Dateien', en: 'Files' },
     comparisonDefaultMessage: { de: 'Vergleiche dieses Dokument mit der Wissensbasis', en: 'Compare this document against the knowledge base' },
+    // `comparisonAttach` is the paperclip's OWN imperative aria-label — kept
+    // as-is for anything still using it as an action label. The Workspace
+    // dialog's file field needs a noun, matching its siblings ("Vorlage",
+    // "Prompt", "Vergleichsmodi"), hence the separate key below.
     comparisonAttach: { de: 'Dokument zum Vergleich anhängen', en: 'Attach a document to compare' },
-    comparisonUploading: { de: 'Wird hochgeladen…', en: 'Uploading…' },
+    comparisonFileLabel: { de: 'Dokument', en: 'Document' },
+    documentComparison: { de: 'Dokumentenvergleich', en: 'Document comparison' },
     deleteFileError: { de: 'Fehler beim Löschen der Datei', en: 'Error deleting file' },
     downloadFileError: { de: 'Fehler beim Herunterladen der Datei. Bitte stelle sicher, dass du angemeldet bist.', en: 'Error downloading file. Please make sure you are logged in.' },
     downloadFailed: { de: 'Download fehlgeschlagen', en: 'Download failed' },
@@ -734,6 +747,7 @@ export const translations = {
     usersFetchError: { de: 'Fehler beim Laden der Benutzer', en: 'Error loading users' },
     roleChangeError: { de: 'Fehler beim Ändern der Rolle', en: 'Error changing role' },
     analysisError: { de: 'Analyse fehlgeschlagen. Bitte prüfe die Verbindung oder versuche es erneut.', en: 'Analysis failed. Please check your network or try again.' },
+    analysisDegradedNoAgent: { de: 'Ohne Agent erzeugt — die gewählte Auswahl war nicht mehr verfügbar.', en: 'Generated without an agent — the selection was no longer available.' },
     previewNotSupported: { de: 'Vorschau ist nur für Text-, Markdown- und PDF-Dateien verfügbar. Bitte lade die Datei herunter, um sie anzusehen.', en: 'Preview is only available for text, Markdown, and PDF files. Please download the file to view it.' },
     siteConfigFetchError: { de: 'Fehler beim Laden der Einstellungen', en: 'Error loading settings' },
     saveFailed: { de: 'Speichern fehlgeschlagen', en: 'Save failed' },
@@ -2121,6 +2135,10 @@ export const translations = {
     agentPickerStandard: { de: 'Standard (kein Agent)', en: 'Standard (no agent)' },
     agentPickerTeamsGroup: { de: 'Teams', en: 'Teams' },
     agentPickerAgentsGroup: { de: 'Agenten', en: 'Agents' },
+    promptPreset: { de: 'Vorlage', en: 'Preset' },
+    promptPresetOwn: { de: 'Eigene Eingabe', en: 'Custom' },
+    prompt: { de: 'Prompt', en: 'Prompt' },
+    start: { de: 'Starten', en: 'Start' },
     agentActiveChip: { de: 'Antwortet mit', en: 'Answering with' },
     membersCount: { de: 'Mitglieder', en: 'members' },
 };

@@ -9,9 +9,40 @@ import { useToast } from '../contexts/ToastContext';
 import { buildMessageMap, findDefaultLeaf } from '../utils/messageTree';
 import { useMessageTree } from './useMessageTree';
 import { useChatStream } from './useChatStream';
-import { useChatAttachment } from './useChatAttachment';
-import type { ComparisonMode } from '../components/ChatComparisonControls';
+import { useChatAttachment, type ChatAttachment } from './useChatAttachment';
 import type { AgentSelection } from './useKbSettings';
+
+// Kept local (not imported from the Workspace comparison dialog): this hook
+// sits below the dialog layer and must not import its union type (see
+// `startComparison`'s `modes: string[]` parameter below).
+type ComparisonMode = 'contradiction' | 'formal' | 'completeness';
+
+/**
+ * Pure helper for `startComparison`: turns an uploaded attachment + chosen
+ * modes + free-text instruction + agent/team choice into the
+ * (message, send-options) pair `useChatStream.handleSendMessage` expects.
+ * Extracted so it is testable without a `useChat` render harness (none
+ * exists yet for this hook).
+ *
+ * `agentSelection` travels in `opts`, not (only) through `setAgentSelection`
+ * state: `useChatStream.handleSendMessage`'s outgoing request is built
+ * synchronously from a closure captured before any `setAgentSelection` call
+ * can take effect (state updates land on the *next* render), so the state
+ * write alone would silently send the *previous* selection for this turn.
+ * See `useChatStream`'s `effectiveSelection`.
+ */
+export function buildComparisonSend(
+  attachment: ChatAttachment,
+  modes: string[],
+  instruction: string,
+  fallbackMessage: string,
+  agentSelection: AgentSelection,
+): { message: string; opts: { attachmentId: string; comparisonModes: string[]; agentSelection: AgentSelection } } {
+  return {
+    message: instruction.trim() || fallbackMessage,
+    opts: { attachmentId: attachment.attachmentId, comparisonModes: modes, agentSelection },
+  };
+}
 
 interface RawChatMessage {
   id: string;
@@ -344,6 +375,78 @@ export function useChat({
     await stream.handleSendMessage(e, userMessage, activeLeafId, editParentId, sendOpts);
   }, [userMessageInput, currentKb, loading, files, activeLeafId, stream, attachmentState.attachment, attachmentState.uploading, selectedModes, t]);
 
+  /**
+   * Starts a document comparison from the Workspace tile.
+   *
+   * The comparison stays a real chat turn — only its entry point moved 2026-08
+   * from the composer into a Workspace tile. That keeps follow-up questions
+   * about the uploaded document working unchanged in the resulting chat
+   * (backend: buildFollowUpContext) — the same property `handleSendMessage`
+   * preserved pre-rework by deliberately NOT clearing the attachment after a
+   * comparison send ("keep the attachment until the user removes it").
+   *
+   * Order here matters and is upload -> handleNewChat -> adopt -> send:
+   *  - upload FIRST, so a failed upload (413/415/422/503, see below) never
+   *    wipes the user's current chat for nothing;
+   *  - handleNewChat clears any attachment left over from the PREVIOUS chat
+   *    (via clearComparison) — required so an attachment can't leak across
+   *    chats — which also wipes the one we just uploaded;
+   *  - adopt immediately re-establishes it from the `uploaded` result
+   *    already in hand (no re-upload), so `attachmentState.attachment` is
+   *    populated again before any later render, and every follow-up
+   *    `handleSendMessage` in this new chat keeps sending its id.
+   *
+   * Returns whether the turn actually started, so the caller (the Workspace
+   * dialog) can keep itself open — and the composer's tab-switch un-done — on
+   * an upload failure (413/415/422/503) instead of closing silently. Before
+   * this fix wave, `attachmentState.error` had zero consumers: the composer's
+   * inline error line was deleted along with the composer entry point, and
+   * nothing replaced it, so a failed upload produced no feedback at all.
+   */
+  const startComparison = useCallback(async (input: {
+    file: File;
+    modes: string[];
+    instruction: string;
+    agentSelection: AgentSelection;
+  }): Promise<boolean> => {
+    if (!currentKb) return false;
+    const uploaded = await attachmentState.upload(input.file);
+    if (!uploaded) {
+      // attachmentState.errorRef (not the `error` *state*) is read here
+      // deliberately — see its doc comment in useChatAttachment.
+      toast.error(attachmentState.errorRef.current || t('comparisonUploadFailed'));
+      return false;
+    }
+
+    handleNewChat();
+    // Restore the attachment handleNewChat just cleared — see the ordering
+    // note in this function's doc comment above.
+    attachmentState.adopt(uploaded);
+    // Two separate writes for two separate turns:
+    //  - `opts.agentSelection` (via buildComparisonSend below) makes THIS
+    //    turn — the comparison itself — use the dialog's choice. It has to
+    //    travel through the send options because `setAgentSelection` only
+    //    takes effect on the next render, after this request is already
+    //    built (see buildComparisonSend's doc comment / useChatStream's
+    //    `effectiveSelection`).
+    //  - `setAgentSelection(input.agentSelection)` makes the choice STICK
+    //    for follow-up questions in the chat `handleNewChat()` just created
+    //    (e.g. "and what does policy 4 say about this?" after the findings
+    //    should get the same agent) — that's a later render/turn, where the
+    //    state write has long since landed.
+    setAgentSelection(input.agentSelection);
+
+    const { message, opts } = buildComparisonSend(uploaded, input.modes, input.instruction, t('comparisonDefaultMessage'), input.agentSelection);
+    await stream.handleSendMessage(
+      { preventDefault: () => {} } as React.FormEvent,
+      message,
+      null,
+      undefined,
+      opts,
+    );
+    return true;
+  }, [currentKb, attachmentState, handleNewChat, setAgentSelection, stream, t, toast]);
+
   const handleStartEdit = useCallback((messageId: string) => {
     setEditingMessageId(messageId);
   }, []);
@@ -475,6 +578,7 @@ export function useChat({
     handleEditSubmit,
     handleForkFromMessage,
     handleStartComparison,
+    startComparison,
     handleRegenerate,
     handleFollowUpClick,
     handleFeedback,
@@ -512,6 +616,7 @@ export function useChat({
     handleEditSubmit,
     handleForkFromMessage,
     handleStartComparison,
+    startComparison,
     handleRegenerate,
     handleFollowUpClick,
     handleFeedback,
