@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { API_BASE_URL } from '../api';
 import { getApiErrorMessage } from '../utils/apiError';
@@ -28,10 +28,16 @@ export function useChatAttachment(kbId: string, t?: Translator) {
   const [attachment, setAttachment] = useState<ChatAttachment | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Mirrors `error`, but readable synchronously right after `await upload()`
+  // resolves — a caller in the same tick (e.g. `startComparison`) still holds
+  // the pre-upload closure, so the `error` *state* it captured is always
+  // stale until the next render. Refs don't have that lag.
+  const errorRef = useRef<string | null>(null);
 
   const upload = useCallback(async (file: File): Promise<ChatAttachment | null> => {
     setUploading(true);
     setError(null);
+    errorRef.current = null;
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -66,6 +72,7 @@ export function useChatAttachment(kbId: string, t?: Translator) {
       }
       console.error('Attachment upload failed:', err);
       setError(msg);
+      errorRef.current = msg;
       return null;
     } finally {
       setUploading(false);
@@ -75,7 +82,8 @@ export function useChatAttachment(kbId: string, t?: Translator) {
   const clear = useCallback(() => {
     setAttachment(null);
     setError(null);
+    errorRef.current = null;
   }, []);
 
-  return { attachment, uploading, error, upload, clear };
+  return { attachment, uploading, error, errorRef, upload, clear };
 }

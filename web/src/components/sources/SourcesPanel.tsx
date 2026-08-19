@@ -110,8 +110,8 @@ const SourcesPanelComp: React.FC = () => {
             width={sidebar.rightSidebarWidth}
             onExpand={() => sidebar.setIsRightSidebarOpen(true)}
             onCollapse={() => sidebar.setIsRightSidebarOpen(false)}
-            expandLabel={t('expandSidebar')}
-            collapseLabel={t('collapseSidebar')}
+            expandLabel={t('expandSourcesSidebar')}
+            collapseLabel={t('collapseSourcesSidebar')}
             collapsedPreview={
                 <>
                     <div className="sidebar-ui__collapsed-divider" />

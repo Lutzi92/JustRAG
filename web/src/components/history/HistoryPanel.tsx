@@ -80,8 +80,8 @@ const HistoryPanelComp: React.FC = () => {
             width={sidebar.leftSidebarWidth}
             onExpand={() => sidebar.setIsLeftSidebarOpen(true)}
             onCollapse={() => sidebar.setIsLeftSidebarOpen(false)}
-            expandLabel={t('expandSidebar')}
-            collapseLabel={t('collapseSidebar')}
+            expandLabel={t('expandHistorySidebar')}
+            collapseLabel={t('collapseHistorySidebar')}
             collapsedPreview={
                 <>
                     <div className="sidebar-ui__collapsed-divider" />

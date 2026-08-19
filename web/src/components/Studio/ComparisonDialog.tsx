@@ -42,6 +42,7 @@ export function ComparisonDialog({ open, kbId, presets, busy, onStart, onClose }
       kbId={kbId}
       busy={busy}
       submitDisabled={!file || modes.length === 0}
+      requirePrompt={false}
       onClose={onClose}
       onSubmit={({ prompt, agentSelection }) => {
         if (!file) return;
@@ -49,7 +50,7 @@ export function ComparisonDialog({ open, kbId, presets, busy, onStart, onClose }
       }}
       extraFields={
         <>
-          <label htmlFor="comparison-file" className="form-hint workspace-dialog__label">{t('comparisonAttach')}</label>
+          <label htmlFor="comparison-file" className="form-hint workspace-dialog__label">{t('comparisonFileLabel')}</label>
           <input
             id="comparison-file"
             type="file"

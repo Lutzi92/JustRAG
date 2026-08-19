@@ -670,7 +670,7 @@ func (h *Handler) tryDeepChat(
 					}
 				}
 				tp := BuildTeamParams(ctx, TeamParamsInput{
-					KbID: kbID, ChatID: chatID, Query: body.Message, Language: lang,
+					KbID: kbID, ChatID: chatID, Query: searchQuery, Language: lang,
 					CurrentDateLine: dateLine, KbSystemPrompt: teamSummaryPrompt,
 					FileIDs: body.SelectedFileIDs,
 					Team:    teamSel.team, Agent: teamSel.agent,

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import type { TouchEvent as ReactTouchEvent } from 'react';
-import { useViewState } from './useViewState';
+import { useState } from 'react';
+import type { Dispatch, SetStateAction, TouchEvent as ReactTouchEvent } from 'react';
+import { useViewState, type KbViewType } from './useViewState';
 
 // Minimal fake touch events matching what useSwipeGesture reads
 // (touches[0].clientX/clientY on start, changedTouches[0].clientX/clientY on
@@ -13,12 +14,25 @@ function touchEnd(x: number): ReactTouchEvent {
   return { changedTouches: [{ clientX: x, clientY: 0 }] } as unknown as ReactTouchEvent;
 }
 
-function setup() {
+// Backs `kbView` with real React state (like AuthenticatedApp does), not a
+// bare vi.fn() spy — useViewState's swipe handlers now read `kbView` on every
+// render to derive the swipe's starting tab (see `deriveActiveMobileTab`), so
+// a call to `setKbView` has to actually feed back into the next render for
+// the multi-swipe tests below to track real app behavior. `setKbViewSpy`
+// still lets tests assert on individual calls the way the plain vi.fn() did.
+function setup(initialKbView: KbViewType = 'chat') {
   const setView = vi.fn();
-  const setKbView = vi.fn();
+  const setKbViewSpy = vi.fn();
   const setShowSettings = vi.fn();
-  const { result } = renderHook(() => useViewState({ setView, setKbView, setShowSettings }));
-  return { result, setKbView };
+  const { result } = renderHook(() => {
+    const [kbView, setKbViewState] = useState<KbViewType>(initialKbView);
+    const setKbView: Dispatch<SetStateAction<KbViewType>> = (v) => {
+      setKbViewSpy(v);
+      setKbViewState(v);
+    };
+    return useViewState({ setView, kbView, setKbView, setShowSettings });
+  });
+  return { result, setKbView: setKbViewSpy };
 }
 
 // dx = end.x - start.x. dx < 0 (drag left) triggers onSwipeLeft, which in
@@ -105,5 +119,31 @@ describe('useViewState swipe navigation', () => {
     swipeLeft(result); // files -> files (Grenze)
     expect(result.current.mobileTab).toBe('files');
     expect(setKbView).not.toHaveBeenCalled();
+  });
+
+  // Fix wave item 4: ChatView's own Workspace tab (icon-only on mobile) calls
+  // setKbView('workspace') directly, bypassing applyTab — so mobileTab can
+  // stay at its default 'chat' while kbView is already 'workspace'. Before
+  // this fix, swipeLeft/swipeRight indexed TAB_ORDER by the stale mobileTab
+  // ('chat') instead of the displayed tab ('workspace'), leaving a left swipe
+  // dead (it "advanced" to the already-shown workspace tab) and a right swipe
+  // skipping straight past chat to history.
+  describe('driftete mobileTab/kbView (ChatViews eigener Workspace-Tab)', () => {
+    it('Swipe links folgt dem angezeigten Tab (workspace) statt dem veralteten mobileTab (chat)', () => {
+      const { result, setKbView } = setup('workspace');
+      expect(result.current.mobileTab).toBe('chat'); // roher State, gedriftet
+
+      swipeLeft(result);
+      expect(result.current.mobileTab).toBe('files');
+      expect(setKbView).not.toHaveBeenCalled();
+    });
+
+    it('Swipe rechts kehrt von workspace zu chat zurück, statt chat zu überspringen', () => {
+      const { result, setKbView } = setup('workspace');
+
+      swipeRight(result);
+      expect(result.current.mobileTab).toBe('chat');
+      expect(setKbView).toHaveBeenCalledWith('chat');
+    });
   });
 });

@@ -21,6 +21,14 @@ export interface WorkspacePromptDialogProps {
   extraFields?: React.ReactNode;
   /** Sperrt „Start“, z. B. solange keine Datei gewählt ist. */
   submitDisabled?: boolean;
+  /**
+   * Ob ein nicht-leeres Prompt-Feld Voraussetzung für „Start“ ist. Default
+   * `true` (Verhalten von „Neue Analyse“). Der Vergleichsdialog setzt dies auf
+   * `false`: Datei + Modi sind dort ausreichende Absicht, das Prompt-Feld ist
+   * nur eine optionale zusätzliche Anweisung (siehe `buildComparisonSend`s
+   * `fallbackMessage`, die genau diesen leeren Fall trägt).
+   */
+  requirePrompt?: boolean;
   busy?: boolean;
   onSubmit: (value: { prompt: string; agentSelection: AgentSelection }) => void;
   onClose: () => void;
@@ -50,7 +58,7 @@ const NO_SELECTION: AgentSelection = {};
  */
 export function WorkspacePromptDialog({
   open, title, submitLabel, presets, kbId, extraFields,
-  submitDisabled, busy, onSubmit, onClose,
+  submitDisabled, requirePrompt = true, busy, onSubmit, onClose,
 }: WorkspacePromptDialogProps) {
   const { t } = useTheme();
   const options = useKbAgents(kbId);
@@ -136,7 +144,7 @@ export function WorkspacePromptDialog({
           <button
             type="button"
             className="send-button"
-            disabled={busy || submitDisabled || !prompt.trim()}
+            disabled={busy || submitDisabled || (requirePrompt && !prompt.trim())}
             onClick={() => onSubmit({ prompt: prompt.trim(), agentSelection: selection })}
           >
             {submitLabel}

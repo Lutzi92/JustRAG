@@ -7,6 +7,7 @@ import { SourcesPanel } from './sources/SourcesPanel';
 import { HistoryPanel } from './history/HistoryPanel';
 import { ChatView } from './ChatView';
 import { MobileTabBar, type MobileTab } from './MobileTabBar';
+import { deriveActiveMobileTab } from '../utils/activeMobileTab';
 
 interface KbWorkspaceLayoutProps {
   mobileTab: MobileTab;
@@ -42,10 +43,11 @@ export function KbWorkspaceLayout({ mobileTab, setMobileTab, swipeHandlers }: Kb
   // Ohne diese Ableitung konnte ChatViews eigene Kopfleiste (die auf Mobil
   // unbedingt rendert und setKbView direkt ruft) den Inhalt umschalten,
   // während die untere Leiste auf dem alten Reiter stehen blieb.
-  const activeMobileTab: MobileTab =
-    mobileTab === 'history' || mobileTab === 'files'
-      ? mobileTab
-      : kbView === 'workspace' ? 'workspace' : 'chat';
+  //
+  // `useViewState`'s swipe handlers apply the same derivation (via the same
+  // shared helper) when computing where a swipe starts — otherwise the swipe
+  // cursor drifts from what's actually on screen in exactly that state.
+  const activeMobileTab: MobileTab = deriveActiveMobileTab(mobileTab, kbView);
 
   if (isMobile) {
     return (

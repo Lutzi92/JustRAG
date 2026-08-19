@@ -121,7 +121,7 @@ function AuthenticatedAppInner() {
 
   // New extracted hooks
   const kbSettings = useKbSettings();
-  const viewState = useViewState({ setView, setKbView, setShowSettings: kbSettings.setShowSettings });
+  const viewState = useViewState({ setView, kbView, setKbView, setShowSettings: kbSettings.setShowSettings });
 
   // Onboarding Tour
   const [showOnboarding, setShowOnboarding] = useState(() => !localStorage.getItem('onboardingCompleted'));

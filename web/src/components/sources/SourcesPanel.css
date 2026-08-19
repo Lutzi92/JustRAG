@@ -84,15 +84,6 @@
   border-color: transparent;
 }
 
-.sidebar-left__collapse-btn {
-  display: flex;
-  align-items: center;
-  color: var(--text-secondary);
-  cursor: pointer;
-  background: none;
-  border: none;
-}
-
 .sidebar-left__files-section {
   flex: 1;
   overflow-y: auto;
@@ -327,10 +318,6 @@
   font-size: 0.8rem;
   font-weight: 500;
   color: var(--text-secondary);
-}
-
-.sidebar-left--mobile {
-  border-right: none;
 }
 
 @media (max-width: 1023px) {

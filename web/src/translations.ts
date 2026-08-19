@@ -239,8 +239,6 @@ export const translations = {
     deleteAnalysis: { de: 'Analyse löschen', en: 'Delete Analysis' },
     saveSuccess: { de: 'Analyse erfolgreich gespeichert', en: 'Analysis saved successfully' },
     saveError: { de: 'Fehler beim Speichern', en: 'Error saving analysis' },
-    researchWorkspace: { de: 'Forschungs-Arbeitsplatz', en: 'Research Workspace' },
-    generatedContentHeader: { de: 'Generierte Inhalte', en: 'Generated Content' },
     close: { de: 'Schließen', en: 'Close' },
 
     // Research
@@ -277,11 +275,10 @@ export const translations = {
 
     // History
     history: { de: 'Verlauf', en: 'History' },
-    noHistory: { de: 'Noch kein Chat-Verlauf.', en: 'No chat history.' },
+    noHistory: { de: 'Noch kein Verlauf vorhanden.', en: 'No history yet.' },
     chat: { de: 'Chat', en: 'Chat' },
     historyKindResearch: { de: 'Bericht', en: 'Report' },
-    historyKindAcademic: { de: 'Academic', en: 'Academic' },
-    expandRightSidebar: { de: 'Rechte Leiste ausklappen', en: 'Expand right sidebar' },
+    historyKindAcademic: { de: 'Akademisch', en: 'Academic' },
 
     // Prompts & Alerts
     enterGenerationTopic: { de: 'Thema für die Generierung eingeben:', en: 'Enter topic for generation:' },
@@ -463,6 +460,11 @@ export const translations = {
     copyToClipboard: { de: 'In Zwischenablage kopieren', en: 'Copy to clipboard' },
     exportDocx: { de: 'DOCX exportieren', en: 'Export DOCX' },
     downloadPdf: { de: 'PDF herunterladen', en: 'Download PDF' },
+    downloadAudio: { de: 'Audio herunterladen', en: 'Download Audio' },
+    downloadPptx: { de: 'PPTX herunterladen', en: 'Download PPTX' },
+    downloadSvg: { de: 'SVG herunterladen', en: 'Download SVG' },
+    presentationCreated: { de: 'Präsentation erstellt', en: 'Presentation created' },
+    noDataAvailable: { de: 'Keine Daten verfügbar', en: 'No data available' },
     analyzeWithAi: { de: 'Mit KI analysieren', en: 'Analyze with AI' },
     saveChanges: { de: 'Änderungen speichern', en: 'Save changes' },
     filters: { de: 'Filter', en: 'Filters' },
@@ -582,8 +584,13 @@ export const translations = {
     switchLanguage: { de: 'Switch to English', en: 'Zu Deutsch wechseln' },
 
     // Sidebar
-    expandSidebar: { de: 'Seitenleiste ausklappen', en: 'Expand sidebar' },
-    collapseSidebar: { de: 'Leiste einklappen', en: 'Collapse sidebar' },
+    // Distinct per panel (not a shared expandSidebar/collapseSidebar) so a
+    // screen-reader user doesn't get two identically-named buttons — one for
+    // history (left), one for sources (right).
+    expandHistorySidebar: { de: 'Verlaufsleiste ausklappen', en: 'Expand history sidebar' },
+    collapseHistorySidebar: { de: 'Verlaufsleiste einklappen', en: 'Collapse history sidebar' },
+    expandSourcesSidebar: { de: 'Quellenleiste ausklappen', en: 'Expand sources sidebar' },
+    collapseSourcesSidebar: { de: 'Quellenleiste einklappen', en: 'Collapse sources sidebar' },
     goToHome: { de: 'Zur Startseite', en: 'Go to home' },
     sources: { de: 'Quellen', en: 'Sources' },
     selectSource: { de: 'Quelle auswählen', en: 'Select source' },
@@ -646,7 +653,12 @@ export const translations = {
     comparisonCitedKb: { de: 'WB', en: 'KB' },
     comparisonCitedFiles: { de: 'Dateien', en: 'Files' },
     comparisonDefaultMessage: { de: 'Vergleiche dieses Dokument mit der Wissensbasis', en: 'Compare this document against the knowledge base' },
+    // `comparisonAttach` is the paperclip's OWN imperative aria-label — kept
+    // as-is for anything still using it as an action label. The Workspace
+    // dialog's file field needs a noun, matching its siblings ("Vorlage",
+    // "Prompt", "Vergleichsmodi"), hence the separate key below.
     comparisonAttach: { de: 'Dokument zum Vergleich anhängen', en: 'Attach a document to compare' },
+    comparisonFileLabel: { de: 'Dokument', en: 'Document' },
     documentComparison: { de: 'Dokumentenvergleich', en: 'Document comparison' },
     deleteFileError: { de: 'Fehler beim Löschen der Datei', en: 'Error deleting file' },
     downloadFileError: { de: 'Fehler beim Herunterladen der Datei. Bitte stelle sicher, dass du angemeldet bist.', en: 'Error downloading file. Please make sure you are logged in.' },

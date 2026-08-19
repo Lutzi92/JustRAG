@@ -382,16 +382,28 @@ export function useChat({
    * from the composer into a Workspace tile. That keeps follow-up questions
    * about the uploaded document working unchanged in the resulting chat
    * (backend: buildFollowUpContext).
+   *
+   * Returns whether the turn actually started, so the caller (the Workspace
+   * dialog) can keep itself open — and the composer's tab-switch un-done — on
+   * an upload failure (413/415/422/503) instead of closing silently. Before
+   * this fix wave, `attachmentState.error` had zero consumers: the composer's
+   * inline error line was deleted along with the composer entry point, and
+   * nothing replaced it, so a failed upload produced no feedback at all.
    */
   const startComparison = useCallback(async (input: {
     file: File;
     modes: string[];
     instruction: string;
     agentSelection: AgentSelection;
-  }) => {
-    if (!currentKb) return;
+  }): Promise<boolean> => {
+    if (!currentKb) return false;
     const uploaded = await attachmentState.upload(input.file);
-    if (!uploaded) return; // upload() already reported the failure via attachmentState.error
+    if (!uploaded) {
+      // attachmentState.errorRef (not the `error` *state*) is read here
+      // deliberately — see its doc comment in useChatAttachment.
+      toast.error(attachmentState.errorRef.current || t('comparisonUploadFailed'));
+      return false;
+    }
 
     handleNewChat();
     // Two separate writes for two separate turns:
@@ -416,7 +428,8 @@ export function useChat({
       undefined,
       opts,
     );
-  }, [currentKb, attachmentState, handleNewChat, setAgentSelection, stream, t]);
+    return true;
+  }, [currentKb, attachmentState, handleNewChat, setAgentSelection, stream, t, toast]);
 
   const handleStartEdit = useCallback((messageId: string) => {
     setEditingMessageId(messageId);

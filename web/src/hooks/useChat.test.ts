@@ -30,6 +30,11 @@ const setAgentSelection = vi.fn();
 const streamSend = vi.fn();
 const uploadMock = vi.fn();
 const clearMock = vi.fn();
+const toastError = vi.fn();
+// A real ref-like object (not a vi.fn()) — `startComparison` reads
+// `errorRef.current` synchronously right after `await upload()` resolves.
+// See useChatAttachment.ts's doc comment on why `error` state can't do this.
+const attachmentErrorRef: { current: string | null } = { current: null };
 
 vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({ language: 'de', t: (key: string) => key }),
@@ -38,7 +43,7 @@ vi.mock('../contexts/ModalContext', () => ({
   useModalContext: () => ({ showConfirm: vi.fn() }),
 }));
 vi.mock('../contexts/ToastContext', () => ({
-  useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
+  useToast: () => ({ success: vi.fn(), error: toastError, warning: vi.fn(), info: vi.fn() }),
 }));
 vi.mock('./useChatStream', () => ({
   useChatStream: () => ({
@@ -53,6 +58,7 @@ vi.mock('./useChatAttachment', () => ({
     attachment: null,
     uploading: false,
     error: null,
+    errorRef: attachmentErrorRef,
     upload: uploadMock,
     clear: clearMock,
   }),
@@ -74,6 +80,7 @@ function renderUseChat() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  attachmentErrorRef.current = null;
 });
 
 describe('useChat.startComparison', () => {
@@ -129,6 +136,50 @@ describe('useChat.startComparison', () => {
 
     expect(streamSend).not.toHaveBeenCalled();
     expect(setAgentSelection).not.toHaveBeenCalled();
+  });
+
+  // Fix wave item 3: before this fix, a failed upload closed the dialog and
+  // switched to Chat with zero user-visible feedback — attachmentState.error
+  // had no consumer. Now startComparison must (a) surface the error via a
+  // toast and (b) report failure back to the caller so the Workspace dialog
+  // stays open instead of closing on a silent failure.
+  it('zeigt einen Toast mit der Upload-Fehlermeldung und meldet false zurück', async () => {
+    uploadMock.mockImplementationOnce(async () => {
+      attachmentErrorRef.current = 'Datei zu groß';
+      return null;
+    });
+    const { result } = renderUseChat();
+
+    let started: boolean | undefined;
+    await act(async () => {
+      started = await result.current.startComparison({
+        file: new File(['x'], 'zu-gross.docx'),
+        modes: ['contradiction'],
+        instruction: 'x',
+        agentSelection: { teamId: 't1' },
+      });
+    });
+
+    expect(started).toBe(false);
+    expect(toastError).toHaveBeenCalledWith('Datei zu groß');
+    expect(streamSend).not.toHaveBeenCalled();
+  });
+
+  it('meldet true zurück, wenn der Vergleich tatsächlich gestartet wurde', async () => {
+    uploadMock.mockResolvedValueOnce({ attachmentId: 'att1', filename: 'x.docx', sectionCount: 1, charCount: 10 });
+    const { result } = renderUseChat();
+
+    let started: boolean | undefined;
+    await act(async () => {
+      started = await result.current.startComparison({
+        file: new File(['x'], 'x.docx'),
+        modes: ['contradiction'],
+        instruction: 'x',
+        agentSelection: {},
+      });
+    });
+
+    expect(started).toBe(true);
   });
 });
 

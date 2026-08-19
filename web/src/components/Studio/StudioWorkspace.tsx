@@ -11,6 +11,10 @@ import {
 import type { GeneratedContent } from '../../types';
 import { isMarkdownArtifact } from '../../utils/artifactTypes';
 import { QuizView } from './QuizView';
+import { FlashcardsArtifact } from './FlashcardsArtifact';
+import { PresentationArtifact } from './PresentationArtifact';
+import { PodcastArtifact } from './PodcastArtifact';
+import { ChartArtifact } from './ChartArtifact';
 import { API_BASE_URL } from '../../api';
 import { MarkdownEditor } from './MarkdownEditor';
 import { WorkspacePromptDialog } from './WorkspacePromptDialog';
@@ -34,8 +38,10 @@ interface StudioWorkspaceProps {
     onAnalysisCreated?: (item: GeneratedContent) => void;
     /** Called when the "Document comparison" tile's dialog is submitted; the
      * caller owns starting the comparison chat turn (`chat.startComparison`)
-     * and switching to the chat view. */
-    onStartComparison?: (v: { file: File; modes: string[]; instruction: string; agentSelection: AgentSelection }) => void;
+     * and switching to the chat view. Resolves to whether the turn actually
+     * started — `false` on an upload failure (413/415/422/503), in which case
+     * the dialog stays open instead of closing on a silent failure. */
+    onStartComparison?: (v: { file: File; modes: string[]; instruction: string; agentSelection: AgentSelection }) => Promise<boolean> | boolean | void;
 }
 
 // `generatedContent` and `onDeleteContent` are accepted for interface
@@ -54,6 +60,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     const toast = useToast();
     const [editorContent, setEditorContent] = useState('');
     const [showComparison, setShowComparison] = useState(false);
+    const [isComparing, setIsComparing] = useState(false);
 
     // When selection changes, update editor content if it's an analysis or abstract
     useEffect(() => {
@@ -385,7 +392,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     background: 'var(--bg-primary)'
                 }}>
                     <h3 style={{ margin: 0 }}>
-                        {selectedItem ? selectedItem.title : t('studio')}
+                        {selectedItem ? selectedItem.title : t('workspace')}
                     </h3>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -443,6 +450,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                     </div>
                 </header>
 
+                {degradedReason && (
+                    <div className="workspace-degraded" role="status">
+                        {t('analysisDegradedNoAgent')}
+                    </div>
+                )}
+
                 <div style={{ flex: 1, display: 'flex', overflow: 'hidden', padding: '2rem' }}>
                     {(selectedItem && isMarkdownArtifact(selectedItem.type)) ? (
                         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -473,27 +486,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                             width: '100%'
                         }}>
                             {selectedItem.type === 'flashcards' && (
-                                <div>
-                                    {(selectedItem.content as Array<{ front: string; back: string }>).map((card, idx) => (
-                                        <div key={idx} style={{
-                                            background: 'var(--bg-primary)',
-                                            padding: '1rem',
-                                            marginBottom: '1rem',
-                                            borderRadius: '8px',
-                                            border: '1px solid var(--border-color)'
-                                        }}>
-                                            <strong>F: {card.front}</strong>
-                                            <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px dashed var(--border-color)' }}>
-                                                A: {card.back}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
+                                <FlashcardsArtifact id={selectedItem.id} content={selectedItem.content} />
                             )}
                             {selectedItem.type === 'quiz' && Array.isArray(selectedItem.content) && (
                                 <QuizView items={selectedItem.content} />
                             )}
-                            {selectedItem.type !== 'flashcards' && !(selectedItem.type === 'quiz' && Array.isArray(selectedItem.content)) && (
+                            {selectedItem.type === 'podcast' && (
+                                <PodcastArtifact id={selectedItem.id} content={selectedItem.content} />
+                            )}
+                            {selectedItem.type === 'presentation' && (
+                                <PresentationArtifact id={selectedItem.id} content={selectedItem.content} />
+                            )}
+                            {selectedItem.type === 'chart' && (
+                                <ChartArtifact content={selectedItem.content} title={selectedItem.title} />
+                            )}
+                            {!['flashcards', 'quiz', 'podcast', 'presentation', 'chart'].includes(selectedItem.type) && (
                                 <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.9rem', fontFamily: 'inherit' }}>
                                     {JSON.stringify(selectedItem.content, null, 2)}
                                 </pre>
@@ -565,18 +572,21 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 open={showComparison}
                 kbId={kbId}
                 presets={presets.comparison}
-                onStart={(v) => {
-                    setShowComparison(false);
-                    onStartComparison?.(v);
+                busy={isComparing}
+                onStart={async (v) => {
+                    setIsComparing(true);
+                    try {
+                        // Keep the dialog open on a failed upload (413/415/422/503)
+                        // instead of closing silently — onStartComparison resolves
+                        // to whether the turn actually started.
+                        const started = await onStartComparison?.(v);
+                        if (started !== false) setShowComparison(false);
+                    } finally {
+                        setIsComparing(false);
+                    }
                 }}
                 onClose={() => setShowComparison(false)}
             />
-
-            {degradedReason && (
-                <div className="workspace-degraded" role="status">
-                    {t('analysisDegradedNoAgent')}
-                </div>
-            )}
         </div>
     );
 };

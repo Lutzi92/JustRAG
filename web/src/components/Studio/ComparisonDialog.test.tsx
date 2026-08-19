@@ -15,7 +15,7 @@ const presets = [{ label: 'Abweichungen', prompt: 'Fasse die Abweichungen zusamm
 const base = { open: true, kbId: 'kb1', presets, onStart: vi.fn(), onClose: vi.fn() };
 const pickFile = async () => {
   await userEvent.upload(
-    screen.getByLabelText('comparisonAttach'),
+    screen.getByLabelText('comparisonFileLabel'),
     new File(['x'], 'entwurf.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
   );
 };
@@ -36,6 +36,21 @@ describe('ComparisonDialog', () => {
     // 'contradiction' ist vorbelegt; abwählen leert die Menge.
     await userEvent.click(screen.getByRole('button', { name: 'comparisonModeContradiction' }));
     expect(screen.getByRole('button', { name: 'start' })).toBeDisabled();
+  });
+
+  // Fix wave M1: the old composer allowed starting a comparison with an
+  // attachment + modes and an empty message box — `buildComparisonSend`'s
+  // `fallbackMessage` exists for exactly this case. The dialog previously
+  // inherited WorkspacePromptDialog's `!prompt.trim()` guard unconditionally,
+  // making that fallback path unreachable from the UI.
+  it('lässt Start ohne Prompt zu, wenn Datei und Modus gewählt sind', async () => {
+    const onStart = vi.fn();
+    render(<ComparisonDialog {...base} onStart={onStart} />);
+    await pickFile();
+    expect(screen.getByRole('button', { name: 'start' })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'start' }));
+    expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ instruction: '' }));
   });
 
   it('reicht Datei, Modi, Prompt und Agent-Auswahl durch', async () => {
