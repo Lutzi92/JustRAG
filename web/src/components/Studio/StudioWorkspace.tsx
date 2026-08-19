@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import axios from 'axios';
 import {
     Minimize2,
-    Type, Layout, Mic, X, Check,
+    Type, Layout, Mic, Check,
     FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks, BarChart3
 } from 'lucide-react';
 import type { GeneratedContent } from '../../types';
@@ -13,6 +13,9 @@ import { isMarkdownArtifact } from '../../utils/artifactTypes';
 import { QuizView } from './QuizView';
 import { API_BASE_URL } from '../../api';
 import { MarkdownEditor } from './MarkdownEditor';
+import { WorkspacePromptDialog } from './WorkspacePromptDialog';
+import { useWorkspacePresets } from '../../hooks/useWorkspacePresets';
+import type { AgentSelection } from '../../hooks/useKbSettings';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useToast } from '../../contexts/ToastContext';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -25,6 +28,9 @@ interface StudioWorkspaceProps {
     onClose: () => void;
     selectedItem: GeneratedContent | null;
     hasFiles?: boolean;
+    /** Called after a successful "New analysis" run with the created record;
+     * the caller owns reloading the artifact list and opening the item. */
+    onAnalysisCreated?: (item: GeneratedContent) => void;
 }
 
 // `generatedContent` and `onDeleteContent` are accepted for interface
@@ -35,7 +41,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     onGenerate: onGenerateParent,
     onClose,
     selectedItem,
-    hasFiles = true
+    hasFiles = true,
+    onAnalysisCreated,
 }) => {
     const { t, language } = useTheme();
     const toast = useToast();
@@ -51,32 +58,53 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     // Analysis State
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
-    const [analysisInstruction, setAnalysisInstruction] = useState('');
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const presets = useWorkspacePresets(kbId, language || 'de');
 
     const handleAnalyzeRequest = () => {
         setShowAnalysisModal(true);
-        setAnalysisInstruction('');
     };
 
-    const performAnalysis = async () => {
-        if (!analysisInstruction.trim()) return;
+    // Fail-soft hint: the backend still produces an analysis even when the
+    // requested agent/team could no longer be used, and reports why via
+    // `degradedReason`. It is bound to the id of the artifact it describes
+    // (`degradedForId`), not shown unconditionally, so that:
+    //  - selecting the freshly created artifact (which `onAnalysisCreated`
+    //    drives from the parent, landing here as a `selectedItem` prop change
+    //    in the same update as the reason itself) does NOT wipe the hint —
+    //    without the id check, the effect below would race the prop change
+    //    and clear the hint before it is ever seen;
+    //  - navigating to any OTHER artifact afterwards does clear it, so the
+    //    warning can never end up attached to an unrelated item.
+    const [degradedReason, setDegradedReason] = useState('');
+    const degradedForId = useRef<string | null>(null);
+    useEffect(() => {
+        if ((selectedItem?.id ?? null) !== degradedForId.current) {
+            setDegradedReason('');
+        }
+    }, [selectedItem?.id]);
+
+    const runAnalysis = async ({ prompt, agentSelection }: { prompt: string; agentSelection: AgentSelection }) => {
         setIsAnalyzing(true);
         setShowAnalysisModal(false);
-
+        setDegradedReason('');
+        degradedForId.current = null;
         try {
             const res = await axios.post(`${API_BASE_URL}/api/kb/${kbId}/generate/analysis`, {
-                topic: analysisInstruction,
-                language: language || 'de'
+                topic: prompt,
+                language: language || 'de',
+                ...(agentSelection.teamId ? { teamId: agentSelection.teamId } : {}),
+                ...(agentSelection.agentId ? { agentId: agentSelection.agentId } : {}),
             });
-
-            const newItem = res.data;
-            if (!newItem?.id) {
+            const record = res.data?.record;
+            if (!record?.id) {
                 toast.error(t('analysisError'));
                 return;
             }
-            // Selection is controlled by the `selectedItem` prop; the parent
-            // refreshes generatedContent and drives selection of the new item.
+            const reason = res.data?.degradedReason || '';
+            setDegradedReason(reason);
+            degradedForId.current = reason ? record.id : null;
+            onAnalysisCreated?.(record);
         } catch (err: unknown) {
             console.error('Analysis failed:', err);
             const axiosErr = err as { response?: { data?: { error?: string } } };
@@ -510,120 +538,20 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 </div>
             </div>
 
-            {/* Analysis Modal */}
-            {showAnalysisModal && (
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    background: 'rgba(0,0,0,0.5)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 1000
-                }}
-                    // Backdrop click-to-close is a mouse convenience redundant with the
-                    // modal's close button; only clicks on the backdrop itself dismiss.
-                    role="presentation"
-                    onClick={(e) => { if (e.target === e.currentTarget) setShowAnalysisModal(false); }}
-                >
-                    <div style={{
-                        background: 'var(--bg-primary)',
-                        padding: '2rem',
-                        borderRadius: '12px',
-                        width: '500px',
-                        maxWidth: '90%',
-                        boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
-                        border: '1px solid var(--border-color)'
-                    }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                            <h3 style={{ margin: 0 }}>{t('deepAnalysis')}</h3>
-                            <button onClick={() => setShowAnalysisModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-                                <X size={20} />
-                            </button>
-                        </div>
+            <WorkspacePromptDialog
+                open={showAnalysisModal}
+                title={t('newAnalysis')}
+                submitLabel={t('start')}
+                presets={presets.analysis}
+                kbId={kbId}
+                busy={isAnalyzing}
+                onSubmit={runAnalysis}
+                onClose={() => setShowAnalysisModal(false)}
+            />
 
-                        <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                            {t('deepAnalysisDescription')}
-                        </p>
-
-                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-                            {[
-                                { label: t('compareSources'), value: "Vergleiche Quellen" },
-                                { label: t('criticalAnalysis'), value: "Kritische Analyse" },
-                                { label: t('extractMethodology'), value: "Methodik extrahieren" },
-                                { label: t('summary'), value: "Zusammenfassung" }
-                            ].map(p => (
-                                <button
-                                    key={p.value}
-                                    onClick={() => setAnalysisInstruction(p.value)}
-                                    className="studio-gen-btn"
-                                    style={{
-                                        justifyContent: 'center',
-                                        flex: '1 1 auto'
-                                    }}
-                                >
-                                    {p.label}
-                                </button>
-                            ))}
-                        </div>
-
-                        <textarea
-                            value={analysisInstruction}
-                            onChange={(e) => setAnalysisInstruction(e.target.value)}
-                            placeholder={t('deepAnalysisPlaceholder')}
-                            style={{
-                                width: '100%',
-                                height: '100px',
-                                padding: '0.75rem',
-                                marginBottom: '1.5rem',
-                                borderRadius: '8px',
-                                border: '1px solid var(--border-color)',
-                                background: 'var(--bg-secondary)',
-                                color: 'var(--text-primary)',
-                                resize: 'none'
-                            }}
-                            // eslint-disable-next-line jsx-a11y/no-autofocus -- focus first field on dialog open (WAI-ARIA dialog pattern)
-                            autoFocus
-                        />
-
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-                            <button
-                                onClick={() => setShowAnalysisModal(false)}
-                                style={{
-                                    padding: '0.75rem 1.5rem',
-                                    borderRadius: '8px',
-                                    border: '1px solid var(--border-color)',
-                                    background: 'transparent',
-                                    cursor: 'pointer',
-                                    color: 'var(--text-primary)'
-                                }}
-                            >
-                                {t('cancel')}
-                            </button>
-                            <button
-                                onClick={performAnalysis}
-                                disabled={!analysisInstruction.trim()}
-                                style={{
-                                    padding: '0.75rem 1.5rem',
-                                    borderRadius: '8px',
-                                    border: 'none',
-                                    background: 'var(--accent-primary)',
-                                    color: '#fff',
-                                    cursor: 'pointer',
-                                    opacity: analysisInstruction.trim() ? 1 : 0.5,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '8px'
-                                }}
-                            >
-                                <Check size={16} />
-                                {t('startAnalysis')}
-                            </button>
-                        </div>
-                    </div>
+            {degradedReason && (
+                <div className="workspace-degraded" role="status">
+                    {t('analysisDegradedNoAgent')}
                 </div>
             )}
         </div>

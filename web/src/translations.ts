@@ -708,6 +708,7 @@ export const translations = {
     usersFetchError: { de: 'Fehler beim Laden der Benutzer', en: 'Error loading users' },
     roleChangeError: { de: 'Fehler beim Ändern der Rolle', en: 'Error changing role' },
     analysisError: { de: 'Analyse fehlgeschlagen. Bitte prüfe die Verbindung oder versuche es erneut.', en: 'Analysis failed. Please check your network or try again.' },
+    analysisDegradedNoAgent: { de: 'Ohne Agent erzeugt — die gewählte Auswahl war nicht mehr verfügbar.', en: 'Generated without an agent — the selection was no longer available.' },
     previewNotSupported: { de: 'Vorschau ist nur für Text-, Markdown- und PDF-Dateien verfügbar. Bitte lade die Datei herunter, um sie anzusehen.', en: 'Preview is only available for text, Markdown, and PDF files. Please download the file to view it.' },
     siteConfigFetchError: { de: 'Fehler beim Laden der Einstellungen', en: 'Error loading settings' },
     saveFailed: { de: 'Speichern fehlgeschlagen', en: 'Save failed' },

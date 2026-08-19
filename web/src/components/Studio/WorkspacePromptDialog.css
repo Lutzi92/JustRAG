@@ -52,3 +52,15 @@
   gap: 0.5rem;
   margin-top: 1rem;
 }
+
+/* Fail-soft hint shown after "New analysis" ran without the requested
+ * agent/team (StudioWorkspace.tsx). Amber, matching the warning treatment
+ * used elsewhere for degraded-but-not-broken states. */
+.workspace-degraded {
+  margin: 0 2rem 1rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: var(--warning-text, #b08800);
+  background: var(--warning-bg, rgba(176, 136, 0, 0.1));
+}
