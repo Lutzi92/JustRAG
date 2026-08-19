@@ -6,7 +6,7 @@ import axios from 'axios';
 import {
     Minimize2,
     Type, Layout, Mic, Check,
-    FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks, BarChart3
+    FileText, Loader2, Newspaper, HelpCircle, GraduationCap, Clock, ListChecks, BarChart3, Scale
 } from 'lucide-react';
 import type { GeneratedContent } from '../../types';
 import { isMarkdownArtifact } from '../../utils/artifactTypes';
@@ -14,6 +14,7 @@ import { QuizView } from './QuizView';
 import { API_BASE_URL } from '../../api';
 import { MarkdownEditor } from './MarkdownEditor';
 import { WorkspacePromptDialog } from './WorkspacePromptDialog';
+import { ComparisonDialog } from './ComparisonDialog';
 import { useWorkspacePresets } from '../../hooks/useWorkspacePresets';
 import type { AgentSelection } from '../../hooks/useKbSettings';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -31,6 +32,10 @@ interface StudioWorkspaceProps {
     /** Called after a successful "New analysis" run with the created record;
      * the caller owns reloading the artifact list and opening the item. */
     onAnalysisCreated?: (item: GeneratedContent) => void;
+    /** Called when the "Document comparison" tile's dialog is submitted; the
+     * caller owns starting the comparison chat turn (`chat.startComparison`)
+     * and switching to the chat view. */
+    onStartComparison?: (v: { file: File; modes: string[]; instruction: string; agentSelection: AgentSelection }) => void;
 }
 
 // `generatedContent` and `onDeleteContent` are accepted for interface
@@ -43,10 +48,12 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     selectedItem,
     hasFiles = true,
     onAnalysisCreated,
+    onStartComparison,
 }) => {
     const { t, language } = useTheme();
     const toast = useToast();
     const [editorContent, setEditorContent] = useState('');
+    const [showComparison, setShowComparison] = useState(false);
 
     // When selection changes, update editor content if it's an analysis or abstract
     useEffect(() => {
@@ -328,6 +335,11 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 <button onClick={handleAnalyzeRequest} disabled={!hasFiles || isAnalyzing} className="studio-gen-btn">
                     <FileText size={16} /> {t('newAnalysis')}
                 </button>
+                {presets.compareEnabled && (
+                    <button onClick={() => setShowComparison(true)} disabled={!hasFiles} className="studio-gen-btn">
+                        <Scale size={16} /> {t('documentComparison')}
+                    </button>
+                )}
                 <button onClick={() => onGenerateParent('cards')} disabled={!hasFiles} className="studio-gen-btn">
                     <Type size={16} /> {t('flashcards')}
                 </button>
@@ -547,6 +559,17 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 busy={isAnalyzing}
                 onSubmit={runAnalysis}
                 onClose={() => setShowAnalysisModal(false)}
+            />
+
+            <ComparisonDialog
+                open={showComparison}
+                kbId={kbId}
+                presets={presets.comparison}
+                onStart={(v) => {
+                    setShowComparison(false);
+                    onStartComparison?.(v);
+                }}
+                onClose={() => setShowComparison(false)}
             />
 
             {degradedReason && (

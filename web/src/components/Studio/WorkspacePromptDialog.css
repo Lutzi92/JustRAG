@@ -53,6 +53,37 @@
   margin-top: 1rem;
 }
 
+/* Comparison mode chips (ComparisonDialog.tsx `extraFields`); styling carried
+ * over from the removed ChatComparisonControls.css. */
+.workspace-dialog__modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 0.4rem;
+  padding: 0;
+  border: none;
+}
+
+.workspace-dialog__modes .mode {
+  padding: 4px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: none;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.workspace-dialog__modes .mode:hover {
+  color: var(--text-primary);
+}
+
+.workspace-dialog__modes .mode.active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--accent-on-primary);
+}
+
 /* Fail-soft hint shown after "New analysis" ran without the requested
  * agent/team (StudioWorkspace.tsx). Amber, matching the warning treatment
  * used elsewhere for degraded-but-not-broken states. */

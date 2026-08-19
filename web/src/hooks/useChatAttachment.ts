@@ -29,7 +29,7 @@ export function useChatAttachment(kbId: string, t?: Translator) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const upload = useCallback(async (file: File) => {
+  const upload = useCallback(async (file: File): Promise<ChatAttachment | null> => {
     setUploading(true);
     setError(null);
     try {
@@ -40,6 +40,7 @@ export function useChatAttachment(kbId: string, t?: Translator) {
         fd,
       );
       setAttachment(res.data);
+      return res.data;
     } catch (err: unknown) {
       const tr = (key: string, fallback: string) => (t ? t(key) : fallback);
       let msg = tr('comparisonUploadFailed', 'Upload failed');
@@ -65,6 +66,7 @@ export function useChatAttachment(kbId: string, t?: Translator) {
       }
       console.error('Attachment upload failed:', err);
       setError(msg);
+      return null;
     } finally {
       setUploading(false);
     }

@@ -9,9 +9,31 @@ import { useToast } from '../contexts/ToastContext';
 import { buildMessageMap, findDefaultLeaf } from '../utils/messageTree';
 import { useMessageTree } from './useMessageTree';
 import { useChatStream } from './useChatStream';
-import { useChatAttachment } from './useChatAttachment';
-import type { ComparisonMode } from '../components/ChatComparisonControls';
+import { useChatAttachment, type ChatAttachment } from './useChatAttachment';
 import type { AgentSelection } from './useKbSettings';
+
+// Kept local (not imported from the Workspace comparison dialog): this hook
+// sits below the dialog layer and must not import its union type (see
+// `startComparison`'s `modes: string[]` parameter below).
+type ComparisonMode = 'contradiction' | 'formal' | 'completeness';
+
+/**
+ * Pure helper for `startComparison`: turns an uploaded attachment + chosen
+ * modes + free-text instruction into the (message, send-options) pair
+ * `useChatStream.handleSendMessage` expects. Extracted so it is testable
+ * without a `useChat` render harness (none exists yet for this hook).
+ */
+export function buildComparisonSend(
+  attachment: ChatAttachment,
+  modes: string[],
+  instruction: string,
+  fallbackMessage: string,
+): { message: string; opts: { attachmentId: string; comparisonModes: string[] } } {
+  return {
+    message: instruction.trim() || fallbackMessage,
+    opts: { attachmentId: attachment.attachmentId, comparisonModes: modes },
+  };
+}
 
 interface RawChatMessage {
   id: string;
@@ -344,6 +366,40 @@ export function useChat({
     await stream.handleSendMessage(e, userMessage, activeLeafId, editParentId, sendOpts);
   }, [userMessageInput, currentKb, loading, files, activeLeafId, stream, attachmentState.attachment, attachmentState.uploading, selectedModes, t]);
 
+  /**
+   * Starts a document comparison from the Workspace tile.
+   *
+   * The comparison stays a real chat turn — only its entry point moved 2026-08
+   * from the composer into a Workspace tile. That keeps follow-up questions
+   * about the uploaded document working unchanged in the resulting chat
+   * (backend: buildFollowUpContext).
+   */
+  const startComparison = useCallback(async (input: {
+    file: File;
+    modes: string[];
+    instruction: string;
+    agentSelection: AgentSelection;
+  }) => {
+    if (!currentKb) return;
+    const uploaded = await attachmentState.upload(input.file);
+    if (!uploaded) return; // upload() already reported the failure via attachmentState.error
+
+    handleNewChat();
+    // Apply the dialog's agent/team choice before sending — handleNewChat()
+    // just reset the selection to {}, and useChatStream sends teamId/agentId
+    // from this state, not from the send options.
+    setAgentSelection(input.agentSelection);
+
+    const { message, opts } = buildComparisonSend(uploaded, input.modes, input.instruction, t('comparisonDefaultMessage'));
+    await stream.handleSendMessage(
+      { preventDefault: () => {} } as React.FormEvent,
+      message,
+      null,
+      undefined,
+      opts,
+    );
+  }, [currentKb, attachmentState, handleNewChat, setAgentSelection, stream, t]);
+
   const handleStartEdit = useCallback((messageId: string) => {
     setEditingMessageId(messageId);
   }, []);
@@ -475,6 +531,7 @@ export function useChat({
     handleEditSubmit,
     handleForkFromMessage,
     handleStartComparison,
+    startComparison,
     handleRegenerate,
     handleFollowUpClick,
     handleFeedback,
@@ -512,6 +569,7 @@ export function useChat({
     handleEditSubmit,
     handleForkFromMessage,
     handleStartComparison,
+    startComparison,
     handleRegenerate,
     handleFollowUpClick,
     handleFeedback,
