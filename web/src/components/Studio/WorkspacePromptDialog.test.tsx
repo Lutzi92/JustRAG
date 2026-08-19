@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WorkspacePromptDialog } from './WorkspacePromptDialog';
@@ -9,6 +9,11 @@ vi.mock('../../contexts/ThemeContext', () => ({ useTheme: () => ({ t: (k: string
 // mockReturnValueOnce/mockReturnValue to force the async-arrival orderings
 // useKbAgents produces in production (empty on first render, filled in once
 // the fetch inside the real hook resolves).
+const listAgents = vi.fn();
+vi.mock('../agents/api', async (orig) => ({
+  ...(await orig() as object),
+  listAgents: () => listAgents(),
+}));
 vi.mock('../../hooks/useKbAgents', () => ({ useKbAgents: vi.fn() }));
 
 const mockedUseKbAgents = vi.mocked(useKbAgents);
@@ -38,6 +43,10 @@ beforeEach(() => {
   // options are already there from the first render, same as before this
   // hook became a controllable mock.
   mockedUseKbAgents.mockReturnValue(populatedAgents);
+  // Every test renders the dialog, and the dialog always asks for the user's
+  // own agents. Without a default the mock yields undefined and the hook
+  // throws on `.then`.
+  listAgents.mockResolvedValue([]);
 });
 
 describe('WorkspacePromptDialog', () => {
@@ -162,5 +171,51 @@ describe('WorkspacePromptDialog: Button-Form', () => {
 
     expect(cancel.className).toContain('btn');
     expect(cancel.className).toContain('btn--secondary');
+  });
+});
+
+// Users create agents under /agents; those agents carry a persona prompt that
+// is often exactly what they want to run an analysis or comparison with. The
+// preset dropdown therefore offers them alongside the built-in templates.
+// Note this is the PROMPT only — running as an agent pipeline stays the job of
+// the separate agent picker below the prompt field.
+describe('WorkspacePromptDialog: Vorlagen aus eigenen Agenten', () => {
+  const agents = [
+    { id: 'a1', name: 'Prüfer', systemPrompt: 'Prüfe streng auf Widersprüche.', isEnabled: true },
+    { id: 'a2', name: 'Stillgelegt', systemPrompt: 'egal', isEnabled: false },
+    { id: 'a3', name: 'Ohne Prompt', systemPrompt: '   ', isEnabled: true },
+  ];
+
+  beforeEach(() => { listAgents.mockResolvedValue(agents); });
+
+  it('bietet die Persona-Prompts der eigenen Agenten als Vorlage an', async () => {
+    render(<WorkspacePromptDialog {...base} />);
+    const select = await screen.findByLabelText('promptPreset');
+    await userEvent.selectOptions(select, 'Prüfer');
+    expect(screen.getByLabelText('prompt')).toHaveValue('Prüfe streng auf Widersprüche.');
+  });
+
+  // Scope every option lookup to the PRESET select: the agent picker below it
+  // renders <option> elements too, and the useKbAgents mock happens to contain
+  // an agent called "Prüfer" — an unscoped query matches that one and passes
+  // whether or not this feature exists at all.
+  const presetOptions = async () => {
+    const select = await screen.findByLabelText('promptPreset');
+    return within(select as HTMLElement);
+  };
+
+  it('lässt deaktivierte Agenten und solche ohne Persona-Prompt weg', async () => {
+    render(<WorkspacePromptDialog {...base} />);
+    const opts = await presetOptions();
+    await waitFor(() => expect(opts.getByRole('option', { name: 'Prüfer' })).toBeInTheDocument());
+    expect(opts.queryByRole('option', { name: 'Stillgelegt' })).not.toBeInTheDocument();
+    expect(opts.queryByRole('option', { name: 'Ohne Prompt' })).not.toBeInTheDocument();
+  });
+
+  it('zeigt weiterhin die eingebauten Vorlagen', async () => {
+    render(<WorkspacePromptDialog {...base} />);
+    const opts = await presetOptions();
+    await waitFor(() => expect(opts.getByRole('option', { name: 'Prüfer' })).toBeInTheDocument());
+    expect(opts.getByRole('option', { name: 'Risiken' })).toBeInTheDocument();
   });
 });

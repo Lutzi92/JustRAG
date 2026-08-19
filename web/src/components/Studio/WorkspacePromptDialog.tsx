@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useKbAgents } from '../../hooks/useKbAgents';
+import { useAgentPresets } from '../../hooks/useAgentPresets';
 import { AgentPicker } from '../agents/AgentPicker';
 import type { AgentSelection } from '../../hooks/useKbSettings';
 import './WorkspacePromptDialog.css';
@@ -62,6 +63,7 @@ export function WorkspacePromptDialog({
 }: WorkspacePromptDialogProps) {
   const { t } = useTheme();
   const options = useKbAgents(kbId);
+  const agentPresets = useAgentPresets();
   const [prompt, setPrompt] = useState('');
   const [presetLabel, setPresetLabel] = useState('');
   const [touchedSelection, setTouchedSelection] = useState<AgentSelection | null>(null);
@@ -116,12 +118,24 @@ export function WorkspacePromptDialog({
           onChange={(e) => {
             const label = e.target.value;
             setPresetLabel(label);
-            const p = presets.find(x => x.label === label);
+            // Built-ins win a label collision; the optgroup makes the origin
+            // visible either way.
+            const p = presets.find(x => x.label === label)
+              ?? agentPresets.find(x => x.label === label);
             if (p) setPrompt(p.prompt);
           }}
         >
           <option value="">{t('promptPresetOwn')}</option>
-          {presets.map(p => <option key={p.label} value={p.label}>{p.label}</option>)}
+          {presets.length > 0 && (
+            <optgroup label={t('promptPresetBuiltIn')}>
+              {presets.map(p => <option key={p.label} value={p.label}>{p.label}</option>)}
+            </optgroup>
+          )}
+          {agentPresets.length > 0 && (
+            <optgroup label={t('promptPresetFromAgents')}>
+              {agentPresets.map(p => <option key={p.label} value={p.label}>{p.label}</option>)}
+            </optgroup>
+          )}
         </select>
 
         <label htmlFor="workspace-prompt" className="form-hint workspace-dialog__label">{t('prompt')}</label>
