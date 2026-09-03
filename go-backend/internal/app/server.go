@@ -82,8 +82,9 @@ func RunServer(cfg *config.Config, version string) error {
 	}
 	defer cleanup()
 
-	// Start RSS + Confluence schedulers under a Redis leader lock so exactly
-	// one go-server replica drives scheduled syncs across the deployment.
+	// Start the night-window sync sweeper (internal/syncsched) under a Redis
+	// leader lock so exactly one go-server replica drives scheduled syncs
+	// (RSS, Confluence and git repo sources) across the deployment.
 	// Track the goroutine so cleanup() (which closes the asynq client) does
 	// not race with an in-flight scheduler enqueue. Defers are LIFO, so this
 	// Wait() runs BEFORE cleanup() above.
