@@ -396,12 +396,19 @@ export type GeneratedContent = GeneratedContentBase & (
     | { type: 'quiz'; content: QuizItem[]; }
 );
 
+/**
+ * Automatic syncs run only inside an admin-configured night window, which is
+ * why the shared select's labels say "nachts" rather than naming a time.
+ */
+export type SyncSchedule = 'manual' | 'daily' | 'weekly';
+
 export interface RssFeed {
     id: string;
     kbId: string;
     url: string;
     title: string | null;
-    pollInterval: number;
+    syncSchedule: SyncSchedule;
+    nextSyncAt: string | null;
     status: 'active' | 'paused' | 'error';
     errorMessage: string | null;
     consecutiveFailures: number;
@@ -434,7 +441,8 @@ export interface ConfluenceSource {
     rootPageId: string | null;
     rootPageTitle: string | null;
     includeAttachments: boolean;
-    syncInterval: number | null;
+    syncSchedule: SyncSchedule;
+    nextSyncAt: string | null;
     status: 'active' | 'syncing' | 'error' | 'paused';
     errorMessage: string | null;
     consecutiveFailures: number;
@@ -452,6 +460,8 @@ export interface GitRepoSource {
     isPrivate: boolean;
     branch: string | null;
     hasToken: boolean;
+    syncSchedule: SyncSchedule;
+    nextSyncAt: string | null;
     status: 'active' | 'syncing' | 'error' | 'paused';
     errorMessage: string | null;
     consecutiveFailures: number;

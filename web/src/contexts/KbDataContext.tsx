@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import type { RssFeed, GeneratedContent, ConfluenceSource, ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath, GitRepoSource } from '../types';
+import type { RssFeed, GeneratedContent, ConfluenceSource, ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath, GitRepoSource, SyncSchedule } from '../types';
 import type { useFileManagement } from '../hooks/useFileManagement';
 import type { useWebTools } from '../hooks/useWebTools';
 import type { useGeneratedContent } from '../hooks/useGeneratedContent';
@@ -14,8 +14,8 @@ export interface KbDataContextValue {
   rssFeeds: RssFeed[];
   rssLoading: boolean;
   fetchRssFeeds: (kbId?: string) => void;
-  addRssFeed: (url: string, pollInterval: number, fetchFullText: boolean) => void;
-  updateRssFeed: (feedId: string, updates: { pollInterval?: number; status?: 'active' | 'paused'; fetchFullText?: boolean }) => void;
+  addRssFeed: (url: string, syncSchedule: SyncSchedule, fetchFullText: boolean) => void;
+  updateRssFeed: (feedId: string, updates: { syncSchedule?: SyncSchedule; status?: 'active' | 'paused'; fetchFullText?: boolean }) => void;
   deleteRssFeed: (feedId: string) => void;
   pollFeedNow: (feedId: string) => void;
   // Confluence
