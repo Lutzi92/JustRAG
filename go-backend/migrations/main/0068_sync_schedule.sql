@@ -38,11 +38,13 @@ BEGIN
 END $$;
 -- +goose StatementEnd
 
--- Backfill. Every RSS feed polled automatically before this release, so all
--- of them become daily. Confluence sources with an interval become daily
--- (including the weekly ones — one uniform target beats a per-interval map).
--- Git repositories were manual-only and stay manual.
-UPDATE rss_feeds SET sync_schedule = 'daily' WHERE sync_schedule = 'manual';
+-- Backfill. Every active RSS feed was polled automatically before this
+-- release, so it becomes daily; a feed the user explicitly paused
+-- (status != 'active') must not be flipped onto a nightly schedule by this
+-- one-shot, irreversible backfill. Confluence sources with an interval
+-- become daily (including the weekly ones — one uniform target beats a
+-- per-interval map). Git repositories were manual-only and stay manual.
+UPDATE rss_feeds SET sync_schedule = 'daily' WHERE sync_schedule = 'manual' AND status = 'active';
 UPDATE confluence_sources SET sync_schedule = 'daily'
  WHERE sync_schedule = 'manual' AND sync_interval IS NOT NULL AND sync_interval > 0;
 
