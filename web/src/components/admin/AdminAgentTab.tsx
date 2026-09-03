@@ -35,6 +35,7 @@ const SECTION_CONFIGS = [
     { id: 'tools', titleKey: 'agentSectionTools', i18nKeys: ['chatCodeExecEnabled'], settingKeys: ['mcp_servers', 'chat_use_mcp_tools', 'chat_code_exec_enabled'] },
     { id: 'tabular', titleKey: 'agentSectionTabular', i18nKeys: ['chatTabularQueryEnabled', 'chatTabularSemanticColumnsEnabled', 'tabularSemanticMinAvgLen', 'tabularSemanticMinDistinctRatio', 'chatTabularChartsEnabled'], settingKeys: ['chat_tabular_query_enabled', 'chat_tabular_semantic_columns_enabled', 'tabular_semantic_min_avg_len', 'tabular_semantic_min_distinct_ratio', 'chat_tabular_charts_enabled'] },
     { id: 'dateAware', titleKey: 'agentSectionDateAware', i18nKeys: ['chatDateAwarenessEnabled', 'chatDateTimezone', 'chatDateToolsEnabled', 'chatDateToolsMaxResults', 'chatRecencyListingEnabled', 'chatRecencyListingNameMatchEnabled', 'chatRecencyListingWindowDays', 'chatRecencyListingMaxResults'], settingKeys: ['chat_date_awareness_enabled', 'chat_date_timezone', 'chat_date_tools_enabled', 'chat_date_tools_max_results', 'chat_recency_listing_enabled', 'chat_recency_listing_name_match_enabled', 'chat_recency_listing_window_days', 'chat_recency_listing_max_results'] },
+    { id: 'syncWindow', titleKey: 'agentSectionSyncWindow', i18nKeys: ['syncWindowStartHour', 'syncWindowEndHour', 'syncWindowTimezone'], settingKeys: ['sync_window_start_hour', 'sync_window_end_hour', 'sync_window_timezone'] },
 ] as const;
 type SectionId = typeof SECTION_CONFIGS[number]['id'];
 
@@ -2307,6 +2308,47 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
                         />
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatRecencyListingMaxResultsHelp')}</p>
+                    </div>
+                </Section>
+
+                <Section title={t('agentSectionSyncWindow')} {...sectionState('syncWindow')}>
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="sync-window-start-hour">{t('syncWindowStartHour')}</label>
+                        <input
+                            id="sync-window-start-hour"
+                            type="number"
+                            min={0}
+                            max={23}
+                            value={siteConfigs.sync_window_start_hour || '1'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, sync_window_start_hour: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="sync-window-end-hour">{t('syncWindowEndHour')}</label>
+                        <input
+                            id="sync-window-end-hour"
+                            type="number"
+                            min={0}
+                            max={23}
+                            value={siteConfigs.sync_window_end_hour || '5'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, sync_window_end_hour: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="sync-window-timezone">{t('syncWindowTimezone')}</label>
+                        <input
+                            id="sync-window-timezone"
+                            type="text"
+                            placeholder="Europe/Berlin"
+                            value={siteConfigs.sync_window_timezone ?? ''}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, sync_window_timezone: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('syncWindowHelp')}</p>
                     </div>
                 </Section>
 

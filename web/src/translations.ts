@@ -2044,6 +2044,18 @@ export const translations = {
     },
 
     // ---------------------------------------------------------------
+    // Night sync window
+    // ---------------------------------------------------------------
+    agentSectionSyncWindow: { de: 'Nächtliches Synchronisationsfenster', en: 'Night sync window' },
+    syncWindowStartHour: { de: 'Fensterbeginn (Stunde)', en: 'Window start (hour)' },
+    syncWindowEndHour: { de: 'Fensterende (Stunde)', en: 'Window end (hour)' },
+    syncWindowTimezone: { de: 'Zeitzone', en: 'Timezone' },
+    syncWindowHelp: {
+        de: 'Automatische Synchronisationen (RSS, Confluence, Git) laufen ausschließlich in diesem Fenster und werden gleichmäßig darüber verteilt. Änderungen wirken innerhalb von 5 Minuten, verschieben aber nur noch nicht eingeplante Läufe.',
+        en: 'Automatic syncs (RSS, Confluence, git) run only inside this window and are spread across it. Changes take effect within 5 minutes but only move runs that are not yet scheduled.',
+    },
+
+    // ---------------------------------------------------------------
     // T2-1 Long-context (System 2) routing
     // ---------------------------------------------------------------
     chatLongcontextEnabled: { de: 'Long-Context-Routing (System 2)', en: 'Long-context routing (System 2)' },
