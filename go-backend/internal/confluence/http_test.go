@@ -55,7 +55,7 @@ func (m *mockStore) UpdateConfluenceConnection(_ context.Context, _ string, u co
 	return m.updatedConn, m.updateConnErr
 }
 
-func (m *mockStore) CreateConfluenceSource(_ context.Context, kbID, connectionID, spaceKey string, rootPageID, rootPageTitle *string, includeAttachments bool, syncInterval *int) (*confluence.ConfluenceSourceRow, error) {
+func (m *mockStore) CreateConfluenceSource(_ context.Context, kbID, connectionID, spaceKey string, rootPageID, rootPageTitle *string, includeAttachments bool, syncSchedule string) (*confluence.ConfluenceSourceRow, error) {
 	if m.sourceErr != nil {
 		return nil, m.sourceErr
 	}
@@ -96,13 +96,6 @@ func (m *mockStore) GetSiteConfigValue(_ context.Context, key string) (*string, 
 		return nil, nil
 	}
 	return v, nil
-}
-
-func (m *mockStore) ListActiveConfluenceSources(_ context.Context) ([]confluence.ConfluenceSourceRow, error) {
-	if m.sourceErr != nil {
-		return nil, m.sourceErr
-	}
-	return m.sources, nil
 }
 
 func (m *mockStore) GetConfluenceConnectionByID(_ context.Context, _ string) (*confluence.ConfluenceConnectionRow, error) {
@@ -446,6 +439,24 @@ func TestCreateSource_MissingSpaceKey(t *testing.T) {
 	h := confluence.NewHandler(store, testJWTSecret)
 
 	body := map[string]any{"connectionId": testConnID} // no spaceKey
+	req := withKBAccess(newRequest(http.MethodPost, "/api/kb/"+testKBID+"/confluence-sources", body), testKBID)
+	rr := httptest.NewRecorder()
+	h.CreateSource(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCreateSource_RejectsUnknownSchedule(t *testing.T) {
+	store := &mockStore{}
+	h := confluence.NewHandler(store, testJWTSecret)
+
+	body := map[string]any{
+		"connectionId": testConnID,
+		"spaceKey":     "DEV",
+		"syncSchedule": "every6h",
+	}
 	req := withKBAccess(newRequest(http.MethodPost, "/api/kb/"+testKBID+"/confluence-sources", body), testKBID)
 	rr := httptest.NewRecorder()
 	h.CreateSource(rr, req)

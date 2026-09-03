@@ -7,8 +7,6 @@ import (
 
 	"github.com/go-redsync/redsync/v4"
 	redsyncredis "github.com/go-redsync/redsync/v4/redis/goredis/v9"
-
-	"github.com/justrag/go-backend/internal/confluence"
 )
 
 // schedulerLockKey is the Redis key used to elect a single leader across
@@ -21,11 +19,13 @@ const (
 	acquireRetryPeriod = 15 * time.Second
 )
 
-// startSchedulers runs the Confluence scheduler under a Redis-based leader
-// lock so that exactly one go-server replica drives scheduled syncs. RSS is
-// no longer driven by a per-feed ticker scheduler here (that mechanism was
-// removed along with rss_feeds.poll_interval); a night-window sweeper takes
-// over scheduling in a later change. It blocks until ctx is canceled.
+// startSchedulers runs the leader-election loop that will drive scheduled
+// syncs. Neither RSS nor Confluence is driven by a per-source ticker
+// scheduler here any more (those mechanisms were removed along with
+// rss_feeds.poll_interval and confluence_sources.sync_interval); a
+// night-window sweeper takes over scheduling for both in a later change.
+// Until then, runAsLeader holds the leader lock and refreshes it but starts
+// no schedulers. It blocks until ctx is canceled.
 //
 // The lock is acquired with a TTL and refreshed periodically. If the leader
 // dies, the TTL expires and another replica acquires the lock on its next
@@ -55,24 +55,18 @@ func startSchedulers(ctx context.Context, infra *serverInfra) {
 			continue
 		}
 
-		slog.Info("scheduler leader lock acquired — starting Confluence scheduler")
+		slog.Info("scheduler leader lock acquired")
 		runAsLeader(ctx, infra, mutex)
 		slog.Info("scheduler leader role released")
 	}
 }
 
-// runAsLeader starts the schedulers and refreshes the lock until ctx is
-// canceled or the lock is lost. On exit, schedulers are stopped and the lock
-// is released.
+// runAsLeader refreshes the lock until ctx is canceled or the lock is lost.
+// It currently starts no schedulers (see startSchedulers) — it exists so
+// exactly one replica holds the leader role while the sweeper that will
+// consume it is wired in. On exit, the lock is released.
 func runAsLeader(ctx context.Context, infra *serverInfra, mutex *redsync.Mutex) {
-	leaderCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	confScheduler := confluence.NewConfluenceScheduler(leaderCtx, infra.asynqClient, confluence.NewStore(infra.db.Main))
-	if err := confScheduler.InitializeAll(leaderCtx); err != nil {
-		slog.Warn("failed to initialize Confluence schedules", "error", err)
-	}
-	defer confScheduler.StopAll()
+	_ = infra // unused until the sweeper (Task 8) is wired in here
 
 	defer func() {
 		// Best-effort release; ignore errors (TTL will expire anyway).

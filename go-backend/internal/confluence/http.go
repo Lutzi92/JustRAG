@@ -16,6 +16,7 @@ import (
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/logctx"
+	"github.com/justrag/go-backend/internal/syncwindow"
 )
 
 // ---------------------------------------------------------------------------
@@ -43,7 +44,8 @@ type ConfluenceSourceRow struct {
 	RootPageID          *string    `json:"rootPageId"          db:"root_page_id"`
 	RootPageTitle       *string    `json:"rootPageTitle"       db:"root_page_title"`
 	IncludeAttachments  bool       `json:"includeAttachments"  db:"include_attachments"`
-	SyncInterval        *int       `json:"syncInterval"        db:"sync_interval"`
+	SyncSchedule        string     `json:"syncSchedule"        db:"sync_schedule"`
+	NextSyncAt          *time.Time `json:"nextSyncAt"          db:"next_sync_at"`
 	Status              string     `json:"status"              db:"status"`
 	ErrorMessage        *string    `json:"errorMessage"        db:"error_message"`
 	ConsecutiveFailures int        `json:"consecutiveFailures" db:"consecutive_failures"`
@@ -55,12 +57,15 @@ type ConfluenceSourceRow struct {
 }
 
 // ConfluenceSourceUpdate carries optional fields for a PATCH update.
+// NextSyncAt is a double pointer so "leave untouched" (nil) and "set to
+// NULL" (non-nil pointing at a nil *time.Time) are both expressible.
 type ConfluenceSourceUpdate struct {
 	SpaceKey            *string
 	RootPageID          *string
 	RootPageTitle       *string
 	IncludeAttachments  *bool
-	SyncInterval        *int
+	SyncSchedule        *string
+	NextSyncAt          **time.Time
 	Status              *string
 	ErrorMessage        *string
 	ConsecutiveFailures *int
@@ -93,12 +98,11 @@ type ConfluenceStore interface {
 	CreateConfluenceConnection(ctx context.Context, userID, encryptedToken string, displayName *string) (*ConfluenceConnectionRow, error)
 	UpdateConfluenceConnection(ctx context.Context, id string, updates ConfluenceConnectionUpdate) (*ConfluenceConnectionRow, error)
 	// Sources
-	CreateConfluenceSource(ctx context.Context, kbID, connectionID, spaceKey string, rootPageID, rootPageTitle *string, includeAttachments bool, syncInterval *int) (*ConfluenceSourceRow, error)
+	CreateConfluenceSource(ctx context.Context, kbID, connectionID, spaceKey string, rootPageID, rootPageTitle *string, includeAttachments bool, syncSchedule string) (*ConfluenceSourceRow, error)
 	ListConfluenceSources(ctx context.Context, kbID string) ([]ConfluenceSourceRow, error)
 	GetConfluenceSourceByID(ctx context.Context, sourceID string) (*ConfluenceSourceRow, error)
 	UpdateConfluenceSource(ctx context.Context, sourceID string, updates ConfluenceSourceUpdate) (*ConfluenceSourceRow, error)
 	DeleteConfluenceSource(ctx context.Context, sourceID string) error
-	ListActiveConfluenceSources(ctx context.Context) ([]ConfluenceSourceRow, error)
 	// Files
 	CreateConfluenceFile(ctx context.Context, data CreateConfluenceFileData) (*ConfluenceFileRow, error)
 	GetFilesByConfluenceSourceID(ctx context.Context, sourceID string) ([]ConfluenceFileRow, error)
@@ -293,7 +297,7 @@ type createSourceRequest struct {
 	RootPageID         *string `json:"rootPageId"`
 	RootPageTitle      *string `json:"rootPageTitle"`
 	IncludeAttachments bool    `json:"includeAttachments"`
-	SyncInterval       *int    `json:"syncInterval"`
+	SyncSchedule       *string `json:"syncSchedule"`
 }
 
 // CreateSource handles POST /api/kb/{id}/confluence-sources.
@@ -316,6 +320,16 @@ func (h *Handler) CreateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate syncSchedule (default manual).
+	syncSchedule := syncwindow.ScheduleManual
+	if body.SyncSchedule != nil {
+		syncSchedule = *body.SyncSchedule
+	}
+	if !syncwindow.Valid(syncSchedule) {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "syncSchedule must be manual, daily or weekly")
+		return
+	}
+
 	// Verify the connection belongs to the authenticated user.
 	user := auth.UserFromContext(ctx)
 	if user != nil {
@@ -327,7 +341,7 @@ func (h *Handler) CreateSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	source, err := h.store.CreateConfluenceSource(ctx, kbID, body.ConnectionID, body.SpaceKey,
-		body.RootPageID, body.RootPageTitle, body.IncludeAttachments, body.SyncInterval)
+		body.RootPageID, body.RootPageTitle, body.IncludeAttachments, syncSchedule)
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to create Confluence source")
 		return
@@ -379,7 +393,7 @@ type updateSourceRequest struct {
 	RootPageID         *string `json:"rootPageId"`
 	RootPageTitle      *string `json:"rootPageTitle"`
 	IncludeAttachments *bool   `json:"includeAttachments"`
-	SyncInterval       *int    `json:"syncInterval"`
+	SyncSchedule       *string `json:"syncSchedule"`
 	Status             *string `json:"status"`
 }
 
@@ -410,6 +424,12 @@ func (h *Handler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate syncSchedule if provided.
+	if body.SyncSchedule != nil && !syncwindow.Valid(*body.SyncSchedule) {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "syncSchedule must be manual, daily or weekly")
+		return
+	}
+
 	// Validate status if provided.
 	if body.Status != nil && *body.Status != "active" && *body.Status != "paused" {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, `status must be "active" or "paused"`)
@@ -421,8 +441,16 @@ func (h *Handler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 		RootPageID:         body.RootPageID,
 		RootPageTitle:      body.RootPageTitle,
 		IncludeAttachments: body.IncludeAttachments,
-		SyncInterval:       body.SyncInterval,
+		SyncSchedule:       body.SyncSchedule,
 		Status:             body.Status,
+	}
+
+	// A schedule change takes effect immediately: clearing next_sync_at makes
+	// the sweeper re-stamp on its next tick. Leaving the old stamp in place
+	// would leave a source on its previous cadence until the next slot fires.
+	if body.SyncSchedule != nil {
+		var null *time.Time
+		updates.NextSyncAt = &null
 	}
 
 	// Clear error state when re-activating.
