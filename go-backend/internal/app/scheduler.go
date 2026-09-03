@@ -69,27 +69,36 @@ func startSchedulers(ctx context.Context, infra *serverInfra) {
 
 // runAsLeader starts the night-window sync sweeper on a context tied to the
 // leader lock, then refreshes the lock until ctx is canceled or the lock is
-// lost. The sweeper runs on leaderCtx (not the outer ctx) so it stops the
-// moment this replica steps down — on lock loss or shutdown — rather than
-// continuing to enqueue syncs after another replica has taken over.
-// On exit, the lock is released.
+// lost. The sweeper runs on leaderCtx (not the outer ctx) so it is signaled
+// to stop the moment this replica steps down — on lock loss or shutdown —
+// rather than continuing to enqueue syncs after another replica has taken
+// over. On exit, the lock is released only after the sweeper goroutine has
+// actually returned (see the join below) — RunServer's schedulerWg.Wait()
+// runs ahead of asynqClient.Close(), and that guarantee is worthless unless
+// runAsLeader itself does not return while the sweeper it spawned is still
+// running.
 func runAsLeader(ctx context.Context, infra *serverInfra, mutex *redsync.Mutex) {
 	leaderCtx, cancel := context.WithCancel(ctx)
+	sweeperDone := make(chan struct{})
 
 	// Defers run LIFO: release the lock first (declared first, runs last)
-	// only after signaling the sweeper to stop (declared last, runs
-	// first). This ordering doesn't wait for the sweeper goroutine to
-	// actually observe cancellation, but it avoids releasing the lock
-	// while it is still definitely running — narrowing, rather than
-	// eliminating, the window in which a new leader's sweeper could
-	// overlap with this one's in-flight tick.
+	// only after the cancel-and-join below (declared last, runs first) has
+	// confirmed the sweeper goroutine has actually exited. A cancel alone is
+	// not enough to guarantee that: *asynq.Client.Enqueue ignores the
+	// context it's handed and uses context.Background() internally, so an
+	// in-flight Tick keeps running against the Redis connection until it
+	// finishes or asynqClient.Close() pulls the connection out from under
+	// it. Joining here is what makes that close-after-return ordering safe.
 	defer func() {
 		// Best-effort release; ignore errors (TTL will expire anyway).
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer releaseCancel()
 		_, _ = mutex.UnlockContext(releaseCtx)
 	}()
-	defer cancel()
+	defer func() {
+		cancel()
+		<-sweeperDone // wait for the in-flight Tick (if any) to actually finish.
+	}()
 
 	sweeper := syncsched.New(
 		infra.asynqClient,
@@ -98,7 +107,10 @@ func runAsLeader(ctx context.Context, infra *serverInfra, mutex *redsync.Mutex) 
 		confluence.NewStore(infra.db.Main),
 		gitrepo.NewStore(infra.db.Main),
 	)
-	safego.Go(func() { sweeper.Run(leaderCtx) })
+	safego.Go(func() {
+		defer close(sweeperDone)
+		sweeper.Run(leaderCtx)
+	})
 
 	ticker := time.NewTicker(refreshInterval)
 	defer ticker.Stop()

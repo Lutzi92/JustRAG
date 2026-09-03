@@ -177,3 +177,31 @@ func TestTick_UnknownKindIsIgnored(t *testing.T) {
 		t.Fatal("an unknown kind must not enqueue anything")
 	}
 }
+
+// TestRun_ReturnsPromptlyOnContextCancellation pins down the property that
+// internal/app's runAsLeader relies on to join the sweeper goroutine before
+// returning: Run must not outlive its context by more than a trivial
+// scheduling delay. Run performs an immediate first Tick before entering its
+// ticker select loop, so the stores here return empty due/unscheduled lists —
+// that first Tick must be cheap or this test's timeout budget is measuring
+// fake-store latency instead of Run's shutdown behavior.
+func TestRun_ReturnsPromptlyOnContextCancellation(t *testing.T) {
+	store := newFakeStore("rss")
+	enq := &fakeEnqueuer{}
+	s := New(enq, fakeConfig{}, store)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancelled before Run even starts — Run must still return.
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Run(ctx)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return within 2s of its context being cancelled — a caller joining this goroutine (internal/app.runAsLeader) would hang shutdown")
+	}
+}
