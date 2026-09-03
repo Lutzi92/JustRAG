@@ -259,12 +259,20 @@ func toDueSources(rows []dueSourceRow) []syncwindow.DueSource {
 	return out
 }
 
-// ListDue returns feeds whose stamped slot has arrived.
+// ListDue returns feeds whose stamped slot has arrived. status IN
+// ('active','error') deliberately keeps an errored feed on the schedule: a
+// sync failure must not permanently drop the source out of ListDue/
+// ListUnscheduled, or a single transient failure (a 500, a network blip)
+// would silently stop the feed from ever syncing again. 'paused' and
+// 'syncing' stay excluded. RSS's poll failure path never actually sets
+// status='error' today (see UpdateRSSFeedPollFailure), but the predicate is
+// kept in sync with confluence/gitrepo for consistency and in case that
+// changes.
 func (s *PGStore) ListDue(ctx context.Context, now time.Time) ([]syncwindow.DueSource, error) {
 	const sql = `
 		SELECT id::text AS id, sync_schedule FROM rss_feeds
 		 WHERE sync_schedule <> 'manual'
-		   AND status = 'active'
+		   AND status IN ('active', 'error')
 		   AND next_sync_at IS NOT NULL
 		   AND next_sync_at <= $1`
 	rows, err := pgxutil.QueryRows[dueSourceRow](ctx, s.pool, sql, now)
@@ -281,7 +289,7 @@ func (s *PGStore) ListUnscheduled(ctx context.Context) ([]syncwindow.DueSource, 
 	const sql = `
 		SELECT id::text AS id, sync_schedule FROM rss_feeds
 		 WHERE sync_schedule <> 'manual'
-		   AND status = 'active'
+		   AND status IN ('active', 'error')
 		   AND next_sync_at IS NULL`
 	rows, err := pgxutil.QueryRows[dueSourceRow](ctx, s.pool, sql)
 	if err != nil {
@@ -290,7 +298,10 @@ func (s *PGStore) ListUnscheduled(ctx context.Context) ([]syncwindow.DueSource, 
 	return toDueSources(rows), nil
 }
 
-// MarkScheduled stamps the next slot.
+// MarkScheduled stamps the next slot. No status predicate here: it addresses
+// a single row by primary key (the id came from ListDue/ListUnscheduled,
+// which already filtered on status), so re-checking status would only risk a
+// silent no-op update if the status changed between list and stamp.
 func (s *PGStore) MarkScheduled(ctx context.Context, id string, next time.Time) error {
 	const sql = `UPDATE rss_feeds SET next_sync_at = $2 WHERE id = $1`
 	_, err := s.pool.Exec(ctx, sql, id, next)

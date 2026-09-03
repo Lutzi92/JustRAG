@@ -71,6 +71,18 @@ type fakeConfig struct{}
 
 func (fakeConfig) GetSiteConfigValue(context.Context, string) (*string, error) { return nil, nil }
 
+// mapConfig is a fakeConfig with specific key/value overrides, for tests that
+// need git_repo_enabled (or another site_config key) to read as something
+// other than "unset".
+type mapConfig map[string]string
+
+func (m mapConfig) GetSiteConfigValue(_ context.Context, key string) (*string, error) {
+	if v, ok := m[key]; ok {
+		return &v, nil
+	}
+	return nil, nil
+}
+
 func TestTick_EnqueuesDueSourcesAndStampsThemForward(t *testing.T) {
 	store := newFakeStore("rss")
 	store.due = []syncwindow.DueSource{daily("feed-1"), daily("feed-2")}
@@ -147,7 +159,10 @@ func TestTick_SweepsAllKinds(t *testing.T) {
 	gitStore := newFakeStore("git_repo")
 	gitStore.due = []syncwindow.DueSource{daily("repo-1")}
 	enq := &fakeEnqueuer{}
-	s := New(enq, fakeConfig{}, rssStore, confStore, gitStore)
+	// git_repo_enabled must read "true" for the git_repo store to be swept
+	// at all — see TestTick_GitRepoDisabledSkipsGitStoreOnly for the
+	// disabled case.
+	s := New(enq, mapConfig{"git_repo_enabled": "true"}, rssStore, confStore, gitStore)
 
 	s.Tick(context.Background(), time.Now())
 
@@ -162,6 +177,44 @@ func TestTick_SweepsAllKinds(t *testing.T) {
 		if !types[want] {
 			t.Fatalf("missing task type %q in %v", want, types)
 		}
+	}
+}
+
+// TestTick_GitRepoDisabledSkipsGitStoreOnly is the F4 regression test:
+// git_repo_enabled is a kill switch. When it reads anything other than
+// "true" (here: unset, via fakeConfig{}), the sweeper must not enqueue or
+// even stamp the git_repo store — a disabled deployment must stop cloning
+// previously-created repos, including private ones with stored PATs — while
+// rss and confluence, which have no such gate, keep sweeping normally.
+func TestTick_GitRepoDisabledSkipsGitStoreOnly(t *testing.T) {
+	rssStore := newFakeStore("rss")
+	rssStore.due = []syncwindow.DueSource{daily("feed-1")}
+	confStore := newFakeStore("confluence")
+	confStore.due = []syncwindow.DueSource{daily("src-1")}
+	gitStore := newFakeStore("git_repo")
+	gitStore.due = []syncwindow.DueSource{daily("repo-1")}
+	gitStore.unscheduled = []syncwindow.DueSource{daily("repo-2")}
+	enq := &fakeEnqueuer{}
+	s := New(enq, fakeConfig{}, rssStore, confStore, gitStore) // git_repo_enabled unset
+
+	s.Tick(context.Background(), time.Now())
+
+	if len(enq.tasks) != 2 {
+		t.Fatalf("expected exactly rss + confluence tasks (git_repo disabled), got %d: %v", len(enq.tasks), enq.tasks)
+	}
+	for _, task := range enq.tasks {
+		if task.Type() == jobs.TypeGitRepoSync {
+			t.Fatal("git_repo_enabled is unset — must not enqueue a git repo sync")
+		}
+	}
+	if len(gitStore.marked) != 0 {
+		t.Fatalf("git_repo_enabled is unset — must not stamp any git repo source either, got %v", gitStore.marked)
+	}
+	if _, ok := rssStore.marked["feed-1"]; !ok {
+		t.Fatal("rss store must still be swept while git_repo is disabled")
+	}
+	if _, ok := confStore.marked["src-1"]; !ok {
+		t.Fatal("confluence store must still be swept while git_repo is disabled")
 	}
 }
 

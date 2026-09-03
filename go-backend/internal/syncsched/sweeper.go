@@ -72,14 +72,31 @@ func (s *Sweeper) Run(ctx context.Context) {
 	}
 }
 
+// gitRepoEnabledConfigKey mirrors the literal used by
+// internal/gitrepo.Handler.CreateSource/TriggerSync to gate the feature.
+const gitRepoEnabledConfigKey = "git_repo_enabled"
+
 // Tick performs one sweep. The window is re-read every tick so an admin
 // change takes effect within TickInterval; already-stamped slots keep their
 // old time.
 func (s *Sweeper) Tick(ctx context.Context, now time.Time) {
 	window := syncwindow.WindowFrom(ctx, s.cfg)
+	gitRepoEnabled := s.gitRepoEnabled(ctx)
 
 	for _, store := range s.stores {
 		kind := store.Kind()
+
+		// git_repo_enabled is a kill switch: CreateSource and TriggerSync
+		// already 403 behind it, but nothing previously stopped the sweeper
+		// from continuing to clone already-created repos — including
+		// private ones with stored PATs — every night after an operator
+		// turned the flag off. Confluence has no equivalent gate here,
+		// deliberately: the old per-source scheduler never gated on
+		// Confluence's connection state either, and that consistency is
+		// intentional, not an oversight.
+		if kind == "git_repo" && !gitRepoEnabled {
+			continue
+		}
 
 		// Newly scheduled sources: stamp only. Enqueuing here would fire a
 		// full sync in the middle of the working day, which is the whole
@@ -107,6 +124,23 @@ func (s *Sweeper) Tick(ctx context.Context, now time.Time) {
 			s.enqueue(kind, src.ID)
 		}
 	}
+}
+
+// gitRepoEnabled reads the git_repo_enabled site config flag. Fail-closed,
+// matching internal/gitrepo.Handler's own check (`enabledVal == nil ||
+// *enabledVal != "true"` means disabled): a nil reader, a read error, or an
+// unset/non-"true" value all mean the sweeper must not touch git repo
+// sources this tick.
+func (s *Sweeper) gitRepoEnabled(ctx context.Context) bool {
+	if s.cfg == nil {
+		return false
+	}
+	v, err := s.cfg.GetSiteConfigValue(ctx, gitRepoEnabledConfigKey)
+	if err != nil {
+		slog.Warn("sync sweeper: failed to read git_repo_enabled, treating as disabled", "error", err)
+		return false
+	}
+	return v != nil && *v == "true"
 }
 
 // stamp writes the next slot; it reports false when nothing was written, in

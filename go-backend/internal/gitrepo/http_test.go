@@ -304,11 +304,14 @@ func TestUpdateSource_ClearsNextSyncAt(t *testing.T) {
 }
 
 // TestUpdateSource_NoScheduleChangeLeavesNextSyncAt verifies that a PATCH
-// not touching syncSchedule does not touch next_sync_at.
+// not touching syncSchedule and not re-activating does not touch
+// next_sync_at. Pausing a source is exactly this case: it must not disturb
+// the stamped slot, since the row falls out of ListDue/ListUnscheduled by
+// status alone while paused.
 func TestUpdateSource_NoScheduleChangeLeavesNextSyncAt(t *testing.T) {
 	fs := &fakeStore{getByID: &GitRepoSourceRow{ID: "SRC1", KbID: "KB-A"}}
 	h := NewHandler(fs, "test-jwt-secret-at-least-32-bytes-long!!", nil)
-	body := `{"status":"active"}`
+	body := `{"status":"paused"}`
 	req := httptest.NewRequest("PATCH", "/api/kb/KB-A/git-repos/SRC1", strings.NewReader(body))
 	req.SetPathValue("id", "KB-A")
 	req.SetPathValue("sourceId", "SRC1")
@@ -320,5 +323,32 @@ func TestUpdateSource_NoScheduleChangeLeavesNextSyncAt(t *testing.T) {
 	}
 	if fs.lastUpdate.NextSyncAt != nil {
 		t.Fatalf("expected NextSyncAt to stay untouched, got %v", fs.lastUpdate.NextSyncAt)
+	}
+}
+
+// TestUpdateSource_ReactivatingClearsNextSyncAt verifies that resuming a
+// paused source (status -> "active", with no syncSchedule in the request
+// body) clears next_sync_at. Without this, resuming a source that was
+// paused for a week fires an immediate daytime sync on the next sweep,
+// because the week-old next_sync_at is still in the past — exactly what the
+// stamp-without-enqueue design in ListUnscheduled exists to prevent.
+func TestUpdateSource_ReactivatingClearsNextSyncAt(t *testing.T) {
+	fs := &fakeStore{getByID: &GitRepoSourceRow{ID: "SRC1", KbID: "KB-A", Status: "paused"}}
+	h := NewHandler(fs, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+	body := `{"status":"active"}`
+	req := httptest.NewRequest("PATCH", "/api/kb/KB-A/git-repos/SRC1", strings.NewReader(body))
+	req.SetPathValue("id", "KB-A")
+	req.SetPathValue("sourceId", "SRC1")
+	rec := httptest.NewRecorder()
+	h.UpdateSource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if fs.lastUpdate.NextSyncAt == nil {
+		t.Fatal("expected NextSyncAt to be set (to clear it) when re-activating")
+	}
+	if *fs.lastUpdate.NextSyncAt != nil {
+		t.Fatalf("expected NextSyncAt to be cleared to NULL, got %v", **fs.lastUpdate.NextSyncAt)
 	}
 }

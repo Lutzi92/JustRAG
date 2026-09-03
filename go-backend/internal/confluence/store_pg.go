@@ -583,12 +583,18 @@ func toDueSources(rows []dueSourceRow) []syncwindow.DueSource {
 	return out
 }
 
-// ListDue returns sources whose stamped slot has arrived.
+// ListDue returns sources whose stamped slot has arrived. status IN
+// ('active','error') deliberately keeps an errored source on the schedule:
+// recordSyncFailure sets status='error' on any sync failure (a 500, a
+// network blip, an expired token), and dropping the predicate to
+// status='active' would take the source out of both ListDue and
+// ListUnscheduled permanently — nothing would ever move next_sync_at again.
+// 'paused' and 'syncing' stay excluded.
 func (s *PGStore) ListDue(ctx context.Context, now time.Time) ([]syncwindow.DueSource, error) {
 	const sql = `
 		SELECT id::text AS id, sync_schedule FROM confluence_sources
 		 WHERE sync_schedule <> 'manual'
-		   AND status = 'active'
+		   AND status IN ('active', 'error')
 		   AND next_sync_at IS NOT NULL
 		   AND next_sync_at <= $1`
 	rows, err := pgxutil.QueryRows[dueSourceRow](ctx, s.pool, sql, now)
@@ -603,7 +609,7 @@ func (s *PGStore) ListUnscheduled(ctx context.Context) ([]syncwindow.DueSource, 
 	const sql = `
 		SELECT id::text AS id, sync_schedule FROM confluence_sources
 		 WHERE sync_schedule <> 'manual'
-		   AND status = 'active'
+		   AND status IN ('active', 'error')
 		   AND next_sync_at IS NULL`
 	rows, err := pgxutil.QueryRows[dueSourceRow](ctx, s.pool, sql)
 	if err != nil {
@@ -612,7 +618,9 @@ func (s *PGStore) ListUnscheduled(ctx context.Context) ([]syncwindow.DueSource, 
 	return toDueSources(rows), nil
 }
 
-// MarkScheduled stamps the next slot.
+// MarkScheduled stamps the next slot. No status predicate here: it addresses
+// a single row by primary key (the id came from ListDue/ListUnscheduled,
+// which already filtered on status).
 func (s *PGStore) MarkScheduled(ctx context.Context, id string, next time.Time) error {
 	const sql = `UPDATE confluence_sources SET next_sync_at = $2 WHERE id = $1`
 	_, err := s.pool.Exec(ctx, sql, id, next)

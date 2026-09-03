@@ -318,6 +318,16 @@ func (h *Handler) UpdateRSSFeed(w http.ResponseWriter, r *http.Request) {
 		zero := 0
 		updates.ErrorMessage = &empty
 		updates.ConsecutiveFailures = &zero
+
+		// Resuming a paused feed must not fire an immediate daytime sync from
+		// a next_sync_at stamped before the pause (possibly days or weeks
+		// stale). Clearing it drops the row into ListUnscheduled, which
+		// stamps a fresh slot in the next window occurrence WITHOUT
+		// enqueuing. Skip if a schedule change already cleared it above.
+		if updates.NextSyncAt == nil {
+			var null *time.Time
+			updates.NextSyncAt = &null
+		}
 	}
 
 	feed, err := h.store.UpdateRSSFeed(ctx, feedID, updates)

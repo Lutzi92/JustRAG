@@ -354,6 +354,37 @@ func TestUpdateRSSFeed_NoScheduleChangeLeavesNextSyncAt(t *testing.T) {
 	}
 }
 
+// TestUpdateRSSFeed_ReactivatingClearsNextSyncAt verifies that resuming a
+// paused feed (status -> "active", with no syncSchedule in the request body)
+// clears next_sync_at. Without this, resuming a feed that was paused for a
+// week fires an immediate daytime sync on the next sweep, because the
+// week-old next_sync_at is still in the past — exactly what the
+// stamp-without-enqueue design in ListUnscheduled exists to prevent.
+func TestUpdateRSSFeed_ReactivatingClearsNextSyncAt(t *testing.T) {
+	feed := makeFeed()
+	feed.Status = "paused"
+	updated := makeFeed()
+	updated.Status = "active"
+
+	store := &mockStore{feed: feed, updated: updated}
+	validator := &mockValidator{}
+	h := newHandlerForTest(store, validator)
+
+	body := map[string]any{"status": "active"}
+	req := withKBAccess(newRequest(http.MethodPatch, "/api/kb/"+testKBID+"/rss/"+testFeedID, body), testKBID)
+	rr := serveFeedID(testFeedID, h.UpdateRSSFeed, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if store.lastUpdate.NextSyncAt == nil {
+		t.Fatal("expected NextSyncAt to be set (to clear it) when re-activating")
+	}
+	if *store.lastUpdate.NextSyncAt != nil {
+		t.Fatalf("expected NextSyncAt to be cleared to NULL, got %v", **store.lastUpdate.NextSyncAt)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tests: DeleteRSSFeed
 // ---------------------------------------------------------------------------

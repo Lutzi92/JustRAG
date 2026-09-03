@@ -590,6 +590,36 @@ func TestUpdateSource_NoScheduleChangeLeavesNextSyncAt(t *testing.T) {
 	}
 }
 
+// TestUpdateSource_ReactivatingClearsNextSyncAt verifies that resuming a
+// paused source (status -> "active", with no syncSchedule in the request
+// body) clears next_sync_at. Without this, resuming a source that was
+// paused for a week fires an immediate daytime sync on the next sweep,
+// because the week-old next_sync_at is still in the past — exactly what the
+// stamp-without-enqueue design in ListUnscheduled exists to prevent.
+func TestUpdateSource_ReactivatingClearsNextSyncAt(t *testing.T) {
+	source := makeSource()
+	source.Status = "paused"
+	updated := makeSource()
+	updated.Status = "active"
+
+	store := &mockStore{source: source, updatedSrc: updated}
+	h := confluence.NewHandler(store, testJWTSecret)
+
+	body := map[string]any{"status": "active"}
+	req := withKBAccess(newRequest(http.MethodPatch, "/api/kb/"+testKBID+"/confluence-sources/"+testSourceID, body), testKBID)
+	rr := serveSourceID(testSourceID, h.UpdateSource, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if store.lastUpdate.NextSyncAt == nil {
+		t.Fatal("expected NextSyncAt to be set (to clear it) when re-activating")
+	}
+	if *store.lastUpdate.NextSyncAt != nil {
+		t.Fatalf("expected NextSyncAt to be cleared to NULL, got %v", **store.lastUpdate.NextSyncAt)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tests: DeleteSource
 // ---------------------------------------------------------------------------

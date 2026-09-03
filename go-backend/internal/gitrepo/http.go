@@ -253,11 +253,39 @@ func (h *Handler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 		update.NextSyncAt = &null
 	}
 
+	// Resuming a paused source must not fire an immediate daytime sync from a
+	// next_sync_at stamped before the pause (possibly days or weeks stale).
+	// Clearing it drops the row into ListUnscheduled, which stamps a fresh
+	// slot in the next window occurrence WITHOUT enqueuing. Skip if a
+	// schedule change already cleared it above. Unlike rss/confluence, git
+	// repo sources have no error_message/consecutive_failures fields to
+	// clear here — GitRepoSourceUpdate carries no such fields.
+	if body.Status != nil && *body.Status == "active" && update.NextSyncAt == nil {
+		var null *time.Time
+		update.NextSyncAt = &null
+	}
+
 	if err := h.store.UpdateGitRepoSource(ctx, sourceID, update); err != nil {
 		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to update git repo source")
 		return
 	}
-	httputil.WriteJSONCtx(ctx, w, http.StatusOK, map[string]string{"message": "updated"})
+
+	// Return the updated row, matching rss.UpdateRSSFeed and
+	// confluence.UpdateSource: the frontend's updateGitRepoSource hook
+	// applies the response body as the new source state, so a bare
+	// {"message":"updated"} here would overwrite the row with itself,
+	// discarding every field the UI needs to keep rendering it (repoUrl,
+	// status, syncSchedule, nextSyncAt, ...).
+	updated, err := h.store.GetGitRepoSourceByID(ctx, sourceID)
+	if err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to fetch updated git repo source")
+		return
+	}
+	if updated == nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "git repo source not found")
+		return
+	}
+	httputil.WriteJSONCtx(ctx, w, http.StatusOK, toDTO(*updated))
 }
 
 // ---------------------------------------------------------------------------
