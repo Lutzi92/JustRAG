@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SourcesSection } from './SourcesSection';
-import type { FileEntry } from '../../types';
+import type { FileEntry, RssFeed, ConfluenceSource, GitRepoSource } from '../../types';
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({ t: (key: string) => key }),
@@ -16,6 +16,31 @@ const makeFile = (over: Partial<FileEntry>): FileEntry => ({
   id: 'f-1', name: 'doc.pdf', type: 'application/pdf',
   status: 'completed', progress: 100, origin: 'upload',
   createdAt: '2026-06-12T00:00:00Z', selected: true,
+  ...over,
+});
+
+const makeRssFeed = (over: Partial<RssFeed> = {}): RssFeed => ({
+  id: 'feed-1', kbId: 'kb-1', url: 'https://example.com/feed.xml', title: 'Feed',
+  syncSchedule: 'manual', nextSyncAt: null, status: 'active', errorMessage: null,
+  consecutiveFailures: 0, lastPolledAt: null, itemCount: 0, fetchFullText: false,
+  createdAt: '2026-06-12T00:00:00Z',
+  ...over,
+});
+
+const makeConfluenceSource = (over: Partial<ConfluenceSource> = {}): ConfluenceSource => ({
+  id: 'conf-1', kbId: 'kb-1', connectionId: 'conn-1', spaceKey: 'ENG', rootPageId: null,
+  rootPageTitle: null, includeAttachments: false, syncSchedule: 'manual', nextSyncAt: null,
+  status: 'active', errorMessage: null, consecutiveFailures: 0, lastSyncedAt: null,
+  pageCount: 0, syncProgress: 0, syncTotal: 0, createdAt: '2026-06-12T00:00:00Z',
+  ...over,
+});
+
+const makeGitRepoSource = (over: Partial<GitRepoSource> = {}): GitRepoSource => ({
+  id: 'git-1', kbId: 'kb-1', repoUrl: 'https://github.com/acme/repo', isPrivate: false,
+  branch: null, hasToken: false, syncSchedule: 'manual', nextSyncAt: null,
+  status: 'active', errorMessage: null, consecutiveFailures: 0, lastSyncedAt: null,
+  lastCommitSha: null, fileCount: 0, syncProgress: 0, syncTotal: 0,
+  createdAt: '2026-06-12T00:00:00Z',
   ...over,
 });
 
@@ -84,5 +109,66 @@ describe('SourcesSection error display + retry', () => {
     const btn = screen.getByRole('button', { name: /retryAllFailed \(2\)/ });
     await userEvent.click(btn);
     expect(onRetryAllFailed).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The API contract: nextSyncAt is displayed only when the source's schedule
+// is not 'manual' AND the value is non-null. Asserted on the text the user
+// actually sees (t() is identity-mocked, so t('nextSync') renders literally
+// as "nextSync") rather than on internal props, per each of the three source
+// types the rule applies to.
+describe('SourcesSection next-sync display', () => {
+  it('shows the next sync time for an RSS feed on a non-manual schedule', () => {
+    const feed = makeRssFeed({ syncSchedule: 'daily', nextSyncAt: '2026-09-04T02:00:00Z' });
+    render(<SourcesSection {...baseProps} files={[]} rssFeeds={[feed]} />);
+    expect(screen.getByText(/nextSync/)).toBeInTheDocument();
+  });
+
+  it('hides the next sync time for an RSS feed on a manual schedule, even with a value set', () => {
+    const feed = makeRssFeed({ syncSchedule: 'manual', nextSyncAt: '2026-09-04T02:00:00Z' });
+    render(<SourcesSection {...baseProps} files={[]} rssFeeds={[feed]} />);
+    expect(screen.queryByText(/nextSync/)).not.toBeInTheDocument();
+  });
+
+  it('hides the next sync time for an RSS feed with no value, even on a non-manual schedule', () => {
+    const feed = makeRssFeed({ syncSchedule: 'daily', nextSyncAt: null });
+    render(<SourcesSection {...baseProps} files={[]} rssFeeds={[feed]} />);
+    expect(screen.queryByText(/nextSync/)).not.toBeInTheDocument();
+  });
+
+  it('shows the next sync time for a Confluence source on a non-manual schedule', () => {
+    const source = makeConfluenceSource({ syncSchedule: 'weekly', nextSyncAt: '2026-09-07T02:00:00Z' });
+    render(<SourcesSection {...baseProps} files={[]} confluenceSources={[source]} />);
+    expect(screen.getByText(/nextSync/)).toBeInTheDocument();
+  });
+
+  it('hides the next sync time for a Confluence source on a manual schedule, even with a value set', () => {
+    const source = makeConfluenceSource({ syncSchedule: 'manual', nextSyncAt: '2026-09-07T02:00:00Z' });
+    render(<SourcesSection {...baseProps} files={[]} confluenceSources={[source]} />);
+    expect(screen.queryByText(/nextSync/)).not.toBeInTheDocument();
+  });
+
+  it('hides the next sync time for a Confluence source with no value, even on a non-manual schedule', () => {
+    const source = makeConfluenceSource({ syncSchedule: 'weekly', nextSyncAt: null });
+    render(<SourcesSection {...baseProps} files={[]} confluenceSources={[source]} />);
+    expect(screen.queryByText(/nextSync/)).not.toBeInTheDocument();
+  });
+
+  it('shows the next sync time for a git repo source on a non-manual schedule', () => {
+    const source = makeGitRepoSource({ syncSchedule: 'daily', nextSyncAt: '2026-09-04T02:00:00Z' });
+    render(<SourcesSection {...baseProps} files={[]} gitRepoSources={[source]} />);
+    expect(screen.getByText(/nextSync/)).toBeInTheDocument();
+  });
+
+  it('hides the next sync time for a git repo source on a manual schedule, even with a value set', () => {
+    const source = makeGitRepoSource({ syncSchedule: 'manual', nextSyncAt: '2026-09-04T02:00:00Z' });
+    render(<SourcesSection {...baseProps} files={[]} gitRepoSources={[source]} />);
+    expect(screen.queryByText(/nextSync/)).not.toBeInTheDocument();
+  });
+
+  it('hides the next sync time for a git repo source with no value, even on a non-manual schedule', () => {
+    const source = makeGitRepoSource({ syncSchedule: 'daily', nextSyncAt: null });
+    render(<SourcesSection {...baseProps} files={[]} gitRepoSources={[source]} />);
+    expect(screen.queryByText(/nextSync/)).not.toBeInTheDocument();
   });
 });
