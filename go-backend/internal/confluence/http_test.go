@@ -30,11 +30,13 @@ type mockStore struct {
 	updateConnErr  error
 	lastConnUpdate *confluence.ConfluenceConnectionUpdate
 	deleteErr      error
-	source         *confluence.ConfluenceSourceRow
-	sources        []confluence.ConfluenceSourceRow
-	sourceErr      error
-	updatedSrc     *confluence.ConfluenceSourceRow
-	siteConfigs    map[string]*string
+	source              *confluence.ConfluenceSourceRow
+	sources             []confluence.ConfluenceSourceRow
+	sourceErr           error
+	updatedSrc          *confluence.ConfluenceSourceRow
+	siteConfigs         map[string]*string
+	lastCreatedSchedule string
+	lastUpdate          confluence.ConfluenceSourceUpdate
 }
 
 func (m *mockStore) GetConfluenceConnectionByUserID(_ context.Context, _ string) (*confluence.ConfluenceConnectionRow, error) {
@@ -56,6 +58,7 @@ func (m *mockStore) UpdateConfluenceConnection(_ context.Context, _ string, u co
 }
 
 func (m *mockStore) CreateConfluenceSource(_ context.Context, kbID, connectionID, spaceKey string, rootPageID, rootPageTitle *string, includeAttachments bool, syncSchedule string) (*confluence.ConfluenceSourceRow, error) {
+	m.lastCreatedSchedule = syncSchedule
 	if m.sourceErr != nil {
 		return nil, m.sourceErr
 	}
@@ -76,7 +79,8 @@ func (m *mockStore) GetConfluenceSourceByID(_ context.Context, _ string) (*confl
 	return m.source, nil
 }
 
-func (m *mockStore) UpdateConfluenceSource(_ context.Context, _ string, _ confluence.ConfluenceSourceUpdate) (*confluence.ConfluenceSourceRow, error) {
+func (m *mockStore) UpdateConfluenceSource(_ context.Context, _ string, updates confluence.ConfluenceSourceUpdate) (*confluence.ConfluenceSourceRow, error) {
+	m.lastUpdate = updates
 	if m.sourceErr != nil {
 		return nil, m.sourceErr
 	}
@@ -463,6 +467,126 @@ func TestCreateSource_RejectsUnknownSchedule(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCreateSource_DefaultsToManual(t *testing.T) {
+	source := makeSource()
+	store := &mockStore{source: source}
+	h := confluence.NewHandler(store, testJWTSecret)
+
+	body := map[string]any{
+		"connectionId": testConnID,
+		"spaceKey":     "ENG",
+	}
+	req := withKBAccess(newRequest(http.MethodPost, "/api/kb/"+testKBID+"/confluence-sources", body), testKBID)
+	rr := httptest.NewRecorder()
+	h.CreateSource(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if store.lastCreatedSchedule != "manual" {
+		t.Fatalf("expected manual, got %q", store.lastCreatedSchedule)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: UpdateSource
+// ---------------------------------------------------------------------------
+
+func TestUpdateSource_OK(t *testing.T) {
+	source := makeSource()
+	updated := makeSource()
+	updated.SyncSchedule = "daily"
+
+	store := &mockStore{source: source, updatedSrc: updated}
+	h := confluence.NewHandler(store, testJWTSecret)
+
+	body := map[string]any{"syncSchedule": "daily"}
+	req := withKBAccess(newRequest(http.MethodPatch, "/api/kb/"+testKBID+"/confluence-sources/"+testSourceID, body), testKBID)
+	rr := serveSourceID(testSourceID, h.UpdateSource, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var got confluence.ConfluenceSourceRow
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.SyncSchedule != "daily" {
+		t.Errorf("expected syncSchedule %q, got %q", "daily", got.SyncSchedule)
+	}
+}
+
+func TestUpdateSource_InvalidSyncSchedule(t *testing.T) {
+	source := makeSource()
+	store := &mockStore{source: source}
+	h := confluence.NewHandler(store, testJWTSecret)
+
+	body := map[string]any{"syncSchedule": "hourly"}
+	req := withKBAccess(newRequest(http.MethodPatch, "/api/kb/"+testKBID+"/confluence-sources/"+testSourceID, body), testKBID)
+	rr := serveSourceID(testSourceID, h.UpdateSource, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestUpdateSource_ClearsNextSyncAt verifies that changing syncSchedule
+// clears next_sync_at so the sweeper re-stamps the slot on its next tick
+// instead of leaving a stale slot from the previous schedule in place. This
+// must hold for every target schedule, INCLUDING a change back to "manual" —
+// that is the case most likely to get special-cased away by a future edit,
+// since "manual" reads like "nothing to schedule" rather than "a schedule
+// change that must clear the stamp".
+func TestUpdateSource_ClearsNextSyncAt(t *testing.T) {
+	for _, schedule := range []string{"daily", "weekly", "manual"} {
+		t.Run(schedule, func(t *testing.T) {
+			source := makeSource()
+			updated := makeSource()
+			updated.SyncSchedule = schedule
+
+			store := &mockStore{source: source, updatedSrc: updated}
+			h := confluence.NewHandler(store, testJWTSecret)
+
+			body := map[string]any{"syncSchedule": schedule}
+			req := withKBAccess(newRequest(http.MethodPatch, "/api/kb/"+testKBID+"/confluence-sources/"+testSourceID, body), testKBID)
+			rr := serveSourceID(testSourceID, h.UpdateSource, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+			}
+			if store.lastUpdate.NextSyncAt == nil {
+				t.Fatal("expected NextSyncAt to be set (to clear it) when syncSchedule changes")
+			}
+			if *store.lastUpdate.NextSyncAt != nil {
+				t.Fatalf("expected NextSyncAt to be cleared to NULL, got %v", **store.lastUpdate.NextSyncAt)
+			}
+		})
+	}
+}
+
+// TestUpdateSource_NoScheduleChangeLeavesNextSyncAt verifies that a PATCH
+// not touching syncSchedule does not touch next_sync_at.
+func TestUpdateSource_NoScheduleChangeLeavesNextSyncAt(t *testing.T) {
+	source := makeSource()
+	updated := makeSource()
+	updated.IncludeAttachments = true
+
+	store := &mockStore{source: source, updatedSrc: updated}
+	h := confluence.NewHandler(store, testJWTSecret)
+
+	body := map[string]any{"includeAttachments": true}
+	req := withKBAccess(newRequest(http.MethodPatch, "/api/kb/"+testKBID+"/confluence-sources/"+testSourceID, body), testKBID)
+	rr := serveSourceID(testSourceID, h.UpdateSource, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if store.lastUpdate.NextSyncAt != nil {
+		t.Fatalf("expected NextSyncAt to stay untouched, got %v", store.lastUpdate.NextSyncAt)
 	}
 }
 
