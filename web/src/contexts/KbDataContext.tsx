@@ -38,7 +38,7 @@ export interface KbDataContextValue {
   gitRepoLoading: boolean;
   fetchGitRepoSources: (kbId?: string) => void;
   addGitRepoSource: (data: { repoUrl: string; isPrivate: boolean; accessToken?: string; branch?: string; syncSchedule?: SyncSchedule }) => void;
-  updateGitRepoSource: (sourceId: string, updates: { status?: 'active' | 'paused' }) => void;
+  updateGitRepoSource: (sourceId: string, updates: { syncSchedule?: SyncSchedule; status?: 'active' | 'paused' }) => void;
   deleteGitRepoSource: (sourceId: string) => void;
   syncGitRepoNow: (sourceId: string) => void;
   // Actions

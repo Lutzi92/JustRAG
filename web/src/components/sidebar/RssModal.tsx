@@ -15,7 +15,13 @@ interface RssModalProps {
 const RssModalComp: React.FC<RssModalProps> = ({ show, onClose, rssLoading, onAddRssFeed }) => {
     const { t } = useTheme();
     const [rssUrl, setRssUrl] = useState('');
-    const [syncSchedule, setSyncSchedule] = useState<SyncSchedule>('manual');
+    // Defaults to 'daily' (not 'manual'): before this branch every RSS feed
+    // polled automatically (60 min default), and migration 0068 backfills
+    // every existing active feed to 'daily'. A newly created feed must keep
+    // that "polls automatically" behavior, or it is fetched once and never
+    // again. The backend's own default stays 'manual' (an omitted field must
+    // stay conservative) — this is a UI-only default.
+    const [syncSchedule, setSyncSchedule] = useState<SyncSchedule>('daily');
     const [rssFetchFullText, setRssFetchFullText] = useState(false);
 
     const handleSubmit = () => {

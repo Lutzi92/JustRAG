@@ -87,7 +87,7 @@ export function useGitRepoSources({ currentKb, fetchFiles }: UseGitRepoSourcesPa
         }
     }, [currentKb, fetchGitRepoSources, fetchFiles, t, toast]);
 
-    const updateGitRepoSource = useCallback(async (sourceId: string, updates: { status?: 'active' | 'paused' }) => {
+    const updateGitRepoSource = useCallback(async (sourceId: string, updates: { syncSchedule?: SyncSchedule; status?: 'active' | 'paused' }) => {
         if (!currentKb) return;
         setGitRepoSources(prev => prev.map(s => s.id === sourceId ? { ...s, ...updates } : s));
         try {

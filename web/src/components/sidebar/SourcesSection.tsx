@@ -6,6 +6,7 @@ import {
 import type { FileEntry, RssFeed, ConfluenceSource, GitRepoSource, SyncSchedule } from '../../types';
 import { useTheme } from '../../contexts/ThemeContext';
 import { IngestStageIndicator } from './IngestStageIndicator';
+import { SyncScheduleSelect } from './SyncScheduleSelect';
 
 interface SourcesSectionProps {
     files: FileEntry[];
@@ -24,7 +25,7 @@ interface SourcesSectionProps {
     onDeleteConfluenceSource: (sourceId: string) => void;
     onSyncConfluenceNow: (sourceId: string) => void;
     gitRepoSources: GitRepoSource[];
-    onUpdateGitRepoSource: (sourceId: string, updates: { status?: 'active' | 'paused' }) => void;
+    onUpdateGitRepoSource: (sourceId: string, updates: { syncSchedule?: SyncSchedule; status?: 'active' | 'paused' }) => void;
     onDeleteGitRepoSource: (sourceId: string) => void;
     onSyncGitRepoNow: (sourceId: string) => void;
     onRetryFile: (id: string) => void;
@@ -195,6 +196,11 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                 {feed.status === 'error' && feed.errorMessage && (
                                     <div className="sidebar-left__rss-feed-error">{feed.errorMessage}</div>
                                 )}
+                                <SyncScheduleSelect
+                                    id={`rss-row-schedule-${feed.id}`}
+                                    value={feed.syncSchedule}
+                                    onChange={(syncSchedule) => onUpdateRssFeed(feed.id, { syncSchedule })}
+                                />
                                 <div className="sidebar-left__rss-feed-actions">
                                     <button onClick={() => onPollFeedNow(feed.id)} title={t('pollNow')} aria-label={t('pollNow')}>
                                         <RefreshCw size={14} />
@@ -259,6 +265,11 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                 {source.status === 'error' && source.errorMessage && (
                                     <div className="sidebar-left__rss-feed-error">{source.errorMessage}</div>
                                 )}
+                                <SyncScheduleSelect
+                                    id={`confluence-row-schedule-${source.id}`}
+                                    value={source.syncSchedule}
+                                    onChange={(syncSchedule) => onUpdateConfluenceSource(source.id, { syncSchedule })}
+                                />
                                 <div className="sidebar-left__rss-feed-actions">
                                     <button onClick={() => onSyncConfluenceNow(source.id)} title={t('pollNow')} aria-label={t('pollNow')}>
                                         <RefreshCw size={14} />
@@ -316,6 +327,11 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                     {source.status === 'error' && source.errorMessage && (
                                         <div className="sidebar-left__rss-feed-error">{source.errorMessage}</div>
                                     )}
+                                    <SyncScheduleSelect
+                                        id={`gitrepo-row-schedule-${source.id}`}
+                                        value={source.syncSchedule}
+                                        onChange={(syncSchedule) => onUpdateGitRepoSource(source.id, { syncSchedule })}
+                                    />
                                     <div className="sidebar-left__rss-feed-actions">
                                         <button onClick={() => onSyncGitRepoNow(source.id)} title={t('pollNow')} aria-label={t('pollNow')}>
                                             <RefreshCw size={14} />

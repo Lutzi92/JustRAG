@@ -54,7 +54,9 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
 
     // RSS state
     const [rssUrl, setRssUrl] = useState('');
-    const [rssSyncSchedule, setRssSyncSchedule] = useState<SyncSchedule>('manual');
+    // Defaults to 'daily', not 'manual': see RssModal.tsx for the rationale
+    // (every RSS feed polled automatically before this branch).
+    const [rssSyncSchedule, setRssSyncSchedule] = useState<SyncSchedule>('daily');
     const [rssFetchFullText, setRssFetchFullText] = useState(false);
     const [rssLoading, setRssLoading] = useState(false);
     const [rssFeeds, setRssFeeds] = useState<RssFeed[]>([]);
