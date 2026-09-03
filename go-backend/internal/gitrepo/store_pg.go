@@ -4,16 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/pgxutil"
+	"github.com/justrag/go-backend/internal/syncwindow"
 )
 
 const gitRepoSourceColumns = `
-	id, kb_id, repo_url, is_private, access_token_encrypted, branch, status,
+	id, kb_id, repo_url, is_private, access_token_encrypted, branch,
+	sync_schedule, next_sync_at, status,
 	error_message, consecutive_failures, last_synced_at, last_commit_sha,
 	file_count, sync_progress, sync_total, created_at`
 
@@ -24,6 +27,8 @@ type GitRepoSourceRow struct {
 	IsPrivate            bool
 	AccessTokenEncrypted *string
 	Branch               *string
+	SyncSchedule         string
+	NextSyncAt           *time.Time
 	Status               string
 	ErrorMessage         *string
 	ConsecutiveFailures  int
@@ -42,6 +47,8 @@ type gitRepoSourceDBRow struct {
 	IsPrivate            bool       `db:"is_private"`
 	AccessTokenEncrypted *string    `db:"access_token_encrypted"`
 	Branch               *string    `db:"branch"`
+	SyncSchedule         string     `db:"sync_schedule"`
+	NextSyncAt           *time.Time `db:"next_sync_at"`
 	Status               string     `db:"status"`
 	ErrorMessage         *string    `db:"error_message"`
 	ConsecutiveFailures  int        `db:"consecutive_failures"`
@@ -63,10 +70,16 @@ type CreateGitRepoSourceInput struct {
 	IsPrivate            bool
 	AccessTokenEncrypted *string // nil for public
 	Branch               *string // nil => default HEAD
+	SyncSchedule         string  // one of syncwindow.Schedule*
 }
 
+// GitRepoSourceUpdate carries optional fields for a PATCH update. NextSyncAt
+// is a double pointer so "leave untouched" (nil) and "set to NULL" (non-nil
+// pointing at a nil *time.Time) are both expressible.
 type GitRepoSourceUpdate struct {
-	Status *string // "active" | "paused"
+	SyncSchedule *string
+	NextSyncAt   **time.Time
+	Status       *string // "active" | "paused"
 }
 
 type SyncState struct {
@@ -119,13 +132,16 @@ func NewStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
 // Compile-time interface assertion.
 var _ Store = (*PGStore)(nil)
 
+// CreateGitRepoSource inserts a new git repo source and returns the stored
+// row. SyncSchedule is one of syncwindow.Schedule*; next_sync_at is left
+// NULL and stamped by the sweeper on its next tick.
 func (s *PGStore) CreateGitRepoSource(ctx context.Context, in CreateGitRepoSourceInput) (*GitRepoSourceRow, error) {
 	const q = `
-		INSERT INTO git_repo_sources (kb_id, repo_url, is_private, access_token_encrypted, branch, status)
-		VALUES ($1, $2, $3, $4, $5, 'active')
+		INSERT INTO git_repo_sources (kb_id, repo_url, is_private, access_token_encrypted, branch, sync_schedule, status)
+		VALUES ($1, $2, $3, $4, $5, $6, 'active')
 		RETURNING ` + gitRepoSourceColumns
 	rows, err := pgxutil.QueryRows[gitRepoSourceDBRow](ctx, s.pool, q,
-		in.KbID, in.RepoURL, in.IsPrivate, in.AccessTokenEncrypted, in.Branch)
+		in.KbID, in.RepoURL, in.IsPrivate, in.AccessTokenEncrypted, in.Branch, in.SyncSchedule)
 	if err != nil {
 		return nil, fmt.Errorf("CreateGitRepoSource: %w", err)
 	}
@@ -163,11 +179,37 @@ func (s *PGStore) GetGitRepoSourceByID(ctx context.Context, id string) (*GitRepo
 }
 
 func (s *PGStore) UpdateGitRepoSource(ctx context.Context, id string, upd GitRepoSourceUpdate) error {
-	if upd.Status == nil {
+	var setClauses []string
+	var args []any
+	param := 1
+
+	if upd.SyncSchedule != nil {
+		setClauses = append(setClauses, fmt.Sprintf("sync_schedule = $%d", param))
+		args = append(args, *upd.SyncSchedule)
+		param++
+	}
+	if upd.NextSyncAt != nil {
+		if *upd.NextSyncAt == nil {
+			setClauses = append(setClauses, "next_sync_at = NULL")
+		} else {
+			setClauses = append(setClauses, fmt.Sprintf("next_sync_at = $%d", param))
+			args = append(args, **upd.NextSyncAt)
+			param++
+		}
+	}
+	if upd.Status != nil {
+		setClauses = append(setClauses, fmt.Sprintf("status = $%d", param))
+		args = append(args, *upd.Status)
+		param++
+	}
+
+	if len(setClauses) == 0 {
 		return nil // Nothing to update.
 	}
-	const q = `UPDATE git_repo_sources SET status = $2 WHERE id = $1`
-	_, err := s.pool.Exec(ctx, q, id, *upd.Status)
+
+	args = append(args, id)
+	q := fmt.Sprintf(`UPDATE git_repo_sources SET %s WHERE id = $%d`, strings.Join(setClauses, ", "), param)
+	_, err := s.pool.Exec(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("UpdateGitRepoSource: %w", err)
 	}
@@ -272,4 +314,66 @@ func (s *PGStore) GetGitRepoSourceFileProgress(ctx context.Context, sourceID str
 		return 0, 0, nil
 	}
 	return rows[0].Total, rows[0].Done, nil
+}
+
+// ---------------------------------------------------------------------------
+// Sweeper contract (internal/syncsched)
+// ---------------------------------------------------------------------------
+
+// Kind identifies this store to the sweeper (internal/syncsched).
+func (s *PGStore) Kind() string { return "git_repo" }
+
+// dueSourceRow scans the two columns the sweeper needs.
+type dueSourceRow struct {
+	ID       string `db:"id"`
+	Schedule string `db:"sync_schedule"`
+}
+
+func toDueSources(rows []dueSourceRow) []syncwindow.DueSource {
+	out := make([]syncwindow.DueSource, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, syncwindow.DueSource{ID: r.ID, Schedule: r.Schedule})
+	}
+	return out
+}
+
+// ListDue returns sources whose stamped slot has arrived.
+func (s *PGStore) ListDue(ctx context.Context, now time.Time) ([]syncwindow.DueSource, error) {
+	const sql = `
+		SELECT id::text AS id, sync_schedule FROM git_repo_sources
+		 WHERE sync_schedule <> 'manual'
+		   AND status = 'active'
+		   AND next_sync_at IS NOT NULL
+		   AND next_sync_at <= $1`
+	rows, err := pgxutil.QueryRows[dueSourceRow](ctx, s.pool, sql, now)
+	if err != nil {
+		return nil, fmt.Errorf("ListDue(git_repo): %w", err)
+	}
+	return toDueSources(rows), nil
+}
+
+// ListUnscheduled returns sources with a schedule but no stamped slot yet
+// (newly created, or newly switched away from manual). The sweeper stamps
+// them WITHOUT enqueuing, so enabling a schedule never triggers a daytime sync.
+func (s *PGStore) ListUnscheduled(ctx context.Context) ([]syncwindow.DueSource, error) {
+	const sql = `
+		SELECT id::text AS id, sync_schedule FROM git_repo_sources
+		 WHERE sync_schedule <> 'manual'
+		   AND status = 'active'
+		   AND next_sync_at IS NULL`
+	rows, err := pgxutil.QueryRows[dueSourceRow](ctx, s.pool, sql)
+	if err != nil {
+		return nil, fmt.Errorf("ListUnscheduled(git_repo): %w", err)
+	}
+	return toDueSources(rows), nil
+}
+
+// MarkScheduled stamps the next slot.
+func (s *PGStore) MarkScheduled(ctx context.Context, id string, next time.Time) error {
+	const sql = `UPDATE git_repo_sources SET next_sync_at = $2 WHERE id = $1`
+	_, err := s.pool.Exec(ctx, sql, id, next)
+	if err != nil {
+		return fmt.Errorf("MarkScheduled(git_repo, %s): %w", id, err)
+	}
+	return nil
 }

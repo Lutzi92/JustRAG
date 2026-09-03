@@ -118,3 +118,17 @@ func TestToGitRepoSourceRowNilPointers(t *testing.T) {
 		t.Errorf("LastCommitSHA: expected nil, got %v", got.LastCommitSHA)
 	}
 }
+
+func TestGitRepoStoreImplementsSweeperContract(t *testing.T) {
+	if k := NewStore(nil).Kind(); k != "git_repo" {
+		t.Fatalf("expected kind git_repo, got %q", k)
+	}
+}
+
+func TestGitRepoSourceRowCarriesSchedule(t *testing.T) {
+	next := time.Date(2026, 9, 5, 3, 0, 0, 0, time.UTC)
+	got := toGitRepoSourceRow(gitRepoSourceDBRow{ID: "g1", SyncSchedule: "daily", NextSyncAt: &next})
+	if got.SyncSchedule != "daily" || got.NextSyncAt == nil {
+		t.Fatalf("schedule fields not carried through: %+v", got)
+	}
+}

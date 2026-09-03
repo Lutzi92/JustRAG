@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -13,6 +14,7 @@ type fakeStore struct {
 	created        *CreateGitRepoSourceInput
 	getByID        *GitRepoSourceRow
 	updateCalled   bool
+	lastUpdate     GitRepoSourceUpdate
 	deleteCalled   bool
 	gitRepoEnabled bool // controls GetSiteConfigValue("git_repo_enabled")
 }
@@ -31,8 +33,9 @@ func (f *fakeStore) ListGitRepoSources(context.Context, string) ([]GitRepoSource
 func (f *fakeStore) GetGitRepoSourceByID(context.Context, string) (*GitRepoSourceRow, error) {
 	return f.getByID, nil
 }
-func (f *fakeStore) UpdateGitRepoSource(_ context.Context, _ string, _ GitRepoSourceUpdate) error {
+func (f *fakeStore) UpdateGitRepoSource(_ context.Context, _ string, upd GitRepoSourceUpdate) error {
 	f.updateCalled = true
+	f.lastUpdate = upd
 	return nil
 }
 func (f *fakeStore) DeleteGitRepoSource(_ context.Context, _ string) error {
@@ -201,5 +204,121 @@ func TestCreateSourceDisabledReturns403(t *testing.T) {
 	}
 	if fs.created != nil {
 		t.Fatal("CreateGitRepoSource must not be called when feature is disabled")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for syncSchedule tests
+// ---------------------------------------------------------------------------
+
+// newTestHandler returns a Handler whose store reports git_repo_enabled=true,
+// plus the fakeStore so tests can inspect captured mock state.
+func newTestHandler(t *testing.T) (*Handler, *fakeStore) {
+	t.Helper()
+	fs := &fakeStore{gitRepoEnabled: true}
+	h := NewHandler(fs, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+	return h, fs
+}
+
+// doRequest builds a request with the given method/path/body and invokes handler directly.
+func doRequest(t *testing.T, handler http.HandlerFunc, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	return rec
+}
+
+// ---------------------------------------------------------------------------
+// Tests: syncSchedule
+// ---------------------------------------------------------------------------
+
+func TestCreateSource_RejectsUnknownSchedule(t *testing.T) {
+	h, _ := newTestHandler(t) // must return a handler whose store reports git_repo_enabled=true
+	body := `{"repoUrl":"https://github.com/o/r.git","syncSchedule":"nightly"}`
+	rec := doRequest(t, h.CreateSource, http.MethodPost, "/api/kb/kb-1/git-repos", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateSource_DefaultsToManual(t *testing.T) {
+	h, fs := newTestHandler(t)
+	body := `{"repoUrl":"https://github.com/o/r.git"}`
+	rec := doRequest(t, h.CreateSource, http.MethodPost, "/api/kb/kb-1/git-repos", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if fs.created == nil || fs.created.SyncSchedule != "manual" {
+		t.Fatalf("expected manual, got %+v", fs.created)
+	}
+}
+
+func TestUpdateSource_InvalidSyncSchedule(t *testing.T) {
+	fs := &fakeStore{getByID: &GitRepoSourceRow{ID: "SRC1", KbID: "KB-A"}}
+	h := NewHandler(fs, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+	body := `{"syncSchedule":"hourly"}`
+	req := httptest.NewRequest("PATCH", "/api/kb/KB-A/git-repos/SRC1", strings.NewReader(body))
+	req.SetPathValue("id", "KB-A")
+	req.SetPathValue("sourceId", "SRC1")
+	rec := httptest.NewRecorder()
+	h.UpdateSource(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if fs.updateCalled {
+		t.Fatal("UpdateGitRepoSource must not be called for an invalid syncSchedule")
+	}
+}
+
+// TestUpdateSource_ClearsNextSyncAt verifies that changing syncSchedule
+// clears next_sync_at so the sweeper re-stamps the slot on its next tick
+// instead of leaving a stale slot from the previous schedule in place. This
+// must hold for every target schedule, INCLUDING a change back to "manual" —
+// that is the case most likely to get special-cased away by a future edit,
+// since "manual" reads like "nothing to schedule" rather than "a schedule
+// change that must clear the stamp".
+func TestUpdateSource_ClearsNextSyncAt(t *testing.T) {
+	for _, schedule := range []string{"daily", "weekly", "manual"} {
+		t.Run(schedule, func(t *testing.T) {
+			fs := &fakeStore{getByID: &GitRepoSourceRow{ID: "SRC1", KbID: "KB-A"}}
+			h := NewHandler(fs, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+			body := `{"syncSchedule":"` + schedule + `"}`
+			req := httptest.NewRequest("PATCH", "/api/kb/KB-A/git-repos/SRC1", strings.NewReader(body))
+			req.SetPathValue("id", "KB-A")
+			req.SetPathValue("sourceId", "SRC1")
+			rec := httptest.NewRecorder()
+			h.UpdateSource(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if fs.lastUpdate.NextSyncAt == nil {
+				t.Fatal("expected NextSyncAt to be set (to clear it) when syncSchedule changes")
+			}
+			if *fs.lastUpdate.NextSyncAt != nil {
+				t.Fatalf("expected NextSyncAt to be cleared to NULL, got %v", **fs.lastUpdate.NextSyncAt)
+			}
+		})
+	}
+}
+
+// TestUpdateSource_NoScheduleChangeLeavesNextSyncAt verifies that a PATCH
+// not touching syncSchedule does not touch next_sync_at.
+func TestUpdateSource_NoScheduleChangeLeavesNextSyncAt(t *testing.T) {
+	fs := &fakeStore{getByID: &GitRepoSourceRow{ID: "SRC1", KbID: "KB-A"}}
+	h := NewHandler(fs, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+	body := `{"status":"active"}`
+	req := httptest.NewRequest("PATCH", "/api/kb/KB-A/git-repos/SRC1", strings.NewReader(body))
+	req.SetPathValue("id", "KB-A")
+	req.SetPathValue("sourceId", "SRC1")
+	rec := httptest.NewRecorder()
+	h.UpdateSource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if fs.lastUpdate.NextSyncAt != nil {
+		t.Fatalf("expected NextSyncAt to stay untouched, got %v", fs.lastUpdate.NextSyncAt)
 	}
 }

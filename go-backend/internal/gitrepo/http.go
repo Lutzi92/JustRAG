@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/hibiken/asynq"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/logctx"
+	"github.com/justrag/go-backend/internal/syncwindow"
 )
 
 // Handler holds the dependencies for the Git repo source HTTP endpoints.
@@ -50,6 +52,8 @@ type gitRepoSourceDTO struct {
 	IsPrivate           bool    `json:"isPrivate"`
 	Branch              *string `json:"branch"`
 	HasToken            bool    `json:"hasToken"`
+	SyncSchedule        string  `json:"syncSchedule"`
+	NextSyncAt          *string `json:"nextSyncAt"`
 	Status              string  `json:"status"`
 	ErrorMessage        *string `json:"errorMessage"`
 	ConsecutiveFailures int     `json:"consecutiveFailures"`
@@ -67,6 +71,11 @@ func toDTO(r GitRepoSourceRow) gitRepoSourceDTO {
 		s := r.LastSyncedAt.Format("2006-01-02T15:04:05Z07:00")
 		last = &s
 	}
+	var next *string
+	if r.NextSyncAt != nil {
+		s := r.NextSyncAt.Format("2006-01-02T15:04:05Z07:00")
+		next = &s
+	}
 	return gitRepoSourceDTO{
 		ID:                  r.ID,
 		KbID:                r.KbID,
@@ -74,6 +83,8 @@ func toDTO(r GitRepoSourceRow) gitRepoSourceDTO {
 		IsPrivate:           r.IsPrivate,
 		Branch:              r.Branch,
 		HasToken:            r.AccessTokenEncrypted != nil && *r.AccessTokenEncrypted != "",
+		SyncSchedule:        r.SyncSchedule,
+		NextSyncAt:          next,
 		Status:              r.Status,
 		ErrorMessage:        r.ErrorMessage,
 		ConsecutiveFailures: r.ConsecutiveFailures,
@@ -91,10 +102,11 @@ func toDTO(r GitRepoSourceRow) gitRepoSourceDTO {
 // ---------------------------------------------------------------------------
 
 type createSourceRequest struct {
-	RepoURL     string `json:"repoUrl"`
-	IsPrivate   bool   `json:"isPrivate"`
-	AccessToken string `json:"accessToken"`
-	Branch      string `json:"branch"`
+	RepoURL      string `json:"repoUrl"`
+	IsPrivate    bool   `json:"isPrivate"`
+	AccessToken  string `json:"accessToken"`
+	Branch       string `json:"branch"`
+	SyncSchedule string `json:"syncSchedule"`
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +140,16 @@ func (h *Handler) CreateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate syncSchedule (empty string means manual).
+	syncSchedule := syncwindow.ScheduleManual
+	if body.SyncSchedule != "" {
+		syncSchedule = body.SyncSchedule
+	}
+	if !syncwindow.Valid(syncSchedule) {
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "syncSchedule must be manual, daily or weekly")
+		return
+	}
+
 	var encTok *string
 	if body.IsPrivate {
 		if body.AccessToken == "" {
@@ -153,6 +175,7 @@ func (h *Handler) CreateSource(w http.ResponseWriter, r *http.Request) {
 		IsPrivate:            body.IsPrivate,
 		AccessTokenEncrypted: encTok,
 		Branch:               branch,
+		SyncSchedule:         syncSchedule,
 	})
 	if err != nil {
 		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to create git repo source")
@@ -193,10 +216,15 @@ func (h *Handler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 	sourceID := r.PathValue("sourceId")
 
 	var body struct {
-		Status *string `json:"status"`
+		SyncSchedule *string `json:"syncSchedule"`
+		Status       *string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.SyncSchedule != nil && !syncwindow.Valid(*body.SyncSchedule) {
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "syncSchedule must be manual, daily or weekly")
 		return
 	}
 	if body.Status != nil && *body.Status != "active" && *body.Status != "paused" {
@@ -214,7 +242,18 @@ func (h *Handler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.store.UpdateGitRepoSource(ctx, sourceID, GitRepoSourceUpdate{Status: body.Status}); err != nil {
+	update := GitRepoSourceUpdate{SyncSchedule: body.SyncSchedule, Status: body.Status}
+
+	// A schedule change takes effect immediately: clearing next_sync_at makes
+	// the sweeper re-stamp on its next tick, including a change back to
+	// "manual" — leaving the old stamp in place would leave a source on its
+	// previous cadence until the next slot fires.
+	if body.SyncSchedule != nil {
+		var null *time.Time
+		update.NextSyncAt = &null
+	}
+
+	if err := h.store.UpdateGitRepoSource(ctx, sourceID, update); err != nil {
 		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to update git repo source")
 		return
 	}
