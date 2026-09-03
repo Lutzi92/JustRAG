@@ -9,7 +9,6 @@ import (
 	redsyncredis "github.com/go-redsync/redsync/v4/redis/goredis/v9"
 
 	"github.com/justrag/go-backend/internal/confluence"
-	"github.com/justrag/go-backend/internal/rss"
 )
 
 // schedulerLockKey is the Redis key used to elect a single leader across
@@ -22,9 +21,11 @@ const (
 	acquireRetryPeriod = 15 * time.Second
 )
 
-// startSchedulers runs the RSS and Confluence schedulers under a Redis-based
-// leader lock so that exactly one go-server replica drives scheduled syncs.
-// It blocks until ctx is canceled.
+// startSchedulers runs the Confluence scheduler under a Redis-based leader
+// lock so that exactly one go-server replica drives scheduled syncs. RSS is
+// no longer driven by a per-feed ticker scheduler here (that mechanism was
+// removed along with rss_feeds.poll_interval); a night-window sweeper takes
+// over scheduling in a later change. It blocks until ctx is canceled.
 //
 // The lock is acquired with a TTL and refreshed periodically. If the leader
 // dies, the TTL expires and another replica acquires the lock on its next
@@ -54,7 +55,7 @@ func startSchedulers(ctx context.Context, infra *serverInfra) {
 			continue
 		}
 
-		slog.Info("scheduler leader lock acquired — starting RSS + Confluence schedulers")
+		slog.Info("scheduler leader lock acquired — starting Confluence scheduler")
 		runAsLeader(ctx, infra, mutex)
 		slog.Info("scheduler leader role released")
 	}
@@ -66,12 +67,6 @@ func startSchedulers(ctx context.Context, infra *serverInfra) {
 func runAsLeader(ctx context.Context, infra *serverInfra, mutex *redsync.Mutex) {
 	leaderCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	rssScheduler := rss.NewScheduler(leaderCtx, infra.asynqClient, rss.NewStore(infra.db.Main))
-	if err := rssScheduler.InitializeAll(leaderCtx); err != nil {
-		slog.Warn("failed to initialize RSS schedules", "error", err)
-	}
-	defer rssScheduler.StopAll()
 
 	confScheduler := confluence.NewConfluenceScheduler(leaderCtx, infra.asynqClient, confluence.NewStore(infra.db.Main))
 	if err := confScheduler.InitializeAll(leaderCtx); err != nil {

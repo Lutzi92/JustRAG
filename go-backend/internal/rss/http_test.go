@@ -28,14 +28,17 @@ type mockStore struct {
 	updated              *rss.RSSFeedRow
 	createdFetchFullText bool
 	updatedFetchFullText *bool
+	lastCreatedSchedule  string
+	lastUpdate           rss.RSSFeedUpdate
 	err                  error
 }
 
-func (m *mockStore) CreateRSSFeed(_ context.Context, kbID, url string, title *string, pollInterval int, fetchFullText bool) (*rss.RSSFeedRow, error) {
+func (m *mockStore) CreateRSSFeed(_ context.Context, kbID, url string, title *string, syncSchedule string, fetchFullText bool) (*rss.RSSFeedRow, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
 	m.createdFetchFullText = fetchFullText
+	m.lastCreatedSchedule = syncSchedule
 	return m.feed, nil
 }
 
@@ -58,18 +61,12 @@ func (m *mockStore) UpdateRSSFeed(_ context.Context, feedID string, updates rss.
 		return nil, m.err
 	}
 	m.updatedFetchFullText = updates.FetchFullText
+	m.lastUpdate = updates
 	return m.updated, nil
 }
 
 func (m *mockStore) DeleteRSSFeed(_ context.Context, feedID string) error {
 	return m.err
-}
-
-func (m *mockStore) ListActiveRSSFeeds(_ context.Context) ([]rss.RSSFeedRow, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.feeds, nil
 }
 
 func (m *mockStore) UpdateRSSFeedPollSuccess(_ context.Context, _ string, _ int) error {
@@ -113,7 +110,7 @@ func makeFeed() *rss.RSSFeedRow {
 		KbID:                testKBID,
 		URL:                 "https://example.com/rss",
 		Title:               &title,
-		PollInterval:        60,
+		SyncSchedule:        "manual",
 		Status:              "active",
 		ConsecutiveFailures: 0,
 		ItemCount:           0,
@@ -165,7 +162,7 @@ func TestCreateRSSFeed_Valid(t *testing.T) {
 	validator := &mockValidator{title: "Test Feed"}
 	h := newHandlerForTest(store, validator)
 
-	body := map[string]any{"url": "https://example.com/rss", "pollInterval": 60}
+	body := map[string]any{"url": "https://example.com/rss"}
 	req := withKBAccess(newRequest(http.MethodPost, "/api/kb/"+testKBID+"/rss", body), testKBID)
 	rr := httptest.NewRecorder()
 	h.CreateRSSFeed(rr, req)
@@ -188,7 +185,7 @@ func TestCreateRSSFeed_MissingURL(t *testing.T) {
 	validator := &mockValidator{}
 	h := newHandlerForTest(store, validator)
 
-	body := map[string]any{"pollInterval": 60} // no url
+	body := map[string]any{} // no url
 	req := withKBAccess(newRequest(http.MethodPost, "/api/kb/"+testKBID+"/rss", body), testKBID)
 	rr := httptest.NewRecorder()
 	h.CreateRSSFeed(rr, req)
@@ -198,18 +195,37 @@ func TestCreateRSSFeed_MissingURL(t *testing.T) {
 	}
 }
 
-func TestCreateRSSFeed_InvalidPollInterval(t *testing.T) {
+func TestCreateRSSFeed_InvalidSyncSchedule(t *testing.T) {
 	store := &mockStore{}
 	validator := &mockValidator{title: "Feed"}
 	h := newHandlerForTest(store, validator)
 
-	body := map[string]any{"url": "https://example.com/rss", "pollInterval": 5} // too low
+	body := map[string]any{"url": "https://example.com/feed.xml", "syncSchedule": "hourly"}
 	req := withKBAccess(newRequest(http.MethodPost, "/api/kb/"+testKBID+"/rss", body), testKBID)
 	rr := httptest.NewRecorder()
 	h.CreateRSSFeed(rr, req)
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCreateRSSFeed_DefaultsToManual(t *testing.T) {
+	feed := makeFeed()
+	store := &mockStore{feed: feed}
+	validator := &mockValidator{title: "Feed"}
+	h := newHandlerForTest(store, validator)
+
+	body := map[string]any{"url": "https://example.com/feed.xml"}
+	req := withKBAccess(newRequest(http.MethodPost, "/api/kb/"+testKBID+"/rss", body), testKBID)
+	rr := httptest.NewRecorder()
+	h.CreateRSSFeed(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if store.lastCreatedSchedule != "manual" {
+		t.Fatalf("expected manual, got %q", store.lastCreatedSchedule)
 	}
 }
 
@@ -250,14 +266,13 @@ func TestListRSSFeeds_OK(t *testing.T) {
 func TestUpdateRSSFeed_OK(t *testing.T) {
 	feed := makeFeed()
 	updated := makeFeed()
-	newInterval := 120
-	updated.PollInterval = newInterval
+	updated.SyncSchedule = "daily"
 
 	store := &mockStore{feed: feed, updated: updated}
 	validator := &mockValidator{}
 	h := newHandlerForTest(store, validator)
 
-	body := map[string]any{"pollInterval": 120}
+	body := map[string]any{"syncSchedule": "daily"}
 	req := withKBAccess(newRequest(http.MethodPatch, "/api/kb/"+testKBID+"/rss/"+testFeedID, body), testKBID)
 	rr := serveFeedID(testFeedID, h.UpdateRSSFeed, req)
 
@@ -269,8 +284,73 @@ func TestUpdateRSSFeed_OK(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if got.PollInterval != newInterval {
-		t.Errorf("expected pollInterval %d, got %d", newInterval, got.PollInterval)
+	if got.SyncSchedule != "daily" {
+		t.Errorf("expected syncSchedule %q, got %q", "daily", got.SyncSchedule)
+	}
+}
+
+func TestUpdateRSSFeed_InvalidSyncSchedule(t *testing.T) {
+	feed := makeFeed()
+	store := &mockStore{feed: feed}
+	validator := &mockValidator{}
+	h := newHandlerForTest(store, validator)
+
+	body := map[string]any{"syncSchedule": "hourly"}
+	req := withKBAccess(newRequest(http.MethodPatch, "/api/kb/"+testKBID+"/rss/"+testFeedID, body), testKBID)
+	rr := serveFeedID(testFeedID, h.UpdateRSSFeed, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestUpdateRSSFeed_ClearsNextSyncAt verifies that changing syncSchedule
+// clears next_sync_at so the sweeper re-stamps the slot on its next tick
+// instead of leaving a stale slot from the previous schedule in place.
+func TestUpdateRSSFeed_ClearsNextSyncAt(t *testing.T) {
+	feed := makeFeed()
+	updated := makeFeed()
+	updated.SyncSchedule = "daily"
+
+	store := &mockStore{feed: feed, updated: updated}
+	validator := &mockValidator{}
+	h := newHandlerForTest(store, validator)
+
+	body := map[string]any{"syncSchedule": "daily"}
+	req := withKBAccess(newRequest(http.MethodPatch, "/api/kb/"+testKBID+"/rss/"+testFeedID, body), testKBID)
+	rr := serveFeedID(testFeedID, h.UpdateRSSFeed, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if store.lastUpdate.NextSyncAt == nil {
+		t.Fatal("expected NextSyncAt to be set (to clear it) when syncSchedule changes")
+	}
+	if *store.lastUpdate.NextSyncAt != nil {
+		t.Fatalf("expected NextSyncAt to be cleared to NULL, got %v", **store.lastUpdate.NextSyncAt)
+	}
+}
+
+// TestUpdateRSSFeed_NoScheduleChangeLeavesNextSyncAt verifies that a PATCH
+// not touching syncSchedule does not touch next_sync_at.
+func TestUpdateRSSFeed_NoScheduleChangeLeavesNextSyncAt(t *testing.T) {
+	feed := makeFeed()
+	updated := makeFeed()
+	updated.FetchFullText = true
+
+	store := &mockStore{feed: feed, updated: updated}
+	validator := &mockValidator{}
+	h := newHandlerForTest(store, validator)
+
+	body := map[string]any{"fetchFullText": true}
+	req := withKBAccess(newRequest(http.MethodPatch, "/api/kb/"+testKBID+"/rss/"+testFeedID, body), testKBID)
+	rr := serveFeedID(testFeedID, h.UpdateRSSFeed, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if store.lastUpdate.NextSyncAt != nil {
+		t.Fatalf("expected NextSyncAt to stay untouched, got %v", store.lastUpdate.NextSyncAt)
 	}
 }
 

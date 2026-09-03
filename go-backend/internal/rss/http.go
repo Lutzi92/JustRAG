@@ -15,6 +15,7 @@ import (
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/logctx"
+	"github.com/justrag/go-backend/internal/syncwindow"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,7 +28,8 @@ type RSSFeedRow struct {
 	KbID                string     `json:"kbId"                db:"kb_id"`
 	URL                 string     `json:"url"                 db:"url"`
 	Title               *string    `json:"title"               db:"title"`
-	PollInterval        int        `json:"pollInterval"        db:"poll_interval"`
+	SyncSchedule        string     `json:"syncSchedule"        db:"sync_schedule"`
+	NextSyncAt          *time.Time `json:"nextSyncAt"          db:"next_sync_at"`
 	Status              string     `json:"status"              db:"status"`
 	ErrorMessage        *string    `json:"errorMessage"        db:"error_message"`
 	ConsecutiveFailures int        `json:"consecutiveFailures" db:"consecutive_failures"`
@@ -37,9 +39,12 @@ type RSSFeedRow struct {
 	CreatedAt           time.Time  `json:"createdAt"           db:"created_at"`
 }
 
-// RSSFeedUpdate carries optional fields for a PATCH update.
+// RSSFeedUpdate carries optional fields for a PATCH update. NextSyncAt is a
+// double pointer so "leave untouched" (nil) and "set to NULL" (non-nil
+// pointing at a nil *time.Time) are both expressible.
 type RSSFeedUpdate struct {
-	PollInterval        *int
+	SyncSchedule        *string
+	NextSyncAt          **time.Time
 	Status              *string
 	ErrorMessage        *string
 	ConsecutiveFailures *int
@@ -52,12 +57,11 @@ type RSSFeedUpdate struct {
 
 // RSSStore is the persistence interface required by Handler.
 type RSSStore interface {
-	CreateRSSFeed(ctx context.Context, kbID, url string, title *string, pollInterval int, fetchFullText bool) (*RSSFeedRow, error)
+	CreateRSSFeed(ctx context.Context, kbID, url string, title *string, syncSchedule string, fetchFullText bool) (*RSSFeedRow, error)
 	ListRSSFeeds(ctx context.Context, kbID string) ([]RSSFeedRow, error)
 	GetRSSFeedByID(ctx context.Context, feedID string) (*RSSFeedRow, error)
 	UpdateRSSFeed(ctx context.Context, feedID string, updates RSSFeedUpdate) (*RSSFeedRow, error)
 	DeleteRSSFeed(ctx context.Context, feedID string) error
-	ListActiveRSSFeeds(ctx context.Context) ([]RSSFeedRow, error)
 	UpdateRSSFeedPollSuccess(ctx context.Context, feedID string, itemCount int) error
 	UpdateRSSFeedPollFailure(ctx context.Context, feedID string, errMsg string) error
 	ListFileNamesByRSSFeedID(ctx context.Context, rssFeedID string) (map[string]bool, error)
@@ -140,9 +144,9 @@ func kbIDFromContext(r *http.Request) string {
 
 // createRSSFeedRequest is the expected JSON body for creating a feed.
 type createRSSFeedRequest struct {
-	URL           string `json:"url"`
-	PollInterval  *int   `json:"pollInterval"`
-	FetchFullText *bool  `json:"fetchFullText"`
+	URL           string  `json:"url"`
+	SyncSchedule  *string `json:"syncSchedule"`
+	FetchFullText *bool   `json:"fetchFullText"`
 }
 
 // CreateRSSFeed handles POST /api/kb/{id}/rss.
@@ -172,13 +176,13 @@ func (h *Handler) CreateRSSFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate pollInterval (default 60, must be 15-1440).
-	pollInterval := 60
-	if body.PollInterval != nil {
-		pollInterval = *body.PollInterval
+	// Validate syncSchedule (default manual).
+	syncSchedule := syncwindow.ScheduleManual
+	if body.SyncSchedule != nil {
+		syncSchedule = *body.SyncSchedule
 	}
-	if pollInterval < 15 || pollInterval > 1440 {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "pollInterval must be between 15 and 1440")
+	if !syncwindow.Valid(syncSchedule) {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "syncSchedule must be manual, daily or weekly")
 		return
 	}
 
@@ -200,7 +204,7 @@ func (h *Handler) CreateRSSFeed(w http.ResponseWriter, r *http.Request) {
 		fetchFullText = *body.FetchFullText
 	}
 
-	feed, err := h.store.CreateRSSFeed(ctx, kbID, body.URL, titlePtr, pollInterval, fetchFullText)
+	feed, err := h.store.CreateRSSFeed(ctx, kbID, body.URL, titlePtr, syncSchedule, fetchFullText)
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to create RSS feed")
 		return
@@ -248,7 +252,7 @@ func (h *Handler) ListRSSFeeds(w http.ResponseWriter, r *http.Request) {
 
 // updateRSSFeedRequest is the expected JSON body for updating a feed.
 type updateRSSFeedRequest struct {
-	PollInterval  *int    `json:"pollInterval"`
+	SyncSchedule  *string `json:"syncSchedule"`
 	Status        *string `json:"status"`
 	FetchFullText *bool   `json:"fetchFullText"`
 }
@@ -282,9 +286,9 @@ func (h *Handler) UpdateRSSFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate pollInterval if provided.
-	if body.PollInterval != nil && (*body.PollInterval < 15 || *body.PollInterval > 1440) {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "pollInterval must be between 15 and 1440")
+	// Validate syncSchedule if provided.
+	if body.SyncSchedule != nil && !syncwindow.Valid(*body.SyncSchedule) {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "syncSchedule must be manual, daily or weekly")
 		return
 	}
 
@@ -295,9 +299,17 @@ func (h *Handler) UpdateRSSFeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updates := RSSFeedUpdate{
-		PollInterval:  body.PollInterval,
+		SyncSchedule:  body.SyncSchedule,
 		Status:        body.Status,
 		FetchFullText: body.FetchFullText,
+	}
+
+	// A schedule change takes effect immediately: clearing next_sync_at makes
+	// the sweeper re-stamp on its next tick. Leaving the old stamp in place
+	// was the pre-0068 bug where an edit did nothing until a leader restart.
+	if body.SyncSchedule != nil {
+		var null *time.Time
+		updates.NextSyncAt = &null
 	}
 
 	// Clear error fields when re-activating.

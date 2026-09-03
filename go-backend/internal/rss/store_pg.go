@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/pgxutil"
+	"github.com/justrag/go-backend/internal/syncwindow"
 )
 
 // PGStore is a PostgreSQL-backed implementation of the rss RSSStore interface.
@@ -24,13 +25,19 @@ func NewStore(pool *pgxpool.Pool) *PGStore {
 // Compile-time interface assertion.
 var _ RSSStore = (*PGStore)(nil)
 
+// rssFeedColumns is the column list shared by every SELECT/RETURNING on
+// rss_feeds. Keep it in one place — it used to be duplicated five times.
+const rssFeedColumns = `id, kb_id, url, title, sync_schedule, next_sync_at, status, error_message,
+		          consecutive_failures, last_polled_at, item_count, fetch_full_text, created_at`
+
 // rssFeedRow is an internal struct with db tags for scanning rss_feeds rows.
 type rssFeedRow struct {
 	ID                  string     `db:"id"`
 	KbID                string     `db:"kb_id"`
 	URL                 string     `db:"url"`
 	Title               *string    `db:"title"`
-	PollInterval        int        `db:"poll_interval"`
+	SyncSchedule        string     `db:"sync_schedule"`
+	NextSyncAt          *time.Time `db:"next_sync_at"`
 	Status              string     `db:"status"`
 	ErrorMessage        *string    `db:"error_message"`
 	ConsecutiveFailures int        `db:"consecutive_failures"`
@@ -45,15 +52,16 @@ func toRSSFeedRow(r rssFeedRow) RSSFeedRow {
 	return RSSFeedRow(r)
 }
 
-// CreateRSSFeed inserts a new RSS feed for the given KB and returns the stored row.
-func (s *PGStore) CreateRSSFeed(ctx context.Context, kbID, url string, title *string, pollInterval int, fetchFullText bool) (*RSSFeedRow, error) {
-	const sql = `
-		INSERT INTO rss_feeds (kb_id, url, title, poll_interval, fetch_full_text, status)
+// CreateRSSFeed inserts a new RSS feed for the given KB and returns the stored
+// row. syncSchedule is one of syncwindow.Schedule*; next_sync_at is left NULL
+// and stamped by the sweeper on its next tick.
+func (s *PGStore) CreateRSSFeed(ctx context.Context, kbID, url string, title *string, syncSchedule string, fetchFullText bool) (*RSSFeedRow, error) {
+	sql := `
+		INSERT INTO rss_feeds (kb_id, url, title, sync_schedule, fetch_full_text, status)
 		VALUES ($1, $2, $3, $4, $5, 'active')
-		RETURNING id, kb_id, url, title, poll_interval, status, error_message,
-		          consecutive_failures, last_polled_at, item_count, fetch_full_text, created_at`
+		RETURNING ` + rssFeedColumns
 
-	rows, err := pgxutil.QueryRows[rssFeedRow](ctx, s.pool, sql, kbID, url, title, pollInterval, fetchFullText)
+	rows, err := pgxutil.QueryRows[rssFeedRow](ctx, s.pool, sql, kbID, url, title, syncSchedule, fetchFullText)
 	if err != nil {
 		return nil, fmt.Errorf("CreateRSSFeed: %w", err)
 	}
@@ -66,9 +74,8 @@ func (s *PGStore) CreateRSSFeed(ctx context.Context, kbID, url string, title *st
 
 // ListRSSFeeds returns all RSS feeds for kbID ordered by created_at DESC.
 func (s *PGStore) ListRSSFeeds(ctx context.Context, kbID string) ([]RSSFeedRow, error) {
-	const sql = `
-		SELECT id, kb_id, url, title, poll_interval, status, error_message,
-		       consecutive_failures, last_polled_at, item_count, fetch_full_text, created_at
+	sql := `
+		SELECT ` + rssFeedColumns + `
 		FROM rss_feeds
 		WHERE kb_id = $1
 		ORDER BY created_at DESC`
@@ -87,9 +94,8 @@ func (s *PGStore) ListRSSFeeds(ctx context.Context, kbID string) ([]RSSFeedRow, 
 
 // GetRSSFeedByID returns the RSS feed with the given ID, or nil if not found.
 func (s *PGStore) GetRSSFeedByID(ctx context.Context, feedID string) (*RSSFeedRow, error) {
-	const sql = `
-		SELECT id, kb_id, url, title, poll_interval, status, error_message,
-		       consecutive_failures, last_polled_at, item_count, fetch_full_text, created_at
+	sql := `
+		SELECT ` + rssFeedColumns + `
 		FROM rss_feeds
 		WHERE id = $1`
 
@@ -111,10 +117,19 @@ func (s *PGStore) UpdateRSSFeed(ctx context.Context, feedID string, updates RSSF
 	var args []any
 	param := 1
 
-	if updates.PollInterval != nil {
-		setClauses = append(setClauses, fmt.Sprintf("poll_interval = $%d", param))
-		args = append(args, *updates.PollInterval)
+	if updates.SyncSchedule != nil {
+		setClauses = append(setClauses, fmt.Sprintf("sync_schedule = $%d", param))
+		args = append(args, *updates.SyncSchedule)
 		param++
+	}
+	if updates.NextSyncAt != nil {
+		if *updates.NextSyncAt == nil {
+			setClauses = append(setClauses, "next_sync_at = NULL")
+		} else {
+			setClauses = append(setClauses, fmt.Sprintf("next_sync_at = $%d", param))
+			args = append(args, **updates.NextSyncAt)
+			param++
+		}
 	}
 	if updates.Status != nil {
 		setClauses = append(setClauses, fmt.Sprintf("status = $%d", param))
@@ -151,8 +166,7 @@ func (s *PGStore) UpdateRSSFeed(ctx context.Context, feedID string, updates RSSF
 		UPDATE rss_feeds
 		SET %s
 		WHERE id = $%d
-		RETURNING id, kb_id, url, title, poll_interval, status, error_message,
-		          consecutive_failures, last_polled_at, item_count, fetch_full_text, created_at`,
+		RETURNING `+rssFeedColumns,
 		strings.Join(setClauses, ", "), param)
 
 	rows, err := pgxutil.QueryRows[rssFeedRow](ctx, s.pool, sql, args...)
@@ -174,27 +188,6 @@ func (s *PGStore) DeleteRSSFeed(ctx context.Context, feedID string) error {
 		return fmt.Errorf("DeleteRSSFeed: %w", err)
 	}
 	return nil
-}
-
-// ListActiveRSSFeeds returns all RSS feeds with status "active" across all KBs,
-// used by the scheduler to initialize poll schedules on startup.
-func (s *PGStore) ListActiveRSSFeeds(ctx context.Context) ([]RSSFeedRow, error) {
-	const sql = `
-		SELECT id, kb_id, url, title, poll_interval, status, error_message,
-		       consecutive_failures, last_polled_at, item_count, fetch_full_text, created_at
-		FROM rss_feeds
-		WHERE status = 'active'
-		ORDER BY created_at ASC`
-
-	rows, err := pgxutil.QueryRows[rssFeedRow](ctx, s.pool, sql)
-	if err != nil {
-		return nil, fmt.Errorf("ListActiveRSSFeeds: %w", err)
-	}
-	result := make([]RSSFeedRow, len(rows))
-	for i, r := range rows {
-		result[i] = toRSSFeedRow(r)
-	}
-	return result, nil
 }
 
 // UpdateRSSFeedPollSuccess updates last_polled_at, item_count, and clears error
@@ -243,4 +236,66 @@ func (s *PGStore) ListFileNamesByRSSFeedID(ctx context.Context, rssFeedID string
 		result[r.Name] = true
 	}
 	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// Sweeper contract (internal/syncsched)
+// ---------------------------------------------------------------------------
+
+// Kind identifies this store to the sweeper (internal/syncsched).
+func (s *PGStore) Kind() string { return "rss" }
+
+// dueSourceRow scans the two columns the sweeper needs.
+type dueSourceRow struct {
+	ID       string `db:"id"`
+	Schedule string `db:"sync_schedule"`
+}
+
+func toDueSources(rows []dueSourceRow) []syncwindow.DueSource {
+	out := make([]syncwindow.DueSource, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, syncwindow.DueSource{ID: r.ID, Schedule: r.Schedule})
+	}
+	return out
+}
+
+// ListDue returns feeds whose stamped slot has arrived.
+func (s *PGStore) ListDue(ctx context.Context, now time.Time) ([]syncwindow.DueSource, error) {
+	const sql = `
+		SELECT id::text AS id, sync_schedule FROM rss_feeds
+		 WHERE sync_schedule <> 'manual'
+		   AND status = 'active'
+		   AND next_sync_at IS NOT NULL
+		   AND next_sync_at <= $1`
+	rows, err := pgxutil.QueryRows[dueSourceRow](ctx, s.pool, sql, now)
+	if err != nil {
+		return nil, fmt.Errorf("ListDue(rss): %w", err)
+	}
+	return toDueSources(rows), nil
+}
+
+// ListUnscheduled returns feeds that have a schedule but no stamped slot yet
+// (newly created, or newly switched away from manual). The sweeper stamps
+// them WITHOUT enqueuing, so enabling a schedule never triggers a daytime sync.
+func (s *PGStore) ListUnscheduled(ctx context.Context) ([]syncwindow.DueSource, error) {
+	const sql = `
+		SELECT id::text AS id, sync_schedule FROM rss_feeds
+		 WHERE sync_schedule <> 'manual'
+		   AND status = 'active'
+		   AND next_sync_at IS NULL`
+	rows, err := pgxutil.QueryRows[dueSourceRow](ctx, s.pool, sql)
+	if err != nil {
+		return nil, fmt.Errorf("ListUnscheduled(rss): %w", err)
+	}
+	return toDueSources(rows), nil
+}
+
+// MarkScheduled stamps the next slot.
+func (s *PGStore) MarkScheduled(ctx context.Context, id string, next time.Time) error {
+	const sql = `UPDATE rss_feeds SET next_sync_at = $2 WHERE id = $1`
+	_, err := s.pool.Exec(ctx, sql, id, next)
+	if err != nil {
+		return fmt.Errorf("MarkScheduled(rss, %s): %w", id, err)
+	}
+	return nil
 }
