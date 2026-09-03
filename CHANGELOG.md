@@ -10,6 +10,34 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## Unreleased
+
+<!-- Not a git-cliff section (every other heading below is a released, tagged
+     version). This one exists because the night-sync-scheduling work landed
+     its hand-written upgrade notes before a release was cut. When cutting the
+     next release, `git cliff --unreleased --tag vX.Y.Z --prepend` will insert
+     the generated "## vX.Y.Z — <date>" section ABOVE this one — fold this
+     block's content into that new section's "### ⚠ Upgrade notes" and delete
+     this heading rather than leaving both. -->
+
+### ⚠ Upgrade notes
+
+- **Migration 0068 required.** Adds `sync_schedule` + `next_sync_at` to
+  `rss_feeds`, `confluence_sources` and `git_repo_sources`.
+- **Automatic syncs move to a night window.** Every RSS feed that polled on an
+  interval (15 min – 24 h) becomes `daily` and now runs once per night;
+  Confluence sources with any interval — including weekly ones — likewise
+  become `daily`. CERT-Bund advisory feeds therefore surface up to ~24 h later
+  than before. Feeds that were already paused (not `status = 'active'`) stay
+  `manual` rather than being flipped onto a nightly schedule; sources that were
+  already manual stay manual. Git repositories stay manual until an admin opts
+  them in — they had no scheduler before this release.
+- The window defaults to 01:00–05:00 `Europe/Berlin` and is configurable in
+  the admin Agent panel (`sync_window_start_hour`, `sync_window_end_hour`,
+  `sync_window_timezone`).
+- This release contains a migration, so it cannot be rolled back by
+  re-pointing the image tag alone.
+
 ## v0.10.0 — 2026-08-19
 
 ### ⚠ Upgrade notes

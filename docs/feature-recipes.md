@@ -314,7 +314,7 @@ git_repo_enabled = true    # master gate; default off (admin Agent panel)
 
 When enabled, a grid button appears in the KB Sources panel. Clicking it opens `GitRepoModal` where the operator enters a repository URL, selects public or private (private requires a Personal Access Token), and optionally specifies a branch (defaults to the remote HEAD). Saving creates a `git_repo_sources` row; the UI lists all sources grouped under a "Git Repositories" section with a manual re-sync button.
 
-**How it works:** submitting the form enqueues a `git-repo-sync` worker task on the `rag-heavy` queue. The worker shallow-clones the repository via go-git v5 through the existing SSRF-safe transport (`fetcher.SafeHTTPClient`). On each sync it compares the remote HEAD commit SHA against the stored SHA; if unchanged the sync is a no-op. Otherwise it performs a path + blob-SHA delta reconcile: files added or modified since the last sync are ingested as individual `files` rows (`origin='git'`) through the normal chunk/embed/KG pipeline; deleted files are cascade-removed. Each file carries `git_repo_source_id`, `git_file_path`, and `git_blob_sha` for future delta tracking. Re-sync is manual-only — there is no scheduler.
+**How it works:** submitting the form enqueues a `git-repo-sync` worker task on the `rag-heavy` queue. The worker shallow-clones the repository via go-git v5 through the existing SSRF-safe transport (`fetcher.SafeHTTPClient`). On each sync it compares the remote HEAD commit SHA against the stored SHA; if unchanged the sync is a no-op. Otherwise it performs a path + blob-SHA delta reconcile: files added or modified since the last sync are ingested as individual `files` rows (`origin='git'`) through the normal chunk/embed/KG pipeline; deleted files are cascade-removed. Each file carries `git_repo_source_id`, `git_file_path`, and `git_blob_sha` for future delta tracking. A source stays manual-only re-sync by default, but can now be switched to `daily`/`weekly` like RSS and Confluence sources — see "Night-window source syncing" below.
 
 **Security:**
 
@@ -329,6 +329,30 @@ When enabled, a grid button appears in the KB Sources panel. Clicking it opens `
 **File filter defaults:** text and code extensions allowlist (`.go`, `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.java`, `.kt`, `.rs`, `.c`, `.cpp`, `.h`, `.cs`, `.rb`, `.php`, `.swift`, `.md`, `.txt`, `.rst`, `.yaml`, `.yml`, `.json`, `.toml`, `.xml`, `.html`, `.css`, `.sh`, `.sql`, `.proto`, …) plus known-name allowlist (`README`, `LICENSE`, `CHANGELOG`, `Makefile`, `Dockerfile`, and their common variants). Skip-list noise directories: `node_modules`, `vendor`, `dist`, `build`, `.git`, `__pycache__`, `.cache`, `.idea`, `.vscode`.
 
 Migration **0060** (`git_repo_sources` table + `files.git_repo_source_id`, `files.git_file_path`, `files.git_blob_sha` columns + `'git'` value for `files.origin`). Package `internal/gitrepo`.
+
+## Night-window source syncing
+
+```
+sync_window_start_hour = 1               # 0-23; unparseable/out-of-range falls back to the default
+sync_window_end_hour   = 5               # 0-23; start == end is a 60-minute window, not zero
+sync_window_timezone   = Europe/Berlin   # IANA name; unresolvable falls back to Europe/Berlin, then UTC
+```
+
+Always on — no master flag, and no migration beyond **0068**. Every RSS feed, Confluence source and git repository carries a `sync_schedule` column (`manual` | `daily` | `weekly`, default `manual`, CHECK-constrained) and a `next_sync_at` timestamp. A single leader-side sweeper (`internal/syncsched.Sweeper`, elected via the existing Redis lock in `internal/app/scheduler.go`) ticks every **5 minutes**: it enqueues every source whose `next_sync_at` has arrived, via the normal `rss-poll` / `confluence-sync` / `git-repo-sync` worker tasks, then stamps each one's next slot before the next window opens. `internal/syncwindow` (pure, no DB) computes that slot: the offset inside the window and — for `weekly` — the weekday are both hashed from the source's id, so sources spread deterministically across the window instead of firing in a burst at its first minute, and the schedule survives restarts and redeploys without reshuffling.
+
+**Manual is a separate axis from the schedule.** The existing manual "sync now" trigger on each source (RSS/Confluence/git-repo) enqueues directly and never reads or writes `sync_schedule` or `next_sync_at` — it fires immediately regardless of window, and does not consume or move a source's next scheduled slot.
+
+**`next_sync_at IS NULL` means "not yet stamped," not "due now."** A source newly switched to `daily`/`weekly` (or created with one), and every row touched by the 0068 backfill, starts with `next_sync_at = NULL`. The sweeper's first pass over such a row only stamps a future slot — it does not enqueue. This is why turning a source's schedule on, or applying the migration, never fires a sync outside the window: the row is invisible to the "due" query (which additionally requires `next_sync_at <= now()`) until it has a stamped slot to be due against.
+
+**A window change takes effect within one tick, but only moves runs that have not fired yet.** `Tick` re-reads the three site_config keys every 5 minutes and applies the new window only to `ListUnscheduled` rows (nothing stamped yet); a row already carrying a `next_sync_at` inside the old window keeps that slot until it fires and is restamped into the new one on its next cycle.
+
+**Operational note — a source due during downtime fires on the next sweep, which may be daytime.** The sweeper has no "skip if we're outside the window now" check on `ListDue` — `next_sync_at <= now()` is the only gate. If the leader replica (or Redis) was down through the night, every source stamped for that night stays due and fires on the first tick after recovery, whatever the wall-clock hour is. This trades a bounded number of daytime syncs for never silently dropping a night's work.
+
+**A brief overlap between an outgoing and an incoming leader is accepted by design**, not a bug: on lock handover mid-tick, both replicas can be mid-sweep for a moment, and a source can be enqueued twice for the same night. `Tick` always stamps a row's next slot *before* enqueuing it, so this cannot loop into a second duplicate; the cost is one redundant poll/sync, which ingestion's `content_hash` dedup absorbs. Do not add cross-leader locking to close this window — it is deliberately not fixed.
+
+**Migration 0068 backfill** (irreversible, one-shot): every RSS feed with `status = 'active'` becomes `daily` (a paused feed stays `manual`, so un-pausing it later requires explicitly choosing a schedule rather than silently inheriting nightly syncs); every Confluence source with a set `sync_interval` becomes `daily` regardless of its old interval, including previously-weekly ones (one uniform target beats reproducing a per-interval map that is being retired); git repositories, which had no scheduler before this release, stay `manual`. The old `rss_feeds.poll_interval` / `confluence_sources.sync_interval` columns are left in place and unread (expand/contract) for a later cleanup release.
+
+Both `cmd/server` and `cmd/worker` blank-import `_ "time/tzdata"` so `sync_window_timezone` (and any other configured IANA timezone, `chat_date_timezone` included) resolves correctly on the alpine runtime image, which ships no zoneinfo database — before this, an unresolvable timezone name silently fell back to UTC in production. Packages: `internal/syncwindow` (pure slot math), `internal/syncsched` (the sweeper), store methods on `internal/rss`, `internal/confluence`, `internal/gitrepo`. Admin panel: Agent tab → "Night sync window".
 
 ## KB permission model — rights matrix (Phase 1)
 
