@@ -3,7 +3,8 @@ import { Plus, Loader2, ChevronDown, ChevronRight, Info, FileText, AlertCircle }
 import { useTheme } from '../../contexts/ThemeContext';
 import { getApiErrorMessage } from '../../utils/apiError';
 import { SourceModal } from './SourceModal';
-import type { ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath } from '../../types';
+import { SyncScheduleSelect } from './SyncScheduleSelect';
+import type { ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath, SyncSchedule } from '../../types';
 
 interface ConfluenceModalProps {
     show: boolean;
@@ -11,7 +12,7 @@ interface ConfluenceModalProps {
     confluenceConnection: ConfluenceConnectionInfo | null;
     confluenceLoading: boolean;
     onSaveConnection: (token: string, displayName?: string) => Promise<void>;
-    onAddSource: (data: { spaceKey: string; rootPageId?: string; rootPageTitle?: string; includeAttachments?: boolean; syncInterval?: number }) => void;
+    onAddSource: (data: { spaceKey: string; rootPageId?: string; rootPageTitle?: string; includeAttachments?: boolean; syncSchedule?: SyncSchedule }) => void;
     fetchSpaces: () => Promise<ConfluenceSpace[]>;
     fetchSpacePages: (spaceKey: string) => Promise<ConfluencePage[]>;
     fetchPageChildren: (pageId: string) => Promise<ConfluencePage[]>;
@@ -66,7 +67,7 @@ const ConfluenceModalComp: React.FC<ConfluenceModalProps> = ({
 
     // Options
     const [includeAttachments, setIncludeAttachments] = useState(false);
-    const [syncInterval, setSyncInterval] = useState<number>(0);
+    const [syncSchedule, setSyncSchedule] = useState<SyncSchedule>('manual');
 
     // Reset state only when modal opens (show transitions false→true)
     const prevShowRef = React.useRef(false);
@@ -87,7 +88,7 @@ const ConfluenceModalComp: React.FC<ConfluenceModalProps> = ({
             setRootPagesError(null);
             setSelectedPages([]);
             setIncludeAttachments(false);
-            setSyncInterval(0);
+            setSyncSchedule('manual');
             setSpaceSearch('');
             setPageSearch('');
             setAllPagesCache({});
@@ -220,11 +221,11 @@ const ConfluenceModalComp: React.FC<ConfluenceModalProps> = ({
     }, [rootPages, fetchPageChildren]);
 
     const handleAddSource = useCallback(() => {
-        const baseData: { spaceKey: string; includeAttachments?: boolean; syncInterval?: number } = {
+        const baseData: { spaceKey: string; includeAttachments?: boolean; syncSchedule?: SyncSchedule } = {
             spaceKey: selectedSpace,
         };
         if (includeAttachments) baseData.includeAttachments = true;
-        if (syncInterval > 0) baseData.syncInterval = syncInterval;
+        if (syncSchedule !== 'manual') baseData.syncSchedule = syncSchedule;
 
         if (scopeMode === 'page_tree' && selectedPages.length > 0) {
             for (const page of selectedPages) {
@@ -234,7 +235,7 @@ const ConfluenceModalComp: React.FC<ConfluenceModalProps> = ({
             onAddSource(baseData);
         }
         onClose();
-    }, [selectedSpace, scopeMode, selectedPages, includeAttachments, syncInterval, onAddSource, onClose]);
+    }, [selectedSpace, scopeMode, selectedPages, includeAttachments, syncSchedule, onAddSource, onClose]);
 
     const togglePageSelection = useCallback((page: { id: string; title: string }) => {
         setSelectedPages(prev => {
@@ -623,21 +624,7 @@ const ConfluenceModalComp: React.FC<ConfluenceModalProps> = ({
                         {t('includeAttachments')}
                     </label>
 
-                    <div className="sidebar-left__slider-row">
-                        <label htmlFor="confluence-sync-interval">{t('syncIntervalLabel')}</label>
-                        <select
-                            id="confluence-sync-interval"
-                            value={syncInterval}
-                            onChange={e => setSyncInterval(parseInt(e.target.value, 10))}
-                            className="sidebar-left__tools-select"
-                        >
-                            <option value="0">{t('manualOnly')}</option>
-                            <option value="360">{t('every6Hours')}</option>
-                            <option value="720">{t('every12Hours')}</option>
-                            <option value="1440">{t('daily')}</option>
-                            <option value="10080">{t('weekly')}</option>
-                        </select>
-                    </div>
+                    <SyncScheduleSelect id="confluence-sync-schedule" value={syncSchedule} onChange={setSyncSchedule} />
 
                     <button
                         onClick={handleAddSource}

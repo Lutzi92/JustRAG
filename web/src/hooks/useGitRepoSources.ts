@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import axios from 'axios';
-import type { KnowledgeBase, GitRepoSource } from '../types';
+import type { KnowledgeBase, GitRepoSource, SyncSchedule } from '../types';
 import { API_BASE_URL } from '../api';
 import { useTheme } from '../contexts/ThemeContext';
 import { useModalContext } from '../contexts/ModalContext';
@@ -71,6 +71,7 @@ export function useGitRepoSources({ currentKb, fetchFiles }: UseGitRepoSourcesPa
         isPrivate: boolean;
         accessToken?: string;
         branch?: string;
+        syncSchedule?: SyncSchedule;
     }) => {
         if (!currentKb) return;
         setGitRepoLoading(true);

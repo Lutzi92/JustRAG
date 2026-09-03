@@ -3,7 +3,7 @@ import {
     Link, Globe, Bot, FileText, Download, Trash2,
     Rss, RefreshCw, Pause, Play, Eye, BookOpen, GitBranch
 } from 'lucide-react';
-import type { FileEntry, RssFeed, ConfluenceSource, GitRepoSource } from '../../types';
+import type { FileEntry, RssFeed, ConfluenceSource, GitRepoSource, SyncSchedule } from '../../types';
 import { useTheme } from '../../contexts/ThemeContext';
 import { IngestStageIndicator } from './IngestStageIndicator';
 
@@ -15,12 +15,12 @@ interface SourcesSectionProps {
     onDownloadFile: (id: string) => void;
     onDeleteFile: (id: string, e: React.MouseEvent) => void;
     rssFeeds: RssFeed[];
-    onUpdateRssFeed: (feedId: string, updates: { pollInterval?: number; status?: 'active' | 'paused' }) => void;
+    onUpdateRssFeed: (feedId: string, updates: { syncSchedule?: SyncSchedule; status?: 'active' | 'paused' }) => void;
     onDeleteRssFeed: (feedId: string) => void;
     onPollFeedNow: (feedId: string) => void;
     onViewFeed: (feed: RssFeed) => void;
     confluenceSources: ConfluenceSource[];
-    onUpdateConfluenceSource: (sourceId: string, updates: { includeAttachments?: boolean; syncInterval?: number | null; status?: 'active' | 'paused' }) => void;
+    onUpdateConfluenceSource: (sourceId: string, updates: { includeAttachments?: boolean; syncSchedule?: SyncSchedule; status?: 'active' | 'paused' }) => void;
     onDeleteConfluenceSource: (sourceId: string) => void;
     onSyncConfluenceNow: (sourceId: string) => void;
     gitRepoSources: GitRepoSource[];
@@ -187,6 +187,9 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                     <div className="source-meta sidebar-left__file-meta sidebar-ui__item-meta">
                                         {feed.itemCount > 0 && <span>{feed.itemCount} {t('items')}</span>}
                                         {feed.lastPolledAt && <span>{t('lastPolled')}: {new Date(feed.lastPolledAt).toLocaleString()}</span>}
+                                        {feed.syncSchedule !== 'manual' && feed.nextSyncAt && (
+                                            <span>{t('nextSync')}: {new Date(feed.nextSyncAt).toLocaleString()}</span>
+                                        )}
                                     </div>
                                 </div>
                                 {feed.status === 'error' && feed.errorMessage && (
@@ -232,6 +235,9 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                     <div className="source-meta sidebar-left__file-meta sidebar-ui__item-meta">
                                         {source.pageCount > 0 && <span>{source.pageCount} {t('pages')}</span>}
                                         {source.lastSyncedAt && <span>{t('lastSynced')}: {new Date(source.lastSyncedAt).toLocaleString()}</span>}
+                                        {source.syncSchedule !== 'manual' && source.nextSyncAt && (
+                                            <span>{t('nextSync')}: {new Date(source.nextSyncAt).toLocaleString()}</span>
+                                        )}
                                     </div>
                                 </div>
                                 {source.status === 'syncing' && source.syncTotal > 0 && (
@@ -292,6 +298,9 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                         <div className="source-meta sidebar-left__file-meta sidebar-ui__item-meta">
                                             {source.fileCount > 0 && <span>{source.fileCount} {t('gitFiles')}</span>}
                                             {source.lastSyncedAt && <span>{t('lastSynced')}: {new Date(source.lastSyncedAt).toLocaleString()}</span>}
+                                            {source.syncSchedule !== 'manual' && source.nextSyncAt && (
+                                                <span>{t('nextSync')}: {new Date(source.nextSyncAt).toLocaleString()}</span>
+                                            )}
                                         </div>
                                     </div>
                                     {source.status === 'syncing' && source.syncTotal > 0 && (

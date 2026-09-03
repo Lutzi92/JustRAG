@@ -4,7 +4,7 @@ import {
     ArrowLeft, Save, Globe, FileText, Sparkles, Users, Trash2, Plus, Loader2,
     Upload, BookOpen, ToggleLeft, ToggleRight, X, Search, Rss, Link
 } from 'lucide-react';
-import type { KnowledgeBase, FileEntry, GlobalKbEditor, SafeAIConfig, RssFeed, ConfluenceSource, ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath } from '../types';
+import type { KnowledgeBase, FileEntry, GlobalKbEditor, SafeAIConfig, RssFeed, ConfluenceSource, ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath, SyncSchedule } from '../types';
 import { API_BASE_URL } from '../api';
 import { MAX_FILES_PER_GLOBAL_KB, ACCEPTED_FILE_TYPES } from '../constants';
 import { useTheme } from '../contexts/ThemeContext';
@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useFormValidation } from '../hooks/useFormValidation';
 import { useToast } from '../contexts/ToastContext';
 import { ConfluenceModal } from './sidebar/ConfluenceModal';
+import { SyncScheduleSelect } from './sidebar/SyncScheduleSelect';
 import { getApiErrorMessage } from '../utils/apiError';
 
 interface GlobalKbSettingsProps {
@@ -53,7 +54,7 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
 
     // RSS state
     const [rssUrl, setRssUrl] = useState('');
-    const [rssPollInterval, setRssPollInterval] = useState(60);
+    const [rssSyncSchedule, setRssSyncSchedule] = useState<SyncSchedule>('manual');
     const [rssFetchFullText, setRssFetchFullText] = useState(false);
     const [rssLoading, setRssLoading] = useState(false);
     const [rssFeeds, setRssFeeds] = useState<RssFeed[]>([]);
@@ -258,7 +259,7 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
         if (!rssUrl.trim()) return;
         setRssLoading(true);
         try {
-            await axios.post(`${API_BASE_URL}/api/kb/${kb.id}/rss`, { url: rssUrl.trim(), pollInterval: rssPollInterval, fetchFullText: rssFetchFullText });
+            await axios.post(`${API_BASE_URL}/api/kb/${kb.id}/rss`, { url: rssUrl.trim(), syncSchedule: rssSyncSchedule, fetchFullText: rssFetchFullText });
             setRssUrl('');
             setRssFetchFullText(false);
             toast.success(t('rssFeedAdded'));
@@ -321,7 +322,7 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
         }
     };
 
-    const handleAddConfluenceSource = async (data: { spaceKey: string; rootPageId?: string; rootPageTitle?: string; includeAttachments?: boolean; syncInterval?: number; connectionId: string }) => {
+    const handleAddConfluenceSource = async (data: { spaceKey: string; rootPageId?: string; rootPageTitle?: string; includeAttachments?: boolean; syncSchedule?: SyncSchedule; connectionId: string }) => {
         setConfluenceLoading(true);
         try {
             await axios.post(`${API_BASE_URL}/api/kb/${kb.id}/confluence-sources`, data);
@@ -705,21 +706,8 @@ export const GlobalKbSettings: React.FC<GlobalKbSettingsProps> = ({ kb, onBack, 
                                 {t('subscribe')}
                             </button>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                            <label htmlFor="gkb-rss-interval">{t('pollInterval')}</label>
-                            <select
-                                id="gkb-rss-interval"
-                                value={rssPollInterval}
-                                onChange={(e) => setRssPollInterval(parseInt(e.target.value, 10))}
-                                style={{ padding: '0.25rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: '0.8rem' }}
-                            >
-                                <option value="15">15 {t('minutes')}</option>
-                                <option value="30">30 {t('minutes')}</option>
-                                <option value="60">1 {t('hours')}</option>
-                                <option value="360">6 {t('hours')}</option>
-                                <option value="720">12 {t('hours')}</option>
-                                <option value="1440">24 {t('hours')}</option>
-                            </select>
+                        <div style={{ marginBottom: '0.5rem' }}>
+                            <SyncScheduleSelect id="gkb-rss-schedule" value={rssSyncSchedule} onChange={setRssSyncSchedule} />
                         </div>
                         <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
                             <input

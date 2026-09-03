@@ -2,23 +2,25 @@ import React, { memo, useState } from 'react';
 import { Plus, Loader2 } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { SourceModal } from './SourceModal';
+import { SyncScheduleSelect } from './SyncScheduleSelect';
+import type { SyncSchedule } from '../../types';
 
 interface RssModalProps {
     show: boolean;
     onClose: () => void;
     rssLoading: boolean;
-    onAddRssFeed: (url: string, pollInterval: number, fetchFullText: boolean) => void;
+    onAddRssFeed: (url: string, syncSchedule: SyncSchedule, fetchFullText: boolean) => void;
 }
 
 const RssModalComp: React.FC<RssModalProps> = ({ show, onClose, rssLoading, onAddRssFeed }) => {
     const { t } = useTheme();
     const [rssUrl, setRssUrl] = useState('');
-    const [rssPollInterval, setRssPollInterval] = useState(60);
+    const [syncSchedule, setSyncSchedule] = useState<SyncSchedule>('manual');
     const [rssFetchFullText, setRssFetchFullText] = useState(false);
 
     const handleSubmit = () => {
         if (rssUrl.trim()) {
-            onAddRssFeed(rssUrl.trim(), rssPollInterval, rssFetchFullText);
+            onAddRssFeed(rssUrl.trim(), syncSchedule, rssFetchFullText);
             setRssUrl('');
             setRssFetchFullText(false);
             onClose();
@@ -38,22 +40,7 @@ const RssModalComp: React.FC<RssModalProps> = ({ show, onClose, rssLoading, onAd
                 // eslint-disable-next-line jsx-a11y/no-autofocus -- focus first field on dialog open (WAI-ARIA dialog pattern)
                 autoFocus
             />
-            <div className="sidebar-left__slider-row">
-                <label htmlFor="rss-modal-interval">{t('pollInterval')}</label>
-                <select
-                    id="rss-modal-interval"
-                    value={rssPollInterval}
-                    onChange={(e) => setRssPollInterval(parseInt(e.target.value, 10))}
-                    className="sidebar-left__tools-select"
-                >
-                    <option value="15">15 {t('minutes')}</option>
-                    <option value="30">30 {t('minutes')}</option>
-                    <option value="60">1 {t('hours')}</option>
-                    <option value="360">6 {t('hours')}</option>
-                    <option value="720">12 {t('hours')}</option>
-                    <option value="1440">24 {t('hours')}</option>
-                </select>
-            </div>
+            <SyncScheduleSelect id="rss-modal-schedule" value={syncSchedule} onChange={setSyncSchedule} />
             <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontSize: '0.85rem' }}>
                 <input
                     type="checkbox"

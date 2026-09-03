@@ -2,12 +2,14 @@ import React, { memo, useState } from 'react';
 import { Plus, Loader2 } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { SourceModal } from './SourceModal';
+import { SyncScheduleSelect } from './SyncScheduleSelect';
+import type { SyncSchedule } from '../../types';
 
 interface GitRepoModalProps {
     show: boolean;
     onClose: () => void;
     loading: boolean;
-    onAdd: (data: { repoUrl: string; isPrivate: boolean; accessToken?: string; branch?: string }) => void;
+    onAdd: (data: { repoUrl: string; isPrivate: boolean; accessToken?: string; branch?: string; syncSchedule?: SyncSchedule }) => void;
 }
 
 const GitRepoModalComp: React.FC<GitRepoModalProps> = ({ show, onClose, loading, onAdd }) => {
@@ -16,6 +18,7 @@ const GitRepoModalComp: React.FC<GitRepoModalProps> = ({ show, onClose, loading,
     const [repoUrl, setRepoUrl] = useState('');
     const [accessToken, setAccessToken] = useState('');
     const [branch, setBranch] = useState('');
+    const [syncSchedule, setSyncSchedule] = useState<SyncSchedule>('manual');
 
     const valid = repoUrl.trim().startsWith('https://') && (!isPrivate || accessToken.trim() !== '');
 
@@ -26,11 +29,13 @@ const GitRepoModalComp: React.FC<GitRepoModalProps> = ({ show, onClose, loading,
             isPrivate,
             accessToken: isPrivate ? accessToken.trim() : undefined,
             branch: branch.trim() || undefined,
+            syncSchedule,
         });
         setRepoUrl('');
         setAccessToken('');
         setBranch('');
         setIsPrivate(false);
+        setSyncSchedule('manual');
         onClose();
     };
 
@@ -85,6 +90,7 @@ const GitRepoModalComp: React.FC<GitRepoModalProps> = ({ show, onClose, loading,
                 aria-label={t('gitRepoBranch')}
                 className="sidebar-left__tools-input"
             />
+            <SyncScheduleSelect id="git-repo-schedule" value={syncSchedule} onChange={setSyncSchedule} />
             <button
                 onClick={handleSubmit}
                 disabled={loading || !valid}

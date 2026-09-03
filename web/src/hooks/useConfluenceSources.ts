@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import axios from 'axios';
-import type { KnowledgeBase, ConfluenceSource, ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath } from '../types';
+import type { KnowledgeBase, ConfluenceSource, ConfluenceConnectionInfo, ConfluenceSpace, ConfluencePage, ConfluencePageWithPath, SyncSchedule } from '../types';
 import { API_BASE_URL } from '../api';
 import { useTheme } from '../contexts/ThemeContext';
 import { useModalContext } from '../contexts/ModalContext';
@@ -118,7 +118,7 @@ export function useConfluenceSources({ currentKb, fetchFiles }: UseConfluenceSou
         };
     }, [confluenceSources, fetchSources, fetchFiles, currentKb]);
 
-    const addSource = useCallback(async (data: { spaceKey: string; rootPageId?: string; rootPageTitle?: string; includeAttachments?: boolean; syncInterval?: number }) => {
+    const addSource = useCallback(async (data: { spaceKey: string; rootPageId?: string; rootPageTitle?: string; includeAttachments?: boolean; syncSchedule?: SyncSchedule }) => {
         const connectionId = confluenceConnection?.connection?.id;
         if (!currentKb || !connectionId) return;
         setConfluenceLoading(true);
@@ -135,7 +135,7 @@ export function useConfluenceSources({ currentKb, fetchFiles }: UseConfluenceSou
         }
     }, [currentKb, confluenceConnection, t, toast]);
 
-    const updateSource = useCallback(async (sourceId: string, updates: { syncInterval?: number | null; status?: 'active' | 'paused'; includeAttachments?: boolean }) => {
+    const updateSource = useCallback(async (sourceId: string, updates: { syncSchedule?: SyncSchedule; status?: 'active' | 'paused'; includeAttachments?: boolean }) => {
         if (!currentKb) return;
         setConfluenceSources(prev => prev.map(s => s.id === sourceId ? { ...s, ...updates } : s));
         try {
