@@ -226,6 +226,15 @@ var snapshotConfigKeys = []string{
 	"tabular_max_rows",
 	"tabular_embed_max_rows",
 	"tabular_column_values_max_distinct",
+	// Tabular router (spreadsheet rework Phase 3) registry keys; same rationale
+	// as the profiler/materializer keys above — a deterministic chat-pipeline
+	// pre-pass, but still per-KB-overridable, so the snapshot must capture it.
+	"chat_tabular_router_enabled",
+	"chat_tabular_router_model",
+	"chat_tabular_router_max_rows",
+	"chat_tabular_router_max_repairs",
+	"chat_tabular_router_timeout_ms",
+	"chat_tabular_router_schema_max_tokens",
 }
 
 // ---------------------------------------------------------------------------

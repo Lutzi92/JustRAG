@@ -249,17 +249,19 @@ func boolVal(vals map[string]*string, key string) bool {
 // Only factcheck_in_chat and citation_validation_enabled are actually
 // default-on among the node activation keys; the remaining entries below
 // (chat_answer_history_enabled, chat_date_awareness_enabled,
-// chat_recency_listing_enabled, chat_corpus_table_router_llm_enabled) are not
-// consulted by any Keys[0] or orchestrator predicate today (the latter is
-// hardcoded false in orchestratorCandidates — the projection cannot make an
-// LLM call), but are kept accurate against their real siteconfig.go defaults
-// for whichever future logic reads them via boolVal.
+// chat_recency_listing_enabled, chat_corpus_table_router_llm_enabled,
+// chat_tabular_router_enabled) are not consulted by any Keys[0] or
+// orchestrator predicate today (the latter is hardcoded false in
+// orchestratorCandidates — the projection cannot make an LLM call), but are
+// kept accurate against their real siteconfig.go defaults for whichever
+// future logic reads them via boolVal.
 var defaultOn = map[string]bool{
 	"chat_answer_history_enabled":          true,
 	"chat_date_awareness_enabled":          true,
 	"chat_recency_listing_enabled":         true,
 	"citation_validation_enabled":          true,
 	"chat_corpus_table_router_llm_enabled": true,
+	"chat_tabular_router_enabled":          true,
 	// factcheck_in_chat is the actual master toggle for post-response
 	// factchecking (readBool default true, siteconfig.go:224) and is
 	// NodeFactuality's Keys[0]. Missing this entry would report

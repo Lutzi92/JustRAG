@@ -1416,6 +1416,36 @@ export const translations = {
         de: 'Wenn aktiviert UND die KB Tabellendaten hat, erhält der Antwort-Prompt eine Anleitung, Ergebnisse als ```chart-Block (Recharts-JSON) auszugeben, den die Oberfläche rendert. Aggregationen via table_query (SQL GROUP BY); Nicht-SQL-Umformungen via code_exec (Plan-Phase). Modellabhängig — bei ungültigem JSON zeigt die Oberfläche einen Fallback. Standard: aus.',
         en: 'When on AND the KB has tabular data, the answer prompt gains guidance to emit results as a ```chart block (Recharts JSON) that the UI renders. Aggregations via table_query (SQL GROUP BY); non-SQL reshapes via code_exec (plan-time). Model-dependent — the UI shows a fallback on invalid JSON. Default: off.',
     },
+    chatTabularRouterEnabled: { de: 'Tabellen-Router', en: 'Tabular router' },
+    chatTabularRouterEnabledHelp: {
+        de: 'Deterministische Vorstufe, die Tabellenfragen in validiertes, schreibgeschütztes SQL übersetzt, bevor auf die normale Suche zurückgefallen wird. Kill-Switch — wirkt nur zusammen mit der strukturierten Tabellen-Abfrage (chat_tabular_query_enabled). Standard: an.',
+        en: 'Deterministic pre-pass that turns table questions into validated read-only SQL before falling back to normal retrieval. Kill switch — effective only together with the structured spreadsheet query (chat_tabular_query_enabled). Default: on.',
+    },
+    chatTabularRouterModel: { de: 'Tabellen-Router: Modell', en: 'Tabular router: model' },
+    chatTabularRouterModelHelp: {
+        de: 'Fast-Tier-Modell für die SQL-Generierung und -Reparatur des Routers. Fällt zurück auf model_tier_fast, wenn leer.',
+        en: 'Fast-tier model for the router’s SQL generation and repair. Falls through to model_tier_fast when empty.',
+    },
+    chatTabularRouterMaxRows: { de: 'Tabellen-Router: max. Zeilen', en: 'Tabular router: max rows' },
+    chatTabularRouterMaxRowsHelp: {
+        de: 'Obergrenze für die Zeilenanzahl im Ergebnis der vom Router erzeugten SQL-Abfrage. Gültiger Bereich [10, 1000]; out-of-range fällt auf den Default zurück. Standard: 200.',
+        en: 'Row cap on the router-generated SQL query’s result set. Valid range [10, 1000]; out-of-range falls back to the default. Default: 200.',
+    },
+    chatTabularRouterMaxRepairs: { de: 'Tabellen-Router: max. Reparaturversuche', en: 'Tabular router: max repairs' },
+    chatTabularRouterMaxRepairsHelp: {
+        de: 'Anzahl der LLM-Reparaturversuche, wenn das generierte SQL die Validierung oder Ausführung nicht besteht. 0 deaktiviert Reparaturen. Gültiger Bereich [0, 5]; out-of-range fällt auf den Default zurück. Standard: 3.',
+        en: 'Number of LLM repair attempts allowed when the generated SQL fails validation or execution. 0 disables repairs. Valid range [0, 5]; out-of-range falls back to the default. Default: 3.',
+    },
+    chatTabularRouterTimeoutMs: { de: 'Tabellen-Router: Timeout (ms)', en: 'Tabular router: timeout (ms)' },
+    chatTabularRouterTimeoutMsHelp: {
+        de: 'Zeitbudget für SQL-Generierung und -Ausführung des Routers, bevor auf die normale Suche zurückgefallen wird. Gültiger Bereich [500, 30000]; out-of-range fällt auf den Default zurück. Standard: 5000.',
+        en: 'Wall-clock budget for the router’s SQL generation and execution before it gives up and falls back to normal retrieval. Valid range [500, 30000]; out-of-range falls back to the default. Default: 5000.',
+    },
+    chatTabularRouterSchemaMaxTokens: { de: 'Tabellen-Router: Schema-Budget (Tokens)', en: 'Tabular router: schema budget (tokens)' },
+    chatTabularRouterSchemaMaxTokensHelp: {
+        de: 'Token-Budget für die Tabellenschema-Beschreibung, die in den SQL-Generierungs-Prompt des Routers eingefügt wird. Gültiger Bereich [1000, 60000]; out-of-range fällt auf den Default zurück. Standard: 12000.',
+        en: 'Token budget for the table-schema description injected into the router’s SQL-generation prompt. Valid range [1000, 60000]; out-of-range falls back to the default. Default: 12000.',
+    },
     chatCorpusTableEnabled: { de: 'Aktivieren', en: 'Enable' },
     chatCorpusTableEnabledHelp: {
         de: 'Erkennt automatisch Anfragen wie „vergleiche/liste alle X über diese Dokumente" und beantwortet sie mit einer strukturierten Map-Reduce-Tabelle. ACHTUNG: ein schneller LLM-Aufruf pro einbezogener Datei.',

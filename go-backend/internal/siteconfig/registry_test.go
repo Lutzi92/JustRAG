@@ -138,6 +138,76 @@ func TestTabularCatalogKeysAreRegistered(t *testing.T) {
 	}
 }
 
+func TestTabularRouterKeysAreRegistered(t *testing.T) {
+	intCases := []struct {
+		key      string
+		min, max float64
+	}{
+		{"chat_tabular_router_max_rows", 10, 1000},
+		{"chat_tabular_router_max_repairs", 0, 5},
+		{"chat_tabular_router_timeout_ms", 500, 30_000},
+		{"chat_tabular_router_schema_max_tokens", 1000, 60_000},
+	}
+	for _, c := range intCases {
+		fld, ok := Field(c.key)
+		if !ok {
+			t.Fatalf("registry has no %q", c.key)
+		}
+		if fld.Type != FieldInt {
+			t.Errorf("%s.Type = %q, want FieldInt", c.key, fld.Type)
+		}
+		if fld.Group != "Tabular" {
+			t.Errorf("%s.Group = %q, want Tabular", c.key, fld.Group)
+		}
+		if fld.RequiresReingest {
+			t.Errorf("%s must not require reingest", c.key)
+		}
+		if fld.Min == nil || *fld.Min != c.min {
+			t.Errorf("%s.Min = %v, want %v", c.key, fld.Min, c.min)
+		}
+		if fld.Max == nil || *fld.Max != c.max {
+			t.Errorf("%s.Max = %v, want %v", c.key, fld.Max, c.max)
+		}
+		if !IsPerKB(c.key) {
+			t.Errorf("%s must be per-KB overridable", c.key)
+		}
+	}
+
+	boolFld, ok := Field("chat_tabular_router_enabled")
+	if !ok {
+		t.Fatal("registry has no chat_tabular_router_enabled")
+	}
+	if boolFld.Type != FieldBool {
+		t.Errorf("chat_tabular_router_enabled.Type = %q, want FieldBool", boolFld.Type)
+	}
+	if boolFld.Group != "Tabular" {
+		t.Errorf("chat_tabular_router_enabled.Group = %q, want Tabular", boolFld.Group)
+	}
+	if boolFld.RequiresReingest {
+		t.Error("chat_tabular_router_enabled must not require reingest")
+	}
+	if !IsPerKB("chat_tabular_router_enabled") {
+		t.Error("chat_tabular_router_enabled must be per-KB overridable")
+	}
+
+	modelFld, ok := Field("chat_tabular_router_model")
+	if !ok {
+		t.Fatal("registry has no chat_tabular_router_model")
+	}
+	if modelFld.Type != FieldString {
+		t.Errorf("chat_tabular_router_model.Type = %q, want FieldString", modelFld.Type)
+	}
+	if modelFld.Group != "Tabular" {
+		t.Errorf("chat_tabular_router_model.Group = %q, want Tabular", modelFld.Group)
+	}
+	if modelFld.RequiresReingest {
+		t.Error("chat_tabular_router_model must not require reingest")
+	}
+	if !IsPerKB("chat_tabular_router_model") {
+		t.Error("chat_tabular_router_model must be per-KB overridable")
+	}
+}
+
 func TestPresetKeysAreRegistered(t *testing.T) {
 	for _, key := range []string{"workspace_analysis_presets", "workspace_comparison_presets"} {
 		fld, ok := Field(key)

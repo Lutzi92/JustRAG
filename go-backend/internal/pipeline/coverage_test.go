@@ -306,6 +306,16 @@ var ignoredKeys = map[string]string{
 	"tabular_max_rows":                   "materializer limit (spreadsheet rework Phase 2): ingest-time knob, not a chat-pipeline node",
 	"tabular_embed_max_rows":             "materializer limit (spreadsheet rework Phase 2): ingest-time knob, not a chat-pipeline node",
 	"tabular_column_values_max_distinct": "materializer limit (spreadsheet rework Phase 2): ingest-time knob, not a chat-pipeline node",
+
+	// Tabular router (spreadsheet rework Phase 3): deterministic tabular router
+	// pre-pass on the standard + supervisor paths — unrepresented in the
+	// phase-0/1 node vocabulary, like chat_recency_listing_*.
+	"chat_tabular_router_enabled":           "deterministic tabular router pre-pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_recency_listing_*",
+	"chat_tabular_router_model":             "deterministic tabular router pre-pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_recency_listing_*",
+	"chat_tabular_router_max_rows":          "deterministic tabular router pre-pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_recency_listing_*",
+	"chat_tabular_router_max_repairs":       "deterministic tabular router pre-pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_recency_listing_*",
+	"chat_tabular_router_timeout_ms":        "deterministic tabular router pre-pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_recency_listing_*",
+	"chat_tabular_router_schema_max_tokens": "deterministic tabular router pre-pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_recency_listing_*",
 }
 
 // TestEveryPipelineFlagIsDrawnOrIgnored is the anti-drift guard (spec §4.4).

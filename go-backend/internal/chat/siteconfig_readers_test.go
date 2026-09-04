@@ -1605,3 +1605,103 @@ func TestChatRecencyListingReaders(t *testing.T) {
 		t.Error("name-match override not applied")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tabular router (spreadsheet rework Phase 3) readers tests
+// ---------------------------------------------------------------------------
+
+// TestTabularRouterReaders covers the six chat_tabular_router_* readers:
+// defaults, one in-range non-default override each, out-of-range → DEFAULT
+// (readInt/parseInt convention — no clamping, see TestTabularCatalogReaders's
+// NOTE above), and the enabled kill switch's explicit-false path. The model
+// reader's three-tier fallback (per-task → model_tier_fast → empty) mirrors
+// TestEnrichmentModel_TierFallback.
+func TestTabularRouterReaders(t *testing.T) {
+	ctx := context.Background()
+
+	// Defaults (nil reader).
+	if got := ChatTabularRouterEnabled(ctx, nil); got != true {
+		t.Errorf("ChatTabularRouterEnabled default = %v, want true", got)
+	}
+	if got := ChatTabularRouterModel(ctx, nil); got != "" {
+		t.Errorf("ChatTabularRouterModel default = %q, want empty", got)
+	}
+	if got := ChatTabularRouterMaxRows(ctx, nil); got != 200 {
+		t.Errorf("ChatTabularRouterMaxRows default = %d, want 200", got)
+	}
+	if got := ChatTabularRouterMaxRepairs(ctx, nil); got != 3 {
+		t.Errorf("ChatTabularRouterMaxRepairs default = %d, want 3", got)
+	}
+	if got := ChatTabularRouterTimeoutMs(ctx, nil); got != 5000 {
+		t.Errorf("ChatTabularRouterTimeoutMs default = %d, want 5000", got)
+	}
+	if got := ChatTabularRouterSchemaMaxTokens(ctx, nil); got != 12000 {
+		t.Errorf("ChatTabularRouterSchemaMaxTokens default = %d, want 12000", got)
+	}
+
+	// Explicit-false kill switch.
+	off := &fakeSiteConfigReader{values: map[string]*string{"chat_tabular_router_enabled": strPtr("false")}}
+	if ChatTabularRouterEnabled(ctx, off) != false {
+		t.Error("explicit false must disable the router")
+	}
+
+	// One in-range non-default override per int reader.
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_router_max_rows":          strPtr("500"),
+		"chat_tabular_router_max_repairs":       strPtr("1"),
+		"chat_tabular_router_timeout_ms":        strPtr("10000"),
+		"chat_tabular_router_schema_max_tokens": strPtr("20000"),
+	}}
+	if got := ChatTabularRouterMaxRows(ctx, r); got != 500 {
+		t.Errorf("ChatTabularRouterMaxRows override = %d, want 500", got)
+	}
+	if got := ChatTabularRouterMaxRepairs(ctx, r); got != 1 {
+		t.Errorf("ChatTabularRouterMaxRepairs override = %d, want 1", got)
+	}
+	if got := ChatTabularRouterTimeoutMs(ctx, r); got != 10000 {
+		t.Errorf("ChatTabularRouterTimeoutMs override = %d, want 10000", got)
+	}
+	if got := ChatTabularRouterSchemaMaxTokens(ctx, r); got != 20000 {
+		t.Errorf("ChatTabularRouterSchemaMaxTokens override = %d, want 20000", got)
+	}
+
+	// Out-of-range values fall back to the default rather than clamping
+	// (readInt/parseInt convention, house rule R16).
+	outOfRange := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_router_max_rows":          strPtr("5"),        // below min 10
+		"chat_tabular_router_max_repairs":       strPtr("6"),        // above max 5
+		"chat_tabular_router_timeout_ms":        strPtr("100"),      // below min 500
+		"chat_tabular_router_schema_max_tokens": strPtr("99999999"), // above max 60000
+	}}
+	if got := ChatTabularRouterMaxRows(ctx, outOfRange); got != 200 {
+		t.Errorf("ChatTabularRouterMaxRows out-of-range = %d, want default 200", got)
+	}
+	if got := ChatTabularRouterMaxRepairs(ctx, outOfRange); got != 3 {
+		t.Errorf("ChatTabularRouterMaxRepairs out-of-range = %d, want default 3", got)
+	}
+	if got := ChatTabularRouterTimeoutMs(ctx, outOfRange); got != 5000 {
+		t.Errorf("ChatTabularRouterTimeoutMs out-of-range = %d, want default 5000", got)
+	}
+	if got := ChatTabularRouterSchemaMaxTokens(ctx, outOfRange); got != 12000 {
+		t.Errorf("ChatTabularRouterSchemaMaxTokens out-of-range = %d, want default 12000", got)
+	}
+
+	// Model: three-tier fallback (per-task → model_tier_fast → empty),
+	// mirroring TestEnrichmentModel_TierFallback / TestResolveFastTierModel_Chain.
+	perTask := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_router_model": strPtr("explicit-model"),
+	}}
+	if got := ChatTabularRouterModel(ctx, perTask); got != "explicit-model" {
+		t.Errorf("per-task override should win, got %q", got)
+	}
+	tierOnly := &fakeSiteConfigReader{values: map[string]*string{
+		"model_tier_fast": strPtr("tier-model"),
+	}}
+	if got := ChatTabularRouterModel(ctx, tierOnly); got != "tier-model" {
+		t.Errorf("tier fallback should apply, got %q", got)
+	}
+	neither := &fakeSiteConfigReader{values: map[string]*string{}}
+	if got := ChatTabularRouterModel(ctx, neither); got != "" {
+		t.Errorf("neither set should yield empty, got %q", got)
+	}
+}

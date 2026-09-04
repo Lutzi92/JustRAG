@@ -33,7 +33,7 @@ const SECTION_CONFIGS = [
     { id: 'ingestion', titleKey: 'agentSectionIngestion', i18nKeys: ['doclingEnabled', 'doclingBaseUrl', 'describeImageEnabled', 'describeImageEnabledHelp', 'describeImageModel', 'describeImageModelHelp', 'contextualEnrichment', 'embeddingBatchSize', 'lateChunkingEnabled', 'lateChunkingMaxInputTokens', 'parentChildEnabled', 'parentChunkSize', 'childChunkSize', 'raptorEnabled', 'raptorMinChunks', 'raptorMaxLevels', 'raptorBranchingFactor', 'raptorClusteringAlgorithm', 'raptorLeidenResolution', 'hyPEEnabled', 'hyPEQuestionsPerChunk', 'hyPEModel'], settingKeys: ['docling_enabled', 'docling_base_url', 'describe_image_enabled', 'describe_image_model', 'contextual_enrichment', 'embedding_batch_size', 'late_chunking_enabled', 'late_chunking_max_input_tokens', 'parent_child_enabled', 'parent_chunk_size', 'child_chunk_size', 'raptor_enabled', 'raptor_min_chunks', 'raptor_max_levels', 'raptor_branching_factor', 'raptor_clustering_algorithm', 'raptor_leiden_resolution', 'hype_enabled', 'hype_questions_per_chunk', 'hype_model'] },
     { id: 'observability', titleKey: 'agentSectionObservability', i18nKeys: ['langfuseBaseUrl'], settingKeys: ['langfuse_base_url'] },
     { id: 'tools', titleKey: 'agentSectionTools', i18nKeys: ['chatCodeExecEnabled'], settingKeys: ['mcp_servers', 'chat_use_mcp_tools', 'chat_code_exec_enabled'] },
-    { id: 'tabular', titleKey: 'agentSectionTabular', i18nKeys: ['chatTabularQueryEnabled', 'chatTabularChartsEnabled'], settingKeys: ['chat_tabular_query_enabled', 'chat_tabular_charts_enabled'] },
+    { id: 'tabular', titleKey: 'agentSectionTabular', i18nKeys: ['chatTabularQueryEnabled', 'chatTabularChartsEnabled', 'chatTabularRouterEnabled', 'chatTabularRouterModel', 'chatTabularRouterMaxRows', 'chatTabularRouterMaxRepairs', 'chatTabularRouterTimeoutMs', 'chatTabularRouterSchemaMaxTokens'], settingKeys: ['chat_tabular_query_enabled', 'chat_tabular_charts_enabled', 'chat_tabular_router_enabled', 'chat_tabular_router_model', 'chat_tabular_router_max_rows', 'chat_tabular_router_max_repairs', 'chat_tabular_router_timeout_ms', 'chat_tabular_router_schema_max_tokens'] },
     { id: 'dateAware', titleKey: 'agentSectionDateAware', i18nKeys: ['chatDateAwarenessEnabled', 'chatDateTimezone', 'chatDateToolsEnabled', 'chatDateToolsMaxResults', 'chatRecencyListingEnabled', 'chatRecencyListingNameMatchEnabled', 'chatRecencyListingWindowDays', 'chatRecencyListingMaxResults'], settingKeys: ['chat_date_awareness_enabled', 'chat_date_timezone', 'chat_date_tools_enabled', 'chat_date_tools_max_results', 'chat_recency_listing_enabled', 'chat_recency_listing_name_match_enabled', 'chat_recency_listing_window_days', 'chat_recency_listing_max_results'] },
     { id: 'syncWindow', titleKey: 'agentSectionSyncWindow', i18nKeys: ['syncWindowStartHour', 'syncWindowEndHour', 'syncWindowTimezone'], settingKeys: ['sync_window_start_hour', 'sync_window_end_hour', 'sync_window_timezone'] },
 ] as const;
@@ -2149,6 +2149,93 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             {t('chatTabularChartsEnabled')}
                         </label>
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatTabularChartsEnabledHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '600px' }}>
+                        <label htmlFor="chat-tabular-router-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="chat-tabular-router-enabled"
+                                type="checkbox"
+                                checked={siteConfigs.chat_tabular_router_enabled === 'true' || siteConfigs.chat_tabular_router_enabled === '1'}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, chat_tabular_router_enabled: e.target.checked ? 'true' : 'false' }))}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('chatTabularRouterEnabled')}
+                        </label>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatTabularRouterEnabledHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-tabular-router-model">{t('chatTabularRouterModel')}</label>
+                        <input
+                            id="chat-tabular-router-model"
+                            type="text"
+                            placeholder="model_tier_fast"
+                            value={siteConfigs.chat_tabular_router_model ?? ''}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_tabular_router_model: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatTabularRouterModelHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-tabular-router-max-rows">{t('chatTabularRouterMaxRows')}</label>
+                        <input
+                            id="chat-tabular-router-max-rows"
+                            type="number"
+                            min={10}
+                            max={1000}
+                            step={1}
+                            value={siteConfigs.chat_tabular_router_max_rows || '200'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_tabular_router_max_rows: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatTabularRouterMaxRowsHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-tabular-router-max-repairs">{t('chatTabularRouterMaxRepairs')}</label>
+                        <input
+                            id="chat-tabular-router-max-repairs"
+                            type="number"
+                            min={0}
+                            max={5}
+                            step={1}
+                            value={siteConfigs.chat_tabular_router_max_repairs || '3'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_tabular_router_max_repairs: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatTabularRouterMaxRepairsHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-tabular-router-timeout-ms">{t('chatTabularRouterTimeoutMs')}</label>
+                        <input
+                            id="chat-tabular-router-timeout-ms"
+                            type="number"
+                            min={500}
+                            max={30000}
+                            step={1}
+                            value={siteConfigs.chat_tabular_router_timeout_ms || '5000'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_tabular_router_timeout_ms: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatTabularRouterTimeoutMsHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-tabular-router-schema-max-tokens">{t('chatTabularRouterSchemaMaxTokens')}</label>
+                        <input
+                            id="chat-tabular-router-schema-max-tokens"
+                            type="number"
+                            min={1000}
+                            max={60000}
+                            step={1}
+                            value={siteConfigs.chat_tabular_router_schema_max_tokens || '12000'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_tabular_router_schema_max_tokens: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatTabularRouterSchemaMaxTokensHelp')}</p>
                     </div>
                 </Section>
 
