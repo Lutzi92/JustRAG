@@ -120,13 +120,16 @@ func Validate(sql string, allowedTables map[string]bool, maxLimit int) (string, 
 			}
 			funcs[fn] = true
 		case *tree.CastExpr:
-			// R48(a): a cast to any reg* type (regclass, regproc, regtype,
-			// regnamespace, ...) resolves an arbitrary string to a catalog
-			// OID at execution time — effectively a second, un-audited
-			// object-name-to-existence oracle alongside the table/function
-			// allowlists ('pg_class'::regclass::text, CAST('x' AS regclass)).
-			if typ, ok := n.Type.(*types.T); ok && strings.HasPrefix(strings.ToLower(typ.PGName()), "reg") {
-				verr = fmt.Errorf("sqlcheck: cast to %q is not allowed", typ.PGName())
+			if err := checkCastType(n.Type); err != nil {
+				verr = err
+				return true
+			}
+		case *tree.AnnotateTypeExpr:
+			// R55: the ::: annotate-type syntax reaches the same target-type
+			// field shape as a cast (ResolvableTypeReference) and is subject
+			// to the exact same audit requirement.
+			if err := checkCastType(n.Type); err != nil {
+				verr = err
 				return true
 			}
 		case *tree.UnresolvedName:
@@ -306,6 +309,28 @@ func checkQualifiedName(n *tree.UnresolvedName, declaredAliases, allowedTables m
 	default:
 		return fmt.Errorf("sqlcheck: qualified reference with a catalog part is not allowed")
 	}
+}
+
+// checkCastType is R48(a) + R55: a cast/annotate-type target that is NOT
+// a plain, parser-resolved built-in type (*types.T) — e.g. a
+// schema-qualified type name like pg_catalog.regclass or
+// public.mydomain, which parses to *tree.UnresolvedObjectName instead —
+// cannot be inspected for the reg* family at all (the *types.T type
+// assertion would just silently miss it, letting an unaudited cast
+// through), so it is rejected outright rather than let past unaudited.
+// Among *types.T targets, the reg* family (regclass, regproc, regtype,
+// regnamespace, ...) resolves an arbitrary string to a catalog OID at
+// execution time — a second, un-audited object-name-to-existence oracle
+// alongside the table/function allowlists — and is rejected too.
+func checkCastType(t tree.ResolvableTypeReference) error {
+	typ, ok := t.(*types.T)
+	if !ok {
+		return fmt.Errorf("sqlcheck: qualified or unknown cast type is not allowed")
+	}
+	if strings.HasPrefix(strings.ToLower(typ.PGName()), "reg") {
+		return fmt.Errorf("sqlcheck: cast to %q is not allowed", typ.PGName())
+	}
+	return nil
 }
 
 // limitCount extracts a top-level LIMIT count as a plain int for the

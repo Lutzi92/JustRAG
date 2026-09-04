@@ -209,6 +209,17 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 		if t.Limit != nil && v.node(t.Limit) {
 			return true
 		}
+		// R56: FOR UPDATE/SHARE/... take row locks (and, for FOR SHARE
+		// OF/FOR UPDATE OF, name a target table of their own that was
+		// never checked against the allowlist). Locking makes no sense
+		// for a read-only router query in the first place, so reject
+		// categorically rather than validate its target list.
+		if len(t.Locking) > 0 {
+			if v.Fn != nil {
+				v.Fn(disallowed{reason: "locking clauses are not allowed"})
+			}
+			return true
+		}
 		return v.node(t.Select)
 	case *tree.Limit:
 		if t.Count != nil && v.node(t.Count) {

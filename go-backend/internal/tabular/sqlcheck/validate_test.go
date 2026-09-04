@@ -42,6 +42,12 @@ func TestValidateAcceptsRouterShapes(t *testing.T) {
 		// declared table ALIAS (not a real schema/table name) must still
 		// be accepted.
 		{"alias-qualified-column", `SELECT a."id" FROM tabular."sheet_ab12_0_0" a`, 1, true, nil},
+		// Fix round 3: two R48(d) qualifier shapes that were already
+		// correctly accepted but had no dedicated test — a full 3-part
+		// schema.table.column reference to an allowed table, and a 2-part
+		// reference using the table's own bare (unaliased) object name.
+		{"three-part-qualified-column", `SELECT tabular."sheet_ab12_0_0"."id" FROM tabular."sheet_ab12_0_0"`, 1, true, nil},
+		{"bare-tablename-qualified-column", `SELECT "sheet_ab12_0_0"."id" FROM tabular."sheet_ab12_0_0"`, 1, true, nil},
 	}
 	for _, c := range cases {
 		c := c
@@ -231,6 +237,57 @@ func TestValidateRejectsParenTableExprAndIsNull(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsQualifiedCastTypes is the R55 fix: a cast/annotate-type
+// target that isn't a plain parser-resolved *types.T — a schema-qualified
+// type name (pg_catalog.regclass, public.mydomain), which parses to
+// *tree.UnresolvedObjectName instead — silently bypassed the reg* check
+// (the type assertion just failed and fell through). Rejected outright now,
+// on both ::type and CAST(... AS type) syntax, and on ::: (AnnotateTypeExpr).
+func TestValidateRejectsQualifiedCastTypes(t *testing.T) {
+	t.Parallel()
+	bad := map[string]string{
+		"regclass-schema-qualified-postfix": `SELECT 'pg_class'::pg_catalog.regclass::text FROM tabular."sheet_ab12_0_0"`,
+		"regclass-schema-qualified-cast":    `SELECT CAST('x' AS pg_catalog.regclass) FROM tabular."sheet_ab12_0_0"`,
+		"domain-schema-qualified":           `SELECT CAST('x' AS public.mydomain) FROM tabular."sheet_ab12_0_0"`,
+		"annotate-type-schema-qualified":    `SELECT ("a":::pg_catalog.regclass) FROM tabular."sheet_ab12_0_0"`,
+	}
+	for name, sql := range bad {
+		if _, _, err := Validate(sql, allow, 200); err == nil {
+			t.Errorf("%s: accepted %q", name, sql)
+		}
+	}
+
+	accept := map[string]string{
+		"cast-text-postfix":    `SELECT "a"::text FROM tabular."sheet_ab12_0_0"`,
+		"cast-numeric-postfix": `SELECT "a"::numeric FROM tabular."sheet_ab12_0_0"`,
+		"cast-int-func":        `SELECT CAST("a" AS int) FROM tabular."sheet_ab12_0_0"`,
+		"annotate-type-int":    `SELECT ("a":::int) FROM tabular."sheet_ab12_0_0"`,
+	}
+	for name, sql := range accept {
+		if _, _, err := Validate(sql, allow, 200); err != nil {
+			t.Errorf("%s: rejected %q: %v", name, sql, err)
+		}
+	}
+}
+
+// TestValidateRejectsLockingClause is the R56 fix: tree.Select.Locking
+// (FOR UPDATE/SHARE/KEY SHARE/NO KEY UPDATE, optionally OF <table>) was
+// never visited, so both the clause itself and any target table it named
+// went unchecked.
+func TestValidateRejectsLockingClause(t *testing.T) {
+	t.Parallel()
+	bad := map[string]string{
+		"for-share":            `SELECT 1 FROM tabular."sheet_ab12_0_0" FOR SHARE`,
+		"for-key-share":        `SELECT 1 FROM tabular."sheet_ab12_0_0" FOR KEY SHARE`,
+		"for-share-of-foreign": `SELECT 1 FROM tabular."sheet_ab12_0_0" FOR SHARE OF "sheet_zz99_0_0"`,
+	}
+	for name, sql := range bad {
+		if _, _, err := Validate(sql, allow, 200); err == nil {
+			t.Errorf("%s: accepted %q", name, sql)
+		}
+	}
+}
+
 func TestValidateIsAggregate(t *testing.T) {
 	t.Parallel()
 	_, info, err := Validate(`SELECT SUM("bgf_num") FROM tabular."sheet_ab12_0_0"`, allow, 200)
@@ -259,6 +316,50 @@ func TestReadOnlyShape(t *testing.T) {
 	}
 	if err := ReadOnlyShape(`(SELECT 1 FROM tabular."sheet_ab12_0_0") UNION (SELECT 2 FROM tabular."sheet_ab12_0_0")`); err != nil {
 		t.Errorf("a leading ( before a parenthesized UNION operand must be accepted: %v", err)
+	}
+}
+
+// TestReadOnlyShapeLiteralTokenizer is the R54 fix: stripQuotedAndLiteralText
+// only understood '...'/"..." pairs, so a Postgres escape string (E'...')
+// containing a backslash-escaped quote — E'\” — desynced its quote-parity
+// tracking: it saw the escaped quote as an ordinary opening/doubled-quote
+// pair and stayed "inside the literal" past the point Postgres itself
+// closed the string, blanking real SQL that followed (here, sql_query's
+// only shape gate — it has no AST parser backstop). The five payloads are
+// the re-review's verbatim shapes (dropped into an allowlisted-table query
+// for the multi-statement/comment/DDL-keyword variants).
+func TestReadOnlyShapeLiteralTokenizer(t *testing.T) {
+	t.Parallel()
+	bad := map[string]string{
+		"estring-hide-semicolon-drop": `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = E'\'' ; DROP TABLE x ; 'z'`,
+		"estring-hide-insert-cte":     `WITH y AS (SELECT E'\'' AS c), x AS (INSERT INTO tabular."sheet_ab12_0_0" VALUES (1) RETURNING 'q') SELECT * FROM x`,
+		"estring-hide-comment":        "SELECT 1 FROM tabular.\"sheet_ab12_0_0\" WHERE \"a\" = E'\\'' -- x\n 'z'",
+		"estring-hide-delete":         `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = E'\'' DELETE FROM tabular."sheet_ab12_0_0" 'z'`,
+		"backslash-close-early":       `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = E'\' AND b = 1 AND c = 'x'`,
+	}
+	for name, sql := range bad {
+		if err := ReadOnlyShape(sql); err == nil {
+			t.Errorf("%s: accepted %q", name, sql)
+		}
+	}
+
+	accept := map[string]string{
+		"estring-plain":        `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = E'it\'s'`,
+		"ustring-plain":        `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = U&'\0041'`,
+		"dollar-in-literal":    `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = 'a$b$c'`,
+		"dollar-in-identifier": `SELECT "a$b$c" FROM tabular."sheet_ab12_0_0"`,
+	}
+	for name, sql := range accept {
+		if err := ReadOnlyShape(sql); err != nil {
+			t.Errorf("%s: rejected %q: %v", name, sql, err)
+		}
+	}
+
+	if err := ReadOnlyShape(`SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = $$x$$`); err == nil {
+		t.Error("a dollar-quoted literal must still be rejected (R46)")
+	}
+	if err := ReadOnlyShape(`SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = 'unterminated`); err == nil {
+		t.Error("an unterminated string literal must be rejected")
 	}
 }
 
