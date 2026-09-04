@@ -93,3 +93,44 @@ func TestProfileTableRegion_EmptyCompletionReturnsError(t *testing.T) {
 		t.Fatal("expected an error for an empty completion body")
 	}
 }
+
+// TestProfileTableRegion_GridRendersAsJSON asserts the grid excerpt renders
+// each row as one JSON array (Task 9 / Phase-2 carry) rather than the old
+// "'a' | 'b'" quote-and-pipe form: a cell that itself contains " | " (a
+// pasted range, a delimited list) must survive as a single JSON element
+// instead of being split at the old column-boundary delimiter, and no
+// single-quote delimiters should appear on a grid line at all.
+func TestProfileTableRegion_GridRendersAsJSON(t *testing.T) {
+	var capturedUser string
+	r := newTestResolverWithCompletion(t, func(_ context.Context, _ *ConfigResolver, user, _, _, _ string) (*CompletionResult, error) {
+		capturedUser = user
+		return &CompletionResult{Content: `{"kind":"table","header_rows":[0],"confidence":0.5,"columns":[]}`}, nil
+	})
+
+	req := SheetProfileRequest{
+		FileName:  "f.xlsx",
+		SheetName: "S",
+		RowOffset: 0,
+		Grid:      [][]string{{"a | b", "c"}},
+	}
+	if _, err := ProfileTableRegion(context.Background(), r, req, "kb1", "en", ""); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	if !strings.Contains(capturedUser, `["a | b","c"]`) {
+		t.Errorf("expected the pipe-containing cell to survive as one JSON element, got: %q", capturedUser)
+	}
+
+	// Isolate the grid line(s) and assert none carry the old '...' delimiter
+	// form. The grid sits between the "Ausschnitt" line and the
+	// "Heuristischer Vorschlag" line in SheetProfileUserPrompt's layout.
+	start := strings.Index(capturedUser, "):\n")
+	end := strings.Index(capturedUser, "Heuristischer Vorschlag")
+	if start == -1 || end == -1 || end <= start {
+		t.Fatalf("could not isolate grid section in user prompt: %q", capturedUser)
+	}
+	gridSection := capturedUser[start:end]
+	if strings.Contains(gridSection, "'") {
+		t.Errorf("grid section must not contain single-quote delimiters, got: %q", gridSection)
+	}
+}

@@ -93,9 +93,18 @@ func ProfileTableRegion(ctx context.Context, resolver *ConfigResolver, req Sheet
 	for i, row := range req.Grid {
 		cells := make([]string, len(row))
 		for j, c := range row {
-			cells[j] = "'" + strings.ReplaceAll(firstNChars(c, 60), "\n", " ") + "'"
+			cells[j] = strings.ReplaceAll(firstNChars(c, 60), "\n", " ")
 		}
-		fmt.Fprintf(&grid, "%d: %s\n", req.RowOffset+i, strings.Join(cells, " | "))
+		// JSON-encode the row instead of joining with " | ": a cell that
+		// legitimately contains " | " (a pasted range, a delimited list)
+		// used to be indistinguishable from a column boundary. json.Marshal
+		// on a []string cannot realistically fail; the fallback keeps the
+		// row line well-formed if it somehow does.
+		cellsJSON, merr := json.Marshal(cells)
+		if merr != nil {
+			cellsJSON = []byte("[]")
+		}
+		fmt.Fprintf(&grid, "%d: %s\n", req.RowOffset+i, cellsJSON)
 	}
 
 	heuristicJSON, err := json.Marshal(req.Heuristic)

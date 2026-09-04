@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -18,6 +19,7 @@ import (
 	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/sessionmem"
+	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -275,10 +277,10 @@ func (h *Handler) assembleSystemPrompt(ctx context.Context, chatID, kbID, userID
 		}
 	}
 
-	// Appended AFTER the KB body (unlike the prepended memory blocks): chart
-	// guidance is a lower-priority capability note, so the operator's KB
-	// identity prompt stays at the top.
-	if g := maybeChartGuidance(ctx, h.siteConfigReader, h.tabularCatalog, kbID, lang); g != "" {
+	// Appended AFTER the KB body (unlike the prepended memory blocks):
+	// tabular guidance is a lower-priority capability note, so the
+	// operator's KB identity prompt stays at the top.
+	if g := maybeTabularGuidance(ctx, h.siteConfigReader, h.tabularCatalog, kbID, lang); g != "" {
 		if kbSystemPrompt == "" {
 			kbSystemPrompt = g
 		} else {
@@ -341,24 +343,107 @@ func prependBlock(block, existing string) string {
 	return block + "\n" + existing
 }
 
-// maybeChartGuidance returns the Phase-3 chart-guidance snippet when charts are
-// enabled AND the KB has materialized tabular data; otherwise "". Fails closed
-// on a catalog error (no guidance) so a transient DB issue never blocks the
-// answer.
-func maybeChartGuidance(ctx context.Context, reader SiteConfigReader, cat TabularCatalogChecker, kbID, lang string) string {
-	if !ChatTabularChartsEnabled(ctx, reader) || cat == nil {
+// tabularSchemaSummaryMaxTokens bounds the per-KB catalog summary text
+// folded into the answer prompt: generous enough for a KB with a handful of
+// tables, small enough to leave headroom for retrieval context.
+const tabularSchemaSummaryMaxTokens = 6000
+
+// maybeTabularGuidance returns the Task-9 per-turn tabular-guidance snippet
+// for the answer prompt: when the tabular master flag
+// (chat_tabular_query_enabled) is on and the KB has materialized tables, the
+// full per-KB catalog summary + rules (via prompts.TabularGuidance),
+// optionally folding in chart-rendering rules when charts are also on; when
+// only chart_tabular_charts_enabled is on, the pre-Task-9 chart-only
+// snippet. Returns "" when neither flag is on, when cat is nil, or when the
+// KB has no materialized tabular data. Fails closed on any catalog error (no
+// guidance) so a transient DB issue never blocks the answer.
+func maybeTabularGuidance(ctx context.Context, reader SiteConfigReader, cat TabularCatalogSummariser, kbID, lang string) string {
+	master := ChatTabularQueryEnabled(ctx, reader)
+	charts := ChatTabularChartsEnabled(ctx, reader)
+	if !master && !charts {
+		return ""
+	}
+	if cat == nil {
 		return ""
 	}
 	has, err := cat.HasDataForKB(ctx, kbID)
 	if err != nil {
-		logctx.From(ctx).Warn("chat: tabular-catalog check failed; skipping chart guidance",
+		logctx.From(ctx).Warn("chat: tabular-catalog check failed; skipping tabular guidance",
 			"kb_id", kbID, "error", err)
 		return ""
 	}
 	if !has {
 		return ""
 	}
-	return prompts.TabularChartGuidance(lang)
+
+	if !master {
+		// Master flag off, charts on (the only remaining case given the
+		// "neither" check above): keep the pre-Task-9 chart-only snippet.
+		return prompts.TabularGuidance(lang, "", true)
+	}
+
+	entries, err := cat.ListByKB(ctx, kbID)
+	if err != nil {
+		logctx.From(ctx).Warn("chat: tabular-catalog listing failed; skipping tabular guidance",
+			"kb_id", kbID, "error", err)
+		return ""
+	}
+	summary := tabular.CompactSchema(entries, nil, "", tabularSchemaSummaryMaxTokens).Text
+	if summary == "" {
+		// R41: HasDataForKB reported materialized tables, but the
+		// compacted rendering came back empty. An empty catalogSummary
+		// tells prompts.TabularGuidance to emit chart guidance only (or
+		// nothing) — fall back to a placeholder line so the "## Tables"
+		// rules block still renders.
+		if lang == "de" {
+			summary = "(keine Tabellen katalogisiert)"
+		} else {
+			summary = "(no tables catalogued)"
+		}
+	}
+	return prompts.TabularGuidance(lang, summary, charts)
+}
+
+// tabularCatalogTTL bounds how long cachedTabularCatalog reuses a KB's
+// ListByKB result before re-reading the catalog. maybeTabularGuidance runs
+// on every complex_reasoning chat turn of every KB, but the catalog only
+// changes when a spreadsheet file is ingested or deleted — a minute of
+// staleness costs at most a one-turn-late pickup of a fresh upload.
+const tabularCatalogTTL = 60 * time.Second
+
+type tabularCatalogCacheEntry struct {
+	entries []tabular.CatalogEntry
+	at      time.Time
+}
+
+// cachedTabularCatalog wraps a TabularCatalogSummariser so ListByKB results
+// are memoized per KB for tabularCatalogTTL. HasDataForKB passes straight
+// through the embedded interface — it's already a cheap indexed EXISTS
+// query, so caching it separately isn't worth the staleness. now is
+// injectable for tests; WithTabularCatalog wires time.Now in production.
+type cachedTabularCatalog struct {
+	TabularCatalogSummariser
+	now func() time.Time
+	m   sync.Map // kbID -> tabularCatalogCacheEntry
+}
+
+func newCachedTabularCatalog(c TabularCatalogSummariser, now func() time.Time) *cachedTabularCatalog {
+	return &cachedTabularCatalog{TabularCatalogSummariser: c, now: now}
+}
+
+func (c *cachedTabularCatalog) ListByKB(ctx context.Context, kbID string) ([]tabular.CatalogEntry, error) {
+	now := c.now()
+	if v, ok := c.m.Load(kbID); ok {
+		if e, ok := v.(tabularCatalogCacheEntry); ok && now.Sub(e.at) < tabularCatalogTTL {
+			return e.entries, nil
+		}
+	}
+	entries, err := c.TabularCatalogSummariser.ListByKB(ctx, kbID)
+	if err != nil {
+		return nil, err
+	}
+	c.m.Store(kbID, tabularCatalogCacheEntry{entries: entries, at: now})
+	return entries, nil
 }
 
 // resolveReasoningLevel returns the effective reasoning level for this

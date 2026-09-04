@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
@@ -38,16 +39,16 @@ type Handler struct {
 	searchService      vector.Searcher
 	rdb                *redis.Client // optional, for deep chat relay
 	siteConfigReader   SiteConfigReader
-	asynqClient        *asynq.Client           // optional, for Phase 3 §G RAGAS sampling
-	decisionRecorder   DecisionRecorder        // optional, Phase 1 §1.4 admin metrics panel
-	toolDispatcher     ToolDispatcher          // optional, Phase 2 §2.1 MCP tool dispatch
-	sessionMemory      sessionmem.Store        // optional, Phase 2 §2.3 chat-session memory
-	kbRouterCandidates KBRouterCandidateLister // optional, AP-A4 sub-KB router
-	kgStore            kg.Store                // optional, AP-C4 graph-routing heuristic
-	longmemStore       longmem.Store           // optional, AP-D1 per-user memory
-	tabularCatalog     TabularCatalogChecker   // optional, Phase-3 chart-guidance gate
-	recencyLister      RecencyLister           // optional, deterministic recency-listing path
-	tabularRouter      *TabularRouter          // optional, deterministic spreadsheet SQL path
+	asynqClient        *asynq.Client            // optional, for Phase 3 §G RAGAS sampling
+	decisionRecorder   DecisionRecorder         // optional, Phase 1 §1.4 admin metrics panel
+	toolDispatcher     ToolDispatcher           // optional, Phase 2 §2.1 MCP tool dispatch
+	sessionMemory      sessionmem.Store         // optional, Phase 2 §2.3 chat-session memory
+	kbRouterCandidates KBRouterCandidateLister  // optional, AP-A4 sub-KB router
+	kgStore            kg.Store                 // optional, AP-C4 graph-routing heuristic
+	longmemStore       longmem.Store            // optional, AP-D1 per-user memory
+	tabularCatalog     TabularCatalogSummariser // optional, Phase-3 tabular-guidance gate
+	recencyLister      RecencyLister            // optional, deterministic recency-listing path
+	tabularRouter      *TabularRouter           // optional, deterministic spreadsheet SQL path
 	// raptorDescendants is the Phase F bridge that resolves a set of
 	// RAPTOR summary chunk ids to their transitive leaf descendants.
 	// Used by runPostResponseTasks to feed the citation validator's
@@ -143,6 +144,15 @@ type DecisionRecorder interface {
 // guidance is never injected.
 type TabularCatalogChecker interface {
 	HasDataForKB(ctx context.Context, kbID string) (bool, error)
+}
+
+// TabularCatalogSummariser extends TabularCatalogChecker with the catalog
+// listing the Task-9 per-KB tabular-guidance snippet renders into a
+// tabular.CompactSchema summary. Satisfied by *tabular.Catalog. Optional —
+// when nil, maybeTabularGuidance never fires.
+type TabularCatalogSummariser interface {
+	TabularCatalogChecker
+	ListByKB(ctx context.Context, kbID string) ([]tabular.CatalogEntry, error)
 }
 
 // HandlerOption is a functional option for NewHandler.
@@ -265,11 +275,16 @@ func WithKBRouterCandidates(l KBRouterCandidateLister) HandlerOption {
 	}
 }
 
-// WithTabularCatalog attaches the Phase-3 tabular-catalog checker used to gate
-// chart guidance to KBs that actually have spreadsheet data.
-func WithTabularCatalog(c TabularCatalogChecker) HandlerOption {
+// WithTabularCatalog attaches the Phase-3 tabular-catalog summariser used to
+// gate and render the per-KB tabular-guidance snippet (chart guidance when
+// only chat_tabular_charts_enabled is on; the full catalog summary + rules
+// when chat_tabular_query_enabled is also on). Wraps c in a 60s per-KB
+// ListByKB cache (cachedTabularCatalog) since the gate runs on every
+// complex_reasoning chat turn of every KB but the catalog only changes on
+// ingest/delete.
+func WithTabularCatalog(c TabularCatalogSummariser) HandlerOption {
 	return func(h *Handler) {
-		h.tabularCatalog = c
+		h.tabularCatalog = newCachedTabularCatalog(c, time.Now)
 	}
 }
 
