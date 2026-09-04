@@ -232,3 +232,56 @@ func TestMaterializeRegionMaxRowsCap(t *testing.T) {
 		t.Errorf("tabular_column_values for name = %v, want [A B] (only the first 2 rows, admitted under MaxRows, may appear)", vals)
 	}
 }
+
+// TestCountCoercionFailuresPerColumn covers item 2 + Ruling R11 directly
+// against a hand-built staging table (bypassing MaterializeRegion's own
+// read/COPY pass, which — by construction — never produces a mismatch
+// between Go's type inference and the SQL guard: every accumulator only
+// commits a column to TypeNumeric/TypeBool/TypeDate once every non-empty
+// value already parsed as that type in Go, and the canonical text it writes
+// (strconv.FormatFloat, "true"/"false", ISO dates) always satisfies the
+// matching SQL regex/IN-list too. So a real coercion failure only shows up
+// as a defensive guard against a Go/SQL divergence, not from ordinary
+// fixture data — this test manufactures that divergence directly in SQL.
+func TestCountCoercionFailuresPerColumn(t *testing.T) {
+	pool := openMainPool(t)
+	ctx := context.Background()
+	stage := "coercion_test_stage"
+	_, _ = pool.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS tabular.%q`, stage))
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), fmt.Sprintf(`DROP TABLE IF EXISTS tabular.%q`, stage)) })
+	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE TABLE tabular.%q ("_rowid" bigint, "amount" text, "flag" text)`, stage)); err != nil {
+		t.Fatal(err)
+	}
+	// "amount": two values that pass the guarded numeric cast, one
+	// ("12.34.56") that doesn't. "flag": every value passes the boolean cast.
+	if _, err := pool.Exec(ctx, fmt.Sprintf(
+		`INSERT INTO tabular.%q ("_rowid","amount","flag") VALUES (1,'10.5','true'),(2,'20','false'),(3,'12.34.56','true')`, stage)); err != nil {
+		t.Fatal(err)
+	}
+	// A shadow spec ("amount_num", ShadowOf: "amount") recasts the SAME
+	// source column that already has a failing value, so R11 is exercised
+	// for real: if the exclusion regressed, the total below would be 2, not 1.
+	specs := []ColumnSpec{
+		{Name: "amount", Type: TypeNumeric},
+		{Name: "flag", Type: TypeBool},
+		{Name: "amount_num", Type: TypeNumeric, ShadowOf: "amount"},
+	}
+	stats := []ColumnStat{{Name: "amount"}, {Name: "flag"}, {Name: "amount_num"}}
+	m := NewMaterializer(pool)
+	total, err := m.countCoercionFailures(ctx, stage, specs, stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 {
+		t.Errorf("total coercion failures = %d, want 1", total)
+	}
+	if stats[0].CoercionFailed != 1 {
+		t.Errorf("amount.CoercionFailed = %d, want 1", stats[0].CoercionFailed)
+	}
+	if stats[1].CoercionFailed != 0 {
+		t.Errorf("flag.CoercionFailed = %d, want 0", stats[1].CoercionFailed)
+	}
+	if stats[2].CoercionFailed != 0 {
+		t.Errorf("amount_num (shadow).CoercionFailed = %d, want 0 (R11: shadows are excluded from the count)", stats[2].CoercionFailed)
+	}
+}
