@@ -151,9 +151,6 @@ func renderTable(b *strings.Builder, fileName string, sp profile.SheetProfile, r
 			continue
 		}
 		rec := record(rp, cells)
-		if rec == "" {
-			continue
-		}
 		if block.Len() > 0 && splitter.CountTokens(block.String()+rec) > budget {
 			flush(ordinal)
 		}

@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -55,6 +56,22 @@ func TestRenderTableAsKeyValueRecords(t *testing.T) {
 	}
 	if out.Regions[0].RowsEmbedded != 8 || out.Regions[0].Blocks < 1 {
 		t.Errorf("region stats: %+v", out.Regions[0])
+	}
+	// All 8 records land in one block at ChunkSize 512 (Blocks == 1); that
+	// block holds far more than one record, so R3's single-oversized-record
+	// exemption cannot excuse an overshoot — it must respect the budget.
+	found := false
+	for _, block := range strings.Split(txt, "\n\n") {
+		if strings.HasPrefix(block, "[tabular.sheet_abc_0_0 rows") {
+			found = true
+			chunkSize := 512
+			if budget := int(0.8 * float64(chunkSize)); splitterCount(block) > budget {
+				t.Errorf("block over budget (%d tokens > %d):\n%s", splitterCount(block), budget, block)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("marker block not found in page text")
 	}
 }
 
@@ -137,5 +154,137 @@ func TestBlocksRespectTokenBudget(t *testing.T) {
 				t.Errorf("block over budget (%d tokens):\n%s", splitterCount(block), block)
 			}
 		}
+	}
+}
+
+// fakeSource is a minimal in-memory sheetsource.Source over a single sheet,
+// used to exercise the multi-record batching path with a table narrow
+// enough that several records fit in one 0.8×ChunkSize block — every
+// fixture table in the other tests here is wide enough that each record
+// alone exceeds the budget, so the batching branch of the block-flush logic
+// (splitter.CountTokens(block.String()+rec) > budget) never actually runs
+// against them.
+type fakeSource struct {
+	sheet sheetsource.SheetInfo
+	rows  [][]sheetsource.Cell
+}
+
+func (f *fakeSource) Sheets() []sheetsource.SheetInfo { return []sheetsource.SheetInfo{f.sheet} }
+
+func (f *fakeSource) ReadSheet(index int, fn sheetsource.RowFunc) (sheetsource.SheetExtras, error) {
+	width := 0
+	for _, r := range f.rows {
+		if len(r) > width {
+			width = len(r)
+		}
+	}
+	for i, r := range f.rows {
+		if err := fn(i, r); err != nil {
+			if err == sheetsource.ErrStop {
+				break
+			}
+			return sheetsource.SheetExtras{}, err
+		}
+	}
+	return sheetsource.SheetExtras{MaxCol: width, RowCount: len(f.rows)}, nil
+}
+
+func (f *fakeSource) Close() error { return nil }
+
+func textCell(s string) sheetsource.Cell {
+	return sheetsource.Cell{Kind: sheetsource.KindText, Raw: s, Formatted: s}
+}
+
+func numCell(s string) sheetsource.Cell {
+	return sheetsource.Cell{Kind: sheetsource.KindNumber, Raw: s, Formatted: s}
+}
+
+// narrowGrid builds a 3-column header + n data-row grid: "A|B|C" header,
+// data rows "x<i>|<i>|y<i>" — short enough that several records fit inside
+// a small token budget, unlike every real fixture used above.
+func narrowGrid(n int) [][]sheetsource.Cell {
+	rows := [][]sheetsource.Cell{{textCell("A"), textCell("B"), textCell("C")}}
+	for i := 1; i <= n; i++ {
+		rows = append(rows, []sheetsource.Cell{
+			textCell(fmt.Sprintf("x%d", i)),
+			numCell(fmt.Sprintf("%d", i)),
+			textCell(fmt.Sprintf("y%d", i)),
+		})
+	}
+	return rows
+}
+
+func TestBlocksBatchRecordsWithinBudget(t *testing.T) {
+	t.Parallel()
+	const dataRows = 40
+	grid := narrowGrid(dataRows)
+	src := &fakeSource{sheet: sheetsource.SheetInfo{Index: 0, Name: "Sheet1"}, rows: grid}
+
+	sample := &sheetsource.Sample{
+		Info:      src.sheet,
+		Rows:      grid,
+		Width:     3,
+		TotalRows: len(grid),
+		Extras:    sheetsource.SheetExtras{MaxCol: 3, RowCount: len(grid)},
+	}
+	sp := profile.ProfileSheet(sample, profile.Options{})
+	if len(sp.Regions) != 1 || sp.Regions[0].Kind != profile.KindTable {
+		t.Fatalf("profile did not detect a single table region: %+v", sp)
+	}
+	rp := sp.Regions[0]
+	if rp.DataStart != 1 || len(rp.Columns) != 3 {
+		t.Fatalf("unexpected region shape: DataStart=%d columns=%d (%+v)", rp.DataStart, len(rp.Columns), rp)
+	}
+
+	out, err := RenderSheet(src, "synthetic.xlsx", sp, nil, Options{ChunkSize: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := out.Regions[0]
+	if rr.Blocks < 3 {
+		t.Fatalf("expected several blocks at ChunkSize 64, got %d: %+v", rr.Blocks, rr)
+	}
+	if rr.RowsEmbedded != dataRows {
+		t.Fatalf("RowsEmbedded = %d, want %d", rr.RowsEmbedded, dataRows)
+	}
+
+	chunkSize := 64
+	budget := int(0.8 * float64(chunkSize))
+	sawMultiRecordBlock := false
+	nextWant := 1
+	for _, block := range strings.Split(out.Page.Text, "\n\n") {
+		if !strings.HasPrefix(block, "[rows") {
+			continue
+		}
+		parts := strings.SplitN(block, "\n", 2)
+		var a, b int
+		if _, err := fmt.Sscanf(parts[0], "[rows %d–%d]", &a, &b); err != nil {
+			t.Fatalf("marker parse %q: %v", parts[0], err)
+		}
+		if a != nextWant {
+			t.Errorf("marker range not contiguous: got start %d, want %d (%q)", a, nextWant, parts[0])
+		}
+		nextWant = b + 1
+
+		recordLines := 0
+		if len(parts) > 1 {
+			for _, l := range strings.Split(parts[1], "\n") {
+				if strings.TrimSpace(l) != "" {
+					recordLines++
+				}
+			}
+		}
+		if recordLines >= 2 {
+			sawMultiRecordBlock = true
+			if tok := splitterCount(block); tok > budget {
+				t.Errorf("multi-record block over budget (%d tokens > %d):\n%s", tok, budget, block)
+			}
+		}
+	}
+	if !sawMultiRecordBlock {
+		t.Fatal("no multi-record block observed — the batching path was not exercised")
+	}
+	if nextWant-1 != dataRows {
+		t.Errorf("marker ranges don't sum to %d rows: last end %d", dataRows, nextWant-1)
 	}
 }
