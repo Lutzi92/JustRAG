@@ -90,6 +90,19 @@ func TestLookupValuesExactPrefixSubstring(t *testing.T) {
 		t.Errorf("hit[1] = %+v, want Value=Goethestraße 57 Match=prefix", hits[1])
 	}
 
+	// perLiteral=3 lets the third-ranked hit through: the two prefix
+	// matches, then the substring match "Am Goetheplatz 1".
+	hits, err = cat.LookupValues(ctx, entries, []string{"Goethe"}, 3)
+	if err != nil {
+		t.Fatalf("LookupValues (prefix+substring, perLiteral=3): %v", err)
+	}
+	if len(hits) != 3 {
+		t.Fatalf("perLiteral=3 hits len = %d, want 3: %+v", len(hits), hits)
+	}
+	if hits[2].Value != "Am Goetheplatz 1" || hits[2].Match != "substring" {
+		t.Errorf("hit[2] = %+v, want Value=Am Goetheplatz 1 Match=substring", hits[2])
+	}
+
 	// "x" -> too short (< 2 runes), skipped: no hits, no error.
 	hits, err = cat.LookupValues(ctx, entries, []string{"x"}, 5)
 	if err != nil {

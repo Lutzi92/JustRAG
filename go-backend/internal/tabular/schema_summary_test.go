@@ -69,4 +69,37 @@ func TestCompactSchemaPrunesByHitsThenOverlap(t *testing.T) {
 	if len(s2.Tables) != 1 || s2.Tables[0] != "sheet_aa_0_0" {
 		t.Fatalf("header overlap must rank Gebäudeliste first: %v", s2.Tables)
 	}
+
+	// Isolate the hits term: give the hit to the SMALLER-row-count table
+	// (Gebäudeliste, 1 234 rows) whose own headers do NOT overlap the
+	// query, while the query's words overlap ONLY Räume's headers
+	// ("fläche"/"raum") — and Räume has vastly more rows too. If the score
+	// dropped the 1000×hits term, both the row-count and overlap signals
+	// would favour Räume, so this sub-case only passes when hits actually
+	// dominate.
+	hitsOnAA := []ValueHit{{TableName: "sheet_aa_0_0", ColumnName: "gebaeude", Value: "1440", Literal: "1440"}}
+	s3 := CompactSchema(twoTables(), hitsOnAA, "Fläche von Raum X", one+10)
+	if len(s3.Tables) != 1 || s3.Tables[0] != "sheet_aa_0_0" {
+		t.Fatalf("value hits must win even against lower row count and zero header overlap: %v", s3.Tables)
+	}
+}
+
+// TestCompactSchemaOversizedFirstTableFallsBackNotEmpty is R36: when even
+// the top-ranked table's own rendering exceeds maxTokens, CompactSchema
+// must still return that one table rather than an empty schema.
+func TestCompactSchemaOversizedFirstTableFallsBackNotEmpty(t *testing.T) {
+	t.Parallel()
+	s := CompactSchema(twoTables(), nil, "", 1)
+	if len(s.Tables) != 1 {
+		t.Fatalf("Tables = %v, want exactly 1 (fallback must include the top-ranked table)", s.Tables)
+	}
+	if s.Text == "" {
+		t.Error("Text is empty even though tables exist")
+	}
+	if !s.Pruned {
+		t.Error("Pruned = false, want true")
+	}
+	if s.Tokens <= 1 {
+		t.Errorf("Tokens = %d, want > maxTokens (1)", s.Tokens)
+	}
 }

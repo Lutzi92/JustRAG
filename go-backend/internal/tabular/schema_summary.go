@@ -279,6 +279,14 @@ func CompactSchema(entries []CatalogEntry, hits []ValueHit, query string, maxTok
 		selected = trial
 	}
 
+	// R36: a single table's own rendering can exceed maxTokens (an
+	// oversized first table). Dropping it entirely would hand the LLM an
+	// empty schema even though tables exist — include the top-ranked table
+	// anyway rather than truncate to nothing.
+	if len(selected) == 0 && len(ranked) > 0 {
+		selected = ranked[:1]
+	}
+
 	finalText := joinBlocks(selected)
 	tables := make([]string, len(selected))
 	for i, b := range selected {
