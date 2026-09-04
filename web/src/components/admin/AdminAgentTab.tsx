@@ -2156,7 +2156,7 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             <input
                                 id="chat-tabular-router-enabled"
                                 type="checkbox"
-                                checked={siteConfigs.chat_tabular_router_enabled === 'true' || siteConfigs.chat_tabular_router_enabled === '1'}
+                                checked={siteConfigs.chat_tabular_router_enabled !== 'false' && siteConfigs.chat_tabular_router_enabled !== '0'}
                                 onChange={e => setSiteConfigs(prev => ({ ...prev, chat_tabular_router_enabled: e.target.checked ? 'true' : 'false' }))}
                                 style={{ width: '18px', height: '18px', cursor: 'pointer' }}
                             />
