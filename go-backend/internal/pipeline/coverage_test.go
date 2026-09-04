@@ -292,6 +292,13 @@ var ignoredKeys = map[string]string{
 	// Utility endpoint unrelated to the answering pipeline, sibling of the
 	// already-ignored describe_image_model.
 	"describe_image_enabled": "utility endpoint (POST /api/describe-image), not part of the answering pipeline",
+
+	// Sheet profiler (spreadsheet rework Phase 1): ingest-time knobs, not a
+	// pipeline node until Phase 2 wires ingest.
+	"tabular_profile_llm_enabled":   "sheet profiler (spreadsheet rework Phase 1): ingest-time knobs, not a pipeline node until Phase 2 wires ingest",
+	"tabular_profile_llm_threshold": "sheet profiler (spreadsheet rework Phase 1): ingest-time knobs, not a pipeline node until Phase 2 wires ingest",
+	"tabular_profile_model":         "sheet profiler (spreadsheet rework Phase 1): ingest-time knobs, not a pipeline node until Phase 2 wires ingest",
+	"tabular_profile_sample_rows":   "sheet profiler (spreadsheet rework Phase 1): ingest-time knobs, not a pipeline node until Phase 2 wires ingest",
 }
 
 // TestEveryPipelineFlagIsDrawnOrIgnored is the anti-drift guard (spec §4.4).
