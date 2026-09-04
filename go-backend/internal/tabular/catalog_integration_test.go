@@ -133,3 +133,76 @@ func TestCatalogV2RoundTrip(t *testing.T) {
 		t.Fatalf("count after DeleteValuesForTables = %d, want 0", count)
 	}
 }
+
+func TestCatalogV2InsertNullsOptionalColumns(t *testing.T) {
+	ctx := context.Background()
+	pool := openMainPool(t)
+
+	var userID, kbID, fileID string
+	if err := pool.QueryRow(ctx, `INSERT INTO users (username, password_hash) VALUES ($1,'x') RETURNING id::text`,
+		fmt.Sprintf("tab-catv2null-%d", os.Getpid())).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, userID) })
+	if err := pool.QueryRow(ctx, `INSERT INTO knowledge_bases (name, user_id) VALUES ('tab-catv2null', $1) RETURNING id::text`, userID).Scan(&kbID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO files (kb_id, name, type, status) VALUES ($1,'null-test.xlsx','application/xlsx','completed') RETURNING id::text`, kbID).Scan(&fileID); err != nil {
+		t.Fatal(err)
+	}
+
+	cat := NewCatalog(pool)
+	tableName := TableNameForRegion(fileID, 0, 0)
+	entry := CatalogEntry{
+		FileID:      fileID,
+		KBID:        kbID,
+		SheetName:   "Sheet1",
+		TableName:   tableName,
+		Columns:     []ColumnSpec{{Original: "A", Name: "a", Type: TypeText}},
+		RowCount:    1,
+		SheetKind:   "table",
+		HeaderRow:   -1,
+		Profile:     nil,
+		ColumnStats: nil,
+	}
+	t.Cleanup(func() { cat.DeleteByFile(ctx, fileID) })
+	if err := cat.Insert(ctx, entry); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	// Assert via SQL that profile, column_stats, and header_row are all NULL
+	var profileIsNull, columnStatsIsNull, headerRowIsNull bool
+	if err := pool.QueryRow(ctx,
+		`SELECT profile IS NULL, column_stats IS NULL, header_row IS NULL FROM tabular_catalog WHERE table_name = $1`,
+		tableName).Scan(&profileIsNull, &columnStatsIsNull, &headerRowIsNull); err != nil {
+		t.Fatalf("SQL query: %v", err)
+	}
+	if !profileIsNull {
+		t.Errorf("profile IS NULL = false, want true")
+	}
+	if !columnStatsIsNull {
+		t.Errorf("column_stats IS NULL = false, want true")
+	}
+	if !headerRowIsNull {
+		t.Errorf("header_row IS NULL = false, want true")
+	}
+
+	// Assert that ListByFile returns one entry with nil Profile/ColumnStats and HeaderRow == -1
+	byFile, err := cat.ListByFile(ctx, fileID)
+	if err != nil {
+		t.Fatalf("ListByFile: %v", err)
+	}
+	if len(byFile) != 1 {
+		t.Fatalf("ListByFile len = %d, want 1", len(byFile))
+	}
+	got := byFile[0]
+	if got.Profile != nil && len(got.Profile) > 0 {
+		t.Errorf("Profile = %s, want nil or empty", got.Profile)
+	}
+	if got.ColumnStats != nil && len(got.ColumnStats) > 0 {
+		t.Errorf("ColumnStats = %+v, want nil or empty", got.ColumnStats)
+	}
+	if got.HeaderRow != -1 {
+		t.Errorf("HeaderRow = %d, want -1", got.HeaderRow)
+	}
+}
