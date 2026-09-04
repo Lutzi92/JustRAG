@@ -156,6 +156,19 @@ func (a *ColumnAccumulator) Canonical(c sheetsource.Cell) (string, bool) {
 }
 
 // FinalSpec decides the SQL type(s) after the pass (spec §4.1): primary + optional shadow.
+//
+// The shadow case (last) is intentionally not gated on Role == RoleMeasure:
+// a column the profiler classified RoleText because it falls short of the
+// >=90% numeric threshold in profile.decideRole (e.g. "Baujahr" with a
+// couple of "2007; Anbau 2018"-style annotations mixed into otherwise plain
+// years) still has a real, aggregatable numeric subset worth exposing as a
+// shadow column — the primary stays text (preserving the annotations
+// verbatim, which is the whole reason the profiler didn't call it Measure),
+// while the shadow lets table_query SUM/AVG over the values that do parse.
+// Gating on Numeric>0 && Numeric<n alone is safe here because every case
+// that would make a Role-based restriction matter (RoleID, RoleBool,
+// RoleDate, a fully numeric column) is already handled by an earlier case in
+// this switch, which stops at the first match.
 func (a *ColumnAccumulator) FinalSpec() (ColumnSpec, *ColumnSpec) {
 	n := a.NonEmpty
 	base := ColumnSpec{Original: a.Profile.Header, Name: a.Name, Role: string(a.Profile.Role), Description: a.Profile.Description, Type: TypeText}
@@ -170,7 +183,7 @@ func (a *ColumnAccumulator) FinalSpec() (ColumnSpec, *ColumnSpec) {
 		}
 	case n > 0 && a.Numeric == n:
 		base.Type = TypeNumeric
-	case a.Profile.Role == profile.RoleMeasure && a.Numeric > 0 && a.Numeric < n:
+	case a.Numeric > 0 && a.Numeric < n:
 		shadow := ColumnSpec{Original: a.Profile.Header + " (Zahl)", Name: trimTo(a.Name, maxIdentBytes-4) + "_num", Type: TypeNumeric, Role: string(profile.RoleMeasure), ShadowOf: a.Name}
 		return base, &shadow
 	}
@@ -215,6 +228,22 @@ func (a *ColumnAccumulator) Stat(primary ColumnSpec, shadow *ColumnSpec, totalRo
 		if !profile.LooksLikeInstruction(s) {
 			st.Samples = append(st.Samples, s)
 		}
+	}
+	return st
+}
+
+// ShadowStat renders the catalog column_stats entry for a column's shadow
+// (numeric-coercion) column, so the catalog carries exactly one ColumnStat
+// per ColumnSpec (primary + shadow, in the same order as FinalSpec/
+// assembleSpecs) rather than silently dropping the shadow's own stats.
+// totalRows is the number of materialised rows; a.Numeric is the shadow
+// column's own non-null count (only numeric-classified cells produced a
+// value there).
+func (a *ColumnAccumulator) ShadowStat(shadow ColumnSpec, totalRows int64) ColumnStat {
+	st := ColumnStat{Name: shadow.Name, Original: shadow.Original, Type: string(shadow.Type), Role: shadow.Role,
+		NullCount: totalRows - a.Numeric, DistinctCount: -1}
+	if a.hasNum {
+		st.Min, st.Max = strconv.FormatFloat(a.MinNum, 'f', -1, 64), strconv.FormatFloat(a.MaxNum, 'f', -1, 64)
 	}
 	return st
 }

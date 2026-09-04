@@ -3,8 +3,6 @@ package tabular
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,30 +33,6 @@ type CatalogEntry struct {
 	HeaderRow   int // -1 = no header row detected
 	Profile     json.RawMessage
 	ColumnStats []ColumnStat
-}
-
-// TableNameForFile builds the collision-safe physical table name for a sheet:
-// sheet_<fileuuid-without-dashes>_<sheetIndex>. Stays within 63 bytes.
-//
-// Deprecated: Phase-2 materializes per-region, not per-sheet; use
-// TableNameForRegion. Kept for Phase-1 callers/tests.
-func TableNameForFile(fileID string, sheetIdx int) string {
-	clean := strings.ReplaceAll(fileID, "-", "")
-	return fmt.Sprintf("sheet_%s_%d", clean, sheetIdx)
-}
-
-// BuildSummaryCard renders the one-chunk discoverability text that REPLACES
-// the spreadsheet's embedded body. It lists the sheet's columns + types and
-// row count so semantic search still surfaces the file, and the answer LLM
-// knows to reach for table_query.
-func BuildSummaryCard(fileName, sheetName, tableName string, cols []ColumnSpec, rowCount int64) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Structured spreadsheet sheet %q from file %q (%d rows).\n", sheetName, fileName, rowCount)
-	fmt.Fprintf(&b, "Queryable via the table_query tool as table %q.%q. Columns:\n", TabularSchema, tableName)
-	for _, c := range cols {
-		fmt.Fprintf(&b, "- %s (%s) [original header: %s]\n", c.Name, c.Type, c.Original)
-	}
-	return b.String()
 }
 
 // Catalog persists and reads tabular_catalog rows. Backed by the main R/W pool

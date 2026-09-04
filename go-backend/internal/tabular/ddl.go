@@ -2,113 +2,93 @@ package tabular
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
-	"time"
 )
 
-// TabularSchema is the dedicated Postgres schema all per-sheet tables live in.
+// TabularSchema is the dedicated Postgres schema all per-region tables live in.
 const TabularSchema = "tabular"
 
-// RowIDColumn is the synthetic primary key added to every materialized table
-// when Phase-2 semantic columns are enabled. Underscore-prefixed so it can
-// never collide with a sanitized user header (sanitizeIdentifier trims leading
-// underscores). It is the join key for the fuzzy-search -> exact-SQL pivot.
+// RowIDColumn is the synthetic primary key added to every materialized
+// table: the 1-based ordinal of the row within the materialized region. It
+// is the join key for the fuzzy-search -> exact-SQL pivot and for cell-level
+// citations. Underscore-prefixed so it can never collide with a sanitized
+// user header (SanitizeIdentifier trims leading underscores).
 const RowIDColumn = "_rowid"
 
-// BuildCreateTableSQL renders the CREATE TABLE statement for a sheet. When
-// withRowID is true, a leading "_rowid" bigint column is prepended. Identifiers
-// are sanitized + double-quoted and types are from the fixed ColumnType set, so
-// this is injection-safe.
-func BuildCreateTableSQL(tableName string, cols []ColumnSpec, withRowID bool) string {
-	parts := make([]string, 0, len(cols)+1)
-	if withRowID {
-		parts = append(parts, fmt.Sprintf("%q bigint", RowIDColumn))
+// numericRe matches the canonical numeric text Canonical() emits (optionally
+// signed integer/decimal, optional exponent). Used only inside a Postgres
+// regex literal — it contains no user data.
+const numericRe = `^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$`
+
+// q double-quotes a SQL identifier, escaping embedded quotes. The only
+// identifier-quoting helper in this package: every table/column name in
+// generated DDL/DML goes through it, so no identifier is ever interpolated
+// unquoted.
+func q(ident string) string { return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"` }
+
+// stagingName derives the text-typed staging table name from the final
+// table name.
+func stagingName(table string) string { return table + "__stage" }
+
+// BuildStagingTableSQL renders the CREATE TABLE statement for a region's
+// staging table: a leading "_rowid" bigint column plus one TEXT column per
+// (already sanitized) name, in order. Every value lands here as text first;
+// BuildTypedTableSQL casts it server-side in a second pass.
+func BuildStagingTableSQL(table string, names []string) string {
+	parts := make([]string, 0, len(names)+1)
+	parts = append(parts, q(RowIDColumn)+" bigint")
+	for _, n := range names {
+		parts = append(parts, q(n)+" text")
 	}
-	for _, c := range cols {
-		parts = append(parts, fmt.Sprintf("%q %s", c.Name, string(c.Type)))
-	}
-	return fmt.Sprintf("CREATE TABLE %s.%q (%s)", TabularSchema, tableName, strings.Join(parts, ", "))
+	return fmt.Sprintf(`CREATE TABLE %s.%s (%s)`, q(TabularSchema), q(stagingName(table)), strings.Join(parts, ", "))
 }
 
-// BuildRowChunkContent renders the embeddable content for one row's flagged
-// (Embedded) columns: a parseable source header line followed by one
-// `Original: value` line per non-empty flagged column. Returns ok=false when no
-// flagged column has content (caller emits no chunk). The header lets the agent
-// recover the table + _rowid to pivot to `table_query ... WHERE _rowid IN (...)`.
-func BuildRowChunkContent(tableName string, rowID int64, cols []ColumnSpec, row []string) (string, bool) {
-	var b strings.Builder
-	fmt.Fprintf(&b, "[%s.%s row %d]\n", TabularSchema, tableName, rowID)
-	any := false
-	for i, c := range cols {
-		if !c.Embedded {
-			continue
-		}
-		if i >= len(row) {
-			continue
-		}
-		val := strings.TrimSpace(row[i])
-		if val == "" {
-			continue
-		}
-		label := c.Original
-		if label == "" {
-			label = c.Name
-		}
-		fmt.Fprintf(&b, "%s: %s\n", label, val)
-		any = true
+// castValue renders the cast expression for one column, without the
+// trailing "AS <name>" — the fragment countCoercionFailures reuses to detect
+// values that fail their target cast. src is the staging column the value
+// comes from: the column's own name normally, or ShadowOf for a shadow
+// column (a shadow never has its own staging column; it recasts the primary
+// text column it shadows). A guarded CASE means "value is NULL" and "value
+// failed to cast" are indistinguishable from the typed table alone — that is
+// what countCoercionFailures exists to recover.
+func castValue(c ColumnSpec) string {
+	src := c.Name
+	if c.ShadowOf != "" {
+		src = c.ShadowOf
 	}
-	if !any {
-		return "", false
-	}
-	return strings.TrimRight(b.String(), "\n"), true
-}
-
-// ColumnNames returns the sanitized identifiers in order (the pgx.CopyFrom
-// column list).
-func ColumnNames(cols []ColumnSpec) []string {
-	out := make([]string, len(cols))
-	for i, c := range cols {
-		out[i] = c.Name
-	}
-	return out
-}
-
-// coerceValue converts a raw cell to the Go value pgx will COPY for the
-// target type. Empty string -> (nil, true) i.e. NULL. A non-empty value that
-// fails its target cast -> (nil, false): the caller stores NULL and records a
-// coercion failure. Text never fails.
-func coerceValue(raw string, t ColumnType) (any, bool) {
-	v := strings.TrimSpace(raw)
-	if v == "" {
-		return nil, true
-	}
-	switch t {
-	case TypeBigint:
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			return nil, false
-		}
-		return n, true
-	case TypeFloat:
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			return nil, false
-		}
-		return f, true
-	case TypeBool:
-		if !isBool(v) {
-			return nil, false
-		}
-		return strings.EqualFold(v, "true"), true
+	switch c.Type {
+	case TypeNumeric:
+		return fmt.Sprintf(`CASE WHEN %s ~ '%s' THEN %s::numeric END`, q(src), numericRe, q(src))
 	case TypeDate:
-		for _, l := range dateLayouts {
-			if d, err := time.Parse(l, v); err == nil {
-				return d, true
-			}
-		}
-		return nil, false
+		return fmt.Sprintf(`CASE WHEN %s ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN %s::date END`, q(src), q(src))
+	case TypeTimestamp:
+		return fmt.Sprintf(`CASE WHEN %s ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN %s::timestamp END`, q(src), q(src))
+	case TypeBool:
+		return fmt.Sprintf(`CASE WHEN %s IN ('true','false') THEN %s::boolean END`, q(src), q(src))
 	default:
-		return raw, true
+		return q(src)
 	}
+}
+
+// castExpr renders one output column of the typed-table CTAS: castValue
+// aliased to the column's own (final, deduped) name.
+func castExpr(c ColumnSpec) string {
+	return castValue(c) + " AS " + q(c.Name)
+}
+
+// BuildTypedTableSQL renders the server-side "pass 2": a CREATE TABLE ... AS
+// SELECT that casts every staging column to its inferred type in one
+// statement, ordered by _rowid. Column names are sanitized identifiers
+// ([a-z0-9_] only, deduped) and the regex literals in castValue contain no
+// user data, so no cell value is ever interpolated into this SQL — values
+// only ever traveled through the earlier COPY.
+func BuildTypedTableSQL(table string, cols []ColumnSpec) string {
+	exprs := make([]string, 0, len(cols)+1)
+	exprs = append(exprs, q(RowIDColumn))
+	for _, c := range cols {
+		exprs = append(exprs, castExpr(c))
+	}
+	return fmt.Sprintf(`CREATE TABLE %s.%s AS SELECT %s FROM %s.%s ORDER BY %s`,
+		q(TabularSchema), q(table), strings.Join(exprs, ", "),
+		q(TabularSchema), q(stagingName(table)), q(RowIDColumn))
 }

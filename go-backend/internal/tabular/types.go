@@ -97,26 +97,3 @@ type ParseReport struct {
 	Materialised bool          `json:"materialised"`
 	Sheets       []SheetReport `json:"sheets"`
 }
-
-// SemanticOptions controls Phase-2 free-text embedding. Enabled gates the whole
-// path (adds _rowid + emits row-chunks); the thresholds drive the heuristic.
-// A threshold of 0 disables that filter.
-type SemanticOptions struct {
-	Enabled          bool
-	MinAvgLen        int
-	MinDistinctRatio float64
-}
-
-// RowChunk is one embeddable row: RowID is the synthetic _rowid; Text is the
-// full chunk content (source header + labeled flagged-column values).
-type RowChunk struct {
-	RowID int64
-	Text  string
-}
-
-// SheetData is one sheet's raw content as read from a file. Rows includes the
-// header row; header detection + column typing happen later in BuildColumnSpecs.
-type SheetData struct {
-	SheetName string
-	Rows      [][]string
-}

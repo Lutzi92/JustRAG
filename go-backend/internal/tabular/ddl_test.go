@@ -5,74 +5,27 @@ import (
 	"testing"
 )
 
-func TestBuildCreateTableSQL(t *testing.T) {
+func TestBuildTypedTableSQL(t *testing.T) {
+	t.Parallel()
 	cols := []ColumnSpec{
-		{Original: "Name", Name: "name", Type: TypeText},
-		{Original: "Revenue", Name: "revenue", Type: TypeFloat},
+		{Name: "gis_code", Type: TypeText}, {Name: "bgf", Type: TypeNumeric}, {Name: "stand", Type: TypeDate},
+		{Name: "aktiv", Type: TypeBool}, {Name: "baujahr", Type: TypeText}, {Name: "baujahr_num", Type: TypeNumeric, ShadowOf: "baujahr"},
 	}
-	got := BuildCreateTableSQL("sheet_abc_0", cols, false)
-	want := `CREATE TABLE tabular."sheet_abc_0" ("name" text, "revenue" double precision)`
-	if got != want {
-		t.Fatalf("BuildCreateTableSQL:\n got=%q\nwant=%q", got, want)
-	}
-}
-
-func TestBuildCreateTableSQLWithRowID(t *testing.T) {
-	cols := []ColumnSpec{
-		{Name: "name", Type: TypeText},
-		{Name: "revenue", Type: TypeFloat},
-	}
-	got := BuildCreateTableSQL("sheet_abc_0", cols, true)
-	want := `CREATE TABLE tabular."sheet_abc_0" ("_rowid" bigint, "name" text, "revenue" double precision)`
-	if got != want {
-		t.Fatalf("with rowid:\n got=%q\nwant=%q", got, want)
-	}
-	// Without rowid, output is unchanged from Phase 1.
-	got2 := BuildCreateTableSQL("sheet_abc_0", cols, false)
-	want2 := `CREATE TABLE tabular."sheet_abc_0" ("name" text, "revenue" double precision)`
-	if got2 != want2 {
-		t.Fatalf("without rowid:\n got=%q\nwant=%q", got2, want2)
-	}
-}
-
-func TestBuildRowChunkContent(t *testing.T) {
-	cols := []ColumnSpec{
-		{Name: "id", Type: TypeBigint},
-		{Name: "notes", Original: "Notes", Type: TypeText, Embedded: true},
-		{Name: "resolution", Original: "Resolution", Type: TypeText, Embedded: true},
-	}
-	row := []string{"42", "latency spike at peak", "added read replicas"}
-	got, ok := BuildRowChunkContent("sheet_abc_0", 42, cols, row)
-	if !ok {
-		t.Fatal("expected a row-chunk for a row with flagged content")
-	}
-	for _, want := range []string{"[tabular.sheet_abc_0 row 42]", "Notes: latency spike at peak", "Resolution: added read replicas"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("row-chunk missing %q:\n%s", want, got)
+	sql := BuildTypedTableSQL("sheet_x_0_0", cols)
+	for _, want := range []string{
+		`CREATE TABLE "tabular"."sheet_x_0_0" AS SELECT "_rowid"`,
+		`"gis_code" AS "gis_code"`, `THEN "bgf"::numeric END AS "bgf"`, `THEN "stand"::date END AS "stand"`,
+		`THEN "aktiv"::boolean END AS "aktiv"`, `THEN "baujahr"::numeric END AS "baujahr_num"`, `FROM "tabular"."sheet_x_0_0__stage"`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("missing %q in\n%s", want, sql)
 		}
 	}
-	if strings.Contains(got, "42\n") && strings.Contains(got, "id:") {
-		t.Fatal("non-flagged columns must not appear in the row-chunk")
+	if strings.Count(sql, "'")%2 != 0 {
+		t.Error("unbalanced quotes")
 	}
-	// A row with no content in any flagged column produces nothing.
-	if _, ok := BuildRowChunkContent("sheet_abc_0", 7, cols, []string{"7", "", ""}); ok {
-		t.Fatal("empty flagged columns must produce no row-chunk")
-	}
-}
-
-func TestCoerceValue(t *testing.T) {
-	// Returns (value, ok). ok=false means the cell could not be coerced and
-	// should be stored NULL with a coercion-stat bump.
-	if v, ok := coerceValue("42", TypeBigint); !ok || v.(int64) != 42 {
-		t.Fatalf("bigint coerce: got %v ok=%v", v, ok)
-	}
-	if _, ok := coerceValue("x", TypeBigint); ok {
-		t.Fatalf("bigint coerce of 'x' should fail")
-	}
-	if v, ok := coerceValue("", TypeFloat); !ok || v != nil {
-		t.Fatalf("empty should coerce to NULL, got %v ok=%v", v, ok)
-	}
-	if v, ok := coerceValue("hello", TypeText); !ok || v.(string) != "hello" {
-		t.Fatalf("text coerce: got %v ok=%v", v, ok)
+	st := BuildStagingTableSQL("sheet_x_0_0", []string{"a", "b"})
+	if !strings.Contains(st, `"_rowid" bigint`) || !strings.Contains(st, `"a" text`) || !strings.Contains(st, `"sheet_x_0_0__stage"`) {
+		t.Errorf("staging: %s", st)
 	}
 }
