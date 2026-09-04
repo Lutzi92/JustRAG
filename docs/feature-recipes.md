@@ -201,7 +201,7 @@ tabular_profile_llm_threshold       = 0.7        # heuristic confidence below wh
 tabular_profile_model               = <small>    # falls through to model_tier_fast
 tabular_profile_sample_rows         = 200        # rows sampled per sheet for structure detection [20,2000]
 tabular_max_rows                    = 2000000    # per table region: rows past this dropped from the SQL table (and counted)
-tabular_embed_max_rows              = 50000      # per table region: rows past this are SQL-only, not embedded in the hybrid text page; MAX 100000 (see note below)
+tabular_embed_max_rows              = 50000      # per table region: rows past this are SQL-only, not embedded in the hybrid text page; MIN 1 (0 is rejected, it would mean the default), MAX 100000 (see note below)
 tabular_column_values_max_distinct  = 10000      # per column: above this no tabular_column_values row is written (fuzzy lookup falls back to BM25/ILIKE)
 chat_tabular_charts_enabled         = true       # Phase 3: chart prompt-guidance (no new tool/migration)
 ```

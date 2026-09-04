@@ -126,7 +126,7 @@ var kbConfigRegistry = []KBConfigField{
 	{Key: "tabular_profile_model", Type: FieldString, Group: "Tabular", Label: "Profiler model", Help: "Fast-tier model for the sheet profiler; empty = model_tier_fast.", RequiresReingest: true},
 	{Key: "tabular_profile_sample_rows", Type: FieldInt, Group: "Tabular", Label: "Profiler sample rows", Help: "Rows sampled per sheet for structure detection (20–2000).", Min: f(20), Max: f(2000), RequiresReingest: true},
 	{Key: "tabular_max_rows", Type: FieldInt, Group: "Tabular", Label: "Max rows per table region", Help: "Per sheet region: rows beyond are dropped from the SQL table and reported.", Min: f(1000), Max: f(5_000_000), RequiresReingest: true},
-	{Key: "tabular_embed_max_rows", Type: FieldInt, Group: "Tabular", Label: "Max embedded rows per table region", Help: "Per table region: rows beyond are not embedded (SQL only). The renderer holds one window of this many rows in memory, so the ceiling is 100000 until incremental rendering lands.", Min: f(0), Max: f(100_000), RequiresReingest: true},
+	{Key: "tabular_embed_max_rows", Type: FieldInt, Group: "Tabular", Label: "Max embedded rows per table region", Help: "Per table region: rows beyond are not embedded (SQL only). Minimum 1 (0 is rejected: it would silently mean the default, not 'cards only'). The renderer holds one window of this many rows in memory, so the ceiling is 100000 until incremental rendering lands.", Min: f(1), Max: f(100_000), RequiresReingest: true},
 	{Key: "tabular_column_values_max_distinct", Type: FieldInt, Group: "Tabular", Label: "Max distinct values per column", Help: "Per text column: above this no value lookup index (BM25/ILIKE only).", Min: f(100), Max: f(100_000), RequiresReingest: true},
 
 	// --- Workspace ---

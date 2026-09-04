@@ -1471,8 +1471,11 @@ func TabularMaxRows(ctx context.Context, reader SiteConfigReader) int {
 
 // TabularEmbedMaxRows caps how many rows of an unmaterialised (or
 // render-only) table region the hybrid renderer embeds inline as text
-// before switching to a summary card. Default 50,000; clamped to
-// [0, 100,000]. Tunable via "tabular_embed_max_rows".
+// before switching to a summary card. Default 50,000; valid range
+// [1, 100,000] — out-of-range values fall back to the default. Tunable via
+// "tabular_embed_max_rows". 0 is deliberately NOT a valid value: the
+// renderer treats a non-positive EmbedMaxRows as "unset" and substitutes
+// its own default, so a 0 here would silently mean 50,000, not "cards only".
 //
 // Ruling R23: the upper bound is 100,000, not 1,000,000. render.RenderSheet
 // buffers this many rows of every table region in memory (neededRows +
@@ -1480,7 +1483,7 @@ func TabularMaxRows(ctx context.Context, reader SiteConfigReader) int {
 // worker OOM, not a slow render. Raising it further waits for the
 // incremental renderer (Phase 4).
 func TabularEmbedMaxRows(ctx context.Context, reader SiteConfigReader) int {
-	return readInt(ctx, reader, "tabular_embed_max_rows", 50_000, 0, 100_000)
+	return readInt(ctx, reader, "tabular_embed_max_rows", 50_000, 1, 100_000)
 }
 
 // TabularColumnValuesMaxDistinct caps how many distinct values per column

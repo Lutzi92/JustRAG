@@ -109,7 +109,7 @@ func TestTabularCatalogKeysAreRegistered(t *testing.T) {
 		min, max float64
 	}{
 		{"tabular_max_rows", 1000, 5_000_000},
-		{"tabular_embed_max_rows", 0, 100_000},
+		{"tabular_embed_max_rows", 1, 100_000},
 		{"tabular_column_values_max_distinct", 100, 100_000},
 	}
 	for _, c := range cases {

@@ -1505,14 +1505,22 @@ func TestTabularCatalogReaders(t *testing.T) {
 		t.Errorf("TabularColumnValuesMaxDistinct override = %d, want 20000", got)
 	}
 
-	// A valid boundary value within range applies normally: 0 is in
-	// tabular_embed_max_rows's [0, 100_000] range (0 = embed nothing but
-	// cards), so it is NOT out-of-range and applies as-is.
+	// 0 is deliberately OUTSIDE tabular_embed_max_rows's [1, 100_000] range:
+	// render.RenderSheet treats a non-positive EmbedMaxRows as "unset" and
+	// substitutes its own 50_000 default, so letting 0 through would make
+	// "embed nothing" silently mean "embed the default". It must fall back
+	// to the reader default instead (same outcome, but explicit and pinned).
 	zero := &fakeSiteConfigReader{values: map[string]*string{
 		"tabular_embed_max_rows": strPtr("0"),
 	}}
-	if got := TabularEmbedMaxRows(ctx, zero); got != 0 {
-		t.Errorf("TabularEmbedMaxRows(\"0\") = %d, want 0", got)
+	if got := TabularEmbedMaxRows(ctx, zero); got != 50_000 {
+		t.Errorf("TabularEmbedMaxRows(\"0\") = %d, want default 50000 (0 is out of range)", got)
+	}
+	one := &fakeSiteConfigReader{values: map[string]*string{
+		"tabular_embed_max_rows": strPtr("1"),
+	}}
+	if got := TabularEmbedMaxRows(ctx, one); got != 1 {
+		t.Errorf("TabularEmbedMaxRows(\"1\") = %d, want 1 (lower bound is valid)", got)
 	}
 
 	// Out-of-range values fall back to the default (see NOTE above) rather
