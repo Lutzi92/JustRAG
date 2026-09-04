@@ -324,13 +324,19 @@ func (s *PGStore) MarkFileErrorIfUnset(ctx context.Context, fileID, stage, messa
 }
 
 // ResetFileForRetry atomically flips an errored file back to 'pending' and
-// clears its error detail. Returns false when the file is not in 'error'
-// status (already retried, deleted, or still processing) — the WHERE
-// clause doubles as the double-click / concurrent-retry guard.
+// clears its error detail, previous parse report, and stage detail. Returns
+// false when the file is not in 'error' status (already retried, deleted,
+// or still processing) — the WHERE clause doubles as the double-click /
+// concurrent-retry guard. parse_report/stage_detail are cleared here (not
+// only overwritten by a successful re-ingest) so a retry that fails again
+// before reaching the spreadsheet ingester — e.g. a parse-stage error —
+// never leaves the PREVIOUS attempt's report/detail visible as if it were
+// current.
 func (s *PGStore) ResetFileForRetry(ctx context.Context, fileID string) (bool, error) {
 	const sql = `
 		UPDATE files SET status = 'pending', progress = 0,
-		       error_stage = NULL, error_message = NULL
+		       error_stage = NULL, error_message = NULL,
+		       parse_report = NULL, stage_detail = NULL
 		WHERE id = $1 AND status = 'error'`
 	tag, err := s.pool.Exec(ctx, sql, fileID)
 	if err != nil {

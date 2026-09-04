@@ -573,6 +573,25 @@ func resolveHyPEModel(ctx context.Context, reader SiteConfigReader) string {
 	return chat.ResolveFastTierModel(ctx, reader, "hype_model")
 }
 
+// spreadsheetStageFlags is the single source of truth for which post-parse
+// stages run on a spreadsheet file. A spreadsheet's embeddable text is a
+// hybrid markdown render of typed table data, not prose — contextual
+// enrichment, KG extraction, HyPE question generation, and RAPTOR
+// summarisation are all tuned for prose, so isSpreadsheet forces all four
+// off regardless of their own site_config gates. enrich/kg/hype/raptor are
+// each already-resolved (site_config AND, for kg/hype/raptor, flatTail)
+// booleans; a non-spreadsheet file passes them through unchanged. Both the
+// stage-plan computation (ProcessFile, up front) and the real per-stage run
+// checks (mid-pipeline) call this so the two can never drift apart — the
+// bug this closes: a plan that hides a stage from the n/x indicator while
+// the stage's actual LLM calls still fire.
+func spreadsheetStageFlags(isSpreadsheet, enrich, kg, hype, raptor bool) (enrichOn, kgOn, hypeOn, raptorOn bool) {
+	if isSpreadsheet {
+		return false, false, false, false
+	}
+	return enrich, kg, hype, raptor
+}
+
 // resolveLateChunkingEnabled gates Jina-style late chunking at ingest:
 // the whole document's chunks are embedded in one call with
 // `late_chunking: true` so each chunk vector carries cross-chunk
@@ -749,12 +768,24 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	parentChild := chat.ParentChildEnabled(ctx, p.siteConfigReader)
 	lateChunking := resolveLateChunkingEnabled(ctx, p.siteConfigReader)
 	flatTail := !parentChild && !lateChunking
+	// enrichOn/kgOn/hypeOn/raptorOn are computed once here and reused
+	// verbatim at every later real-run gate (enrichmentEnabled below, and
+	// the KG/HyPE/RAPTOR checks post-embed) — spreadsheetStageFlags is the
+	// only place isSpreadsheet can suppress a stage, so the stage plan the
+	// upload spinner shows and the stages that actually run can never
+	// disagree.
+	enrichOn, kgOn, hypeOn, raptorOn := spreadsheetStageFlags(isSpreadsheet,
+		resolveEnrichmentEnabled(ctx, p.siteConfigReader),
+		flatTail && resolveKGExtractionEnabled(ctx, p.siteConfigReader),
+		flatTail && resolveHyPEEnabled(ctx, p.siteConfigReader),
+		flatTail && chat.RaptorEnabled(ctx, p.siteConfigReader),
+	)
 	plan := buildStagePlan(stageFlags{
 		Tabular: isSpreadsheet && p.ingester != nil && chat.ChatTabularQueryEnabled(ctx, p.siteConfigReader),
-		Enrich:  resolveEnrichmentEnabled(ctx, p.siteConfigReader) && !isSpreadsheet,
-		KG:      flatTail && resolveKGExtractionEnabled(ctx, p.siteConfigReader) && !isSpreadsheet,
-		HyPE:    flatTail && resolveHyPEEnabled(ctx, p.siteConfigReader) && !isSpreadsheet,
-		Raptor:  flatTail && chat.RaptorEnabled(ctx, p.siteConfigReader) && !isSpreadsheet,
+		Enrich:  enrichOn,
+		KG:      kgOn,
+		HyPE:    hypeOn,
+		Raptor:  raptorOn,
 	})
 	defer func() {
 		// WithoutCancel: clear the stage even if the request ctx was canceled,
@@ -833,7 +864,6 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 				EmbedMaxRows: chat.TabularEmbedMaxRows(ctx, p.siteConfigReader),
 				MaxDistinct:  chat.TabularColumnValuesMaxDistinct(ctx, p.siteConfigReader),
 				ChunkSize:    chunkSize,
-				Lang:         rawLang,
 			},
 			Progress: func(detail string) {
 				if err := p.store.UpdateFileStageDetail(ctx, fileID, detail); err != nil {
@@ -927,8 +957,9 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	}
 
 	// Check if contextual enrichment is enabled (once per file, not per
-	// batch). Never for spreadsheets — see isSpreadsheet above.
-	enrichmentEnabled := resolveEnrichmentEnabled(ctx, p.siteConfigReader) && !isSpreadsheet
+	// batch). enrichOn already folds in isSpreadsheet — see
+	// spreadsheetStageFlags above, computed alongside the stage plan.
+	enrichmentEnabled := enrichOn
 	enrichmentModel := resolveEnrichmentModel(ctx, p.siteConfigReader)
 	if enrichmentEnabled {
 		// Probe the resolver once. On a fresh install with no AI provider
@@ -1305,7 +1336,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// the gate is on AND ingestion at least partially succeeded. Errors
 	// log and drop — KG is a side-channel, never reverts the file's
 	// completed/partial status.
-	if !isSpreadsheet && resolveKGExtractionEnabled(ctx, p.siteConfigReader) {
+	if kgOn {
 		p.setStage(ctx, fileID, plan, stageKG)
 		// Clear this file's prior KG contribution before re-extracting so a
 		// re-ingest replaces rather than accumulates entities/edges. Placed
@@ -1321,7 +1352,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 
 	// HyPE: generate + embed hypothetical questions per chunk. Best-effort,
 	// post-ingest, gated independently from KG. Re-ingest is the only backfill.
-	if !isSpreadsheet && resolveHyPEEnabled(ctx, p.siteConfigReader) {
+	if hypeOn {
 		p.setStage(ctx, fileID, plan, stageHyPE)
 		if hErr := p.runHyPEGenerationStage(ctx, fileID, kbID, fileName, result.Text, rawLang); hErr != nil {
 			logctx.From(ctx).Warn("processor: hype generation stage failed",
@@ -1334,7 +1365,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// (the two stripe document_chunks differently and re-running RAPTOR
 	// over parent-child children would feed structural rows back as
 	// "leaves").
-	if !isSpreadsheet && chat.RaptorEnabled(ctx, p.siteConfigReader) {
+	if raptorOn {
 		if chat.ParentChildEnabled(ctx, p.siteConfigReader) {
 			observability.RecordRaptorBuild("skipped_parent_child")
 			logctx.From(ctx).Info("raptor.build.skipped",

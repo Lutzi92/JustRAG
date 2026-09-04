@@ -594,6 +594,56 @@ func TestClearStaleKG_ToleratesDeleterError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// toParseResult tests
+// ---------------------------------------------------------------------------
+
+// TestToParseResult verifies the ingest.Result → parser.ParseResult
+// conversion: pages stay 1-based (straight from ingest.Page.Number, no
+// off-by-one reindexing), IsMarkdown is always true (a spreadsheet's hybrid
+// render is markdown regardless of source format), and Text carries the
+// joined text ingest.Result already assembled.
+func TestToParseResult(t *testing.T) {
+	res := &ingest.Result{
+		Text: "page one\n\npage two",
+		Pages: []ingest.Page{
+			{Number: 1, Text: "page one"},
+			{Number: 2, Text: "page two"},
+		},
+	}
+
+	out := toParseResult(res)
+
+	if !out.IsMarkdown {
+		t.Error("IsMarkdown must be true for a spreadsheet's hybrid render")
+	}
+	if out.Text != "page one\n\npage two" {
+		t.Errorf("Text = %q, want the ingest result's joined text", out.Text)
+	}
+	if len(out.Pages) != 2 {
+		t.Fatalf("Pages: got %d, want 2", len(out.Pages))
+	}
+	if out.Pages[0].PageNumber != 1 || out.Pages[0].Text != "page one" {
+		t.Errorf("Pages[0] = %+v, want {1, \"page one\"}", out.Pages[0])
+	}
+	if out.Pages[1].PageNumber != 2 || out.Pages[1].Text != "page two" {
+		t.Errorf("Pages[1] = %+v, want {2, \"page two\"}", out.Pages[1])
+	}
+}
+
+// TestToParseResult_NoPages verifies the zero-pages edge case doesn't panic
+// and leaves Pages nil (buildIndexedChunks then falls back to splitting the
+// whole Text as one unpaginated document).
+func TestToParseResult_NoPages(t *testing.T) {
+	out := toParseResult(&ingest.Result{Text: "solo text"})
+	if !out.IsMarkdown || out.Text != "solo text" {
+		t.Errorf("got %+v", out)
+	}
+	if len(out.Pages) != 0 {
+		t.Errorf("Pages: got %d, want 0", len(out.Pages))
+	}
+}
+
+// ---------------------------------------------------------------------------
 // SpreadsheetIngester seam test
 // ---------------------------------------------------------------------------
 
@@ -635,14 +685,20 @@ func (f *fakeIngester) WithLLM(llm profile.LLMProfiler) SpreadsheetIngester {
 // TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment verifies that a
 // spreadsheet file with an ingester wired routes through it (not the
 // factory's SpreadsheetParser), stores the parse report, and that the stage
-// plan excludes enrich/kg/hype/raptor even though contextual_enrichment is
-// explicitly on in site_config — isSpreadsheet must force it off.
+// plan excludes enrich/kg/hype/raptor even though contextual_enrichment,
+// kg_extraction_enabled, hype_enabled, and raptor_enabled are ALL explicitly
+// on in site_config — isSpreadsheet must force every one of them off via
+// spreadsheetStageFlags. Also asserts the ingester was called with a nil LLM
+// profiler (no AI resolver wired in this test).
 func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
 	store := &mockStore{}
 	p := NewProcessor(parser.DefaultFactoryWith(nil), nil, nil, store)
 	p.SetSiteConfigReader(&fakeSiteConfigReader{values: map[string]*string{
 		"chat_tabular_query_enabled": strPtr("true"),
 		"contextual_enrichment":      strPtr("true"),
+		"kg_extraction_enabled":      strPtr("true"),
+		"hype_enabled":               strPtr("true"),
+		"raptor_enabled":             strPtr("true"),
 	}})
 	ing := &fakeIngester{}
 	p.SetIngester(ing)
@@ -659,12 +715,16 @@ func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
 	if len(ing.calls) != 1 || !ing.calls[0].Options.Materialize {
 		t.Fatalf("ingester calls: %+v", ing.calls)
 	}
+	if ing.llm != nil {
+		t.Errorf("expected WithLLM(nil) (no AI resolver wired), got %+v", ing.llm)
+	}
 	if store.parseReports["f1"] == nil || !strings.Contains(string(store.parseReports["f1"]), `"kind":"table"`) {
 		t.Errorf("parse report not stored: %s", store.parseReports["f1"])
 	}
 	// parse + tabular + embed: buildStagePlan always includes parse and
 	// embed; tabular is added because materialise is on; enrich/kg/hype/
-	// raptor are excluded because isSpreadsheet forces them off. The embed
+	// raptor are excluded because isSpreadsheet forces them off even though
+	// every one of their own site_config gates is on above. The embed
 	// stage is never actually reached in this test (0 chunks → early
 	// return before stageEmbed's setStage call), but plan.total() is fixed
 	// for the whole plan, so the last stage call recorded (tabular) still
@@ -674,5 +734,63 @@ func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
 	}
 	if store.lastStageDetail["f1"] != "" {
 		t.Errorf("stage detail must be cleared at the end, got %q", store.lastStageDetail["f1"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// spreadsheetStageFlags tests
+// ---------------------------------------------------------------------------
+
+// TestSpreadsheetStageFlags is the single source of truth's own unit test:
+// a spreadsheet forces all four stages off regardless of their inputs; a
+// non-spreadsheet passes every input through unchanged.
+func TestSpreadsheetStageFlags(t *testing.T) {
+	cases := []struct {
+		name                                   string
+		isSpreadsheet                          bool
+		enrich, kg, hype, raptor               bool
+		wantEnrich, wantKG, wantHyPE, wantRapt bool
+	}{
+		{
+			name:          "spreadsheet forces all four off even when all four are on",
+			isSpreadsheet: true,
+			enrich:        true, kg: true, hype: true, raptor: true,
+			wantEnrich: false, wantKG: false, wantHyPE: false, wantRapt: false,
+		},
+		{
+			name:          "spreadsheet stays off when all four are already off",
+			isSpreadsheet: true,
+			enrich:        false, kg: false, hype: false, raptor: false,
+			wantEnrich: false, wantKG: false, wantHyPE: false, wantRapt: false,
+		},
+		{
+			name:          "non-spreadsheet passes all four through when on",
+			isSpreadsheet: false,
+			enrich:        true, kg: true, hype: true, raptor: true,
+			wantEnrich: true, wantKG: true, wantHyPE: true, wantRapt: true,
+		},
+		{
+			name:          "non-spreadsheet passes all four through when off",
+			isSpreadsheet: false,
+			enrich:        false, kg: false, hype: false, raptor: false,
+			wantEnrich: false, wantKG: false, wantHyPE: false, wantRapt: false,
+		},
+		{
+			name:          "non-spreadsheet passes a mixed combination through unchanged",
+			isSpreadsheet: false,
+			enrich:        true, kg: false, hype: true, raptor: false,
+			wantEnrich: true, wantKG: false, wantHyPE: true, wantRapt: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotEnrich, gotKG, gotHyPE, gotRapt := spreadsheetStageFlags(tc.isSpreadsheet, tc.enrich, tc.kg, tc.hype, tc.raptor)
+			if gotEnrich != tc.wantEnrich || gotKG != tc.wantKG || gotHyPE != tc.wantHyPE || gotRapt != tc.wantRapt {
+				t.Errorf("spreadsheetStageFlags(%v, %v, %v, %v, %v) = (%v, %v, %v, %v), want (%v, %v, %v, %v)",
+					tc.isSpreadsheet, tc.enrich, tc.kg, tc.hype, tc.raptor,
+					gotEnrich, gotKG, gotHyPE, gotRapt,
+					tc.wantEnrich, tc.wantKG, tc.wantHyPE, tc.wantRapt)
+			}
+		})
 	}
 }

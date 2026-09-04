@@ -141,6 +141,17 @@ func TestResetFileForRetry(t *testing.T) {
 	ctx := context.Background()
 	_, fileID := seedErrorFile(t, pool, "error")
 
+	// Fix round 1, item 5: a retry must clear the PREVIOUS attempt's parse
+	// report and stage detail too, not just error_stage/error_message —
+	// otherwise a retry that fails again before reaching the spreadsheet
+	// ingester (e.g. a parse-stage error) would leave a stale report/detail
+	// visible as if it described the current attempt.
+	if _, err := pool.Exec(ctx,
+		`UPDATE files SET parse_report = '{"version":1}'::jsonb, stage_detail = 'Blatt 2/3' WHERE id = $1::uuid`,
+		fileID); err != nil {
+		t.Fatalf("seed parse_report/stage_detail: %v", err)
+	}
+
 	reset, err := store.ResetFileForRetry(ctx, fileID)
 	if err != nil || !reset {
 		t.Fatalf("first reset: reset=%v err=%v", reset, err)
@@ -148,6 +159,15 @@ func TestResetFileForRetry(t *testing.T) {
 	status, stage, msg := readErrorFields(t, pool, fileID)
 	if status != "pending" || stage != nil || msg != nil {
 		t.Fatalf("after reset: status=%s stage=%v msg=%v", status, stage, msg)
+	}
+	var parseReport, stageDetail *string
+	if err := pool.QueryRow(ctx,
+		`SELECT parse_report::text, stage_detail FROM files WHERE id = $1::uuid`, fileID,
+	).Scan(&parseReport, &stageDetail); err != nil {
+		t.Fatalf("read parse_report/stage_detail: %v", err)
+	}
+	if parseReport != nil || stageDetail != nil {
+		t.Errorf("reset must clear parse_report/stage_detail: parseReport=%v stageDetail=%v", parseReport, stageDetail)
 	}
 
 	// Second reset loses the WHERE status='error' race — the 409 path.

@@ -41,8 +41,10 @@ type Options struct {
 	EmbedMaxRows int                // tabular_embed_max_rows
 	MaxDistinct  int                // tabular_column_values_max_distinct
 	ChunkSize    int                // for block sizing
-	Lang         string             // "de"/"en" for the LLM prompt
-	Model        string             // resolved fast-tier model override ("" = KB chat model)
+	// Lang and Model are NOT here: the LLM prompt language and model
+	// override are carried on the AIProfiler passed to WithLLM (see llm.go)
+	// instead — Ingest itself never reads either, so duplicating them here
+	// was dead configuration (fix round 1, item 3).
 }
 
 // Input is one file's ingest request.
@@ -119,12 +121,19 @@ func (g *Ingester) Ingest(ctx context.Context, in Input) (*Result, error) {
 	}
 	defer src.Close()
 
-	materialise := opts.Materialize && g.mat != nil
-	if materialise {
+	// R17: drop this file's old tables/catalog rows whenever a materialiser
+	// is wired, regardless of whether THIS run is materialising — not only
+	// when materialise is true. Otherwise a re-ingest with
+	// chat_tabular_query_enabled toggled off (materialise=false) leaves the
+	// previous run's tables and tabular_catalog rows behind: stale rows
+	// that no longer correspond to the current file content, discoverable
+	// by table_query and never cleaned up short of a manual DROP.
+	if g.mat != nil {
 		if err := g.mat.DropTablesForFile(ctx, in.FileID); err != nil {
 			return nil, fmt.Errorf("ingest: drop old tables: %w", err)
 		}
 	}
+	materialise := opts.Materialize && g.mat != nil
 
 	sheets := src.Sheets()
 	if len(sheets) == 0 {

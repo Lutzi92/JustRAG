@@ -152,6 +152,32 @@ func TestIngestMaterialiseFailureKeepsText(t *testing.T) {
 	}
 }
 
+// TestIngestDropsOldTablesWhenMaterializerWiredButNotMaterialising is R17's
+// regression test: a re-ingest with chat_tabular_query_enabled off
+// (Materialize: false) must still drop the file's PREVIOUS run's tables/
+// catalog rows whenever a materialiser is wired, or a toggle-off re-ingest
+// leaves stale tabular_catalog rows and tables behind — discoverable by
+// table_query, never cleaned up short of a manual DROP.
+func TestIngestDropsOldTablesWhenMaterializerWiredButNotMaterialising(t *testing.T) {
+	t.Parallel()
+	mat := &fakeMat{}
+	g := New(mat, nil)
+	res, err := g.Ingest(context.Background(), Input{FilePath: fixtures + "ids_leading_zero.xlsx", FileName: "ids_leading_zero.xlsx", FileID: "f", KBID: "kb",
+		Options: Options{Materialize: false, SampleRows: 200, ChunkSize: 512}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mat.dropped) != 1 || mat.dropped[0] != "f" {
+		t.Errorf("DropTablesForFile must fire once for the file's old tables even with Materialize=false: dropped=%v", mat.dropped)
+	}
+	if len(mat.calls) != 0 {
+		t.Errorf("MaterializeRegion must not run when Materialize=false: calls=%d", len(mat.calls))
+	}
+	if res.Report.Materialised {
+		t.Error("report must not claim materialised when Materialize=false")
+	}
+}
+
 func TestWithLLMShallowCopy(t *testing.T) {
 	t.Parallel()
 	fm := &fakeMat{}
