@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/mcp"
+	"github.com/justrag/go-backend/internal/tabular/sqlcheck"
 )
 
 // SQLQueryArgs documents the sql_query tool input. The query is
@@ -43,27 +44,6 @@ var allowedTablesDefault = map[string]bool{
 	"files":           true,
 	"agent_decisions": true,
 }
-
-// deniedKeywords is the explicit blacklist for whole-word DDL/DML
-// keywords. Word-boundary matched (?i)\bX\b so column names
-// containing the substring don't false-positive (a column named
-// "update_count" wouldn't collide with the UPDATE keyword).
-//
-// Conservative: the production read-only role would reject these
-// at the database level too, but rejecting at the tool layer
-// surfaces a clean error to the LLM instead of an opaque DB error.
-var deniedKeywords = []string{
-	"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
-	"CREATE", "GRANT", "REVOKE", "EXECUTE", "COPY", "SET",
-	"VACUUM", "ANALYZE", "REINDEX", "CLUSTER", "LOCK", "NOTIFY",
-	"LISTEN", "UNLISTEN", "PREPARE", "DEALLOCATE",
-}
-
-// deniedKeywordRe matches any denied keyword as a whole word, case-insensitive.
-// Compiled once at package init rather than rebuilding 24 separate regexes on
-// every sql_query / table_query invocation (validateReadOnlyShape runs per
-// tool call). A single alternation also short-circuits on the first match.
-var deniedKeywordRe = regexp.MustCompile(`(?i)\b(?:` + strings.Join(deniedKeywords, "|") + `)\b`)
 
 var fromOrJoinRe = regexp.MustCompile(`(?i)\b(?:from|join|into|update)\s+(?:only\s+)?["]?([a-zA-Z_][a-zA-Z0-9_]*)["]?`)
 
@@ -213,29 +193,12 @@ func sqlQueryHandler(exec SQLExecutor) mcp.ToolHandlerFunc {
 }
 
 // validateReadOnlyShape applies the format rules shared by sql_query and
-// table_query: SELECT-only, single statement, no comments, no DDL/DML
-// keywords. Table-allowlist enforcement is the caller's responsibility (the
-// two tools resolve their allowlists differently).
-func validateReadOnlyShape(q string) error {
-	trimmed := strings.TrimSpace(q)
-	if trimmed == "" {
-		return fmt.Errorf("empty query")
-	}
-	upper := strings.ToUpper(trimmed)
-	if !strings.HasPrefix(upper, "SELECT ") && !strings.HasPrefix(upper, "SELECT\n") && !strings.HasPrefix(upper, "SELECT\t") {
-		return fmt.Errorf("query must start with SELECT")
-	}
-	if strings.Contains(strings.TrimRight(trimmed, "; \n\t"), ";") {
-		return fmt.Errorf("only one statement allowed (no internal `;`)")
-	}
-	if strings.Contains(trimmed, "--") || strings.Contains(trimmed, "/*") {
-		return fmt.Errorf("comments are not allowed")
-	}
-	if m := deniedKeywordRe.FindString(trimmed); m != "" {
-		return fmt.Errorf("disallowed keyword: %s", strings.ToUpper(m))
-	}
-	return nil
-}
+// table_query: SELECT-only (optionally WITH), single statement, no
+// comments, no DDL/DML keywords. Table-allowlist enforcement is the
+// caller's responsibility (the two tools resolve their allowlists
+// differently). The rules themselves live in sqlcheck so the tabular
+// router's AST validator can share them without importing this package.
+func validateReadOnlyShape(q string) error { return sqlcheck.ReadOnlyShape(q) }
 
 // fromClauseTerminators are the keywords that end a FROM clause's table
 // list when they appear at the clause's own parenthesis depth. JOIN/ON/
