@@ -3,7 +3,7 @@
 Real-world-shaped spreadsheet fixtures for `internal/sheetsource` and its
 downstream ingestion tasks. All content is synthetic (German headers kept
 for realism); the seven real JLU workbooks that motivated this shape are
-**not** in the repo — see the manual test in Task 13.
+**not** in the repo — see the manual real-file test below.
 
 Regenerate with `./regen.sh` (needs LibreOffice's `soffice` on `PATH`; the
 generator itself is pure Go and needs no LibreOffice).
@@ -38,3 +38,27 @@ generator itself is pure Go and needs no LibreOffice).
 - `formulas.xls` is converted from the *original* (pre-recalculation)
   `multirow_header_formulas.xlsx`, not the recalculated copy — LibreOffice
   still recalculates on load since the source has no cached values yet.
+
+## Guard suite and the manual real-file test
+
+`internal/tabular/profile/fixtures_test.go` is the phase-1 acceptance suite
+over these fixtures — it ties `sheetsource.Open` / `CollectSample` to
+`profile.ProfileSheet` and asserts the shapes tabulated above:
+
+```bash
+cd go-backend && go test ./internal/tabular/profile/ -run TestGuard -v
+```
+
+The seven real JLU workbooks are **not** in the repo. The same checks run
+against them from a build-tagged manual test
+(`internal/tabular/profile/manual_realfiles_test.go`), which skips unless
+`REALFILES` points at the directory holding them:
+
+```bash
+cd go-backend && REALFILES="$HOME/Downloads/Dez. E und HRZ - KI-gestütztes Flächenmanagement" \
+  go test -tags manual ./internal/tabular/profile/ -run TestManualRealFiles -v
+```
+
+The 125 MB `_2008-2026_Alle_Original.xlsx` ledger is deliberately left out of
+that list (~1 min per sample pass); it is exercised separately by
+`internal/sheetsource/manual_ledger_test.go` via `LEDGER=<path>`.
