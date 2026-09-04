@@ -207,6 +207,38 @@ func TestMaybeTabularGuidance_EmptyCatalogPlaceholder_German(t *testing.T) {
 	}
 }
 
+// TestMaybeTabularGuidance_ListByKBErrorFailsClosed covers the branch the
+// HasDataForKB-error test doesn't reach: HasDataForKB succeeds (true), but
+// the subsequent ListByKB call errors. This must fail closed to "" — NOT
+// the R41 placeholder, which only applies when ListByKB succeeds but
+// CompactSchema renders empty text. It also asserts the cache does not
+// memoise the error: cachedTabularCatalog.ListByKB only stores a cache
+// entry on success, so a second call — with the underlying catalog now
+// returning entries — must yield the real summary rather than repeating
+// the failure or serving a cached error.
+func TestMaybeTabularGuidance_ListByKBErrorFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_query_enabled": strPtr("true"),
+	}}
+	underlying := &fakeCatalogChecker{has: true, listErr: errors.New("boom")}
+	cached := newCachedTabularCatalog(underlying, time.Now)
+
+	g := maybeTabularGuidance(ctx, reader, cached, "kb", "en")
+	if g != "" {
+		t.Fatalf("ListByKB error must fail closed (no guidance, no placeholder), got %q", g)
+	}
+
+	// Fix the underlying catalog and retry: the cache must not have
+	// memoised the error.
+	underlying.listErr = nil
+	underlying.entries = []tabular.CatalogEntry{oneTableEntry()}
+	g2 := maybeTabularGuidance(ctx, reader, cached, "kb", "en")
+	if !strings.Contains(g2, "## Tables") || !strings.Contains(g2, "sheet1") {
+		t.Fatalf("expected the real summary after a successful retry, got %q", g2)
+	}
+}
+
 // TestCachedTabularCatalog_TTL exercises the ListByKB memoization directly:
 // two calls within the TTL window must hit the underlying catalog once;
 // past the TTL, a third call must hit it again.
