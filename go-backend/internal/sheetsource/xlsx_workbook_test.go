@@ -1,6 +1,12 @@
 package sheetsource
 
-import "testing"
+import (
+	"archive/zip"
+	"bytes"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestOpenXLSXReadsWorkbookParts(t *testing.T) {
 	t.Parallel()
@@ -72,5 +78,45 @@ func TestOpenXLSXNumbersFormatsStyles(t *testing.T) {
 	}
 	if w.date1904 {
 		t.Error("date1904 should be false")
+	}
+}
+
+func TestOpenXLSXCorruptPart(t *testing.T) {
+	t.Parallel()
+	// Create a minimal valid XLSX with corrupt sharedStrings data
+	buf := &bytes.Buffer{}
+	zw := zip.NewWriter(buf)
+
+	// Write minimal workbook.xml
+	workbookXML := `<?xml version="1.0"?><workbook><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`
+	w, _ := zw.Create("xl/workbook.xml")
+	w.Write([]byte(workbookXML))
+
+	// Write minimal workbook.xml.rels
+	relsXML := `<?xml version="1.0"?><Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`
+	w, _ = zw.Create("xl/_rels/workbook.xml.rels")
+	w.Write([]byte(relsXML))
+
+	// Create sharedStrings.xml entry, but truncate it mid-stream to corrupt it
+	w, _ = zw.Create("xl/sharedStrings.xml")
+	w.Write([]byte(`<?xml version="1.0"?><sst><si><t>test</t></si><si><t>inco`))
+	// Entry is incomplete/invalid XML
+
+	zw.Close()
+
+	// Write to temp file
+	tmpFile := filepath.Join(t.TempDir(), "corrupt.xlsx")
+	if err := os.WriteFile(tmpFile, buf.Bytes(), 0600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	// Try to open - should get an error from parsing corrupt sharedStrings
+	w_result, err := openXLSX(tmpFile)
+	if err == nil {
+		w_result.Close()
+		t.Fatal("expected error opening corrupt sharedStrings.xml, got nil")
+	}
+	if w_result != nil {
+		w_result.Close()
 	}
 }

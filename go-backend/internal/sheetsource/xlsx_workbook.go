@@ -3,11 +3,14 @@ package sheetsource
 import (
 	"archive/zip"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"path"
 	"strings"
 )
+
+var errPartMissing = errors.New("sheetsource: part not in archive")
 
 type xlsxSheetEntry struct {
 	Name, Part string
@@ -43,7 +46,12 @@ func openXLSX(filePath string) (*xlsxWorkbook, error) {
 		zr.Close()
 		return nil, err
 	}
-	if rc, err := w.openPart("xl/sharedStrings.xml"); err == nil {
+	if rc, err := w.openPart("xl/sharedStrings.xml"); err != nil {
+		if !errors.Is(err, errPartMissing) {
+			zr.Close()
+			return nil, fmt.Errorf("sheetsource: sharedStrings: %w", err)
+		}
+	} else {
 		w.sst, err = parseSharedStrings(rc)
 		rc.Close()
 		if err != nil {
@@ -51,7 +59,12 @@ func openXLSX(filePath string) (*xlsxWorkbook, error) {
 			return nil, fmt.Errorf("sheetsource: sharedStrings: %w", err)
 		}
 	}
-	if rc, err := w.openPart("xl/styles.xml"); err == nil {
+	if rc, err := w.openPart("xl/styles.xml"); err != nil {
+		if !errors.Is(err, errPartMissing) {
+			zr.Close()
+			return nil, fmt.Errorf("sheetsource: styles: %w", err)
+		}
+	} else {
 		w.xfs, err = parseStyles(rc)
 		rc.Close()
 		if err != nil {
@@ -67,16 +80,24 @@ func (w *xlsxWorkbook) Close() error { return w.zr.Close() }
 func (w *xlsxWorkbook) openPart(name string) (io.ReadCloser, error) {
 	f, ok := w.parts[name]
 	if !ok {
-		return nil, fmt.Errorf("sheetsource: part %q not in archive", name)
+		return nil, errPartMissing
 	}
-	return f.Open()
+	rc, err := f.Open()
+	if err != nil {
+		return nil, fmt.Errorf("sheetsource: open part %q: %w", name, err)
+	}
+	return rc, nil
 }
 
 // parseWorkbook reads xl/workbook.xml (sheet list + state + date1904 +
 // definedNames) and xl/_rels/workbook.xml.rels (r:id -> part path).
 func (w *xlsxWorkbook) parseWorkbook() error {
 	rels := map[string]string{}
-	if rc, err := w.openPart("xl/_rels/workbook.xml.rels"); err == nil {
+	if rc, err := w.openPart("xl/_rels/workbook.xml.rels"); err != nil {
+		if !errors.Is(err, errPartMissing) {
+			return fmt.Errorf("sheetsource: workbook.xml.rels: %w", err)
+		}
+	} else {
 		dec := xml.NewDecoder(rc)
 		for {
 			tok, err := dec.Token()
