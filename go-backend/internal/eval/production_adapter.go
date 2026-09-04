@@ -21,10 +21,27 @@ type ProductionContextAdapter struct {
 	siteConfigReader chat.SiteConfigReader
 	flags            EvalFlags
 
+	// tabularRouter is the deterministic spreadsheet path. Optional —
+	// nil (the default) reproduces the pre-router pipeline exactly, which
+	// is what a retrieval-only ablation wants.
+	tabularRouter *chat.TabularRouter
+
 	// cache stores the final ChatContext per question so judge-mode can
 	// reuse the assembled system prompt and context text without a second
 	// retrieval pass.
 	cache map[string]*chat.ChatContext
+}
+
+// ProductionAdapterOption configures optional dependencies that only some
+// eval entrypoints can supply (cmd/eval has the pools; the in-app runner
+// does not necessarily).
+type ProductionAdapterOption func(*ProductionContextAdapter)
+
+// WithTabularRouter attaches the deterministic tabular router so a
+// --production-context run exercises the same spreadsheet path production
+// serves (quoted id phrases, forced simple BM25 arm, SQL-result addendum).
+func WithTabularRouter(r *chat.TabularRouter) ProductionAdapterOption {
+	return func(a *ProductionContextAdapter) { a.tabularRouter = r }
 }
 
 // EvalFlags carries the flag values through the adapter without a global.
@@ -48,13 +65,18 @@ func NewProductionContextAdapter(
 	searchService vector.Searcher,
 	siteConfigReader chat.SiteConfigReader,
 	flags EvalFlags,
+	opts ...ProductionAdapterOption,
 ) *ProductionContextAdapter {
-	return &ProductionContextAdapter{
+	a := &ProductionContextAdapter{
 		aiResolver:       aiResolver,
 		searchService:    searchService,
 		siteConfigReader: siteConfigReader,
 		flags:            flags,
 	}
+	for _, o := range opts {
+		o(a)
+	}
+	return a
 }
 
 // Search runs chat.PrepareChatContext for the question and caches the
@@ -69,6 +91,7 @@ func (a *ProductionContextAdapter) Search(ctx context.Context, q Question, k int
 		MultiQuery:              a.flags.MultiQuery,
 		StepBack:                a.flags.StepBack,
 		ForceEnumerationPrepass: a.flags.ForceEnumerationPrepass,
+		TabularRouter:           a.tabularRouter,
 	}
 	chatCtx, err := chat.PrepareChatContext(ctx, a.aiResolver, a.searchService, a.siteConfigReader, params)
 	if err != nil {

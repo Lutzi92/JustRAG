@@ -53,6 +53,13 @@ type SupervisorChatParams struct {
 	// answer system prompt (empty when chat_date_awareness_enabled is off).
 	// Set at dispatch via SystemPromptDateLine.
 	CurrentDateLine string
+	// TabularRouter backs the deterministic spreadsheet path — same
+	// contract as ChatContextParams.TabularRouter: it runs before the
+	// specialist dispatch, promotes identifier literals in the query the
+	// specialist searches with, forces the simple BM25 arm, and injects
+	// its result rows as a system-prompt addendum. Nil disables it
+	// (nil-receiver safe regardless).
+	TabularRouter *TabularRouter
 }
 
 // RunSupervisorChat is the production entry point. It routes the query
@@ -102,6 +109,11 @@ func runSupervisorChatTestable(
 		map[string]any{"supervisorStage": "dispatch"},
 	)
 
+	// Deterministic tabular path (design §5.1), same contract as the
+	// standard path in PrepareChatContext: it runs before the specialist
+	// dispatch so its retrieval hints reach the specialist's single
+	// SearchOptions, and its rows are injected below as a prompt
+	// addendum. Fail-open: Run never errors.
 	in := agents.Input{
 		KbID:          params.KbID,
 		Query:         params.Query,
@@ -110,6 +122,24 @@ func runSupervisorChatTestable(
 		GraphChunkIDs: params.GraphChunkIDs,
 		BridgeChunks:  params.BridgeChunks,
 		HyPESearch:    params.HyPESearch,
+	}
+	var tabularAddendum string
+	var tabularTrace *TabularTrace
+	if params.TabularRouter != nil {
+		tab := params.TabularRouter.Run(ctx, TabularRouterInput{
+			KbID:     params.KbID,
+			Query:    params.Query,
+			Language: params.Language,
+			Emit:     emit,
+		})
+		tabularTrace = tab.Trace
+		tabularAddendum = tab.Addendum
+		if tab.SearchQuery != "" {
+			// Retrieval only — params.Query stays the user's phrasing for
+			// the sufficient-context gate and the enumeration classifier.
+			in.Query = tab.SearchQuery
+		}
+		in.ForceBM25SimpleArm = tab.ForceSimpleArm
 	}
 	var (
 		res agents.SupervisorResult
@@ -178,6 +208,12 @@ func runSupervisorChatTestable(
 	case IsLowConfidence(accumulated):
 		sb.WriteString(prompts.ChatLowConfidenceNotice(params.Language))
 	}
+	if tabularAddendum != "" {
+		// Before AGENT NOTES and CONTEXT: the executed rows are ground
+		// truth the answer LLM should prefer over the retrieved prose.
+		sb.WriteString("\n\n")
+		sb.WriteString(tabularAddendum)
+	}
 	if res.Notes != "" {
 		sb.WriteString("\n\nAGENT NOTES:\n")
 		sb.WriteString(res.Notes)
@@ -191,5 +227,6 @@ func runSupervisorChatTestable(
 		Context:      contextText,
 		FinalChunks:  accumulated,
 		Abstain:      abstain,
+		TabularTrace: tabularTrace,
 	}, nil
 }

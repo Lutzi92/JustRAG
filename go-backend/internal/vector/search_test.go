@@ -768,3 +768,41 @@ func TestBuildTwoPassVectorSQL(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// effectiveSimpleArm — the single BM25 keyword-arm decision
+// ---------------------------------------------------------------------------
+
+// TestEffectiveSimpleArm covers the OR semantics of the per-request
+// ForceBM25SimpleArm override against the deployment-wide site_config. All
+// four BM25 fan-outs inside Search (primary, multi-query, step-back,
+// sub-queries) consume the single value this helper returns, so the arm can
+// never differ between them within one request.
+func TestEffectiveSimpleArm(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		cfg, force, want bool
+	}{
+		{false, false, false},
+		{true, false, true},
+		{false, true, true}, // the tabular router's override turns it on
+		{true, true, true},
+	}
+	for _, c := range cases {
+		if got := effectiveSimpleArm(context.Background(), c.cfg, c.force); got != c.want {
+			t.Errorf("effectiveSimpleArm(cfg=%v, force=%v) = %v, want %v", c.cfg, c.force, got, c.want)
+		}
+	}
+}
+
+// TestShapeHash_ForceBM25SimpleArm guards the cache-correctness half: the
+// forced arm selects a different BM25 candidate pool, so a forced request
+// must not read a non-forced request's cached SearchResult.
+func TestShapeHash_ForceBM25SimpleArm(t *testing.T) {
+	t.Parallel()
+	base := shapeHash(SearchOptions{}, 10, "emb")
+	forced := shapeHash(SearchOptions{ForceBM25SimpleArm: true}, 10, "emb")
+	if string(base) == string(forced) {
+		t.Fatal("ForceBM25SimpleArm must fragment the query-cache shape hash")
+	}
+}

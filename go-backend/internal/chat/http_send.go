@@ -384,6 +384,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		GraphSubgraphChunkIDs: graphChunkIDs,
 		BridgeChunks:          bridgeChunks,
 		RecencyLister:         h.recencyLister,
+		TabularRouter:         h.tabularRouter,
 	}
 
 	// AP-C4 trajectory event (standard path): the decision was computed
@@ -807,6 +808,7 @@ func (h *Handler) tryDeepChat(
 			BridgeChunks:    bridgeChunks,
 			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
 			MultiSpecialist: ChatSupervisorMultiSpecialist(ctx, h.siteConfigReader),
+			TabularRouter:   h.tabularRouter,
 
 			SufficientContextEnabled: ChatSufficientContextEnabled(ctx, h.siteConfigReader),
 			SufficientContextModel:   ResolveFastTierModel(ctx, h.siteConfigReader, "chat_sufficient_context_model"),

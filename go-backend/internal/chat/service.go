@@ -80,6 +80,14 @@ type ChatContextParams struct {
 	// Nil disables the path — public API / OpenAI-compat / mcpserver
 	// callers leave it unset.
 	RecencyLister RecencyLister
+	// TabularRouter backs the deterministic spreadsheet path: one
+	// validated read-only SQL statement against the KB's materialized
+	// tables, injected as a system-prompt addendum, plus two retrieval
+	// hints (id literals quoted in the search query, BM25 simple arm
+	// forced). Nil disables it entirely — public API / OpenAI-compat /
+	// mcpserver callers leave it unset, and so does any deployment
+	// without a read-only DSN. Nil-receiver safe either way.
+	TabularRouter *TabularRouter
 }
 
 // ChatSource represents a single source document surfaced in a chat response.
@@ -161,6 +169,12 @@ type ChatContext struct {
 	// non-nil, the HTTP layer emits it as a {"structuredTable": …} SSE event
 	// and persists it on the AI message. nil for every other orchestrator.
 	StructuredTable *StructuredTable
+	// TabularTrace records what the deterministic tabular router did this
+	// turn (fired / skipped reason, the executed SQL, row count, repair
+	// count). nil whenever no router was attached — post-response query
+	// logging and the eval harness read it, nothing in the answer path
+	// depends on it.
+	TabularTrace *TabularTrace
 }
 
 // ---------------------------------------------------------------------------
@@ -934,6 +948,35 @@ func PrepareChatContext(
 		}
 	}
 
+	// Deterministic tabular path (design §5.1). Runs BEFORE recency and
+	// decomposition because it rewrites the retrieval query: on a KB with
+	// ingested spreadsheet data it quotes identifier literals
+	// ("01.1440.055_.10") so BM25 matches them as phrases and forces the
+	// simple keyword arm on. When it also produces a result set, the rows
+	// are injected as a system-prompt addendum below. Fail-open by
+	// construction — Run never errors and is nil-receiver safe, so the
+	// only cost of a broken tabular path is a little latency.
+	//
+	// The promotion applies to RETRIEVAL ONLY: params.SearchQuery stays
+	// the user's phrasing for the enumeration pre-pass, logs and history.
+	searchQuery := params.SearchQuery
+	var tabularAddendum string
+	var tabularTrace *TabularTrace
+	if params.TabularRouter != nil {
+		tab := params.TabularRouter.Run(ctx, TabularRouterInput{
+			KbID:     params.KbID,
+			Query:    params.SearchQuery,
+			Language: params.Language,
+			Emit:     params.Emit,
+		})
+		tabularTrace = tab.Trace
+		tabularAddendum = tab.Addendum
+		if tab.SearchQuery != "" {
+			searchQuery = tab.SearchQuery
+		}
+		opts.ForceBM25SimpleArm = tab.ForceSimpleArm
+	}
+
 	// Deterministic recency listing: for "what is new / recently added"
 	// queries, window-scope retrieval to recently created files and
 	// fetch the complete file listing for the window (injected as a
@@ -941,7 +984,7 @@ func PrepareChatContext(
 	// arbitrary subset for these content-free queries — prod bug
 	// 2026-07-02, "Welche neuen Meldungen gibt es?" listed 1 of many.
 	recency := applyRecencyListing(ctx, siteConfig, params.RecencyLister,
-		params.KbID, params.SearchQuery, &opts, time.Now())
+		params.KbID, searchQuery, &opts, time.Now())
 	if recency.fired && params.Emit != nil {
 		params.Emit(map[string]any{
 			"type":         "recency_listing",
@@ -967,8 +1010,10 @@ func PrepareChatContext(
 	// primary beneficiary of this flag.
 	maybeDecomposeQuery(ctx, aiResolver, siteConfig, params, &opts)
 
-	// Pass 0 so Search() applies the admin-configured default_top_k from site_configs.
-	result, err := searchSvc.Search(ctx, params.KbID, params.SearchQuery, 0, opts)
+	// Pass 0 so Search() applies the admin-configured default_top_k from
+	// site_configs. searchQuery is params.SearchQuery unless the tabular
+	// router promoted identifier literals to quoted phrases.
+	result, err := searchSvc.Search(ctx, params.KbID, searchQuery, 0, opts)
 	if err != nil {
 		return nil, fmt.Errorf("chat: search: %w", err)
 	}
@@ -1144,6 +1189,12 @@ func PrepareChatContext(
 		// content as new.
 		sb.WriteString(prompts.RecencyListingAddendum(params.Language, recency.entries, recency.sinceISO, recency.truncated))
 	}
+	if tabularAddendum != "" {
+		// Must precede the CONTEXT block: the executed rows are ground
+		// truth the answer LLM should prefer over the retrieved prose.
+		sb.WriteString("\n\n")
+		sb.WriteString(tabularAddendum)
+	}
 	sb.WriteString("\n\nCONTEXT:\n")
 	sb.WriteString(contextText)
 
@@ -1154,6 +1205,7 @@ func PrepareChatContext(
 		Context:       contextText,
 		FinalChunks:   chunks,
 		Abstain:       abstain,
+		TabularTrace:  tabularTrace,
 	}, nil
 }
 

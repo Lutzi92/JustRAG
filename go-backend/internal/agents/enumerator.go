@@ -61,12 +61,13 @@ func (e *EnumeratorAgent) Execute(ctx context.Context, in Input) (Output, error)
 		return Output{}, errSearcherUnconfigured
 	}
 	opts := vector.SearchOptions{
-		FileIDs:       in.FileIDs,
-		ModelOverride: e.PlanningModel,
-		QueryType:     vector.QueryTypeEnumeration,
-		GraphChunkIDs: in.GraphChunkIDs,
-		BridgeChunks:  in.BridgeChunks,
-		HyPESearch:    in.HyPESearch,
+		FileIDs:            in.FileIDs,
+		ModelOverride:      e.PlanningModel,
+		QueryType:          vector.QueryTypeEnumeration,
+		GraphChunkIDs:      in.GraphChunkIDs,
+		BridgeChunks:       in.BridgeChunks,
+		HyPESearch:         in.HyPESearch,
+		ForceBM25SimpleArm: in.ForceBM25SimpleArm,
 	}
 	res, err := e.Searcher.Search(ctx, in.KbID, in.Query, 0, opts)
 	if err != nil {

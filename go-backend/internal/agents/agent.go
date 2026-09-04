@@ -40,6 +40,14 @@ type Input struct {
 	// HyPESearch enables the HyPE query-time arm on this agent's
 	// initial search (resolved from hype_search_enabled at dispatch).
 	HyPESearch bool
+	// ForceBM25SimpleArm forces the simple BM25 keyword arm on for this
+	// agent's search regardless of the deployment-wide
+	// `bm25_simple_arm_enabled` site_config. The Supervisor sets it from
+	// chat.SupervisorChatParams's tabular router when the KB has ingested
+	// spreadsheet data — short literal cell values ("01.1440.055_.10")
+	// are exactly the regime the simple arm exists for. False (default)
+	// leaves the site_config in charge.
+	ForceBM25SimpleArm bool
 }
 
 // Output captures everything one specialist produced for one Input.

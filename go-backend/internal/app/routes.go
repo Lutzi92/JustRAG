@@ -82,6 +82,7 @@ import (
 	"github.com/justrag/go-backend/internal/systemhealth"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/tabular/rematerialize"
+	"github.com/justrag/go-backend/internal/tabular/sqlexec"
 	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/users"
 	"github.com/justrag/go-backend/internal/vector"
@@ -1016,6 +1017,41 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 	// kb just for this one feature.
 	kbRouterLister := &kbRouterCandidateAdapter{store: rc.kbStore}
 
+	// Deterministic tabular router (design §5.1): answers spreadsheet
+	// questions with one validated read-only SQL statement and hands
+	// retrieval its two hints (quoted id phrases, forced simple BM25 arm).
+	// Built ONLY when the SELECT-only role is configured and reachable —
+	// same boundary as the sql_query / table_query tools: LLM-authored SQL
+	// never touches the read/write pool. Left nil otherwise, which makes
+	// the router a no-op on every chat turn.
+	var tabularRouter *chat.TabularRouter
+	if rc.infra.sqlToolDB != nil {
+		tabularRouter = chat.NewTabularRouter(
+			tabular.NewCatalog(rc.infra.db.Main),
+			sqlexec.NewReadOnly(rc.infra.sqlToolDB),
+			func(ctx context.Context, req ai.TabularSQLRequest, kbID, model string) (ai.TabularSQLProposal, error) {
+				return ai.GenerateTabularSQL(ctx, rc.aiResolver, req, kbID, model)
+			},
+			func(ctx context.Context) chat.TabularRouterConfig {
+				return chat.TabularRouterConfig{
+					// Two gates: the tabular master flag AND the router's
+					// own kill switch. Either off ⇒ the router skips
+					// before it touches the database.
+					Enabled: chat.ChatTabularQueryEnabled(ctx, rc.chatStore) &&
+						chat.ChatTabularRouterEnabled(ctx, rc.chatStore),
+					Model:      chat.ChatTabularRouterModel(ctx, rc.chatStore),
+					MaxRows:    chat.ChatTabularRouterMaxRows(ctx, rc.chatStore),
+					MaxRepairs: chat.ChatTabularRouterMaxRepairs(ctx, rc.chatStore),
+					Timeout: time.Duration(chat.ChatTabularRouterTimeoutMs(ctx, rc.chatStore)) *
+						time.Millisecond,
+					SchemaMaxTokens: chat.ChatTabularRouterSchemaMaxTokens(ctx, rc.chatStore),
+				}
+			},
+		)
+	} else {
+		slog.Warn("tabular router disabled; set JUSTRAG_DB_URL_READONLY to a SELECT-only role to enable the deterministic spreadsheet path")
+	}
+
 	chatOpts := []chat.HandlerOption{
 		chat.WithRedis(rc.infra.rdb.Client),
 		chat.WithSiteConfigReader(rc.chatStore),
@@ -1056,6 +1092,10 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 		chat.WithRecencyLister(&recencyListerAdapter{
 			store: builtin.NewPgxRecentDocsStore(rc.infra.db.Main),
 		}),
+		// nil when no read-only DSN is configured — the option is safe to
+		// pass unconditionally (the router is nil-receiver safe and the
+		// chat paths skip a nil pointer outright).
+		chat.WithTabularRouter(tabularRouter),
 		chat.WithTeamLoader(rc.agentTeamsStore),
 		chat.WithUsageRecorder(usage.NewRecorder(rc.infra.db.Main)),
 	}

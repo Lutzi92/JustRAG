@@ -160,6 +160,16 @@ type SearchOptions struct {
 	// vice-versa (the shape hash differs).
 	LongContextMode bool
 
+	// ForceBM25SimpleArm forces the prototype-A "simple" keyword arm on for
+	// this request even when the deployment-wide `bm25_simple_arm_enabled`
+	// site_config is off. Set by the chat layer's tabular router for KBs
+	// that have ingested spreadsheet data: cell values are short, literal
+	// and unstemmable ("01.1440.055_.10", "0002001919"), which is exactly
+	// the regime where the simple arm out-recalls the tiered one. Never set
+	// by users. The flag participates in the query-cache shape hash — it
+	// selects a different candidate pool.
+	ForceBM25SimpleArm bool
+
 	// CreatedAfter / CreatedBefore bound the retrieval pool to documents
 	// whose effective date (files.created_at in phase 1) falls within the
 	// window. Nil = no bound. Resolved early in Search() into file IDs via
@@ -753,13 +763,18 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	}
 	timer.Mark("embed")
 
+	// The keyword-arm decision is made exactly once per search and reused
+	// by every BM25 fan-out below (primary, multi-query, step-back,
+	// sub-queries) so the request can never run a mixed set of arms.
+	simpleArm := effectiveSimpleArm(ctx, siteCfg.BM25SimpleArmEnabled, opts.ForceBM25SimpleArm)
+
 	// ------------------------------------------------------------------
 	// 5 & 6. Vector + keyword search
 	// ------------------------------------------------------------------
 	vectorResults, keywordResults, err := s.runPrimarySearches(
 		ctx, tableName, embeddingStr, finalQuery, kbID, pgConfig,
 		opts.FileIDs, searchLimit, dimensions, useHalfvec, siteCfg.HNSWEfSearch,
-		siteCfg.MRLTwoPass, embeddingLowStr, siteCfg.BM25SimpleArmEnabled,
+		siteCfg.MRLTwoPass, embeddingLowStr, simpleArm,
 		siteCfg.BM25TieredBoost, opts.NodeKindFilter,
 	)
 	if err != nil {
@@ -833,7 +848,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 			)
 			if siteCfg.RAGFusionEnabled {
 				bm25Lists := s.runMultiQueryBM25Searches(
-					ctx, tableName, altQueries, kbID, pgConfig, opts.FileIDs, searchLimit, siteCfg.BM25SimpleArmEnabled, siteCfg.BM25TieredBoost,
+					ctx, tableName, altQueries, kbID, pgConfig, opts.FileIDs, searchLimit, simpleArm, siteCfg.BM25TieredBoost,
 				)
 				keywordExtraLists = append(keywordExtraLists, bm25Lists...)
 			}
@@ -876,7 +891,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 			stageLog = append(stageLog, "stepback_lists", len(sbLists))
 			if siteCfg.RAGFusionEnabled {
 				sbBM25 := s.runMultiQueryBM25Searches(
-					ctx, tableName, []string{stepBackQuery}, kbID, pgConfig, opts.FileIDs, searchLimit, siteCfg.BM25SimpleArmEnabled, siteCfg.BM25TieredBoost,
+					ctx, tableName, []string{stepBackQuery}, kbID, pgConfig, opts.FileIDs, searchLimit, simpleArm, siteCfg.BM25TieredBoost,
 				)
 				keywordExtraLists = append(keywordExtraLists, sbBM25...)
 			}
@@ -904,7 +919,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		)
 		if siteCfg.RAGFusionEnabled {
 			subBM25 := s.runMultiQueryBM25Searches(
-				ctx, tableName, opts.SubQueries, kbID, pgConfig, opts.FileIDs, searchLimit, siteCfg.BM25SimpleArmEnabled, siteCfg.BM25TieredBoost,
+				ctx, tableName, opts.SubQueries, kbID, pgConfig, opts.FileIDs, searchLimit, simpleArm, siteCfg.BM25TieredBoost,
 			)
 			keywordExtraLists = append(keywordExtraLists, subBM25...)
 		}
@@ -1352,6 +1367,21 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		}
 	}
 	return result, nil
+}
+
+// effectiveSimpleArm is the single decision point for the BM25 keyword arm.
+// cfg is the deployment-wide `bm25_simple_arm_enabled` site_config; force is
+// the per-request override (SearchOptions.ForceBM25SimpleArm, set by the chat
+// layer's tabular router for KBs with ingested spreadsheet data). Every BM25
+// fan-out in one search reads the result of this one call, so a request can
+// never mix arms. The override is logged once per search when it actually
+// flips the decision — an operator reading `bm25_simple_arm_enabled = false`
+// must be able to see why the simple arm ran anyway.
+func effectiveSimpleArm(ctx context.Context, cfg, force bool) bool {
+	if force && !cfg {
+		logctx.From(ctx).Info("bm25 simple arm forced on for a KB with tabular data")
+	}
+	return cfg || force
 }
 
 // ---------------------------------------------------------------------------

@@ -962,6 +962,55 @@ func ChatTabularChartsEnabled(ctx context.Context, reader SiteConfigReader) bool
 	return readBool(ctx, reader, "chat_tabular_charts_enabled", false)
 }
 
+// ChatTabularRouterEnabled is the kill switch for the deterministic tabular
+// router (the chat path that answers spreadsheet questions with one
+// validated read-only SQL statement). Default TRUE: the router is inert
+// unless the KB actually has ingested spreadsheet data, and it is gated a
+// second time by the tabular master flag `chat_tabular_query_enabled`, so
+// the useful control is "turn it off for a deployment where it misbehaves".
+// Tunable via "chat_tabular_router_enabled".
+func ChatTabularRouterEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_tabular_router_enabled", true)
+}
+
+// ChatTabularRouterModel returns the model the router's SQL generator uses.
+// Falls back through the fast-tier chain (per-task → `model_tier_fast` →
+// empty; empty lets the caller use the KB default chat model). Tunable via
+// "chat_tabular_router_model".
+func ChatTabularRouterModel(ctx context.Context, reader SiteConfigReader) string {
+	return ResolveFastTierModel(ctx, reader, "chat_tabular_router_model")
+}
+
+// ChatTabularRouterMaxRows caps the rows one router statement may return
+// (the validator wraps an oversized LIMIT and the executor enforces the same
+// cap). Range [10, 1000]; default 200. Tunable via
+// "chat_tabular_router_max_rows".
+func ChatTabularRouterMaxRows(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_tabular_router_max_rows", 200, 10, 1000)
+}
+
+// ChatTabularRouterMaxRepairs bounds the router's repair loop — how many
+// times a rejected / failing / empty statement may be handed back to the
+// generator with the failure text. 0 disables repairs. Range [0, 5];
+// default 3. Tunable via "chat_tabular_router_max_repairs".
+func ChatTabularRouterMaxRepairs(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_tabular_router_max_repairs", 3, 0, 5)
+}
+
+// ChatTabularRouterTimeoutMs is the per-statement execution timeout in
+// milliseconds. Range [500, 30000]; default 5000. Tunable via
+// "chat_tabular_router_timeout_ms".
+func ChatTabularRouterTimeoutMs(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_tabular_router_timeout_ms", 5000, 500, 30000)
+}
+
+// ChatTabularRouterSchemaMaxTokens caps the compact schema rendered into the
+// SQL-generation prompt. Range [1000, 60000]; default 12000. Tunable via
+// "chat_tabular_router_schema_max_tokens".
+func ChatTabularRouterSchemaMaxTokens(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_tabular_router_schema_max_tokens", 12000, 1000, 60000)
+}
+
 // ChatKBRouterEnabled reports whether the AP-A4 sub-KB router runs
 // when the chat request signals "auto" (via `?route=auto` query
 // param). Default off — existing single-KB requests are unaffected.

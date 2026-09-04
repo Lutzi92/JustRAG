@@ -24,7 +24,8 @@ const queryCacheSchemaVersion byte = 2
 // Covered request-scoped fields:
 //   - Enhance (string): query rewrite/expand/spell mode
 //   - QueryType (string): lookup / enumeration / complex_reasoning routing
-//   - HyDE / MultiQuery / StepBack (bitmask byte): query-transform flags
+//   - HyDE / MultiQuery / StepBack / LongContextMode / ForceBM25SimpleArm
+//     (bitmask byte): query-transform and retrieval-shape flags
 //   - Grade (bitmask byte): CRAG-style relevance grading attaches per-chunk
 //     verdicts to the SearchResult, so two requests with different Grade
 //     values must not share a cache slot
@@ -68,6 +69,11 @@ func shapeHash(opts SearchOptions, topN int, embeddingModel string) []byte {
 	// cache entries must NOT collide with normal-mode entries.
 	if opts.LongContextMode {
 		flags |= 0x10
+	}
+	// The forced simple keyword arm selects a different BM25 candidate
+	// pool, so its results must not collide with normal-mode entries.
+	if opts.ForceBM25SimpleArm {
+		flags |= 0x20
 	}
 	h.Write([]byte{flags})
 

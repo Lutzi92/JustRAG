@@ -46,6 +46,7 @@ type Handler struct {
 	longmemStore       longmem.Store           // optional, AP-D1 per-user memory
 	tabularCatalog     TabularCatalogChecker   // optional, Phase-3 chart-guidance gate
 	recencyLister      RecencyLister           // optional, deterministic recency-listing path
+	tabularRouter      *TabularRouter          // optional, deterministic spreadsheet SQL path
 	// raptorDescendants is the Phase F bridge that resolves a set of
 	// RAPTOR summary chunk ids to their transitive leaf descendants.
 	// Used by runPostResponseTasks to feed the citation validator's
@@ -265,6 +266,19 @@ func WithTabularCatalog(c TabularCatalogChecker) HandlerOption {
 func WithRecencyLister(l RecencyLister) HandlerOption {
 	return func(h *Handler) {
 		h.recencyLister = l
+	}
+}
+
+// WithTabularRouter attaches the deterministic tabular router: on a KB with
+// ingested spreadsheet data it answers the question with one validated
+// read-only SQL statement (injected as a system-prompt addendum) and hands
+// retrieval two hints — identifier literals quoted as BM25 phrases and the
+// simple keyword arm forced on. Production wiring only builds it when a
+// read-only DSN is configured (JUSTRAG_DB_URL_READONLY); optional
+// everywhere, and nil-receiver safe.
+func WithTabularRouter(r *TabularRouter) HandlerOption {
+	return func(h *Handler) {
+		h.tabularRouter = r
 	}
 }
 

@@ -24,6 +24,8 @@ import (
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/database"
 	"github.com/justrag/go-backend/internal/eval"
+	"github.com/justrag/go-backend/internal/tabular"
+	"github.com/justrag/go-backend/internal/tabular/sqlexec"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -213,11 +215,36 @@ func main() {
 			)
 			slog.Info("eval: orchestrator-dispatch mode on (production-parity routing)")
 		} else {
+			// R30: exercise the deterministic tabular path the way
+			// production does. The eval binary has only the main pool, so
+			// the read-only executor wraps it in a READ ONLY transaction —
+			// the statement is validated before it is ever executed, and
+			// eval runs against a corpus the operator already owns.
+			tabularRouter := chat.NewTabularRouter(
+				tabular.NewCatalog(db.Main),
+				sqlexec.NewReadOnly(db.Main),
+				func(ctx context.Context, req ai.TabularSQLRequest, kbID, model string) (ai.TabularSQLProposal, error) {
+					return ai.GenerateTabularSQL(ctx, aiResolver, req, kbID, model)
+				},
+				func(ctx context.Context) chat.TabularRouterConfig {
+					return chat.TabularRouterConfig{
+						Enabled: chat.ChatTabularQueryEnabled(ctx, chatStore) &&
+							chat.ChatTabularRouterEnabled(ctx, chatStore),
+						Model:      chat.ChatTabularRouterModel(ctx, chatStore),
+						MaxRows:    chat.ChatTabularRouterMaxRows(ctx, chatStore),
+						MaxRepairs: chat.ChatTabularRouterMaxRepairs(ctx, chatStore),
+						Timeout: time.Duration(chat.ChatTabularRouterTimeoutMs(ctx, chatStore)) *
+							time.Millisecond,
+						SchemaMaxTokens: chat.ChatTabularRouterSchemaMaxTokens(ctx, chatStore),
+					}
+				},
+			)
 			adapter = eval.NewProductionContextAdapter(
 				aiResolver,
 				searchService,
 				siteReader,
 				flags,
+				eval.WithTabularRouter(tabularRouter),
 			)
 		}
 	} else {
