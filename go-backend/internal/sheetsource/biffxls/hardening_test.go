@@ -2,6 +2,7 @@ package biffxls
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -142,5 +143,58 @@ func TestCellAtSpanIsDeterministic(t *testing.T) {
 				t.Fatalf("CellAt(0,%d) = %+v ok=%v, want %v from the first-registered span", col, cv, ok, want)
 			}
 		}
+	}
+}
+
+// TestAddRangeIsBounded covers the Phase-1 final-review parked finding: a
+// Ranger-registered record (only HYPERLINK reaches addRange) may claim at
+// most maxRangeCells cells. Before the bound, a hostile HYPERLINK CellRange
+// spanning the whole sheet allocated rows x cols row/column entries -- the
+// underlying cell records already carry the values, so refusing the range
+// loses nothing but the link text on those cells.
+func TestAddRangeIsBounded(t *testing.T) {
+	t.Parallel()
+	w := &WorkSheet{rows: map[uint16]*Row{}}
+	huge := &HyperLink{CellRange: CellRange{FirstRowB: 0, LastRowB: 9999, FristColB: 0, LastColB: 16383}}
+	w.addRange(huge, huge)
+	if len(w.rows) != 0 {
+		t.Fatalf("hostile hyperlink range registered %d rows; want 0", len(w.rows))
+	}
+	small := &HyperLink{CellRange: CellRange{FirstRowB: 2, LastRowB: 3, FristColB: 1, LastColB: 4}}
+	w.addRange(small, small)
+	if len(w.rows) != 2 || len(w.rows[2].cols) != 4 {
+		t.Fatalf("small range: rows=%d cols=%d", len(w.rows), len(w.rows[2].cols))
+	}
+}
+
+type failingReadSeeker struct{ n int }
+
+func (f *failingReadSeeker) Read(p []byte) (int, error) {
+	f.n++
+	if f.n > 1 {
+		return 0, errors.New("disk on fire")
+	}
+	// one syntactically valid, empty BOF record so parse enters the loop
+	rec := []byte{0x09, 0x08, 0x00, 0x00}
+	return copy(p, rec), nil
+}
+func (f *failingReadSeeker) Seek(off int64, whence int) (int64, error) { return 0, nil }
+
+// TestParseRecordsNonEOFError covers the Phase-1 final-review parked test
+// gap: a non-EOF read error while parsing sheet records must be recorded in
+// parseErr for the caller to see (ParseErr), while an ordinary end-of-stream
+// (io.EOF / io.ErrUnexpectedEOF, i.e. a sheet with no explicit EOF record)
+// must not be treated as an error.
+func TestParseRecordsNonEOFError(t *testing.T) {
+	t.Parallel()
+	w := &WorkSheet{rows: map[uint16]*Row{}, wb: &WorkBook{}}
+	w.parse(&failingReadSeeker{})
+	if w.parseErr == nil {
+		t.Fatal("non-EOF read error must be recorded in parseErr")
+	}
+	w2 := &WorkSheet{rows: map[uint16]*Row{}, wb: &WorkBook{}}
+	w2.parse(bytes.NewReader(nil)) // immediate EOF
+	if w2.parseErr != nil {
+		t.Fatalf("EOF must not be recorded as an error, got %v", w2.parseErr)
 	}
 }

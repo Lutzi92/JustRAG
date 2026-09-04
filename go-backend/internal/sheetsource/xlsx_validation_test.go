@@ -105,3 +105,31 @@ func TestParseListRef(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveValidationsCapsReReads covers the Phase-1 final-review parked
+// finding: each range validation re-streams the referenced sheet, so an
+// unbounded number of them is O(N x sheet) re-reads. resolveValidations must
+// resolve at most maxListValidations per sheet, leaving the rest Values ==
+// nil rather than re-streaming without bound.
+func TestResolveValidationsCapsReReads(t *testing.T) {
+	t.Parallel()
+	src, err := OpenXLSX("testdata/header_row14_metadata.xlsx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	ex := SheetExtras{}
+	for i := 0; i < maxListValidations+5; i++ {
+		ex.Validations = append(ex.Validations, Validation{Ref: "Dropdown!$C$6:$C$8"})
+	}
+	src.resolveValidations(&ex, 0)
+	resolved := 0
+	for _, v := range ex.Validations {
+		if v.Values != nil {
+			resolved++
+		}
+	}
+	if resolved != maxListValidations {
+		t.Fatalf("resolved %d validations, want cap %d", resolved, maxListValidations)
+	}
+}

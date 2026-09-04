@@ -293,10 +293,23 @@ func (w *WorkSheet) addCell(col Coler, ch contentHandler) {
 	w.addContent(col.Row(), ch)
 }
 
-func (w *WorkSheet) addRange(rang Ranger, ch contentHandler) {
+// maxRangeCells bounds how many cells one Ranger record (HYPERLINK) may
+// register. The range comes straight from the file; the cell records the
+// range covers already carry the values, so refusing an absurd range loses
+// nothing but the link text on those cells.
+const maxRangeCells = 4096
 
-	for i := rang.FirstRow(); i <= rang.LastRow(); i++ {
+func (w *WorkSheet) addRange(rang Ranger, ch contentHandler) {
+	rows := int(rang.LastRow()) - int(rang.FirstRow()) + 1
+	cols := int(ch.LastCol()) - int(ch.FirstCol()) + 1
+	if rows <= 0 || cols <= 0 || rows*cols > maxRangeCells {
+		return
+	}
+	for i := rang.FirstRow(); ; i++ {
 		w.addContent(i, ch)
+		if i == rang.LastRow() {
+			break
+		}
 	}
 }
 
