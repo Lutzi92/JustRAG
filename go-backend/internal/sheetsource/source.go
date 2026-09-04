@@ -3,6 +3,10 @@ package sheetsource
 
 import (
 	"errors"
+	"fmt"
+	"io"
+	"math"
+	"strconv"
 	"strings"
 )
 
@@ -70,4 +74,70 @@ type Source interface {
 
 func (c Cell) IsEmpty() bool {
 	return c.Kind == KindEmpty || (c.Kind == KindText && strings.TrimSpace(c.Raw) == "")
+}
+
+// recoverToErr turns a panic into an error on *err. Every exported entry point
+// of every Source installs it: the files reaching these readers are untrusted
+// uploads decoded by hand-rolled parsers (and, for .xls, by a fork of an
+// upstream library that was never written with hostile input in mind), so a
+// malformed file must fail its own ingest and nothing else. Callers that need
+// to distinguish a parser bug from a corrupt file have the op and the panic
+// value in the message.
+//
+// Note this also converts a panic raised inside the caller's own RowFunc; a
+// RowFunc must therefore not rely on panicking through ReadSheet.
+func recoverToErr(err *error, op string) {
+	if r := recover(); r != nil {
+		*err = fmt.Errorf("sheetsource: panic in %s: %v", op, r)
+	}
+}
+
+// maxPartBytes caps how many bytes a single decompressed archive part may
+// yield. A zip entry's declared uncompressed size is attacker-controlled
+// metadata, so the only real bound is on what is actually read. Package-level
+// var rather than const so tests can shrink it.
+var maxPartBytes int64 = 256 << 20
+
+// capReader fails the read that would take the total past cap, so a zip bomb
+// surfaces as a clear error instead of an out-of-memory worker. It reads one
+// byte past cap before failing, which is what makes "exactly cap bytes" (fine)
+// distinguishable from "more than cap bytes" (refused).
+type capReader struct {
+	r    io.Reader
+	name string
+	cap  int64
+	read int64
+}
+
+func (c *capReader) tooLarge() error {
+	return fmt.Errorf("sheetsource: %s exceeds the %d byte limit", c.name, c.cap)
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.read > c.cap {
+		return 0, c.tooLarge()
+	}
+	if room := c.cap + 1 - c.read; int64(len(p)) > room {
+		p = p[:room]
+	}
+	n, err := c.r.Read(p)
+	c.read += int64(n)
+	if c.read > c.cap {
+		return n, c.tooLarge()
+	}
+	return n, err
+}
+
+func cappedPart(r io.Reader, name string) io.Reader {
+	return &capReader{r: r, name: name, cap: maxPartBytes}
+}
+
+// percentRaw canonicalises a stored fraction as its percentage value. Every
+// reader must use it: f*100 is not exact in float64 (0.07*100 is
+// 7.000000000000001, 0.365*100 is 36.499999999999996), so a plain
+// FormatFloat produced different Raw strings per file format for the same
+// displayed percentage. Rounding to 10 decimals is far below any spreadsheet's
+// own precision and removes the noise.
+func percentRaw(f float64) string {
+	return strconv.FormatFloat(math.Round(f*100*1e10)/1e10, 'f', -1, 64)
 }

@@ -85,7 +85,8 @@ type CSVSource struct {
 	enc   string // reflects only the 64 KiB sniff sample; ReadSheet re-decides on the full file
 }
 
-func OpenCSV(path string) (*CSVSource, error) {
+func OpenCSV(path string) (src *CSVSource, err error) {
+	defer recoverToErr(&err, "OpenCSV")
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -104,8 +105,8 @@ func (s *CSVSource) Sheets() []SheetInfo {
 	return []SheetInfo{{Index: 0, Name: name}}
 }
 
-func (s *CSVSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
-	var ex SheetExtras
+func (s *CSVSource) ReadSheet(index int, fn RowFunc) (ex SheetExtras, err error) {
+	defer recoverToErr(&err, "CSVSource.ReadSheet")
 	if index != 0 {
 		return ex, errors.New("sheetsource: csv has one sheet")
 	}
@@ -133,7 +134,7 @@ func (s *CSVSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
 		// Deliver gap rows (nil) for skipped indices
 		for i := lastRowIdx + 1; i < physicalIdx; i++ {
 			if err := fn(i, nil); err != nil {
-				if err == ErrStop {
+				if errors.Is(err, ErrStop) {
 					ex.RowCount = i + 1
 					return ex, nil
 				}
@@ -152,7 +153,7 @@ func (s *CSVSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
 			ex.MaxCol = len(cells)
 		}
 		if err := fn(physicalIdx, cells); err != nil {
-			if err == ErrStop {
+			if errors.Is(err, ErrStop) {
 				ex.RowCount = physicalIdx + 1
 				return ex, nil
 			}

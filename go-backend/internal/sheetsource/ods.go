@@ -3,6 +3,7 @@ package sheetsource
 import (
 	"archive/zip"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -12,7 +13,17 @@ import (
 
 const (
 	maxODSColRepeat = 16384
+	// A repeated row group that carries content is materialised row by row,
+	// so it stays capped: no real sheet repeats 1000 identical data rows,
+	// and truncating there costs nothing downstream.
 	maxODSRowRepeat = 1000
+	// An empty repeat is only a gap, so it follows the xlsx reader's
+	// maxGapRows instead: up to 100k, and an error beyond that rather than a
+	// silent truncation, which would shift every row below the gap. The cap
+	// is checked where the gap is flushed (i.e. only for gaps that actually
+	// sit between content rows) — the trailing number-rows-repeated="1048566"
+	// every LibreOffice file ends with is never delivered and never counted.
+	maxODSEmptyRowRepeat = 100_000
 )
 
 // ODSSource reads OpenDocument Spreadsheet (.ods) files with a streaming
@@ -31,7 +42,8 @@ type odsSheetInfo struct {
 
 var _ Source = (*ODSSource)(nil)
 
-func OpenODS(path string) (*ODSSource, error) {
+func OpenODS(path string) (src *ODSSource, err error) {
+	defer recoverToErr(&err, "OpenODS")
 	s := &ODSSource{path: path}
 	if err := s.scanSheets(); err != nil {
 		return nil, err
@@ -90,7 +102,7 @@ func (s *ODSSource) scanSheets() error {
 	defer zr.Close()
 	defer rc.Close()
 
-	dec := xml.NewDecoder(rc)
+	dec := xml.NewDecoder(cappedPart(rc, "content.xml"))
 	hiddenStyles := map[string]bool{}
 	inAutoStyles := false
 	var curStyleName string
@@ -154,7 +166,7 @@ func odsCell(attrs map[string]string, text string) Cell {
 		c.Style.Unit = attrs["currency"]
 	case "percentage":
 		if v, err := strconv.ParseFloat(attrs["value"], 64); err == nil {
-			c.Kind, c.Raw = KindNumber, canonicalNumber(v*100)
+			c.Kind, c.Raw = KindNumber, percentRaw(v)
 			c.Style.Percent = true
 			c.Formatted = c.Raw + "%"
 		}
@@ -188,13 +200,25 @@ func odsCellAttrs(t xml.StartElement) map[string]string {
 	return m
 }
 
-func repeatCount(t xml.StartElement, name string, cap int) int {
+func repeatCount(t xml.StartElement, name string, limit int) int {
+	n := rawRepeatCount(t, name)
+	if n > limit {
+		n = limit
+	}
+	return n
+}
+
+// rawRepeatCount reads a *-repeated attribute without clamping it, so the
+// caller can choose between truncating and refusing. Anything longer than
+// nine digits is not a repeat count a spreadsheet can mean (and would
+// overflow atoiAttr's accumulator), so it reads as "far too large".
+func rawRepeatCount(t xml.StartElement, name string) int {
+	if len(attr(t, name)) > 9 {
+		return maxODSEmptyRowRepeat + 1
+	}
 	n := atoiAttr(t, name)
 	if n < 1 {
 		n = 1
-	}
-	if n > cap {
-		n = cap
 	}
 	return n
 }
@@ -261,8 +285,8 @@ func mergeSingleCellValidationRanges(ranges []Range) []Range {
 // siblings of the tables (under office:spreadsheet) and are collected
 // wherever encountered; cells' table:content-validation-name references are
 // resolved against them once the whole document has been scanned.
-func (s *ODSSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
-	var ex SheetExtras
+func (s *ODSSource) ReadSheet(index int, fn RowFunc) (ex SheetExtras, err error) {
+	defer recoverToErr(&err, "ODSSource.ReadSheet")
 	if index < 0 || index >= len(s.sheets) {
 		return ex, fmt.Errorf("sheetsource: sheet %d out of range", index)
 	}
@@ -274,7 +298,7 @@ func (s *ODSSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
 	defer zr.Close()
 	defer rc.Close()
 
-	dec := xml.NewDecoder(rc)
+	dec := xml.NewDecoder(cappedPart(rc, "content.xml"))
 
 	defs := map[string]odsValidationDef{}
 	usedRanges := map[string][]Range{}
@@ -358,7 +382,10 @@ parse:
 					continue parse
 				}
 				row = nil
-				rowRepeat = repeatCount(t, "number-rows-repeated", maxODSRowRepeat)
+				// Uncapped here: whether this group is a gap or a content
+				// run is only known at </table:table-row>, and the two get
+				// different caps.
+				rowRepeat = rawRepeatCount(t, "number-rows-repeated")
 				rowHasContent = false
 				lastGroupLen, lastGroupEmpty = 0, false
 			case "table-cell", "covered-table-cell":
@@ -449,15 +476,21 @@ parse:
 					pendingGaps += rowRepeat
 					continue parse
 				}
+				// Reached only when a content row follows, so this counts
+				// interior gaps only — the trailing padding row every
+				// LibreOffice file ends with is never flushed.
+				if pendingGaps > maxODSEmptyRowRepeat {
+					return ex, fmt.Errorf("sheetsource: ods: gap of %d empty rows before row %d", pendingGaps, rowIdx+1)
+				}
 				for pendingGaps > 0 {
 					err := deliver(rowIdx, nil)
-					if err != nil && err != ErrStop {
+					if err != nil && !errors.Is(err, ErrStop) {
 						return ex, err
 					}
 					// The row was delivered (fn ran, even if it then asked
 					// to stop) — count it before advancing/breaking.
 					ex.RowCount = rowIdx + 1
-					stop := err == ErrStop
+					stop := errors.Is(err, ErrStop)
 					rowIdx++
 					pendingGaps--
 					if stop {
@@ -465,15 +498,19 @@ parse:
 						break parse
 					}
 				}
-				for i := 0; i < rowRepeat; i++ {
+				contentRepeat := rowRepeat
+				if contentRepeat > maxODSRowRepeat {
+					contentRepeat = maxODSRowRepeat
+				}
+				for i := 0; i < contentRepeat; i++ {
 					cp := make([]Cell, len(row))
 					copy(cp, row)
 					err := deliver(rowIdx, cp)
-					if err != nil && err != ErrStop {
+					if err != nil && !errors.Is(err, ErrStop) {
 						return ex, err
 					}
 					ex.RowCount = rowIdx + 1
-					stop := err == ErrStop
+					stop := errors.Is(err, ErrStop)
 					rowIdx++
 					if stop {
 						stoppedEarly = true

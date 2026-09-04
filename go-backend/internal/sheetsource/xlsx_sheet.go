@@ -2,6 +2,7 @@ package sheetsource
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -15,7 +16,8 @@ const maxGapRows = 100_000
 
 type XLSXSource struct{ wb *xlsxWorkbook }
 
-func OpenXLSX(path string) (*XLSXSource, error) {
+func OpenXLSX(path string) (src *XLSXSource, err error) {
+	defer recoverToErr(&err, "OpenXLSX")
 	wb, err := openXLSX(path)
 	if err != nil {
 		return nil, err
@@ -104,8 +106,7 @@ func (s *XLSXSource) cellFromState(st *xlsxCellState) Cell {
 		case x.Date:
 			c.Kind, c.Raw = KindDate, serialToISO(f, s.wb.date1904)
 		case x.Percent:
-			// Round to 10 decimals: 0.365*100 is not exactly 36.5 in float64 (R7).
-			c.Kind, c.Raw = KindNumber, canonicalNumber(math.Round(f*100*1e10)/1e10)
+			c.Kind, c.Raw = KindNumber, percentRaw(f)
 			c.Formatted = c.Raw + "%"
 		default:
 			c.Kind, c.Raw = KindNumber, canonicalNumber(f)
@@ -248,7 +249,7 @@ func (s *XLSXSource) readSheetRaw(index int, fn RowFunc) (SheetExtras, bool, err
 			case "row":
 				if rowIdx >= 0 {
 					if err := deliver(rowIdx, row); err != nil {
-						if err == ErrStop {
+						if errors.Is(err, ErrStop) {
 							ex.RowCount = nextRow
 							return ex, true, nil
 						}
@@ -273,7 +274,8 @@ func (s *XLSXSource) readSheetRaw(index int, fn RowFunc) (SheetExtras, bool, err
 
 // ReadSheet reads a sheet and resolves list validation values (unless the read
 // was stopped early by the callback returning ErrStop).
-func (s *XLSXSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
+func (s *XLSXSource) ReadSheet(index int, fn RowFunc) (ex SheetExtras, err error) {
+	defer recoverToErr(&err, "XLSXSource.ReadSheet")
 	ex, stopped, err := s.readSheetRaw(index, fn)
 	if err != nil {
 		return ex, err

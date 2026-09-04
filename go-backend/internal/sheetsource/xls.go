@@ -22,7 +22,8 @@ var _ Source = (*XLSSource)(nil)
 // OpenXLS opens a .xls workbook. The whole workbook stream is parsed eagerly
 // (BIFF has no per-sheet index that could be read lazily), but individual
 // sheets are only decoded on first access.
-func OpenXLS(path string) (*XLSSource, error) {
+func OpenXLS(path string) (src *XLSSource, err error) {
+	defer recoverToErr(&err, "OpenXLS")
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -53,8 +54,8 @@ func (s *XLSSource) Sheets() []SheetInfo {
 	return out
 }
 
-func (s *XLSSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
-	var ex SheetExtras
+func (s *XLSSource) ReadSheet(index int, fn RowFunc) (ex SheetExtras, err error) {
+	defer recoverToErr(&err, "XLSSource.ReadSheet")
 	sh := s.wb.GetSheet(index)
 	if sh == nil {
 		return ex, fmt.Errorf("sheetsource: sheet %d out of range", index)
@@ -90,6 +91,14 @@ func (s *XLSSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
 		}
 	}
 	ex.RowCount = int(sh.MaxRow) + 1
+	// The rows above are everything the record parser managed to decode. When
+	// it stopped on a malformed record they are a prefix of the sheet, so
+	// report that after delivering them — the caller keeps what was readable
+	// and still learns the sheet is truncated. (biffxls used to print the
+	// error to stdout and swallow it.)
+	if perr := sh.ParseErr(); perr != nil {
+		return ex, fmt.Errorf("sheetsource: xls: sheet %d truncated: %w", index, perr)
+	}
 	return ex, nil
 }
 
@@ -111,7 +120,7 @@ func cellFromXLS(cv biffxls.CellValue, date1904 bool) Cell {
 	case cv.IsNumber && cv.IsDate:
 		c.Kind, c.Raw = KindDate, serialToISO(cv.Number, date1904)
 	case cv.IsNumber && cv.IsPercent:
-		c.Kind, c.Raw = KindNumber, canonicalNumber(cv.Number*100)
+		c.Kind, c.Raw = KindNumber, percentRaw(cv.Number)
 		c.Formatted, c.Style.Percent = c.Raw+"%", true
 	case cv.IsNumber:
 		c.Kind, c.Raw = KindNumber, canonicalNumber(cv.Number)

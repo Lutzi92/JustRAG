@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,7 +46,7 @@ func TestODSCoveredCellsAndTypes(t *testing.T) {
 	if row3[0].Raw != "Verwaltung" || row3[2].IsEmpty() || row3[3].IsEmpty() {
 		t.Errorf("row 3 alignment broken: %+v", row3)
 	}
-	if ex.Merged == nil || len(ex.Merged) == 0 || ex.Merged[0] != (Range{1, 0, 1, 1}) {
+	if len(ex.Merged) == 0 || ex.Merged[0] != (Range{1, 0, 1, 1}) {
 		t.Errorf("merged = %+v", ex.Merged)
 	}
 	pctSeen, dateSeen := false, false
@@ -354,5 +355,173 @@ func TestODSCoveredCellRepeatAlignment(t *testing.T) {
 	}
 	if got[4].Raw != "E" {
 		t.Errorf("E must stay at column 4, got %+v", got[4])
+	}
+}
+
+// odsGapDoc builds a one-table document with a content row, an empty row
+// repeated `repeat` times, and a second content row — so the gap is interior
+// and therefore actually flushed.
+func odsGapDoc(repeat string) string {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content
+  xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  office:version="1.4">
+  <office:body>
+    <office:spreadsheet>
+      <table:table table:name="Main">
+        <table:table-row>
+          <table:table-cell office:value-type="string"><text:p>A</text:p></table:table-cell>
+        </table:table-row>
+        <table:table-row table:number-rows-repeated="` + repeat + `">
+          <table:table-cell/>
+        </table:table-row>
+        <table:table-row>
+          <table:table-cell office:value-type="string"><text:p>B</text:p></table:table-cell>
+        </table:table-row>
+      </table:table>
+    </office:spreadsheet>
+  </office:body>
+</office:document-content>`
+}
+
+// TestODSInteriorGapCap pins parity with the xlsx reader's maxGapRows: an
+// interior run of empty rows is delivered in full up to 100k (it used to be
+// truncated at 1000, which silently shifted every row below it), and a longer
+// one is an error rather than a silent truncation.
+func TestODSInteriorGapCap(t *testing.T) {
+	t.Parallel()
+
+	t.Run("gap past the old 1000 cap is delivered in full", func(t *testing.T) {
+		t.Parallel()
+		src, err := OpenODS(buildODS(t, odsGapDoc("5000")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer src.Close()
+		var lastIdx int
+		gaps := 0
+		ex, err := src.ReadSheet(0, func(i int, cells []Cell) error {
+			lastIdx = i
+			if cells == nil {
+				gaps++
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gaps != 5000 {
+			t.Errorf("gap rows delivered = %d, want 5000", gaps)
+		}
+		// A + 5000 gaps + B: the second content row must land at index 5001.
+		if lastIdx != 5001 || ex.RowCount != 5002 {
+			t.Errorf("last row index = %d, RowCount = %d, want 5001 / 5002", lastIdx, ex.RowCount)
+		}
+	})
+
+	t.Run("gap past 100k is an error", func(t *testing.T) {
+		t.Parallel()
+		src, err := OpenODS(buildODS(t, odsGapDoc("200000")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer src.Close()
+		if _, err := src.ReadSheet(0, func(int, []Cell) error { return nil }); err == nil {
+			t.Fatal("ReadSheet accepted a 200000-row interior gap")
+		} else if !strings.Contains(err.Error(), "gap of") {
+			t.Errorf("error = %v, want a gap-too-large message", err)
+		}
+	})
+
+	t.Run("trailing padding row is never counted", func(t *testing.T) {
+		t.Parallel()
+		// The final row every LibreOffice file writes: empty, repeated to the
+		// bottom of the sheet. It is never flushed, so it must not trip the
+		// interior-gap cap.
+		doc := `<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content
+  xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  office:version="1.4">
+  <office:body>
+    <office:spreadsheet>
+      <table:table table:name="Main">
+        <table:table-row>
+          <table:table-cell office:value-type="string"><text:p>A</text:p></table:table-cell>
+        </table:table-row>
+        <table:table-row table:number-rows-repeated="1048575">
+          <table:table-cell table:number-columns-repeated="16384"/>
+        </table:table-row>
+      </table:table>
+    </office:spreadsheet>
+  </office:body>
+</office:document-content>`
+		src, err := OpenODS(buildODS(t, doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer src.Close()
+		ex, err := src.ReadSheet(0, func(int, []Cell) error { return nil })
+		if err != nil {
+			t.Fatalf("ReadSheet = %v, want nil (trailing padding is not an interior gap)", err)
+		}
+		if ex.RowCount != 1 {
+			t.Errorf("RowCount = %d, want 1", ex.RowCount)
+		}
+	})
+}
+
+const odsPercentDoc = `<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content
+  xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  office:version="1.4">
+  <office:body>
+    <office:spreadsheet>
+      <table:table table:name="Main">
+        <table:table-row>
+          <table:table-cell office:value-type="percentage" office:value="0.07"/>
+          <table:table-cell office:value-type="percentage" office:value="0.29"/>
+          <table:table-cell office:value-type="percentage" office:value="0.365"/>
+        </table:table-row>
+      </table:table>
+    </office:spreadsheet>
+  </office:body>
+</office:document-content>`
+
+// TestODSPercentHasNoFloatNoise guards the shared percentRaw canonicalisation
+// at the reader level: 0.07*100 is 7.000000000000001 and 0.29*100 is
+// 28.999999999999996 in float64, and this reader used to write exactly those
+// digits into Raw while the xlsx reader rounded.
+func TestODSPercentHasNoFloatNoise(t *testing.T) {
+	t.Parallel()
+	path := buildODS(t, odsPercentDoc)
+	src, err := OpenODS(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	var got []Cell
+	if _, err := src.ReadSheet(0, func(i int, cells []Cell) error {
+		if i == 0 {
+			got = cells
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"7", "29", "36.5"}
+	if len(got) < len(want) {
+		t.Fatalf("row = %+v", got)
+	}
+	for i, w := range want {
+		if got[i].Raw != w || got[i].Formatted != w+"%" || !got[i].Style.Percent || got[i].Kind != KindNumber {
+			t.Errorf("cell %d = %+v, want Raw %q / Formatted %q", i, got[i], w, w+"%")
+		}
 	}
 }

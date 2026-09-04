@@ -121,6 +121,11 @@ func TestCellFromXLS(t *testing.T) {
 		{"percent is scaled and marked",
 			biffxls.CellValue{IsNumber: true, Number: 0.125, IsPercent: true},
 			Cell{Kind: KindNumber, Raw: "12.5", Formatted: "12.5%", Style: CellStyle{Percent: true}}},
+		// Guards the shared percentRaw canonicalisation: 0.07*100 is
+		// 7.000000000000001 in float64, and this reader used to emit that.
+		{"percent has no float noise",
+			biffxls.CellValue{IsNumber: true, Number: 0.07, IsPercent: true},
+			Cell{Kind: KindNumber, Raw: "7", Formatted: "7%", Style: CellStyle{Percent: true}}},
 		{"date serial",
 			biffxls.CellValue{IsNumber: true, Number: 45000, IsDate: true},
 			Cell{Kind: KindDate, Raw: "2023-03-15", Formatted: "2023-03-15"}},

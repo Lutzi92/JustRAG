@@ -52,7 +52,7 @@ func openXLSX(filePath string) (*xlsxWorkbook, error) {
 			return nil, fmt.Errorf("sheetsource: sharedStrings: %w", err)
 		}
 	} else {
-		w.sst, err = parseSharedStrings(rc)
+		w.sst, err = parseSharedStrings(cappedPart(rc, "xl/sharedStrings.xml"))
 		rc.Close()
 		if err != nil {
 			zr.Close()
@@ -65,7 +65,7 @@ func openXLSX(filePath string) (*xlsxWorkbook, error) {
 			return nil, fmt.Errorf("sheetsource: styles: %w", err)
 		}
 	} else {
-		w.xfs, err = parseStyles(rc)
+		w.xfs, err = parseStyles(cappedPart(rc, "xl/styles.xml"))
 		rc.Close()
 		if err != nil {
 			zr.Close()

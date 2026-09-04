@@ -45,6 +45,7 @@ require (
 
 require (
 	github.com/coreos/go-oidc/v3 v3.18.0
+	github.com/extrame/ole2 v0.0.0-20160812065207-d69429661ad7
 	github.com/extrame/xls v0.0.1
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/imroc/req/v3 v3.57.0
@@ -93,7 +94,6 @@ require (
 	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/elliotchance/pie/v2 v2.9.0 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
-	github.com/extrame/ole2 v0.0.0-20160812065207-d69429661ad7 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/forPelevin/gomoji v1.2.0 // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.8-0.20250403174932-29230038a667 // indirect

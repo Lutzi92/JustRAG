@@ -3,9 +3,8 @@ package biffxls
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
+	"errors"
 	"io"
-	"unicode/utf16"
 )
 
 type boundsheet struct {
@@ -30,7 +29,17 @@ type WorkSheet struct {
 	// completes.
 	Merged      [][4]int
 	lastFormula *FormulaCol
+	// parseErr holds the first error that ended record parsing for this
+	// sheet. FORK FIX: upstream printed it to stdout, which a library must
+	// never do; ParseErr lets the caller decide.
+	parseErr error
 }
+
+// ParseErr reports the error that ended record parsing for this sheet, or nil
+// when the sheet's records were consumed to the end-of-sheet marker. A
+// non-nil value means the rows already decoded are a prefix of the sheet.
+// FORK ADDITION.
+func (w *WorkSheet) ParseErr() error { return w.parseErr }
 
 func (w *WorkSheet) Row(i int) *Row {
 	row := w.rows[uint16(i)]
@@ -59,20 +68,23 @@ func (w *WorkSheet) Hidden() bool {
 
 // CellAt returns the typed value at (row, col), 0-based. ok is false when the
 // cell does not exist. FORK ADDITION.
+//
+// A single map lookup: addContent registers a span record (MULRK / MULBLANK /
+// HYPERLINK) under every column it covers. It used to be keyed on FirstCol
+// only, so every interior column of a span fell through to a full scan of the
+// row's map — O(n) per lookup, i.e. O(n²) for a row read left to right, and
+// nondeterministic when two spans overlap because Go randomises map iteration
+// order.
 func (w *WorkSheet) CellAt(row, col int) (CellValue, bool) {
 	r := w.rows[uint16(row)]
 	if r == nil {
 		return CellValue{}, false
 	}
-	if ch, ok := r.cols[uint16(col)]; ok {
-		return cellValueOf(ch, w.wb, 0), true
+	ch, ok := r.cols[uint16(col)]
+	if !ok {
+		return CellValue{}, false
 	}
-	for _, ch := range r.cols {
-		if int(ch.FirstCol()) <= col && col <= int(ch.LastCol()) {
-			return cellValueOf(ch, w.wb, col-int(ch.FirstCol())), true
-		}
-	}
-	return CellValue{}, false
+	return cellValueOf(ch, w.wb, col-int(ch.FirstCol())), true
 }
 
 func cellValueOf(ch contentHandler, wb *WorkBook, i int) CellValue {
@@ -97,7 +109,12 @@ func (w *WorkSheet) parse(buf io.ReadSeeker) {
 				break
 			}
 		} else {
-			fmt.Println(err)
+			// FORK FIX: upstream did fmt.Println(err) here — a library
+			// writing to stdout. io.EOF is the ordinary end of a stream that
+			// simply has no EOF record and is not worth reporting.
+			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				w.parseErr = err
+			}
 			break
 		}
 	}
@@ -168,6 +185,13 @@ func (w *WorkSheet) parseBof(buf io.ReadSeeker, b *bof, pre *bof) *bof {
 		col = new(NumberCol)
 		binary.Read(buf, binary.LittleEndian, col)
 	case 0x06: //FORMULA
+		// FORK FIX (ledger T6): the fixed FORMULA header is 20 bytes. A
+		// truncated record made `b.Size-20` underflow the uint16 into ~65k
+		// and constructed a cell from garbage; skip the body instead.
+		if b.Size < 20 {
+			buf.Seek(int64(b.Size), 1)
+			break
+		}
 		c := new(FormulaCol)
 		binary.Read(buf, binary.LittleEndian, &c.Header)
 		c.Bts = make([]byte, b.Size-20)
@@ -217,9 +241,15 @@ func (w *WorkSheet) parseBof(buf io.ReadSeeker, b *bof, pre *bof) *bof {
 				var upCount uint16
 				binary.Read(buf, binary.LittleEndian, &upCount)
 				binary.Read(buf, binary.LittleEndian, &count)
-				bts := make([]byte, count)
-				binary.Read(buf, binary.LittleEndian, &bts)
-				hy.ShortedFilePath = string(bts)
+				// FORK FIX: same unbounded, file-controlled make() as
+				// utf16String had; skip rather than allocate.
+				if count > maxUTF16Chars {
+					buf.Seek(int64(count), 1)
+				} else {
+					bts := make([]byte, count)
+					binary.Read(buf, binary.LittleEndian, &bts)
+					hy.ShortedFilePath = string(bts)
+				}
 				buf.Seek(24, 1)
 				binary.Read(buf, binary.LittleEndian, &count)
 				if count > 0 {
@@ -231,10 +261,9 @@ func (w *WorkSheet) parseBof(buf io.ReadSeeker, b *bof, pre *bof) *bof {
 		}
 		if flag&0x8 != 0 {
 			binary.Read(buf, binary.LittleEndian, &count)
-			var bts = make([]uint16, count)
-			binary.Read(buf, binary.LittleEndian, &bts)
-			runes := utf16.Decode(bts[:len(bts)-1])
-			hy.TextMark = string(runes)
+			// FORK FIX: was an inline copy of utf16String, sharing its
+			// count == 0 panic and its unbounded make().
+			hy.TextMark = b.utf16String(buf, count)
 		}
 
 		w.addRange(&hy.CellRange, &hy)
@@ -271,6 +300,12 @@ func (w *WorkSheet) addRange(rang Ranger, ch contentHandler) {
 	}
 }
 
+// maxSpanCols bounds how many column keys one span record may claim.
+// LastCol() comes from the file, so an unbounded loop here would be another
+// out-of-memory vector; 16384 is the widest column count any spreadsheet
+// format allows.
+const maxSpanCols = 16384
+
 func (w *WorkSheet) addContent(row_num uint16, ch contentHandler) {
 	var row *Row
 	var ok bool
@@ -279,7 +314,25 @@ func (w *WorkSheet) addContent(row_num uint16, ch contentHandler) {
 		info.Index = row_num
 		row = w.addRow(info)
 	}
-	row.cols[ch.FirstCol()] = ch
+	// FORK FIX: register under every column the record covers, not just its
+	// first — see CellAt. First registration wins, so an overlapping span
+	// (and a HYPERLINK record, which arrives after the cell records it
+	// covers) can no longer displace a value already stored for a column.
+	first, last := ch.FirstCol(), ch.LastCol()
+	if last < first {
+		last = first
+	}
+	if int(last)-int(first) >= maxSpanCols {
+		last = first + maxSpanCols - 1
+	}
+	for c := first; ; c++ {
+		if _, exists := row.cols[c]; !exists {
+			row.cols[c] = ch
+		}
+		if c == last { // compared here, not in the loop head: last may be 0xFFFF
+			break
+		}
+	}
 }
 
 func (w *WorkSheet) addRow(info *rowInfo) (row *Row) {
