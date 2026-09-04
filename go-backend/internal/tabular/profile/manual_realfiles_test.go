@@ -22,7 +22,9 @@ func TestManualRealFiles(t *testing.T) {
 		dataStart int
 		minCols   int
 	}{
-		"250314_Gebäudeliste für Maßnahmenplan gem. HKlimaG §7(9)_JLU.xlsx": {1: {profile.KindTable, 14, 20}, 3: {profile.KindTable, 5, 2}},
+		// Sheet 3 is the hidden `Dropdown` lookup sheet: fifteen small
+		// one-column lists, so the first table region carries a single column.
+		"250314_Gebäudeliste für Maßnahmenplan gem. HKlimaG §7(9)_JLU.xlsx": {1: {profile.KindTable, 14, 20}, 3: {profile.KindTable, 5, 1}},
 		"250803_Immobilienportfolioanalyse JLU__Stand August 2026.xlsx":     {0: {profile.KindTable, 5, 15}},
 		"Gebäudedaten der JLU aus CAFM.xlsx":                                {0: {profile.KindTable, 1, 23}},
 		"Raumdaten der JLU aus CAFM.xlsx":                                   {0: {profile.KindTable, 1, 31}},

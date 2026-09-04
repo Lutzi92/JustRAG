@@ -243,3 +243,86 @@ func TestDetectRegionsNewColumnBeforeContinuation(t *testing.T) {
 		t.Errorf("region[1]: expected {4,0,5,0,true}, got %+v", regs[1])
 	}
 }
+
+// realScore is DetectRegions' production scorer bound to s. The stubbed
+// scorers above deliberately never exercise headerScore's actual range.
+func realScore(s *sheetsource.Sample) HeaderScoreFunc {
+	return func(r int, reg Region) float64 { return headerScore(s, r, reg) }
+}
+
+func TestDetectRegionsGutterColumnMerged(t *testing.T) {
+	t.Parallel()
+	// Two three-column blocks separated by one blank column, filled on the
+	// same rows: one table with a spacer, not two regions.
+	s := grid(
+		"Nr|Name|Ort|.|Note|Jahr|BGF",
+		"1|A|X|.|#|#|#",
+		"2|B|Y|.|#|#|#",
+		"3|C|Z|.|#|#|#",
+	)
+	regs := DetectRegions(s, realScore(s))
+	if len(regs) != 1 || regs[0] != (Region{0, 0, 3, 6, true}) {
+		t.Errorf("regions = %+v", regs)
+	}
+}
+
+func TestDetectRegionsGutterOneColumnListsStaySplit(t *testing.T) {
+	t.Parallel()
+	s := grid(
+		"Ja / Nein|.|Priorisierung",
+		"Ja|.|hoch",
+		"Nein|.|mittel",
+	)
+	regs := DetectRegions(s, realScore(s))
+	if len(regs) != 2 || regs[0] != (Region{0, 0, 2, 0, true}) || regs[1] != (Region{0, 2, 2, 2, true}) {
+		t.Errorf("regions = %+v", regs)
+	}
+}
+
+func TestDetectRegionsGutterUnalignedRowsStaySplit(t *testing.T) {
+	t.Parallel()
+	// The narrower block is filled on 2 rows, the wider one on 6: a legend
+	// parked beside a table, not a second column group of it.
+	s := grid(
+		"Legende|kurz|.|Nr|Name|Ort",
+		"A|Alt|.|1|A|X",
+		".|.|.|2|B|Y",
+		".|.|.|3|C|Z",
+		".|.|.|4|D|W",
+		".|.|.|5|E|V",
+	)
+	regs := DetectRegions(s, realScore(s))
+	if len(regs) != 2 || regs[0] != (Region{0, 0, 1, 1, false}) || regs[1] != (Region{0, 3, 5, 5, true}) {
+		t.Errorf("regions = %+v", regs)
+	}
+}
+
+func TestDetectRegionsContinuationWithRealHeaderScore(t *testing.T) {
+	t.Parallel()
+	// headerScore's `distinct` and `coverage` terms are both 1.0 for any dense
+	// row, so a full-width data row scores ~0.49 and can never clear the
+	// absolute 0.35 bar. The relative arm is what merges this Sections-shaped
+	// sheet back into one region.
+	s := grid(
+		"Gebäude|Baujahr|BGF|Note",
+		"Hörsaalgebäude|#|#|#",
+		"Bibliothek|#|#|#",
+		"Mensa|#|#|#",
+		"Verwaltung|#|#|#",
+		"Werkstatt|#|#|#",
+		".|.|.|.",
+		"Institutsgebäude|#|#|#",
+		"Sporthalle|#|#|#",
+		"Rechenzentrum|#|#|#",
+		"Labor|#|#|#",
+		"Pförtnerloge|#|#|#",
+	)
+	boldRow(s, 0)
+	if got := headerScore(s, 7, Region{Top: 7, Left: 0, Bottom: 11, Right: 3, OpenEnded: true}); got < continuationHeaderScore {
+		t.Fatalf("fixture no longer exercises the relative arm: score(7) = %.4f < %.2f", got, continuationHeaderScore)
+	}
+	regs := DetectRegions(s, realScore(s))
+	if len(regs) != 1 || regs[0].Bottom != 11 {
+		t.Errorf("regions = %+v", regs)
+	}
+}
