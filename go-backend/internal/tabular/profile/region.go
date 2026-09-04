@@ -7,12 +7,6 @@ type HeaderScoreFunc func(rowIdx int, reg Region) float64
 
 const continuationHeaderScore = 0.35
 
-// regionWithBlockBottom tracks a region and its untrimmed row-block bottom.
-type regionWithBlockBottom struct {
-	region      Region
-	blockBottom int
-}
-
 func filledGrid(s *sheetsource.Sample) [][]bool {
 	g := make([][]bool, len(s.Rows))
 	for r := range s.Rows {
@@ -36,8 +30,11 @@ func filledGrid(s *sheetsource.Sample) [][]bool {
 
 func DetectRegions(s *sheetsource.Sample, score HeaderScoreFunc) []Region {
 	g := filledGrid(s)
-	var outInternal []regionWithBlockBottom
+	var out []Region
 	r := 0
+	prevBlockBottom := -2
+	var prevBlockRegions []int
+
 	for r < len(g) {
 		if !rowHasAny(g[r]) {
 			r++
@@ -49,23 +46,7 @@ func DetectRegions(s *sheetsource.Sample, score HeaderScoreFunc) []Region {
 		}
 		blockBottom := r - 1
 
-		// Snapshot previous block information before processing current block's candidates
-		// This prevents mutations during column block processing from affecting the lookup
-		prevBlockBottom := -1
-		prevBlockStart := -1
-		prevBlockEnd := len(outInternal)
-		if len(outInternal) > 0 {
-			prevBlockBottom = outInternal[len(outInternal)-1].blockBottom
-			prevBlockEnd = len(outInternal)
-			// Find the start index of the previous block
-			for i := len(outInternal) - 1; i >= 0; i-- {
-				if outInternal[i].blockBottom == prevBlockBottom {
-					prevBlockStart = i
-				} else {
-					break
-				}
-			}
-		}
+		var currentBlockRegions []int
 
 		c := 0
 		for c < s.Width {
@@ -92,46 +73,46 @@ func DetectRegions(s *sheetsource.Sample, score HeaderScoreFunc) []Region {
 
 			// Look for a previous-block region to merge with
 			merged := false
-			if prevBlockStart >= 0 && blockTop == prevBlockBottom+2 { // exactly one blank row between blocks
-				// Find overlapping region from previous block (using snapshot) with largest overlap
+			if blockTop == prevBlockBottom+2 && len(prevBlockRegions) > 0 { // exactly one blank row between blocks
+				// Find overlapping region from previous block with largest overlap
 				bestIdx := -1
 				bestOverlap := 0
-				for i := prevBlockEnd - 1; i >= prevBlockStart; i-- {
-					prevReg := outInternal[i].region
+				for _, idx := range prevBlockRegions {
+					prevReg := out[idx]
 					overlap := min(prevReg.Right, right) - max(prevReg.Left, left) + 1
 					narrow := min(prevReg.Right-prevReg.Left, right-left) + 1
 					if overlap > 0 && float64(overlap) >= 0.8*float64(narrow) {
 						if overlap > bestOverlap {
 							bestOverlap = overlap
-							bestIdx = i
+							bestIdx = idx
 						}
 					}
 				}
 				if bestIdx >= 0 && score(trimmedTop, reg) < continuationHeaderScore {
 					// Merge into found region
-					outInternal[bestIdx].region.Bottom = trimmedBottom
-					outInternal[bestIdx].region.OpenEnded = reg.OpenEnded
-					if reg.Left < outInternal[bestIdx].region.Left {
-						outInternal[bestIdx].region.Left = reg.Left
+					out[bestIdx].Bottom = trimmedBottom
+					out[bestIdx].OpenEnded = reg.OpenEnded
+					if reg.Left < out[bestIdx].Left {
+						out[bestIdx].Left = reg.Left
 					}
-					if reg.Right > outInternal[bestIdx].region.Right {
-						outInternal[bestIdx].region.Right = reg.Right
+					if reg.Right > out[bestIdx].Right {
+						out[bestIdx].Right = reg.Right
 					}
-					outInternal[bestIdx].blockBottom = blockBottom
+					currentBlockRegions = append(currentBlockRegions, bestIdx)
 					merged = true
 				}
 			}
 			if !merged {
-				outInternal = append(outInternal, regionWithBlockBottom{region: reg, blockBottom: blockBottom})
+				currentBlockRegions = append(currentBlockRegions, len(out))
+				out = append(out, reg)
 			}
 		}
+
+		// Update tracking for next block
+		prevBlockBottom = blockBottom
+		prevBlockRegions = currentBlockRegions
 	}
 
-	// Extract regions from internal representation
-	var out []Region
-	for _, rb := range outInternal {
-		out = append(out, rb.region)
-	}
 	return out
 }
 
