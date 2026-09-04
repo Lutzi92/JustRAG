@@ -82,7 +82,7 @@ func sniffDelimiter(head []byte) rune {
 type CSVSource struct {
 	path  string
 	delim rune
-	enc   string
+	enc   string // reflects only the 64 KiB sniff sample; ReadSheet re-decides on the full file
 }
 
 func OpenCSV(path string) (*CSVSource, error) {
@@ -118,8 +118,9 @@ func (s *CSVSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
 	r.Comma = s.delim
 	r.FieldsPerRecord = -1
 	r.LazyQuotes = true
-	r.TrimLeadingSpace = true
-	for i := 0; ; i++ {
+	r.TrimLeadingSpace = s.delim != '\t'
+	lastRowIdx := -1
+	for {
 		rec, err := r.Read()
 		if err == io.EOF {
 			break
@@ -127,6 +128,19 @@ func (s *CSVSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
 		if err != nil {
 			return ex, err
 		}
+		line, _ := r.FieldPos(0) // 1-based line number
+		physicalIdx := line - 1  // convert to 0-based
+		// Deliver gap rows (nil) for skipped indices
+		for i := lastRowIdx + 1; i < physicalIdx; i++ {
+			if err := fn(i, nil); err != nil {
+				if err == ErrStop {
+					ex.RowCount = i + 1
+					return ex, nil
+				}
+				return ex, err
+			}
+		}
+		// Deliver the current record
 		cells := make([]Cell, len(rec))
 		for j, v := range rec {
 			cells[j] = Cell{Kind: KindText, Raw: v, Formatted: v}
@@ -137,14 +151,15 @@ func (s *CSVSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
 		if len(cells) > ex.MaxCol {
 			ex.MaxCol = len(cells)
 		}
-		if err := fn(i, cells); err != nil {
+		if err := fn(physicalIdx, cells); err != nil {
 			if err == ErrStop {
-				ex.RowCount = i + 1
+				ex.RowCount = physicalIdx + 1
 				return ex, nil
 			}
 			return ex, err
 		}
-		ex.RowCount = i + 1
+		lastRowIdx = physicalIdx
+		ex.RowCount = physicalIdx + 1
 	}
 	return ex, nil
 }
