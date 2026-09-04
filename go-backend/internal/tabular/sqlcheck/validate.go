@@ -322,15 +322,47 @@ func checkQualifiedName(n *tree.UnresolvedName, declaredAliases, allowedTables m
 // regnamespace, ...) resolves an arbitrary string to a catalog OID at
 // execution time — a second, un-audited object-name-to-existence oracle
 // alongside the table/function allowlists — and is rejected too.
+//
+// Fix round 4 (NEW-A): the reg* test must run on the ELEMENT type, not on
+// the target type as written. An ARRAY of a reg* type is its own *types.T
+// whose PGName() follows Postgres's array-name convention — a leading
+// underscore, e.g. "_regclass" — so a HasPrefix(…, "reg") test on the
+// outer type silently missed every array shape ('{pg_class}'::regclass[],
+// CAST(x AS regclass[]), :::regclass[], ::regclass ARRAY, ::regproc[], …),
+// and ('{pg_class}'::regclass[])[1]::oid was then a working catalog-OID
+// oracle (proven live). findRegType peels ARRAY wrappers (and descends
+// into tuple members, same bug class) before the prefix test.
 func checkCastType(t tree.ResolvableTypeReference) error {
 	typ, ok := t.(*types.T)
 	if !ok {
 		return fmt.Errorf("sqlcheck: qualified or unknown cast type is not allowed")
 	}
-	if strings.HasPrefix(strings.ToLower(typ.PGName()), "reg") {
-		return fmt.Errorf("sqlcheck: cast to %q is not allowed", typ.PGName())
+	if bad := findRegType(typ, 0); bad != "" {
+		return fmt.Errorf("sqlcheck: cast to %q is not allowed", bad)
 	}
 	return nil
+}
+
+// findRegType returns the PGName of the first reg* type reachable from t
+// by peeling ARRAY wrappers and descending into tuple members, or "" when
+// there is none. depth is a guard against a pathological or cyclic type
+// graph; the nesting a parser-produced type can carry is single-digit.
+func findRegType(t *types.T, depth int) string {
+	if t == nil || depth > 16 {
+		return ""
+	}
+	if name := t.PGName(); strings.HasPrefix(strings.ToLower(name), "reg") {
+		return name
+	}
+	if elem := t.ArrayContents(); elem != nil {
+		return findRegType(elem, depth+1)
+	}
+	for _, member := range t.TupleContents() {
+		if bad := findRegType(member, depth+1); bad != "" {
+			return bad
+		}
+	}
+	return ""
 }
 
 // limitCount extracts a top-level LIMIT count as a plain int for the

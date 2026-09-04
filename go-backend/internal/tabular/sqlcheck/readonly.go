@@ -92,19 +92,32 @@ func ReadOnlyShape(q string) error {
 //     opening quote at the position of the escaped `'`, followed by a
 //     doubled-quote escape, and stays open past where Postgres actually
 //     closed the string.
-//   - U&'...' / u&'...'   Unicode escape string: treated the same as an
-//     E-string (backslash-escape-next). Real Postgres syntax only uses
-//     backslash there for \XXXX code points, never immediately before a
-//     quote character, so treating it as a superset of the real escaping
-//     rule is safe — it can only recognize a boundary AT LEAST as late
-//     as Postgres would, never earlier.
+//   - U&'...' / u&'...'   Unicode escape string: ” is the only
+//     escaped-quote form, exactly as for a plain '...' string. Postgres
+//     has NO lexer-level backslash escape here (fix round 4, NEW-B): the
+//     \XXXX Unicode escapes are decoded AFTER lexing, and UESCAPE can
+//     rebind the escape character to something else entirely, so the
+//     lexer closes U&'\' at the quote right after the backslash. Scanning
+//     it with backslash-escaping made this scanner close LATER than
+//     Postgres — see the boundary-direction rule below.
 //   - "..."    quoted identifier: "" is the only escaped-quote form.
 //   - $$...$$ / $tag$...$tag$   dollar-quoted string: no escapes at all
 //     — the string ends only where the SAME opening delimiter recurs.
+//     The tag follows unquoted-identifier rules, so its first rune is a
+//     letter or "_" and never a digit (fix round 4, NEW-C: "$1$" is a
+//     positional parameter followed by "$", not a dollar-quote opener).
 //     Reported back via the foundDollarQuote return so the caller can
 //     reject it (R46) without a separate raw-text regex, which would
 //     also misfire on a "$" that is itself inside another literal (e.g.
 //     'a$b$c' or "a$b$c").
+//
+// Boundary direction is the safety property: this scanner must never
+// recognize a literal's closing boundary LATER than Postgres does —
+// blanking text Postgres actually executes could hide a ";", a comment
+// marker or a DDL keyword from ReadOnlyShape's checks. Closing EARLIER
+// than Postgres is only a false-reject risk (literal content reaching
+// the checks as if it were SQL), which is why each form above is scanned
+// with exactly Postgres's own escaping rule rather than a superset.
 //
 // terminated is false if any literal never closes (ran off the end of
 // q) — Postgres's own lexer would raise "unterminated string" for the
@@ -139,7 +152,12 @@ func stripLiterals(q string) (stripped string, foundDollarQuote, terminated bool
 			for j < len(r) && (r[j] == '_' || unicode.IsLetter(r[j]) || unicode.IsDigit(r[j])) {
 				j++
 			}
-			if j < len(r) && r[j] == '$' {
+			// NEW-C: a dollar-quote tag follows unquoted-identifier rules,
+			// so a non-empty tag never starts with a digit — "$1$" is the
+			// positional parameter $1 followed by a "$", not an opener.
+			// Treating it as one would blank real SQL after it.
+			validTag := j == i+1 || !unicode.IsDigit(r[i+1])
+			if validTag && j < len(r) && r[j] == '$' {
 				delim := r[i : j+1]
 				foundDollarQuote = true
 				end, ok := indexDelim(r, j+1, delim)
@@ -164,7 +182,10 @@ func stripLiterals(q string) (stripped string, foundDollarQuote, terminated bool
 			i = end
 
 		case (c == 'U' || c == 'u') && i+2 < len(r) && r[i+1] == '&' && r[i+2] == '\'' && !isWord(i-1):
-			end, ok := scanQuoted(r, i+3, '\'', true)
+			// NEW-B: no backslash escaping — Postgres's lexer closes a
+			// U&'...' string on the first undoubled quote, whatever
+			// precedes it.
+			end, ok := scanQuoted(r, i+3, '\'', false)
 			if !ok {
 				terminated = false
 			}

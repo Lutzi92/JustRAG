@@ -270,6 +270,43 @@ func TestValidateRejectsQualifiedCastTypes(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsRegTypeArrays is the NEW-A fix (fix round 4): an
+// ARRAY of a reg* type resolves to a *types.T whose PGName() is the
+// Postgres array name — "_regclass", with a LEADING UNDERSCORE — so the
+// reg* prefix test on the target type as written missed every array
+// shape, and ('{pg_class}'::regclass[])[1]::oid was a working catalog-OID
+// oracle (proven against the live database). The check now peels ARRAY
+// wrappers before the prefix test.
+func TestValidateRejectsRegTypeArrays(t *testing.T) {
+	t.Parallel()
+	bad := map[string]string{
+		"regclass-array-postfix":  `SELECT '{pg_class}'::regclass[] FROM tabular."sheet_ab12_0_0"`,
+		"regclass-array-oracle":   `SELECT ('{pg_class}'::regclass[])[1]::oid FROM tabular."sheet_ab12_0_0"`,
+		"regclass-array-cast":     `SELECT CAST('{pg_class}' AS regclass[]) FROM tabular."sheet_ab12_0_0"`,
+		"regclass-array-annotate": `SELECT ('{pg_class}':::regclass[]) FROM tabular."sheet_ab12_0_0"`,
+		"regclass-array-keyword":  `SELECT '{pg_class}'::regclass ARRAY FROM tabular."sheet_ab12_0_0"`,
+		"regproc-array":           `SELECT '{count}'::regproc[] FROM tabular."sheet_ab12_0_0"`,
+		"regtype-array":           `SELECT '{int4}'::regtype[] FROM tabular."sheet_ab12_0_0"`,
+		"regnamespace-array":      `SELECT '{public}'::regnamespace[] FROM tabular."sheet_ab12_0_0"`,
+	}
+	for name, sql := range bad {
+		if _, _, err := Validate(sql, allow, 200); err == nil {
+			t.Errorf("%s: accepted %q", name, sql)
+		}
+	}
+
+	accept := map[string]string{
+		"text-array":         `SELECT '{a,b}'::text[] FROM tabular."sheet_ab12_0_0"`,
+		"int-array":          `SELECT '{1,2}'::int[] FROM tabular."sheet_ab12_0_0"`,
+		"text-array-keyword": `SELECT '{a,b}'::text ARRAY FROM tabular."sheet_ab12_0_0"`,
+	}
+	for name, sql := range accept {
+		if _, _, err := Validate(sql, allow, 200); err != nil {
+			t.Errorf("%s: rejected %q: %v", name, sql, err)
+		}
+	}
+}
+
 // TestValidateRejectsLockingClause is the R56 fix: tree.Select.Locking
 // (FOR UPDATE/SHARE/KEY SHARE/NO KEY UPDATE, optionally OF <table>) was
 // never visited, so both the clause itself and any target table it named
@@ -360,6 +397,83 @@ func TestReadOnlyShapeLiteralTokenizer(t *testing.T) {
 	}
 	if err := ReadOnlyShape(`SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = 'unterminated`); err == nil {
 		t.Error("an unterminated string literal must be rejected")
+	}
+}
+
+// TestReadOnlyShapeUnicodeEscapeString is the NEW-B fix (fix round 4):
+// Postgres has NO lexer-level backslash escape inside U&'…' — the \XXXX
+// escapes are decoded after lexing and UESCAPE can rebind the escape
+// character — so the lexer closes U&'\' at the quote right after the
+// backslash. Scanning it with backslash-escaping made stripLiterals close
+// LATER than Postgres and blank real SQL that follows, which is the
+// direction that can hide a ";"/comment/DDL keyword from the checks. The
+// assertions pin the rejection REASON, because the old behaviour also
+// rejected the payload — but for the wrong reason (a runaway literal),
+// which is an accident of quote parity, not a guarantee.
+func TestReadOnlyShapeUnicodeEscapeString(t *testing.T) {
+	t.Parallel()
+	hidden := `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = U&'\' UESCAPE '!' ; DROP TABLE x`
+	err := ReadOnlyShape(hidden)
+	if err == nil {
+		t.Fatalf("accepted %q", hidden)
+	}
+	if !strings.Contains(err.Error(), "only one statement") {
+		t.Errorf("the ; after the U&'' literal must be visible to the statement check, got %v", err)
+	}
+
+	accept := map[string]string{
+		"unicode-escape":         `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = U&'\0041'`,
+		"custom-uescape":         `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = U&'!0041' UESCAPE '!'`,
+		"doubled-quote-in-ustr":  `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = U&'it''s'`,
+		"backslash-then-content": `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = U&'\' UESCAPE '!' AND "b" = 'x'`,
+	}
+	for name, sql := range accept {
+		if err := ReadOnlyShape(sql); err != nil {
+			t.Errorf("%s: rejected %q: %v", name, sql, err)
+		}
+	}
+}
+
+// TestReadOnlyShapeDollarTag is the NEW-C fix (fix round 4): a
+// dollar-quote tag follows unquoted-identifier rules, so it never starts
+// with a digit — "$1$" is the positional parameter $1 followed by "$".
+// Reading it as an opener blanked everything up to the next "$1$", i.e.
+// real SQL Postgres executes. As with NEW-B the payload was rejected
+// either way, so the assertion pins the reason: without the fix it is
+// only R46's blanket dollar-quote ban that catches it, and the hidden ";"
+// is never seen at all.
+func TestReadOnlyShapeDollarTag(t *testing.T) {
+	t.Parallel()
+	hidden := `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE 1 = $1$ ; DROP TABLE x ; $1$`
+	err := ReadOnlyShape(hidden)
+	if err == nil {
+		t.Fatalf("accepted %q", hidden)
+	}
+	if !strings.Contains(err.Error(), "only one statement") {
+		t.Errorf("a digit-leading $1$ is not a dollar-quote opener, so the ; must stay visible, got %v", err)
+	}
+
+	accept := map[string]string{
+		"positional-param":    `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = 'x' AND 1 = $1`,
+		"dollar-in-ident":     `SELECT "a$1$b" FROM tabular."sheet_ab12_0_0"`,
+		"two-positional-args": `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = $1 AND "b" = $2`,
+	}
+	for name, sql := range accept {
+		if err := ReadOnlyShape(sql); err != nil {
+			t.Errorf("%s: rejected %q: %v", name, sql, err)
+		}
+	}
+
+	// R46 still stands for every genuine tag shape.
+	for _, sql := range []string{
+		`SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = $$x$$`,
+		`SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = $tag$x$tag$`,
+		`SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = $_t1$x$_t1$`,
+	} {
+		err := ReadOnlyShape(sql)
+		if err == nil || !strings.Contains(err.Error(), "dollar-quoted") {
+			t.Errorf("dollar-quoted literal must still be rejected as such: %q → %v", sql, err)
+		}
 	}
 }
 
