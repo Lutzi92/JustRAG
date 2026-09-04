@@ -72,11 +72,16 @@ func AssignRoles(s *sheetsource.Sample, reg Region, hb headerBlock) []ColumnProf
 			}
 			// idValueRe's digit-separator-digit shape also matches plain
 			// decimal numbers ("2143.28") and dd.mm.yyyy dates
-			// ("14.03.2025"); both are already unambiguously typed by the
-			// sheet or ParseDateText, so a pattern hit there is not
-			// evidence of an ID column.
-			if pat && cell.Kind != sheetsource.KindNumber && cell.Kind != sheetsource.KindDate {
-				if _, isDate := ParseDateText(cell.Raw); !isDate {
+			// ("14.03.2025"). Every CSV cell is KindText (no typed Number/
+			// Date kind to lean on), so a pattern hit only counts as ID
+			// evidence when the cell is untyped text AND it doesn't
+			// independently parse as a number (either decimal style) or a
+			// date.
+			if pat && cell.Kind == sheetsource.KindText {
+				_, okDot := ParseNumber(cell.Raw, false)
+				_, okComma := ParseNumber(cell.Raw, true)
+				_, isDate := ParseDateText(cell.Raw)
+				if !okDot && !okComma && !isDate {
 					cp.Stats.IDPattern++
 				}
 			}
@@ -148,23 +153,16 @@ func decideRole(s *sheetsource.Sample, reg Region, hb headerBlock, c int, cp *Co
 		return RoleMeasure
 	}
 
-	// Deviation from the brief's literal "distinct <= 20% of n": at small n
-	// (test fixture n=6) 20% rounds down to a single distinct value, which
-	// would reject the brief's own worked example (Denkmalschutz, 3 distinct
-	// of 6) while still admitting nothing. 50% is the threshold that
-	// classifies Denkmalschutz (3/6) as Category and Beschreibung (6/6) as
-	// Text, matching the brief's stated expected roles; see task-11-report.md
-	// for the stats and the DONE_WITH_CONCERNS note.
-	if len(cp.ListValues) > 0 || (n >= 5 && len(distinct) <= 50 && float64(len(distinct)) <= 0.5*float64(n)) {
+	if len(cp.ListValues) > 0 || (n >= 5 && len(distinct) <= 50 && float64(len(distinct)) <= max(3, 0.2*float64(n))) {
 		return RoleCategory
 	}
 
 	return RoleText
 }
 
-// fixedWidthCodes reports whether every non-null data value in column c is
-// an all-digit string of one identical length >= 4, with >= 90% of them
-// distinct (rule 1, fixed-width codes).
+// fixedWidthCodes reports whether every non-null data value in column c
+// (at least 3 of them) is an all-digit string of one identical length >= 4,
+// with >= 90% of them distinct (rule 1, fixed-width codes).
 func fixedWidthCodes(s *sheetsource.Sample, reg Region, hb headerBlock, c int, distinct map[string]int) bool {
 	width := -1
 	n := 0
@@ -187,7 +185,7 @@ func fixedWidthCodes(s *sheetsource.Sample, reg Region, hb headerBlock, c int, d
 		}
 		n++
 	}
-	if n == 0 || width < 4 {
+	if n < 3 || width < 4 {
 		return false
 	}
 	return float64(len(distinct)) >= 0.9*float64(n)
