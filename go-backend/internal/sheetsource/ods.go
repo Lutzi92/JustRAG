@@ -435,6 +435,13 @@ parse:
 				if !inTarget {
 					continue parse
 				}
+				// Only the last cell group processed in this row is
+				// eligible for trimming (LibreOffice's own padding block).
+				// A row can have several trailing empty groups (e.g. a
+				// small explicit blank group immediately followed by the
+				// number-columns-repeated padding to 16384); trimming only
+				// the final one preserves the earlier ones' column
+				// positions instead of collapsing them too.
 				if lastGroupEmpty && lastGroupLen > 0 && lastGroupLen <= len(row) {
 					row = row[:len(row)-lastGroupLen]
 				}
@@ -443,29 +450,35 @@ parse:
 					continue parse
 				}
 				for pendingGaps > 0 {
-					if err := deliver(rowIdx, nil); err != nil {
-						if err == ErrStop {
-							stoppedEarly = true
-							break parse
-						}
+					err := deliver(rowIdx, nil)
+					if err != nil && err != ErrStop {
 						return ex, err
 					}
+					// The row was delivered (fn ran, even if it then asked
+					// to stop) — count it before advancing/breaking.
 					ex.RowCount = rowIdx + 1
+					stop := err == ErrStop
 					rowIdx++
 					pendingGaps--
+					if stop {
+						stoppedEarly = true
+						break parse
+					}
 				}
 				for i := 0; i < rowRepeat; i++ {
 					cp := make([]Cell, len(row))
 					copy(cp, row)
-					if err := deliver(rowIdx, cp); err != nil {
-						if err == ErrStop {
-							stoppedEarly = true
-							break parse
-						}
+					err := deliver(rowIdx, cp)
+					if err != nil && err != ErrStop {
 						return ex, err
 					}
 					ex.RowCount = rowIdx + 1
+					stop := err == ErrStop
 					rowIdx++
+					if stop {
+						stoppedEarly = true
+						break parse
+					}
 				}
 			case "table":
 				if inTarget {

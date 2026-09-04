@@ -238,3 +238,121 @@ func TestODSInMemoryDocument(t *testing.T) {
 		t.Errorf("validation sqref = %+v", v.Sqref)
 	}
 }
+
+const odsThreeRowsDoc = `<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content
+  xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  office:version="1.4">
+  <office:body>
+    <office:spreadsheet>
+      <table:table table:name="Main">
+        <table:table-row>
+          <table:table-cell office:value-type="string"><text:p>R0</text:p></table:table-cell>
+          <table:table-cell table:number-columns-repeated="16383"/>
+        </table:table-row>
+        <table:table-row>
+          <table:table-cell office:value-type="string"><text:p>R1</text:p></table:table-cell>
+          <table:table-cell table:number-columns-repeated="16383"/>
+        </table:table-row>
+        <table:table-row>
+          <table:table-cell office:value-type="string"><text:p>R2</text:p></table:table-cell>
+          <table:table-cell table:number-columns-repeated="16383"/>
+        </table:table-row>
+      </table:table>
+    </office:spreadsheet>
+  </office:body>
+</office:document-content>`
+
+// TestODSErrStopRowCount verifies that SheetExtras.RowCount counts the row
+// on which the callback returned ErrStop: that row was delivered (fn ran on
+// it) before it asked to stop, so it must be included, per the RowCount doc
+// ("rows delivered, gaps included") and matching XLSXSource's behavior.
+func TestODSErrStopRowCount(t *testing.T) {
+	t.Parallel()
+	path := buildODS(t, odsThreeRowsDoc)
+	src, err := OpenODS(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	delivered := 0
+	ex, err := src.ReadSheet(0, func(i int, cells []Cell) error {
+		delivered++
+		if i == 1 {
+			return ErrStop
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ReadSheet returned err = %v, want nil (ErrStop is swallowed)", err)
+	}
+	if delivered != 2 {
+		t.Fatalf("delivered = %d, want 2", delivered)
+	}
+	if ex.RowCount != 2 {
+		t.Errorf("RowCount = %d, want 2 (the stopping row, index 1, must be counted)", ex.RowCount)
+	}
+}
+
+const odsCoveredRepeatDoc = `<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content
+  xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  office:version="1.4">
+  <office:body>
+    <office:spreadsheet>
+      <table:table table:name="Main">
+        <table:table-row>
+          <table:table-cell office:value-type="string"><text:p>A</text:p></table:table-cell>
+          <table:covered-table-cell table:number-columns-repeated="3"/>
+          <table:table-cell office:value-type="string"><text:p>E</text:p></table:table-cell>
+          <table:table-cell table:number-columns-repeated="16380"/>
+        </table:table-row>
+      </table:table>
+    </office:spreadsheet>
+  </office:body>
+</office:document-content>`
+
+// TestODSCoveredCellRepeatAlignment covers a <table:covered-table-cell>
+// that itself carries number-columns-repeated (distinct from the plain,
+// single covered cell already exercised by the real-fixture test): it must
+// expand to that many blank Cell{} entries without shifting the column
+// index of what follows.
+func TestODSCoveredCellRepeatAlignment(t *testing.T) {
+	t.Parallel()
+	path := buildODS(t, odsCoveredRepeatDoc)
+	src, err := OpenODS(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	var got []Cell
+	_, err = src.ReadSheet(0, func(i int, cells []Cell) error {
+		if i == 0 {
+			got = cells
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("row width = %d, want 5: %+v", len(got), got)
+	}
+	if got[0].Raw != "A" {
+		t.Errorf("A = %+v", got[0])
+	}
+	for i := 1; i <= 3; i++ {
+		if !got[i].IsEmpty() {
+			t.Errorf("covered cell %d not empty: %+v", i, got[i])
+		}
+	}
+	if got[4].Raw != "E" {
+		t.Errorf("E must stay at column 4, got %+v", got[4])
+	}
+}
