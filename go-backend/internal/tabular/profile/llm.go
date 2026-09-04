@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -126,24 +127,52 @@ func llmAcceptableKind(k SheetKind) bool {
 // one-sentence gloss.
 const maxDescriptionRunes = 300
 
+// filterHeaderRows validates a proposed HeaderRows override against the
+// region's own row bounds [top, bottom]: rows is LLM output steered by
+// spreadsheet cell content (the model can invent or copy a row number from
+// anywhere in its context), so it is not trusted verbatim. Out-of-range
+// indices are dropped; the remainder is deduped and sorted ascending. A
+// nil/empty result (every proposed row was out of range) signals "do not
+// override" to the caller.
+func filterHeaderRows(rows []int, top, bottom int) []int {
+	seen := make(map[int]bool, len(rows))
+	out := make([]int, 0, len(rows))
+	for _, r := range rows {
+		if r < top || r > bottom || seen[r] {
+			continue
+		}
+		seen[r] = true
+		out = append(out, r)
+	}
+	sort.Ints(out)
+	return out
+}
+
 // ApplyLLM merges an ai.SheetProfileProposal into rp (spec §3.2 / §6.6):
 //
 //   - Column descriptions are taken from the proposal for every column
 //     whose Index matches a column already in rp, UNLESS the description
 //     LooksLikeInstruction or exceeds maxDescriptionRunes — those are
 //     dropped and counted in Diagnostics["descriptions_filtered"].
-//   - Kind, HeaderRows (and DataStart, derived from the new HeaderRows),
-//     and per-column roles are overridden ONLY when the heuristic was not
-//     confident (heuristicConf < opts.Threshold) AND the proposal is
-//     confident (prop.Confidence >= opts.Threshold). Role overrides are
-//     additionally restricted to id/category/text (see llmAcceptableRole).
+//   - Kind, HeaderRows (and DataStart, derived from the validated
+//     HeaderRows), and per-column roles are overridden ONLY when the
+//     heuristic was not confident (heuristicConf < opts.Threshold) AND the
+//     proposal is confident (prop.Confidence >= opts.Threshold). Role
+//     overrides are additionally restricted to id/category/text (see
+//     llmAcceptableRole). HeaderRows overrides are additionally validated
+//     against the region's own [Region.Top, Region.Bottom] bounds (see
+//     filterHeaderRows) — a proposal whose rows are all out of range does
+//     not override HeaderRows/DataStart at all, even when the gate is open.
 //   - rp.UsedLLM is always set to true (the call was made, whether or not
 //     anything was actually overridden).
 //   - Every role/kind disagreement between the heuristic and the proposal
 //     is recorded in Diagnostics["llm_disagreements"] as a
-//     "column N: old->new" / "kind: old->new" string, whether or not it
-//     was accepted — this is the operator-visible signal of how often the
-//     heuristic and the LLM disagree, independent of the gate.
+//     "column N: old->new" / "kind: old->new" string, UNCONDITIONALLY —
+//     independent of whether the override gate is open, and independent of
+//     whether the proposed kind is even one ApplyLLM would ever accept.
+//     This is the operator-visible signal of how often the heuristic and
+//     the LLM disagree; gating it on override would hide every
+//     disagreement a confident heuristic correctly overruled.
 //
 // No-op when opts.Enabled is false.
 func ApplyLLM(rp *RegionProfile, prop ai.SheetProfileProposal, heuristicConf float64, opts LLMOptions) {
@@ -192,16 +221,22 @@ func ApplyLLM(rp *RegionProfile, prop ai.SheetProfileProposal, heuristicConf flo
 		}
 	}
 
+	// Kind disagreement is recorded regardless of the override gate — see
+	// the doc comment above. Only the actual assignment is gated.
+	propKind := SheetKind(prop.Kind)
+	if propKind != "" && propKind != rp.Kind {
+		disagreements = append(disagreements, fmt.Sprintf("kind: %s->%s", rp.Kind, propKind))
+	}
+
 	if override {
-		if k := SheetKind(prop.Kind); llmAcceptableKind(k) {
-			if k != rp.Kind {
-				disagreements = append(disagreements, fmt.Sprintf("kind: %s->%s", rp.Kind, k))
-			}
-			rp.Kind = k
+		if llmAcceptableKind(propKind) {
+			rp.Kind = propKind
 		}
 		if len(prop.HeaderRows) > 0 {
-			rp.HeaderRows = prop.HeaderRows
-			rp.DataStart = prop.HeaderRows[len(prop.HeaderRows)-1] + 1
+			if valid := filterHeaderRows(prop.HeaderRows, rp.Region.Top, rp.Region.Bottom); len(valid) > 0 {
+				rp.HeaderRows = valid
+				rp.DataStart = valid[len(valid)-1] + 1
+			}
 		}
 	}
 
