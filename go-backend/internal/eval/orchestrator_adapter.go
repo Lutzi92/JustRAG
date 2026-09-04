@@ -184,10 +184,15 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 	if orchestrator == OrchestratorStandard {
 		out, err := a.prod.Search(ctx, q, k)
 		if err == nil {
+			var tab *TabularEvalTrace
+			if chatCtx, hit := a.prod.ChatContextForQuestion(q.ID); hit {
+				tab = TabularEvalTraceFrom(chatCtx.TabularTrace)
+			}
 			a.traceCache[q.ID] = &AgentTrace{
 				Orchestrator:        OrchestratorStandard,
 				ClassifiedQueryType: queryType,
 				DispatchReason:      dispatchReason,
+				Tabular:             tab,
 			}
 		}
 		return out, err
@@ -269,6 +274,11 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 
 	trace := BuildAgentTrace(orchestrator, dispatchReason, events, planInputs)
 	trace.ClassifiedQueryType = queryType
+	// Only the Supervisor path actually runs the tabular router today
+	// (RunPlanExecuteChat / RunAgenticChat never set TabularTrace), so
+	// this is a no-op for those orchestrators — TabularEvalTraceFrom
+	// returns nil for a nil TabularTrace.
+	trace.Tabular = TabularEvalTraceFrom(chatCtx.TabularTrace)
 	a.traceCache[q.ID] = trace
 	a.chunkCache[q.ID] = chatCtx.FinalChunks
 

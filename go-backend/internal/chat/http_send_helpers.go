@@ -693,7 +693,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	// mutates the painted answer in place. The full refined text
 	// is still persisted to DB by runPostResponseTasks.
 	emit := func(pl map[string]any) { writeSSE(ctx, w, pl) }
-	followUps, verification, _ := h.runPostResponseTasks(ctx, p.userMessage, fullResponse, p.chatCtx.Context, p.kbID, p.lang, aiMsg.ID, p.chatCtx.Sources, emit)
+	followUps, verification, _ := h.runPostResponseTasks(ctx, p.userMessage, fullResponse, p.chatCtx.Context, p.kbID, p.lang, aiMsg.ID, p.chatCtx.Sources, emit, p.chatCtx.TabularTrace)
 	if len(followUps) > 0 {
 		writeSSE(ctx, w, map[string]any{"followUpQuestions": followUps})
 	}
@@ -781,7 +781,7 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 
 	// Non-streaming path: no SSE channel exists, so emit is nil.
 	// The refined answer surfaces via the JSON `answer` field instead.
-	followUps, verification, refinedAnswer := h.runPostResponseTasks(ctx, p.userMessage, result.Content, p.chatCtx.Context, p.kbID, p.lang, aiMsg.ID, p.chatCtx.Sources, nil)
+	followUps, verification, refinedAnswer := h.runPostResponseTasks(ctx, p.userMessage, result.Content, p.chatCtx.Context, p.kbID, p.lang, aiMsg.ID, p.chatCtx.Sources, nil, p.chatCtx.TabularTrace)
 
 	if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsValid() {
 		if err := h.store.UpdateMessageTraceID(ctx, aiMsg.ID, sc.TraceID().String()); err != nil {

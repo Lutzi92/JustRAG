@@ -1024,10 +1024,16 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 	// same boundary as the sql_query / table_query tools: LLM-authored SQL
 	// never touches the read/write pool. Left nil otherwise, which makes
 	// the router a no-op on every chat turn.
+	// tabularCatalog is the single main-pool tabular.Catalog instance shared
+	// by the router, the chart-guidance gate (WithTabularCatalog) and the
+	// SQL query-log writer (WithTabularQueryLog) — all three read/write the
+	// same tabular_* tables, so one *Catalog per pool is all that's needed.
+	tabularCatalog := tabular.NewCatalog(rc.infra.db.Main)
+
 	var tabularRouter *chat.TabularRouter
 	if rc.infra.sqlToolDB != nil {
 		tabularRouter = chat.NewTabularRouter(
-			tabular.NewCatalog(rc.infra.db.Main),
+			tabularCatalog,
 			sqlexec.NewReadOnly(rc.infra.sqlToolDB),
 			func(ctx context.Context, req ai.TabularSQLRequest, kbID, model string) (ai.TabularSQLProposal, error) {
 				return ai.GenerateTabularSQL(ctx, rc.aiResolver, req, kbID, model)
@@ -1057,7 +1063,11 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 		chat.WithKBRouterCandidates(kbRouterLister),
 		chat.WithKGStore(rc.kgStore),
 		chat.WithLongmemStore(longmemStore),
-		chat.WithTabularCatalog(tabular.NewCatalog(rc.infra.db.Main)),
+		chat.WithTabularCatalog(tabularCatalog),
+		// SQL audit log (Task 7, R26): one tabular_query_log row per turn
+		// the router had an opinion on, written post-response with the AI
+		// message id. Same catalog/pool as the router above.
+		chat.WithTabularQueryLog(tabularCatalog),
 		// Phase F RAPTOR: vector.ChunkService implements the
 		// RaptorDescendantsResolver shape via
 		// GetRaptorDescendantLeafContentsAcrossDims. When summary

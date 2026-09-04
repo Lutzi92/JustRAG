@@ -58,6 +58,7 @@ func RunEval(ctx context.Context, searcher Searcher, questions []Question, k int
 	rep.RouteAggregates = AggregateByRoute(rep.Questions, k)
 	rep.OrchestratorAggregates = AggregateByOrchestrator(rep.Questions, k)
 	rep.RoutingAccuracy = RoutingAccuracy(rep.Questions)
+	rep.TabularRouterFireRate, rep.TabularSQLErrorRate = TabularRouterRates(rep.Questions)
 	return rep, nil
 }
 
@@ -247,5 +248,6 @@ func RunEvalWithJudge(ctx context.Context, searcher Searcher, questions []Questi
 	rep.RouteAggregates = AggregateByRoute(rep.Questions, k)
 	rep.OrchestratorAggregates = AggregateByOrchestrator(rep.Questions, k)
 	rep.RoutingAccuracy = RoutingAccuracy(rep.Questions)
+	rep.TabularRouterFireRate, rep.TabularSQLErrorRate = TabularRouterRates(rep.Questions)
 	return rep, nil
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/safego"
+	"github.com/justrag/go-backend/internal/tabular"
 )
 
 // detachedContext returns a fresh background context that carries any
@@ -100,6 +101,7 @@ func (h *Handler) runPostResponseTasks(
 	userMessage, aiResponse, contextText, kbID, lang, aiMsgID string,
 	sources []ChatSource,
 	emit func(map[string]any),
+	trace *TabularTrace,
 ) ([]string, *MessageVerification, string) {
 	// Detach from client disconnect: the AI message is already persisted by
 	// the time we run, so letting a disconnect cancel this work would
@@ -155,6 +157,35 @@ func (h *Handler) runPostResponseTasks(
 				h.runLongmemExtract(ctx, user.ID, kbID, lang, userMessage, aiResponse)
 			})
 		}
+	}
+
+	// Tabular router SQL audit log (Task 7, R26): write one
+	// tabular_query_log row for every turn the router had an opinion
+	// on — including skipped outcomes, which are cheap and are what
+	// makes fire-rate analysis possible from the table alone. Runs
+	// only when a router is actually wired (trace != nil, set by
+	// PrepareChatContext/RunSupervisorChat) and a logger is
+	// configured (WithTabularQueryLog); either being absent is a
+	// normal deployment shape, not an error. Fire-and-forget: a
+	// failed insert only costs one row of observability, never the
+	// chat turn, so it logs a warning and moves on.
+	if trace != nil && h.tabularQueryLog != nil {
+		wg.Add(1)
+		safego.GoCtx(ctx, func() {
+			defer wg.Done()
+			entry := tabular.QueryLogEntry{
+				KBID:      kbID,
+				MessageID: aiMsgID,
+				Question:  trace.Question,
+				SQL:       trace.SQL,
+				RowCount:  trace.RowCount,
+				Outcome:   trace.Outcome,
+			}
+			if err := h.tabularQueryLog.InsertQueryLog(ctx, entry); err != nil {
+				logctx.From(ctx).Warn("tabular query log insert failed",
+					"kbId", kbID, "messageId", aiMsgID, "outcome", trace.Outcome, "err", err)
+			}
+		})
 	}
 
 	// Citation validator + factuality verifier share one goroutine so the

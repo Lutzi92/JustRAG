@@ -135,6 +135,32 @@ func (a *ProductionContextAdapter) Search(ctx context.Context, q Question, k int
 	return out, nil
 }
 
+// AgentTraceForQuestion satisfies the agentTracer interface RunEval
+// detects via type assertion. ProductionContextAdapter doesn't dispatch
+// through an orchestrator, so every field except Tabular stays zero — this
+// exists solely so a --production-context run without
+// --orchestrator-dispatch still surfaces the tabular router's decision
+// (chatCtx.TabularTrace, set by PrepareChatContext when a.tabularRouter is
+// non-nil) in the report. Returns nil when no ChatContext was cached for
+// questionID (search errored) or the cached ChatContext carries no tabular
+// trace (no router wired, or the router didn't fire) — either way
+// QuestionReport.Agent stays nil, keeping legacy report shapes byte-stable
+// for runs without the router attached.
+func (a *ProductionContextAdapter) AgentTraceForQuestion(questionID string) *AgentTrace {
+	if a.cache == nil {
+		return nil
+	}
+	c, ok := a.cache[questionID]
+	if !ok || c == nil {
+		return nil
+	}
+	tab := TabularEvalTraceFrom(c.TabularTrace)
+	if tab == nil {
+		return nil
+	}
+	return &AgentTrace{Tabular: tab}
+}
+
 // ChatContextForQuestion returns the cached ChatContext for judge-mode answer
 // generation. Returns (nil, false) if no retrieval was run for questionID
 // (e.g. it errored).

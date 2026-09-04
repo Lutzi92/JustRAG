@@ -22,6 +22,7 @@ import (
 	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/sessionmem"
 	"github.com/justrag/go-backend/internal/store"
+	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/vector"
 )
@@ -81,6 +82,19 @@ type Handler struct {
 	// ignored (feature not wired).
 	teamLoader    TeamLoader
 	usageRecorder usage.Recorder // optional, per-turn usage ledger (internal/usage)
+	// tabularQueryLog persists one row of the tabular router's SQL audit
+	// trail (tabular_query_log) per turn, written post-response with the
+	// AI message id. Optional — when nil, runPostResponseTasks skips the
+	// insert; the router's decision is still visible via TabularTrace on
+	// the eval harness and via trajectory events.
+	tabularQueryLog TabularQueryLogger
+}
+
+// TabularQueryLogger is the persistence surface the chat handler uses to
+// record one tabular-router decision/execution per turn. Satisfied by
+// *tabular.Catalog. Optional — when nil, no query-log row is written.
+type TabularQueryLogger interface {
+	InsertQueryLog(ctx context.Context, e tabular.QueryLogEntry) error
 }
 
 // TeamLoader loads user-created agent-team selections at chat time,
@@ -279,6 +293,17 @@ func WithRecencyLister(l RecencyLister) HandlerOption {
 func WithTabularRouter(r *TabularRouter) HandlerOption {
 	return func(h *Handler) {
 		h.tabularRouter = r
+	}
+}
+
+// WithTabularQueryLog attaches the tabular router's SQL audit-log writer.
+// Production wiring passes the same *tabular.Catalog used to build the
+// router (Task 4/routes.go) so both read the same tabular_query_log table.
+// Optional — when nil, runPostResponseTasks never writes a query-log row,
+// which only costs observability, never a chat turn.
+func WithTabularQueryLog(l TabularQueryLogger) HandlerOption {
+	return func(h *Handler) {
+		h.tabularQueryLog = l
 	}
 }
 

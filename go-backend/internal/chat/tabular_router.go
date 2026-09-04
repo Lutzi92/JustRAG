@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/justrag/go-backend/internal/ai"
+	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/promptsafety"
 	"github.com/justrag/go-backend/internal/tabular"
@@ -286,16 +287,16 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 
 		prop, err := r.gen(ctx, req, in.KbID, cfg.Model)
 		if err != nil {
-			// metrics: Task 7 (outcome llm_error)
 			res.Trace.Outcome = "llm_error"
+			observability.RecordTabularRouter(res.Trace.Outcome)
 			res.Addendum = r.attemptedOnly(in.Language)
 			return res
 		}
 		if prop.SQL == nil {
 			// The model declared the tables cannot answer the question.
 			// Repairing that is asking it to guess, so this is terminal.
-			// metrics: Task 7 (outcome fired_empty, reason unanswerable)
 			res.Trace.Outcome = "fired_empty"
+			observability.RecordTabularRouter(res.Trace.Outcome)
 			res.Addendum = r.attemptedOnly(in.Language)
 			emitTabular(in, map[string]any{"type": "tabular_router_skipped", "reason": "unanswerable"})
 			return res
@@ -326,9 +327,11 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 				failure, kind = "all aggregate values are NULL", failureEmpty
 			default:
 				// Success — a clean result is never re-reviewed.
-				// metrics: Task 7 (outcome fired_ok, rows, repairs)
 				res.Trace.Outcome = "fired_ok"
 				res.Trace.RowCount = out.RowCount
+				observability.RecordTabularRouter(res.Trace.Outcome)
+				observability.RecordTabularRouterRows(out.RowCount)
+				observability.RecordTabularRouterRepairs(res.Trace.Repairs)
 				emitTabular(in, map[string]any{"type": "tabular_router_sql", "sql": proposed})
 				emitTabular(in, map[string]any{
 					"type":      "tabular_router_rows",
@@ -360,7 +363,6 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 
 	// Repairs exhausted: tell the answer LLM the SQL path was tried so it
 	// falls back to the retrieved context instead of inventing numbers.
-	// metrics: Task 7 (outcome sql_error / validator_rejected / fired_empty)
 	switch lastKind {
 	case failureValidator:
 		res.Trace.Outcome = "validator_rejected"
@@ -369,6 +371,8 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 	default:
 		res.Trace.Outcome = "sql_error"
 	}
+	observability.RecordTabularRouter(res.Trace.Outcome)
+	observability.RecordTabularRouterRepairs(res.Trace.Repairs)
 	res.Addendum = r.attemptedOnly(in.Language)
 	return res
 }
@@ -377,8 +381,8 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 // result as-is — SearchQuery/ForceSimpleArm keep whatever the algorithm had
 // already established (a skip after the gate still forces the keyword arm).
 func (r *TabularRouter) skip(in TabularRouterInput, res TabularRouterResult, reason string) TabularRouterResult {
-	// metrics: Task 7 (outcome skipped_<reason>)
 	res.Trace.Outcome = "skipped_" + reason
+	observability.RecordTabularRouter(res.Trace.Outcome)
 	emitTabular(in, map[string]any{"type": "tabular_router_skipped", "reason": reason})
 	return res
 }
@@ -388,8 +392,8 @@ func (r *TabularRouter) skip(in TabularRouterInput, res TabularRouterResult, rea
 // made. res.Fired is left exactly as the caller had it — false before the
 // generation loop (no SQL call was made, R44), true once inside it.
 func (r *TabularRouter) cancelled(in TabularRouterInput, res TabularRouterResult) TabularRouterResult {
-	// metrics: Task 7 (outcome cancelled)
 	res.Trace.Outcome = "cancelled"
+	observability.RecordTabularRouter(res.Trace.Outcome)
 	res.Addendum = r.attemptedOnly(in.Language)
 	return res
 }

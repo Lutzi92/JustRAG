@@ -119,6 +119,16 @@ Aggregate (k=%d, count=%d):
 			fmt.Fprintf(w, "  %-20s %.3f (%d/%d)\n", e, acc, b.Correct, b.Scored)
 		}
 	}
+	if rep.TabularRouterFireRate != nil || rep.TabularSQLErrorRate != nil {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Tabular router:")
+		if rep.TabularRouterFireRate != nil {
+			fmt.Fprintf(w, "  fire_rate      = %.3f (of lookup/complex_reasoning questions)\n", *rep.TabularRouterFireRate)
+		}
+		if rep.TabularSQLErrorRate != nil {
+			fmt.Fprintf(w, "  sql_error_rate = %.3f (of fired questions)\n", *rep.TabularSQLErrorRate)
+		}
+	}
 	if rep.DepthBuckets != nil {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "Depth buckets (k=%d, min_total_chunks=%d, eligible_questions=%d):\n",

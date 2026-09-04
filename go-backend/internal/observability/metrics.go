@@ -9,6 +9,7 @@ import (
 	"context"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -2393,4 +2394,85 @@ func RecordTabularProfileLLM(outcome string) {
 		outcome = "error"
 	}
 	tabularProfileLLMTotal.WithLabelValues(outcome).Inc()
+}
+
+// --- Tabular deterministic SQL router (Task 7) -----------------------------
+
+var tabularRouterTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_tabular_router_total",
+		Help: "Per-outcome counter for the deterministic tabular SQL " +
+			"router (TabularRouter.Run, one call per chat turn on a KB " +
+			"with spreadsheet data). Outcome values: fired_ok (executed, " +
+			"non-empty rows), fired_empty (executed but empty/all-NULL, " +
+			"or the model declared the question unanswerable), " +
+			"sql_error (DB error after repairs exhausted), llm_error " +
+			"(SQL-generation call failed), validator_rejected (statement " +
+			"failed sqlcheck after repairs exhausted), cancelled (turn " +
+			"abandoned before/during generation), skipped (router did " +
+			"not fire — disabled, no tables, no cue, catalog error, " +
+			"schema empty; the specific reason lives on the trajectory " +
+			"event, not this label, to keep cardinality bounded).",
+		ConstLabels: commonLabels,
+	},
+	[]string{"outcome"},
+)
+
+var tabularRouterRows = promauto.NewHistogram(
+	prometheus.HistogramOpts{
+		Name:        "rag_tabular_router_rows",
+		Help:        "Row count of a fired-and-executed tabular router statement (fired_ok only).",
+		Buckets:     []float64{1, 5, 20, 50, 100, 200},
+		ConstLabels: commonLabels,
+	},
+)
+
+var tabularRouterRepairsTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name:        "rag_tabular_router_repairs_total",
+		Help:        "Count of repair rounds (SQL regenerated after a validator/DB/empty-result failure) across all tabular router turns.",
+		ConstLabels: commonLabels,
+	},
+)
+
+// tabularRouterKnownOutcomes are the outcome labels TabularRouter.Run
+// itself can produce verbatim; every "skipped_<reason>" value collapses to
+// "skipped" (bounded cardinality — the reason is still visible on the
+// tabular_router_skipped trajectory event).
+var tabularRouterKnownOutcomes = map[string]bool{
+	"fired_ok":           true,
+	"fired_empty":        true,
+	"sql_error":          true,
+	"llm_error":          true,
+	"validator_rejected": true,
+	"cancelled":          true,
+}
+
+// RecordTabularRouter increments the per-outcome counter for one
+// TabularRouter.Run call. Any "skipped_<reason>" value (and any other
+// unrecognized outcome) normalizes to "skipped"/"error" respectively so
+// caller-side typos surface visibly instead of silently growing the label
+// cardinality.
+func RecordTabularRouter(outcome string) {
+	switch {
+	case tabularRouterKnownOutcomes[outcome]:
+	case strings.HasPrefix(outcome, "skipped"):
+		outcome = "skipped"
+	default:
+		outcome = "error"
+	}
+	tabularRouterTotal.WithLabelValues(outcome).Inc()
+}
+
+// RecordTabularRouterRows records the row count of one fired-and-executed
+// tabular router statement.
+func RecordTabularRouterRows(n int) {
+	tabularRouterRows.Observe(float64(n))
+}
+
+// RecordTabularRouterRepairs increments the repair-round counter by n (n is
+// TabularTrace.Repairs — the number of regenerate-and-retry rounds a single
+// turn spent before its terminal outcome).
+func RecordTabularRouterRepairs(n int) {
+	tabularRouterRepairsTotal.Add(float64(n))
 }

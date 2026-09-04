@@ -155,4 +155,15 @@ type Report struct {
 	// carries a golden QueryType; nil otherwise so legacy report shapes
 	// stay byte-stable.
 	RoutingAccuracy *RoutingAccuracyReport `json:"routing_accuracy,omitempty"`
+	// TabularRouterFireRate is fired / (questions whose golden query_type
+	// is lookup or complex_reasoning — the golden schema has no
+	// "aggregation" label, see TabularRouterRates) — how often the
+	// deterministic spreadsheet router engaged on a question shape it's
+	// built for. Nil when no question in the run carries an eligible
+	// query_type, so legacy report shapes stay byte-stable.
+	TabularRouterFireRate *float64 `json:"tabular_router_fire_rate,omitempty"`
+	// TabularSQLErrorRate is (sql_error + validator_rejected) / fired —
+	// of the turns the router actually attempted, how often it ended in
+	// an unusable statement. Nil when no question fired.
+	TabularSQLErrorRate *float64 `json:"tabular_sql_error_rate,omitempty"`
 }
