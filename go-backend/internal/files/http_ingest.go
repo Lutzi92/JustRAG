@@ -305,6 +305,7 @@ func (h *Handler) AddTextSource(w http.ResponseWriter, r *http.Request) {
 			MimeType:     "text/plain",
 		})
 		if marshalErr != nil {
+			h.dropTabularTables(r.Context(), fileRecord.ID)
 			_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
 			_ = h.storage.DeleteFile(r.Context(), storagePath)
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to prepare processing job")
@@ -320,6 +321,7 @@ func (h *Handler) AddTextSource(w http.ResponseWriter, r *http.Request) {
 			// Compensating cleanup: the file row + blob would otherwise be an
 			// unprocessable orphan (no job will ever run). Delete so a client
 			// retry is clean.
+			h.dropTabularTables(r.Context(), fileRecord.ID)
 			_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
 			_ = h.storage.DeleteFile(r.Context(), storagePath)
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to queue for processing")
@@ -541,6 +543,7 @@ func (h *Handler) FetchURL(w http.ResponseWriter, r *http.Request) {
 			MimeType:     fetched.MimeType,
 		})
 		if marshalErr != nil {
+			h.dropTabularTables(r.Context(), fileRecord.ID)
 			_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
 			_ = h.storage.DeleteFile(r.Context(), storagePath)
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to prepare processing job")
@@ -556,6 +559,7 @@ func (h *Handler) FetchURL(w http.ResponseWriter, r *http.Request) {
 			// Compensating cleanup: the file row + blob would otherwise be an
 			// unprocessable orphan (no job will ever run). Delete so a client
 			// retry is clean.
+			h.dropTabularTables(r.Context(), fileRecord.ID)
 			_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
 			_ = h.storage.DeleteFile(r.Context(), storagePath)
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to queue for processing")
@@ -681,6 +685,7 @@ func (h *Handler) AddSources(w http.ResponseWriter, r *http.Request) {
 				MimeType:     "text/markdown",
 			})
 			if marshalErr != nil {
+				h.dropTabularTables(r.Context(), fileRecord.ID)
 				_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
 				_ = h.storage.DeleteFile(r.Context(), storagePath)
 				httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to prepare processing job")
@@ -696,6 +701,7 @@ func (h *Handler) AddSources(w http.ResponseWriter, r *http.Request) {
 				// Compensating cleanup: the file row + blob would otherwise be an
 				// unprocessable orphan (no job will ever run). Delete so a client
 				// retry is clean.
+				h.dropTabularTables(r.Context(), fileRecord.ID)
 				_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
 				_ = h.storage.DeleteFile(r.Context(), storagePath)
 				httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to queue for processing")

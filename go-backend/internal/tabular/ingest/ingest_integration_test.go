@@ -121,6 +121,13 @@ func TestIngestHeaderRow14MetadataEndToEnd(t *testing.T) {
 	pool := openMainPool(t)
 	fileID, kbID := seedFile(t, pool, "header_row14_metadata.xlsx")
 	mat := tabular.NewMaterializer(pool)
+	// Register the drop as CLEANUP right away, not just as the explicit
+	// assertion step at the end: every t.Fatal between here and there would
+	// otherwise leak this file's tabular.sheet_* tables and its
+	// tabular_column_values rows into the shared test database (Task-10
+	// review, Important 1). DropTablesForFile is idempotent, so the
+	// explicit drop below still runs and is still asserted.
+	t.Cleanup(func() { _ = mat.DropTablesForFile(context.Background(), fileID) })
 	g := New(mat, nil)
 
 	res, err := g.Ingest(context.Background(), Input{

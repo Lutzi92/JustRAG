@@ -44,10 +44,18 @@ func TestDetectDecimalComma(t *testing.T) {
 
 func TestParseDateTextAndNullTokens(t *testing.T) {
 	t.Parallel()
-	for _, s := range []string{"2025-03-14", "14.03.2025", "4.3.2025", "14.03.25", "2025/03/14", "2025-03-14T10:00:00", "2025-03-14 10:00:00"} {
+	// "2025-03-14T10:00" is M6: the seconds-less ISO datetime that a
+	// CSV/ODS export writes and that every other layout in the list rejects.
+	for _, s := range []string{"2025-03-14", "14.03.2025", "4.3.2025", "14.03.25", "2025/03/14", "2025-03-14T10:00:00", "2025-03-14T10:00", "2025-03-14 10:00:00"} {
 		if _, ok := ParseDateText(s); !ok {
 			t.Errorf("ParseDateText(%q) failed", s)
 		}
+	}
+	// The seconds-less form parses to the same instant as the full one.
+	withSecs, _ := ParseDateText("2025-03-14T10:00:00")
+	noSecs, ok := ParseDateText("2025-03-14T10:00")
+	if !ok || !withSecs.Equal(noSecs) {
+		t.Errorf("ParseDateText(\"2025-03-14T10:00\") = %v (ok=%v), want %v", noSecs, ok, withSecs)
 	}
 	for _, s := range []string{"03-14-25", "1972", "März 2025"} {
 		if _, ok := ParseDateText(s); ok {

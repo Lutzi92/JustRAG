@@ -119,6 +119,7 @@ type Handler struct {
 	fetcher      *fetcher.Fetcher
 	queryCache   QueryCacheInvalidator
 	kgEvents     kgFileEventer
+	tableDropper TableDropper
 }
 
 // SetFetcher injects the shared Fetcher used by FetchURL to retrieve web
@@ -132,6 +133,25 @@ func (h *Handler) SetFetcher(f *fetcher.Fetcher) { h.fetcher = f }
 // Optional — when nil, the cache is left to its TTL fallback.
 func (h *Handler) SetQueryCacheInvalidator(qc QueryCacheInvalidator) { h.queryCache = qc }
 
+// TableDropper drops a file's materialised spreadsheet tables (the
+// `tabular.sheet_*` tables), its tabular_column_values rows and its
+// tabular_catalog rows. Satisfied by *tabular.Materializer.
+//
+// C1/R20: the catalog row is the ONLY index from a file to its physical
+// tables, and nothing else in the schema references them (they live in the
+// `tabular` schema, outside `files`' foreign keys). Deleting the files row
+// first therefore does not cascade the tables away — it makes them
+// unreachable: orphaned tables that no catalog lookup, no re-ingest and no
+// KB delete can ever find again. Every site that removes a files row must
+// drop them FIRST.
+//
+// Optional: a nil dropper leaves the tables alone (the pre-Phase-2
+// behaviour), which is what the unit tests and any deployment without a
+// main pool get.
+type TableDropper interface {
+	DropTablesForFile(ctx context.Context, fileID string) error
+}
+
 // kgFileEventer removes a deleted file's knowledge-graph contribution and
 // notifies mindmap subscribers. Satisfied by *kgevents.FileHook. Optional —
 // nil leaves the KG graph untouched on delete (pre-0055 behaviour).
@@ -142,6 +162,25 @@ type kgFileEventer interface {
 // SetKGFileEventer injects the KG cleanup + mindmap-notify hook for file
 // deletes. Optional.
 func (h *Handler) SetKGFileEventer(e kgFileEventer) { h.kgEvents = e }
+
+// SetTableDropper injects the spreadsheet table cleanup hook for file
+// deletes. Optional — nil leaves materialised tables in place.
+func (h *Handler) SetTableDropper(d TableDropper) { h.tableDropper = d }
+
+// dropTabularTables removes a file's materialised spreadsheet tables. It
+// MUST run before the files row is deleted (see TableDropper). Best effort:
+// a failure is logged and the delete continues, because leaving the files
+// row behind for the sake of a `tabular` cleanup would strand the file in
+// the UI with its chunks and blob already gone.
+func (h *Handler) dropTabularTables(ctx context.Context, fileID string) {
+	if h.tableDropper == nil || fileID == "" {
+		return
+	}
+	if err := h.tableDropper.DropTablesForFile(ctx, fileID); err != nil {
+		logctx.From(ctx).Warn("tabular: drop tables for deleted file failed",
+			"fileId", fileID, "error", err)
+	}
+}
 
 // invalidateQueryCache fires the optional KB query-cache invalidation
 // hook. Fail-safe: nil invalidator is a no-op; errors are logged but
@@ -419,6 +458,11 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		_ = h.storage.DeleteFile(r.Context(), *file.StoragePath)
 	}
 
+	// Drop the file's materialised spreadsheet tables BEFORE the files row
+	// goes: the tabular_catalog row keyed on this file id is the only way
+	// to find them again (C1/R20).
+	h.dropTabularTables(r.Context(), fileID)
+
 	// Delete the DB record.
 	if err := h.store.DeleteFileRecord(r.Context(), fileID); err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "Failed to delete file record")
@@ -593,6 +637,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		); enqErr != nil {
 			logctx.From(r.Context()).Error("failed to enqueue file processing job", "fileId", fileRecord.ID, "error", enqErr)
 			// Clean up the orphaned file and DB record so retries don't create duplicates.
+			h.dropTabularTables(r.Context(), fileRecord.ID)
 			_ = h.store.DeleteFileRecord(r.Context(), fileRecord.ID)
 			_ = h.storage.DeleteFile(r.Context(), storagePath)
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to queue file for processing")

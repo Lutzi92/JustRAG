@@ -201,12 +201,14 @@ tabular_profile_llm_threshold       = 0.7        # heuristic confidence below wh
 tabular_profile_model               = <small>    # falls through to model_tier_fast
 tabular_profile_sample_rows         = 200        # rows sampled per sheet for structure detection [20,2000]
 tabular_max_rows                    = 2000000    # per table region: rows past this dropped from the SQL table (and counted)
-tabular_embed_max_rows              = 50000      # per table region: rows past this are SQL-only, not embedded in the hybrid text page
+tabular_embed_max_rows              = 50000      # per table region: rows past this are SQL-only, not embedded in the hybrid text page; MAX 100000 (see note below)
 tabular_column_values_max_distinct  = 10000      # per column: above this no tabular_column_values row is written (fuzzy lookup falls back to BM25/ILIKE)
 chat_tabular_charts_enabled         = true       # Phase 3: chart prompt-guidance (no new tool/migration)
 ```
 
 Migrations **0048** (`tabular` schema + `tabular_catalog`) and **0069** (catalog v2 columns, `tabular_column_values`, `tabular_query_log`, `files.parse_report`/`stage_detail`). The 2026-09-04 spreadsheet-ingest rework's Phase 2 replaced the Phase-1 buffered-memory materializer with a streaming reader (`sheetsource`) → profiler (`tabular/profile`) → typed Postgres tables (`internal/tabular`; a majority-numeric TEXT column or a `RoleMeasure` column additionally gets a `_num` shadow column, primary stays text) + a key:value hybrid text render (`tabular/render`, one profile card per table region) for the standard chunk/embed pipeline — see the `chat_tabular_*`/`tabular_*` entry in CLAUDE.md's Quick reference for the current mechanism (this recipe's full rewrite is tracked for Phase 4). The three `chat_tabular_semantic_columns_enabled`/`tabular_semantic_min_avg_len`/`tabular_semantic_min_distinct_ratio` free-text-column-embedding keys from the earlier Phase-2 draft are **REMOVED** (superseded by the hybrid render + `tabular_column_values` value index). `table_query` runs read-only SELECTs through `JUSTRAG_DB_URL_READONLY` with the per-KB catalog allowlist. **Any `tabular_*`/`tabular_profile_*` key change needs a re-ingest to take effect** (values are baked in at ingest time) — re-upload the file, or use the per-KB rematerialise endpoint `POST /api/kb/{id}/tabular/rematerialize` (kbAdmin), which re-ingests every spreadsheet file in the KB via `TypeReEmbedding`.
+
+`tabular_embed_max_rows` is capped at **100 000** (Ruling R23). The renderer buffers one window of that many rows per table region in memory before it writes a line — `render.RenderSheet` collects the region's rows into a map, then formats them — so the knob bounds worker RSS, not just page length; a million-row window is an OOM, not a slow ingest. A larger window waits for the incremental renderer planned for Phase 4. Rows past the cap stay reachable through `table_query` (the profile card says so), and only say so when the region actually has a materialised table.
 
 **OPERATOR PREREQUISITE** — run once as DB owner/superuser after migration 0048 (and `tabular_column_values` again after 0069):
 

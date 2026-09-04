@@ -38,7 +38,20 @@ type Options struct {
 	// entry; when the entry is missing, the rendered row count
 	// (RowsEmbedded + RowsPastCap) is used instead.
 	RowCounts map[[2]int]int
+
+	// Progress is called every progressEvery rows of RenderSheet's own pass
+	// over the sheet, with the number of rows read so far. May be nil.
+	//
+	// M2: the materialiser's heartbeat stops at tabular_max_rows (its
+	// ordinal freezes once the cap is hit) and does not fire at all in
+	// render-only mode, so on a long sheet the ingest job looked wedged
+	// while this pass was still streaming. This is the render path's own
+	// heartbeat.
+	Progress func(rowsDone int)
 }
+
+// progressEvery is the row interval between Options.Progress callbacks.
+const progressEvery = 10_000
 
 // RegionRender carries the per-region render outcome.
 type RegionRender struct {
@@ -97,6 +110,7 @@ func RenderSheet(src sheetsource.Source, fileName string, sp profile.SheetProfil
 	// window CollectSample profiled, not necessarily the full sheet).
 	needed := neededRows(sp, opts)
 	maxRowSeen := -1
+	rowsRead := 0
 	rows := map[int][]sheetsource.Cell{}
 	if _, err := src.ReadSheet(sp.Sheet.Index, func(r int, cells []sheetsource.Cell) error {
 		if r > maxRowSeen {
@@ -104,6 +118,10 @@ func RenderSheet(src sheetsource.Source, fileName string, sp profile.SheetProfil
 		}
 		if needed(r) {
 			rows[r] = cells
+		}
+		rowsRead++
+		if opts.Progress != nil && rowsRead%progressEvery == 0 {
+			opts.Progress(rowsRead)
 		}
 		return nil
 	}); err != nil {

@@ -236,7 +236,12 @@ func (g *Ingester) ingestSheet(ctx context.Context, src sheetsource.Source, info
 				},
 			})
 			if err != nil {
-				logctx.From(ctx).Warn("tabular: materialise failed; text path only", "sheet", info.Name, "region", ri, "error", err.Error())
+				// M7: the error text can carry raw cell/header content
+				// (identifier names, COPY value echoes) and arbitrary
+				// newlines, which would break one structured log line into
+				// several unattributed ones. Log the same bounded,
+				// newline-free form the report note gets.
+				logctx.From(ctx).Warn("tabular: materialise failed; text path only", "sheet", info.Name, "region", ri, "error", SanitizeNote(err.Error()))
 				rep.Notes = append(rep.Notes, fmt.Sprintf("region %d: materialisation failed: %s", ri, SanitizeNote(err.Error())))
 				res.Report.Materialised = false
 			} else {
@@ -266,6 +271,13 @@ func (g *Ingester) ingestSheet(ctx context.Context, src sheetsource.Source, info
 
 	sr, err := render.RenderSheet(src, in.FileName, sp, names, render.Options{
 		ChunkSize: opts.ChunkSize, EmbedMaxRows: opts.EmbedMaxRows, CardStats: cardStats, RowCounts: rowCounts,
+		// M2: the render pass streams the whole sheet again (and is the
+		// only pass at all in render-only mode), so it needs its own
+		// heartbeat or a long sheet looks wedged after the materialiser's
+		// last callback.
+		Progress: func(rows int) {
+			progress(fmt.Sprintf("Blatt %d/%d · %d Zeilen", info.Index+1, sheetCount, rows))
+		},
 	})
 	if err != nil {
 		return Page{}, tabular.SheetReport{}, fmt.Errorf("render: %w", err)

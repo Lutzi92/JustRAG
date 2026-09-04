@@ -62,16 +62,59 @@ func TestRenderTableAsKeyValueRecords(t *testing.T) {
 	// exemption cannot excuse an overshoot — it must respect the budget.
 	found := false
 	for _, block := range strings.Split(txt, "\n\n") {
-		if strings.HasPrefix(block, "[tabular.sheet_abc_0_0 rows") {
-			found = true
-			chunkSize := 512
-			if budget := int(0.8 * float64(chunkSize)); splitterCount(block) > budget {
-				t.Errorf("block over budget (%d tokens > %d):\n%s", splitterCount(block), budget, block)
-			}
+		// I7: heading line first, marker line second.
+		head, rest, ok := strings.Cut(block, "\n")
+		if !ok || head != "### ids_leading_zero.xlsx › Sheet1" || !strings.HasPrefix(rest, "[tabular.sheet_abc_0_0 rows") {
+			continue
+		}
+		found = true
+		chunkSize := 512
+		if budget := int(0.8 * float64(chunkSize)); splitterCount(block) > budget {
+			t.Errorf("block over budget (%d tokens > %d):\n%s", splitterCount(block), budget, block)
 		}
 	}
 	if !found {
 		t.Fatal("marker block not found in page text")
+	}
+}
+
+// TestBlockHeadingRepeatsPerBlock pins I7: the spec's "### <file> › <sheet>"
+// heading opens EVERY row block, not just the page. internal/processor only
+// records the enclosing heading in chunk metadata (SectionsForChunk →
+// meta["sections"]) and never prepends it to the embedded chunk text, so a
+// block that becomes its own chunk would otherwise be embedded with no file
+// or sheet name in it at all.
+func TestBlockHeadingRepeatsPerBlock(t *testing.T) {
+	t.Parallel()
+	const dataRows = 40
+	grid := narrowGrid(dataRows)
+	src := &fakeSource{sheet: sheetsource.SheetInfo{Index: 0, Name: "Sheet1"}, rows: grid}
+	sample := &sheetsource.Sample{
+		Info: src.sheet, Rows: grid, Width: 3, TotalRows: len(grid),
+		Extras: sheetsource.SheetExtras{MaxCol: 3, RowCount: len(grid)},
+	}
+	sp := profile.ProfileSheet(sample, profile.Options{})
+	out, err := RenderSheet(src, "synthetic.xlsx", sp, TableNames{{0, 0}: "sheet_x_0_0"}, Options{ChunkSize: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := out.Regions[0]
+	if rr.Blocks < 3 {
+		t.Fatalf("need several blocks to make the point, got %d", rr.Blocks)
+	}
+	markers := 0
+	for _, block := range strings.Split(out.Page.Text, "\n\n") {
+		head, rest, ok := strings.Cut(block, "\n")
+		if !ok || !strings.HasPrefix(rest, "[tabular.sheet_x_0_0 rows") {
+			continue
+		}
+		markers++
+		if head != "### synthetic.xlsx › Sheet1" {
+			t.Errorf("block %d does not open with its own heading: %q", markers, head)
+		}
+	}
+	if markers != rr.Blocks {
+		t.Errorf("found %d marker blocks, region reported %d", markers, rr.Blocks)
 	}
 }
 
@@ -116,9 +159,20 @@ func TestRenderFormProseAndCap(t *testing.T) {
 		t.Errorf("prose sheet:\n%s", out2.Page.Text)
 	}
 	sp3 := profileOf(t, src2, 0)
+	// M1: no table name here (nil TableNames), so the rows past the cap are
+	// reachable by nothing at all — the card must NOT point at table_query.
 	out3, _ := RenderSheet(src2, "header_row14_metadata.xlsx", sp3, nil, Options{ChunkSize: 512, EmbedMaxRows: 5})
-	if out3.Regions[0].RowsEmbedded != 5 || out3.Regions[0].RowsPastCap != 15 || !strings.Contains(out3.Page.Text, "Zeilen 6–20 sind nur über table_query erreichbar") {
-		t.Errorf("cap: %+v\n%s", out3.Regions[0], out3.Page.Text)
+	if out3.Regions[0].RowsEmbedded != 5 || out3.Regions[0].RowsPastCap != 15 ||
+		!strings.Contains(out3.Page.Text, "Zeilen 6–20 sind nicht eingebettet und hier nicht abrufbar") ||
+		strings.Contains(out3.Page.Text, "table_query") {
+		t.Errorf("cap without a table: %+v\n%s", out3.Regions[0], out3.Page.Text)
+	}
+	// Same region WITH a materialised table: now table_query really can
+	// reach the capped rows, so the card says so.
+	out3t, _ := RenderSheet(src2, "header_row14_metadata.xlsx", sp3, TableNames{{0, 0}: "sheet_cap_0_0"}, Options{ChunkSize: 512, EmbedMaxRows: 5})
+	if !strings.Contains(out3t.Page.Text, "Zeilen 6–20 sind nur über table_query erreichbar") ||
+		strings.Contains(out3t.Page.Text, "nicht abrufbar") {
+		t.Errorf("cap with a table:\n%s", out3t.Page.Text)
 	}
 	if !strings.Contains(out3.Page.Text, "Stammdaten / Ressort: HMWK") {
 		t.Errorf("joined header must be the record key:\n%s", out3.Page.Text)
@@ -249,14 +303,19 @@ func TestBlocksBatchRecordsWithinBudget(t *testing.T) {
 	}
 
 	chunkSize := 64
+	// I7: a block is heading + marker + records, and the WHOLE block has to
+	// fit the chunk budget — the renderer subtracts both fixed lines from
+	// the record budget, so measuring the assembled block against the plain
+	// chunk budget is the real guard.
 	budget := int(0.8 * float64(chunkSize))
 	sawMultiRecordBlock := false
 	nextWant := 1
 	for _, block := range strings.Split(out.Page.Text, "\n\n") {
-		if !strings.HasPrefix(block, "[rows") {
+		head, rest, ok := strings.Cut(block, "\n")
+		if !ok || !strings.HasPrefix(head, "### ") || !strings.HasPrefix(rest, "[rows") {
 			continue
 		}
-		parts := strings.SplitN(block, "\n", 2)
+		parts := strings.SplitN(rest, "\n", 2)
 		var a, b int
 		if _, err := fmt.Sscanf(parts[0], "[rows %d–%d]", &a, &b); err != nil {
 			t.Fatalf("marker parse %q: %v", parts[0], err)

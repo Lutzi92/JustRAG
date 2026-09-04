@@ -65,6 +65,10 @@ type ColumnStat struct {
 	HighCardinality bool     `json:"high_cardinality,omitempty"`
 	Samples         []string `json:"samples,omitempty"`
 	CoercionFailed  int64    `json:"coercion_failed"`
+	// LongValuesSkipped counts values excluded from the exact-lookup index
+	// for exceeding the indexed-value byte cap (R21). They stay reachable
+	// through BM25/ILIKE, just not through tabular_column_values.
+	LongValuesSkipped int64 `json:"long_values_skipped,omitempty"`
 }
 
 // SheetReport is one sheet's entry in a file's ParseReport (files.parse_report).

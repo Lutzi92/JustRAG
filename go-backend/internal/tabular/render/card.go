@@ -25,9 +25,21 @@ type ColumnCardStat struct {
 func columnCardStatsFromProfile(cols []profile.ColumnProfile) []ColumnCardStat {
 	out := make([]ColumnCardStat, 0, len(cols))
 	for _, c := range cols {
-		top := c.ListValues
-		if len(top) > 5 {
-			top = top[:5]
+		// Spec §6.6: ListValues comes straight from cell text and lands
+		// verbatim in the profile card, which is embedded and quoted into
+		// the answer prompt. The materialiser path already filters
+		// instruction-shaped values out of ValueSet/Samples
+		// (tabular.ColumnAccumulator.Stat); this render-only fallback is
+		// the same surface and needs the same filter.
+		top := make([]string, 0, 5)
+		for _, v := range c.ListValues {
+			if profile.LooksLikeInstruction(v) {
+				continue
+			}
+			if len(top) == 5 {
+				break
+			}
+			top = append(top, v)
 		}
 		out = append(out, ColumnCardStat{
 			Header:      strings.Join(strings.Fields(c.Header), " "),

@@ -65,20 +65,34 @@ func proseLine(cells []sheetsource.Cell, cols []int) string {
 	}
 }
 
-func allEmpty(cells []sheetsource.Cell, cols []int) bool {
-	for _, c := range cols {
-		if c >= 0 && c < len(cells) && !cells[c].IsEmpty() {
-			return false
-		}
-	}
-	return true
-}
-
-func markerPrefix(table string) string {
+// MarkerPrefix is the opening of a row block's marker line. A full block
+// marker reads "[tabular.<table> rows <a>–<b>]" (en dash between the
+// bounds), where a and b are _rowid values in the materialised table; when
+// the region was not materialised the table part is omitted. Exported
+// because the table_query tool description in internal/mcp/builtin teaches
+// a model to parse this exact shape, and its test pins the two together.
+func MarkerPrefix(table string) string {
 	if table == "" {
 		return "[rows"
 	}
 	return "[tabular." + table + " rows"
+}
+
+// blockHeading is the markdown heading repeated at the start of every row
+// block (spec §4.5). internal/processor records a chunk's enclosing heading
+// in chunk METADATA only (SectionsForChunk fills meta sections); it never
+// prepends it to the embedded chunk text, so a block that lands in its own
+// chunk would otherwise carry no file/sheet provenance in what is actually
+// embedded and quoted back to the answer model.
+func blockHeading(fileName string, sp profile.SheetProfile, regionIdx int) string {
+	h := "### " + fileName + " › " + sp.Sheet.Name
+	if sp.Sheet.Hidden {
+		h += " (hidden)"
+	}
+	if len(sp.Regions) > 1 {
+		h += fmt.Sprintf(" › Bereich %d", regionIdx+1)
+	}
+	return h
 }
 
 // lastRow is the highest absolute row index this table region's data can
@@ -111,12 +125,27 @@ func renderTable(b *strings.Builder, fileName string, sp profile.SheetProfile, r
 	}
 
 	last := lastRow(rp, maxRowSeen)
-	regionRows := last - rp.DataStart + 1
-	if regionRows < 0 {
-		regionRows = 0
-	}
+	// R22: the SAME regionRows the materialiser passes to ClassifyRow for
+	// this region. It is deliberately NOT derived from `last` (which folds
+	// in maxRowSeen, a quantity the materialiser's single streaming pass
+	// cannot know), because a different regionRows makes IsDerivedRow's
+	// "formula spans half the region" rule fire on one side only — and the
+	// block markers below would then address different rows than _rowid.
+	regionRows := profile.RegionRows(rp.Region, rp.DataStart)
 
-	budget := int(0.8 * float64(opts.ChunkSize))
+	// The budget bounds the RECORDS in a block, but the block that reaches
+	// the chunker is heading + marker + records, so both fixed lines come
+	// off the chunk budget first. (The marker line was already unaccounted
+	// for before I7 added the heading; a block could therefore overshoot
+	// the chunk by its own marker.) The marker's own width is bounded with
+	// a six-digit stand-in for each ordinal rather than the real numbers,
+	// which are not known until the block is flushed.
+	heading := blockHeading(fileName, sp, regionIdx)
+	overhead := splitter.CountTokens(heading) + splitter.CountTokens(MarkerPrefix(rr.TableName)+" 000000–000000]")
+	budget := int(0.8*float64(opts.ChunkSize)) - overhead
+	if budget < 1 {
+		budget = 1
+	}
 
 	var rowsBuf strings.Builder
 	var block strings.Builder
@@ -125,7 +154,7 @@ func renderTable(b *strings.Builder, fileName string, sp profile.SheetProfile, r
 		if block.Len() == 0 {
 			return
 		}
-		fmt.Fprintf(&rowsBuf, "%s %d–%d]\n%s\n", markerPrefix(rr.TableName), blockStart, lastOrdinal, block.String())
+		fmt.Fprintf(&rowsBuf, "%s\n%s %d–%d]\n%s\n", heading, MarkerPrefix(rr.TableName), blockStart, lastOrdinal, block.String())
 		block.Reset()
 		rr.Blocks++
 	}
@@ -139,10 +168,11 @@ func renderTable(b *strings.Builder, fileName string, sp profile.SheetProfile, r
 			}
 			continue
 		}
-		if allEmpty(cells, cols) {
+		rowEmpty, rowDerived := profile.ClassifyRow(cells, cols, regionRows)
+		if rowEmpty {
 			continue
 		}
-		if derived[r] || profile.IsDerivedRow(cells, cols, regionRows) {
+		if derived[r] || rowDerived {
 			flush(ordinal)
 			if line := proseLine(cells, cols); line != "" {
 				rowsBuf.WriteString(line)
@@ -180,7 +210,16 @@ func renderTable(b *strings.Builder, fileName string, sp profile.SheetProfile, r
 	}
 	card := ProfileCard(fileName, sp, rp, rr.TableName, rowCount, stats)
 	if rr.RowsPastCap > 0 {
-		card += fmt.Sprintf("Zeilen %d–%d sind nur über table_query erreichbar.\n", opts.EmbedMaxRows+1, rowCount)
+		// M1: "reachable via table_query" is only true when the region
+		// actually has a table. Without one (render-only ingest, or a
+		// per-region materialisation failure) the rows past the cap are
+		// simply not in the index at all, and pointing the model at a tool
+		// that cannot see them invites a fabricated answer.
+		if rr.TableName != "" {
+			card += fmt.Sprintf("Zeilen %d–%d sind nur über table_query erreichbar.\n", opts.EmbedMaxRows+1, rowCount)
+		} else {
+			card += fmt.Sprintf("Zeilen %d–%d sind nicht eingebettet und hier nicht abrufbar.\n", opts.EmbedMaxRows+1, rowCount)
+		}
 	}
 	b.WriteString(card)
 	b.WriteString("\n")

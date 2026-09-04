@@ -112,6 +112,10 @@ func (m *Materializer) MaterializeRegion(ctx context.Context, in RegionInput) (r
 	for _, r := range in.Profile.DerivedRows {
 		derived[r] = true
 	}
+	// R22: the SAME regionRows the renderer uses for this region, so
+	// ClassifyRow returns the same verdict on both sides and the rendered
+	// block markers address the rows this pass actually materialises.
+	regionRows := profile.RegionRows(in.Profile.Region, in.Profile.DataStart)
 
 	go func() {
 		defer close(ch)
@@ -131,17 +135,24 @@ func (m *Materializer) MaterializeRegion(ctx context.Context, in RegionInput) (r
 				return nil
 			}
 			res.RowsRead++
-			if derived[r] || profile.IsDerivedRow(cells, kept, max(int(res.RowsRead), 4)) {
+			// One classifier, one regionRows — shared with the renderer
+			// (profile.ClassifyRow, R22). Emptiness is decided before
+			// derivedness on both sides.
+			rowEmpty, rowDerived := profile.ClassifyRow(cells, kept, regionRows)
+			if rowEmpty {
+				res.RowsSkippedEmpty++
+				return nil
+			}
+			if derived[r] || rowDerived {
 				res.DerivedRowsSkipped++
 				return nil
 			}
 			// Canonicalize every kept cell first — a pure read of cell
-			// state, independent of accumulator state — so emptiness and
-			// the MaxRows cap can both be decided BEFORE any accumulator is
-			// touched. A row dropped for the cap must not affect stats or
-			// the distinct-value maps at all.
+			// state, independent of accumulator state — so the MaxRows cap
+			// can be decided BEFORE any accumulator is touched. A row
+			// dropped for the cap must not affect stats or the
+			// distinct-value maps at all.
 			row := make([]any, 1, len(accs)+1)
-			empty := true
 			for _, a := range accs {
 				var c sheetsource.Cell
 				if a.Profile.Index < len(cells) {
@@ -149,14 +160,9 @@ func (m *Materializer) MaterializeRegion(ctx context.Context, in RegionInput) (r
 				}
 				if v, ok := a.Canonical(c); ok {
 					row = append(row, v)
-					empty = false
 				} else {
 					row = append(row, nil)
 				}
-			}
-			if empty {
-				res.RowsSkippedEmpty++
-				return nil
 			}
 			if ordinal >= int64(in.MaxRows) {
 				res.RowsDropped++

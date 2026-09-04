@@ -13,6 +13,14 @@ const (
 	defaultMaxDistinct = 10_000
 	valueSetMax        = 50
 	sampleMax          = 3
+
+	// maxIndexedValueBytes bounds a single distinct value kept for the
+	// tabular_column_values exact-lookup index. Postgres' btree index-tuple
+	// limit is ~2704 bytes and the table's PK spans the value column, so a
+	// longer value would fail the region's insert outright. 512 bytes is
+	// well under that and far past any realistic categorical/ID value; a
+	// longer cell is free text, which stays reachable via BM25/ILIKE.
+	maxIndexedValueBytes = 512
 )
 
 var boolTrue = map[string]bool{"ja": true, "yes": true, "true": true, "x": true, "✓": true, "wahr": true}
@@ -26,11 +34,14 @@ type ColumnAccumulator struct {
 	Name                                                           string // sanitised, deduped SQL identifier
 	NonEmpty, Numeric, Dates, Timestamps, Bools, Texts, NullTokens int64
 	LeadingZero, LongDigits                                        int64
-	MinNum, MaxNum                                                 float64
-	MinDate, MaxDate                                               string
-	Distinct                                                       map[string]int64 // nil for non-text roles or after overflow
-	Overflowed                                                     bool
-	Samples                                                        []string // first 3 non-empty raw values
+	// LongValuesSkipped counts distinct-value occurrences dropped from the
+	// value index for exceeding maxIndexedValueBytes (R21).
+	LongValuesSkipped int64
+	MinNum, MaxNum    float64
+	MinDate, MaxDate  string
+	Distinct          map[string]int64 // nil for non-text roles or after overflow
+	Overflowed        bool
+	Samples           []string // first 3 non-empty raw values
 	// unexported
 	hasNum      bool
 	maxDistinct int
@@ -105,9 +116,20 @@ func (a *ColumnAccumulator) Add(c sheetsource.Cell) {
 		a.LongDigits++
 	}
 	if a.Distinct != nil {
-		a.Distinct[canon]++
-		if len(a.Distinct) > a.maxDistinct {
-			a.Distinct, a.Overflowed = nil, true
+		// R21: tabular_column_values' primary key covers (table, column,
+		// value); Postgres' btree index tuple limit (~2704 bytes) makes an
+		// unbounded free-text cell fail the whole region's insert. Long
+		// values are skipped at INSERTION, not at Values() time, so a
+		// column of long free text cannot burn through MaxDistinct (and
+		// silently lose the value index for the SHORT values in it) for
+		// entries that would be dropped anyway.
+		if len(canon) > maxIndexedValueBytes {
+			a.LongValuesSkipped++
+		} else {
+			a.Distinct[canon]++
+			if len(a.Distinct) > a.maxDistinct {
+				a.Distinct, a.Overflowed = nil, true
+			}
 		}
 	}
 }
@@ -213,7 +235,8 @@ func (a *ColumnAccumulator) FinalSpec() (ColumnSpec, *ColumnSpec) {
 // Stat renders the catalog column_stats entry; totalRows is the number of materialised rows.
 func (a *ColumnAccumulator) Stat(primary ColumnSpec, shadow *ColumnSpec, totalRows int64) ColumnStat {
 	st := ColumnStat{Name: primary.Name, Original: primary.Original, Type: string(primary.Type), Role: primary.Role, Description: primary.Description,
-		NullCount: totalRows - a.NonEmpty, NullTokens: a.NullTokens, DistinctCount: -1, HighCardinality: a.Overflowed}
+		NullCount: totalRows - a.NonEmpty, NullTokens: a.NullTokens, DistinctCount: -1, HighCardinality: a.Overflowed,
+		LongValuesSkipped: a.LongValuesSkipped}
 	if shadow != nil {
 		st.ShadowColumn = shadow.Name
 	}
@@ -268,10 +291,25 @@ func (a *ColumnAccumulator) ShadowStat(shadow ColumnSpec, totalRows int64) Colum
 	return st
 }
 
-// Values returns the distinct-value map for tabular_column_values (nil when overflowed or non-text).
+// Values returns the distinct-value map for tabular_column_values (nil when
+// overflowed or non-text).
+//
+// Spec §6.6: a value that reads as an instruction to a model is dropped
+// here, the same way Stat drops it from ValueSet/Samples — the value index
+// is quoted back into table_query results and therefore into the answer
+// prompt, so an injected cell must not reach it. Values longer than
+// maxIndexedValueBytes were already refused at insertion time (R21) and are
+// counted in LongValuesSkipped.
 func (a *ColumnAccumulator) Values() map[string]int64 {
-	if a.Overflowed {
+	if a.Overflowed || a.Distinct == nil {
 		return nil
 	}
-	return a.Distinct
+	out := make(map[string]int64, len(a.Distinct))
+	for v, n := range a.Distinct {
+		if profile.LooksLikeInstruction(v) {
+			continue
+		}
+		out[v] = n
+	}
+	return out
 }

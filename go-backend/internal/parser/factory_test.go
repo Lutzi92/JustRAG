@@ -21,7 +21,6 @@ func TestFactorySelectsSpreadsheetParser(t *testing.T) {
 		{"xlsx MIME", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "x"},
 		{"ods MIME", "application/vnd.oasis.opendocument.spreadsheet", "x"},
 	} {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			p := f.GetParser(c.mime, c.fileName)

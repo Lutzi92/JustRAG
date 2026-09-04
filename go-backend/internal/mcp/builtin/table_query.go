@@ -98,8 +98,9 @@ func newTableQueryWithDeps(cat catalogReader, exec SQLExecutor, enabled func(con
 		Name: "table_query",
 		Description: "Query large uploaded spreadsheets with read-only SQL (exact lookups, SUM/AVG/COUNT, GROUP BY, filter/sort). " +
 			"Call with {\"describe\": true} first to list available tables and columns, then send a SELECT against a tabular.* table. " +
-			"Each sheet also has a synthetic `_rowid` column: to aggregate over rows found via fuzzy search, read the ids from the " +
-			"`[tabular.<table> row <id>]` headers in kb_search results and filter with `WHERE _rowid IN (...)`. Returns up to 100 rows.",
+			"Each sheet also has a synthetic `_rowid` column: to aggregate over rows found via fuzzy search, read the table name and " +
+			"the row range from the `[tabular.<table> rows <a>–<b>]` marker above a block of rows in kb_search results and filter with " +
+			"`WHERE _rowid BETWEEN <a> AND <b>`. Returns up to 100 rows.",
 		InputSchema: json.RawMessage(tableQueryInputSchema),
 		Handler:     mcp.ToolHandlerFunc(tableQueryHandler(cat, exec, enabled)),
 	}

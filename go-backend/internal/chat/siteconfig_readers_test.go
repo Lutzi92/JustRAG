@@ -1506,7 +1506,7 @@ func TestTabularCatalogReaders(t *testing.T) {
 	}
 
 	// A valid boundary value within range applies normally: 0 is in
-	// tabular_embed_max_rows's [0, 1_000_000] range (0 = embed nothing but
+	// tabular_embed_max_rows's [0, 100_000] range (0 = embed nothing but
 	// cards), so it is NOT out-of-range and applies as-is.
 	zero := &fakeSiteConfigReader{values: map[string]*string{
 		"tabular_embed_max_rows": strPtr("0"),
@@ -1535,7 +1535,7 @@ func TestTabularCatalogReaders(t *testing.T) {
 	// Above-max also falls back to default.
 	aboveMax := &fakeSiteConfigReader{values: map[string]*string{
 		"tabular_max_rows":                   strPtr("6000000"), // above max 5000000
-		"tabular_embed_max_rows":             strPtr("2000000"), // above max 1000000
+		"tabular_embed_max_rows":             strPtr("200000"),  // above max 100000 (R23)
 		"tabular_column_values_max_distinct": strPtr("200000"),  // above max 100000
 	}}
 	if got := TabularMaxRows(ctx, aboveMax); got != 2_000_000 {
