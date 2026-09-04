@@ -16,53 +16,54 @@ func TestNewStoreNonNil(t *testing.T) {
 	}
 }
 
-// fakeTableDropper records each DropTablesForFile call so the ordering test
-// below can assert it ran.
-type fakeTableDropper struct{ called []string }
+// fakeTableDropper records each DropTablesForFile call, optionally into a
+// shared event-order log (nil = untracked) so http_test.go's DeleteSource
+// tests can additionally assert ordering against another mock's own calls.
+type fakeTableDropper struct {
+	called []string
+	events *[]string
+}
 
 func (d *fakeTableDropper) DropTablesForFile(_ context.Context, fileID string) error {
+	if d.events != nil {
+		*d.events = append(*d.events, "drop:"+fileID)
+	}
 	d.called = append(d.called, fileID)
 	return nil
 }
 
-// TestDeleteGitRepoFileByIDDropsTablesBeforeRowDelete pins the Phase-3
-// carry: DeleteGitRepoFileByID must drop a file's materialised spreadsheet
-// tables BEFORE the files row delete (see TableDropper's doc comment for
-// why deleting the row first orphans them beyond any future reach).
-//
-// This has no real-DB seam (a genuine delete needs a live pool), so the
-// ordering is pinned the same way *PGStore itself would panic: NewStore(nil)
-// has no pool, so s.pool.Exec panics -- reaching that panic proves the
-// dropper call sits strictly before it, since a swapped or dropped call
-// would either never run or run after the (fatal) panic.
-func TestDeleteGitRepoFileByIDDropsTablesBeforeRowDelete(t *testing.T) {
+// TestPGStoreDropTablesForNilDropperIsNoop pins the nil-safety half of the
+// Phase-3 carry directly against dropTablesFor (rather than indirectly via
+// DeleteGitRepoFileByID and a nil-pool panic, which a prior version of this
+// test relied on -- that made a removed nil check and a removed dropper
+// call both look identical from the outside, since either way the next
+// line's nil-pool Exec panics regardless). With no dropper wired,
+// dropTablesFor must return immediately without ever touching the pool, so
+// this must not panic even though s.pool is nil.
+func TestPGStoreDropTablesForNilDropperIsNoop(t *testing.T) {
+	s := NewStore(nil)
+	s.dropTablesFor(context.Background(), []string{"file-1"})
+}
+
+// TestPGStoreDropTablesForCallsOncePerID pins the positive half: with a
+// dropper wired, every id passed in gets exactly one DropTablesForFile
+// call, in order.
+func TestPGStoreDropTablesForCallsOncePerID(t *testing.T) {
 	s := NewStore(nil)
 	d := &fakeTableDropper{}
 	s.SetTableDropper(d)
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected a panic from the nil-pool Exec (proves the dropper ran first, not that Exec is reachable)")
-		}
-		if want := []string{"file-1"}; len(d.called) != 1 || d.called[0] != want[0] {
-			t.Errorf("dropper called = %v, want %v", d.called, want)
-		}
-	}()
-	_ = s.DeleteGitRepoFileByID(context.Background(), "file-1")
-}
+	s.dropTablesFor(context.Background(), []string{"file-1", "file-2"})
 
-// TestDeleteGitRepoFileByIDNilDropperSkipsCleanly pins the nil-safety half:
-// with no dropper wired, the nil check itself must not panic before ever
-// reaching the (nil-pool) Exec.
-func TestDeleteGitRepoFileByIDNilDropperSkipsCleanly(t *testing.T) {
-	s := NewStore(nil)
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected a panic from the nil-pool Exec")
+	want := []string{"file-1", "file-2"}
+	if len(d.called) != len(want) {
+		t.Fatalf("called = %v, want %v", d.called, want)
+	}
+	for i, id := range want {
+		if d.called[i] != id {
+			t.Errorf("called[%d] = %q, want %q", i, d.called[i], id)
 		}
-	}()
-	_ = s.DeleteGitRepoFileByID(context.Background(), "file-1")
+	}
 }
 
 func TestToGitRepoSourceRow(t *testing.T) {

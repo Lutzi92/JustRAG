@@ -65,6 +65,21 @@ type RSSStore interface {
 	UpdateRSSFeedPollSuccess(ctx context.Context, feedID string, itemCount int) error
 	UpdateRSSFeedPollFailure(ctx context.Context, feedID string, errMsg string) error
 	ListFileNamesByRSSFeedID(ctx context.Context, rssFeedID string) (map[string]bool, error)
+	ListFileIDsByRSSFeedID(ctx context.Context, rssFeedID string) ([]string, error)
+}
+
+// TableDropper drops a file's materialised spreadsheet tables (the
+// `tabular.sheet_*` tables), its tabular_column_values rows and its
+// tabular_catalog rows. Satisfied by *tabular.Materializer. See the
+// identical interface documented at internal/files.TableDropper for the
+// full rationale (R60): a feed's own DeleteRSSFeed relies on
+// files.rss_feed_id ON DELETE CASCADE, which removes the files rows but
+// never drops their physical tables — this MUST run before that delete.
+//
+// Optional: a nil dropper (the default) leaves the tables alone, which is
+// what an RSS feed -- never a spreadsheet in practice -- costs nothing for.
+type TableDropper interface {
+	DropTablesForFile(ctx context.Context, fileID string) error
 }
 
 // ---------------------------------------------------------------------------
@@ -105,9 +120,34 @@ type AsynqEnqueuer interface {
 
 // Handler holds the dependencies for the RSS feed endpoints.
 type Handler struct {
-	store       RSSStore
-	validator   FeedValidator
-	asynqClient AsynqEnqueuer
+	store        RSSStore
+	validator    FeedValidator
+	asynqClient  AsynqEnqueuer
+	tableDropper TableDropper
+}
+
+// SetTableDropper injects the spreadsheet table cleanup hook for
+// DeleteRSSFeed. Optional — nil (the default) leaves materialised tables in
+// place.
+func (h *Handler) SetTableDropper(d TableDropper) { h.tableDropper = d }
+
+// dropTablesForFeed drops every file's materialised spreadsheet tables for
+// the given RSS feed. Nil-safe: returns immediately when no dropper is
+// wired. Best effort per file: a failure is logged and the rest still run.
+func (h *Handler) dropTablesForFeed(ctx context.Context, feedID string) {
+	if h.tableDropper == nil {
+		return
+	}
+	ids, err := h.store.ListFileIDsByRSSFeedID(ctx, feedID)
+	if err != nil {
+		logctx.From(ctx).Warn("tabular: list files for rss feed delete failed", "feedId", feedID, "error", err)
+		return
+	}
+	for _, id := range ids {
+		if err := h.tableDropper.DropTablesForFile(ctx, id); err != nil {
+			logctx.From(ctx).Warn("tabular: drop tables for deleted rss file failed", "fileId", id, "error", err)
+		}
+	}
 }
 
 // NewHandler creates a Handler backed by store using the production gofeed validator.
@@ -368,6 +408,13 @@ func (h *Handler) DeleteRSSFeed(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusNotFound, "RSS feed not found")
 		return
 	}
+
+	// R60: drop this feed's files' materialised spreadsheet tables BEFORE
+	// the feed delete. DeleteRSSFeed relies on files.rss_feed_id ON DELETE
+	// CASCADE, which removes the files rows (and their tabular_catalog
+	// rows) but never drops the physical tables — deleting the feed first
+	// would orphan them beyond any future reach.
+	h.dropTablesForFeed(ctx, feedID)
 
 	if err := h.store.DeleteRSSFeed(ctx, feedID); err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to delete RSS feed")

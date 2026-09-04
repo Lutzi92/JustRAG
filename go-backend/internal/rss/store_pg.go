@@ -238,6 +238,28 @@ func (s *PGStore) ListFileNamesByRSSFeedID(ctx context.Context, rssFeedID string
 	return result, nil
 }
 
+// fileIDRow is used for scanning file ids.
+type fileIDRow struct {
+	ID string `db:"id"`
+}
+
+// ListFileIDsByRSSFeedID returns the ids of every file linked to the given
+// RSS feed. Used by DeleteRSSFeed to drop each file's materialised
+// spreadsheet tables before the feed delete cascades the files rows away
+// (R60).
+func (s *PGStore) ListFileIDsByRSSFeedID(ctx context.Context, rssFeedID string) ([]string, error) {
+	const sql = `SELECT id FROM files WHERE rss_feed_id = $1`
+	rows, err := pgxutil.QueryRows[fileIDRow](ctx, s.pool, sql, rssFeedID)
+	if err != nil {
+		return nil, fmt.Errorf("ListFileIDsByRSSFeedID: %w", err)
+	}
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+	return ids, nil
+}
+
 // ---------------------------------------------------------------------------
 // Sweeper contract (internal/syncsched)
 // ---------------------------------------------------------------------------

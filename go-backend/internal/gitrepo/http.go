@@ -21,15 +21,42 @@ import (
 
 // Handler holds the dependencies for the Git repo source HTTP endpoints.
 type Handler struct {
-	store       Store
-	jwtSecret   string
-	asynqClient *asynq.Client
+	store        Store
+	jwtSecret    string
+	asynqClient  *asynq.Client
+	tableDropper TableDropper
 }
 
 // NewHandler creates a Handler backed by store, using jwtSecret to encrypt
 // access tokens before storage and asynqClient to enqueue sync jobs.
 func NewHandler(store Store, jwtSecret string, asynqClient *asynq.Client) *Handler {
 	return &Handler{store: store, jwtSecret: jwtSecret, asynqClient: asynqClient}
+}
+
+// SetTableDropper injects the spreadsheet table cleanup hook for
+// DeleteSource. Optional — nil (the default) leaves materialised tables in
+// place. TableDropper is defined in store_pg.go and shared with PGStore's
+// own per-file delete path.
+func (h *Handler) SetTableDropper(d TableDropper) { h.tableDropper = d }
+
+// dropTablesForSource drops every file's materialised spreadsheet tables
+// for the given git repo source. Nil-safe: returns immediately when no
+// dropper is wired. Best effort per file: a failure is logged and the rest
+// still run.
+func (h *Handler) dropTablesForSource(ctx context.Context, sourceID string) {
+	if h.tableDropper == nil {
+		return
+	}
+	files, err := h.store.ListGitRepoFiles(ctx, sourceID)
+	if err != nil {
+		logctx.From(ctx).Warn("tabular: list files for git repo source delete failed", "sourceId", sourceID, "error", err)
+		return
+	}
+	for _, f := range files {
+		if err := h.tableDropper.DropTablesForFile(ctx, f.FileID); err != nil {
+			logctx.From(ctx).Warn("tabular: drop tables for deleted git repo file failed", "fileId", f.FileID, "error", err)
+		}
+	}
 }
 
 // kbIDFromContext returns the KB ID from the kbaccess middleware context or
@@ -307,6 +334,14 @@ func (h *Handler) DeleteSource(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "git repo source not found")
 		return
 	}
+
+	// R60: drop this source's files' materialised spreadsheet tables
+	// BEFORE the source delete. DeleteGitRepoSource relies on
+	// files.git_repo_source_id ON DELETE CASCADE, which removes the files
+	// rows (and their tabular_catalog rows) but never drops the physical
+	// tables — deleting the source first would orphan them beyond any
+	// future reach.
+	h.dropTablesForSource(ctx, sourceID)
 
 	if err := h.store.DeleteGitRepoSource(ctx, sourceID); err != nil {
 		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to delete git repo source")

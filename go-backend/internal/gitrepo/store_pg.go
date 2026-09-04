@@ -299,17 +299,29 @@ func (s *PGStore) CreateGitRepoFile(ctx context.Context, in CreateGitRepoFileInp
 	return rows[0].ID, nil
 }
 
+// dropTablesFor drops each id's materialised spreadsheet tables via the
+// injected TableDropper. Nil-safe: returns immediately (never touching the
+// pool) when no dropper is wired, so this costs nothing for a deployment
+// without a main pool or a caller that only ever handles text files.
+// Best effort per id: a failure is logged and the rest still run.
+func (s *PGStore) dropTablesFor(ctx context.Context, ids []string) {
+	if s.tableDropper == nil {
+		return
+	}
+	for _, id := range ids {
+		if err := s.tableDropper.DropTablesForFile(ctx, id); err != nil {
+			slog.Warn("tabular: drop tables for deleted git repo file failed",
+				"fileId", id, "error", err)
+		}
+	}
+}
+
 func (s *PGStore) DeleteGitRepoFileByID(ctx context.Context, fileID string) error {
 	// Drop any materialised spreadsheet tables BEFORE the files row goes
 	// away: tabular_catalog is the only index from a file to its physical
 	// tables, so deleting the files row first would orphan them beyond any
-	// future reach (see TableDropper). Best effort, non-fatal.
-	if s.tableDropper != nil {
-		if err := s.tableDropper.DropTablesForFile(ctx, fileID); err != nil {
-			slog.Warn("tabular: drop tables for deleted git repo file failed",
-				"fileId", fileID, "error", err)
-		}
-	}
+	// future reach (see TableDropper).
+	s.dropTablesFor(ctx, []string{fileID})
 	_, err := s.pool.Exec(ctx, `DELETE FROM files WHERE id = $1`, fileID)
 	if err != nil {
 		return fmt.Errorf("DeleteGitRepoFileByID: %w", err)

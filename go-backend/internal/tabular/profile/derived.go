@@ -104,13 +104,23 @@ const FallbackRegionRows = 1000
 // RegionRows is the row count both the materialiser and the renderer must
 // pass to ClassifyRow/IsDerivedRow for a region: the region's exact height
 // when profiling bounded it; when it is open-ended, the sheet's declared
-// row count minus the rows before dataStart (when sheetRows is known), else
-// the shared fallback. dataStart is the region's first data row
-// (RegionProfile.DataStart); sheetRows is the sheet's
+// row count minus the rows before dataStart (when sheetRows is known AND
+// at least dataStart), else the shared fallback. dataStart is the region's
+// first data row (RegionProfile.DataStart); sheetRows is the sheet's
 // sheetsource.SheetInfo.RowCount (0 = unknown).
+//
+// R58: a stale/placeholder xlsx dimension (see sheetRowCount's doc comment
+// in sheetsource) can declare a row count BELOW the region's own data
+// start -- that is not a genuinely tiny sheet, it is an unrecalculated ref
+// (real-world example: a raw-Go-writer xlsx with every sheet stuck at
+// "A1"). Trusting it verbatim would drive regionRows to ~1, which in turn
+// drives IsDerivedRow's "formula spans at least half the region" threshold
+// to ~0 -- misclassifying ordinary data rows as totals. So sheetRows is
+// only treated as known when it is at least dataStart; anything smaller
+// falls back to the shared constant exactly as if RowCount were 0.
 func RegionRows(r Region, dataStart int, sheetRows int) int {
 	if r.OpenEnded {
-		if sheetRows > 0 {
+		if sheetRows > 0 && sheetRows >= dataStart {
 			if n := sheetRows - dataStart + 1; n > 0 {
 				return n
 			}

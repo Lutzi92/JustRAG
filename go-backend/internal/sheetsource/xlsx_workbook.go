@@ -96,6 +96,14 @@ func (w *xlsxWorkbook) openPart(name string) (io.ReadCloser, error) {
 // a missing dimension (or one this can't parse) yields 0. This lets a
 // caller learn the sheet's row count WITHOUT reading the sheet body, unlike
 // SheetExtras.RowCount which is only known after a full pass.
+//
+// Caveat seen in the wild: some writers never recompute the dimension, so
+// a sheet with real data can still report a stale single-cell ref like
+// "A1" (RowCount 1). This method reports exactly what the ref declares --
+// downstream consumers that need a lower bound on the sheet's true extent
+// must guard against a suspiciously small value themselves (see R58 /
+// profile.RegionRows, which treats a declared count below the region's
+// data start as unknown rather than trusting it).
 func (w *xlsxWorkbook) sheetRowCount(part string) int {
 	rc, err := w.openPart(part)
 	if err != nil {

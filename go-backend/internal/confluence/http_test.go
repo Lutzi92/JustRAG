@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,14 +23,14 @@ import (
 var _ confluence.ConfluenceStore = (*mockStore)(nil)
 
 type mockStore struct {
-	conn           *confluence.ConfluenceConnectionRow
-	connErr        error
-	createdConn    *confluence.ConfluenceConnectionRow
-	createConnErr  error
-	updatedConn    *confluence.ConfluenceConnectionRow
-	updateConnErr  error
-	lastConnUpdate *confluence.ConfluenceConnectionUpdate
-	deleteErr      error
+	conn                *confluence.ConfluenceConnectionRow
+	connErr             error
+	createdConn         *confluence.ConfluenceConnectionRow
+	createConnErr       error
+	updatedConn         *confluence.ConfluenceConnectionRow
+	updateConnErr       error
+	lastConnUpdate      *confluence.ConfluenceConnectionUpdate
+	deleteErr           error
 	source              *confluence.ConfluenceSourceRow
 	sources             []confluence.ConfluenceSourceRow
 	sourceErr           error
@@ -37,6 +38,8 @@ type mockStore struct {
 	siteConfigs         map[string]*string
 	lastCreatedSchedule string
 	lastUpdate          confluence.ConfluenceSourceUpdate
+	filesForSource      []confluence.ConfluenceFileRow // returned by GetFilesByConfluenceSourceID
+	events              *[]string                      // shared event-order log; nil = untracked
 }
 
 func (m *mockStore) GetConfluenceConnectionByUserID(_ context.Context, _ string) (*confluence.ConfluenceConnectionRow, error) {
@@ -87,7 +90,10 @@ func (m *mockStore) UpdateConfluenceSource(_ context.Context, _ string, updates 
 	return m.updatedSrc, nil
 }
 
-func (m *mockStore) DeleteConfluenceSource(_ context.Context, _ string) error {
+func (m *mockStore) DeleteConfluenceSource(_ context.Context, sourceID string) error {
+	if m.events != nil {
+		*m.events = append(*m.events, "delete:"+sourceID)
+	}
 	return m.deleteErr
 }
 
@@ -111,7 +117,23 @@ func (m *mockStore) CreateConfluenceFile(_ context.Context, _ confluence.CreateC
 }
 
 func (m *mockStore) GetFilesByConfluenceSourceID(_ context.Context, _ string) ([]confluence.ConfluenceFileRow, error) {
-	return nil, nil
+	return m.filesForSource, nil
+}
+
+// fakeTableDropper implements confluence.TableDropper, recording each call
+// (and its position in a shared event log) so tests can assert both "called
+// once per file id" and "before the source delete".
+type fakeTableDropper struct {
+	events  *[]string
+	dropped []string
+}
+
+func (d *fakeTableDropper) DropTablesForFile(_ context.Context, fileID string) error {
+	if d.events != nil {
+		*d.events = append(*d.events, "drop:"+fileID)
+	}
+	d.dropped = append(d.dropped, fileID)
+	return nil
 }
 
 func (m *mockStore) GetConfluenceSourceIDForFile(_ context.Context, _ string) (string, error) {
@@ -629,6 +651,62 @@ func TestDeleteSource_OK(t *testing.T) {
 	source := makeSource()
 	store := &mockStore{source: source}
 	h := confluence.NewHandler(store, testJWTSecret)
+
+	req := withKBAccess(
+		newRequest(http.MethodDelete, "/api/kb/"+testKBID+"/confluence-sources/"+testSourceID, nil),
+		testKBID,
+	)
+	rr := serveSourceID(testSourceID, h.DeleteSource, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestDeleteSource_DropsTablesBeforeDeletingSource pins R60: DeleteSource
+// must drop every one of its files' materialised spreadsheet tables BEFORE
+// the source delete, which relies on files.confluence_source_id ON DELETE
+// CASCADE and never drops the physical tables itself.
+func TestDeleteSource_DropsTablesBeforeDeletingSource(t *testing.T) {
+	source := makeSource()
+	var events []string
+	store := &mockStore{
+		source: source,
+		filesForSource: []confluence.ConfluenceFileRow{
+			{ID: "file-1"}, {ID: "file-2"},
+		},
+		events: &events,
+	}
+	dropper := &fakeTableDropper{events: &events}
+	h := confluence.NewHandler(store, testJWTSecret)
+	h.SetTableDropper(dropper)
+
+	req := withKBAccess(
+		newRequest(http.MethodDelete, "/api/kb/"+testKBID+"/confluence-sources/"+testSourceID, nil),
+		testKBID,
+	)
+	rr := serveSourceID(testSourceID, h.DeleteSource, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rr.Code, rr.Body.String())
+	}
+	wantEvents := []string{"drop:file-1", "drop:file-2", "delete:" + testSourceID}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Errorf("event order = %v, want %v", events, wantEvents)
+	}
+}
+
+// TestDeleteSource_NilDropperIsNoop pins the nil-safety half: a deployment
+// without a main pool (or a caller that never wired one) must still delete
+// the source, unaffected.
+func TestDeleteSource_NilDropperIsNoop(t *testing.T) {
+	source := makeSource()
+	store := &mockStore{
+		source:         source,
+		filesForSource: []confluence.ConfluenceFileRow{{ID: "file-1"}},
+	}
+	h := confluence.NewHandler(store, testJWTSecret)
+	// TableDropper deliberately left nil.
 
 	req := withKBAccess(
 		newRequest(http.MethodDelete, "/api/kb/"+testKBID+"/confluence-sources/"+testSourceID, nil),

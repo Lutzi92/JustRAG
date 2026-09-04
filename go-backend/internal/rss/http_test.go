@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -31,6 +32,9 @@ type mockStore struct {
 	lastCreatedSchedule  string
 	lastUpdate           rss.RSSFeedUpdate
 	err                  error
+	fileIDs              []string  // returned by ListFileIDsByRSSFeedID
+	events               *[]string // shared event-order log; nil = untracked
+	deletedFeedID        string
 }
 
 func (m *mockStore) CreateRSSFeed(_ context.Context, kbID, url string, title *string, syncSchedule string, fetchFullText bool) (*rss.RSSFeedRow, error) {
@@ -66,6 +70,10 @@ func (m *mockStore) UpdateRSSFeed(_ context.Context, feedID string, updates rss.
 }
 
 func (m *mockStore) DeleteRSSFeed(_ context.Context, feedID string) error {
+	if m.events != nil {
+		*m.events = append(*m.events, "delete:"+feedID)
+	}
+	m.deletedFeedID = feedID
 	return m.err
 }
 
@@ -79,6 +87,26 @@ func (m *mockStore) UpdateRSSFeedPollFailure(_ context.Context, _ string, _ stri
 
 func (m *mockStore) ListFileNamesByRSSFeedID(_ context.Context, _ string) (map[string]bool, error) {
 	return nil, m.err
+}
+
+func (m *mockStore) ListFileIDsByRSSFeedID(_ context.Context, _ string) ([]string, error) {
+	return m.fileIDs, m.err
+}
+
+// fakeTableDropper implements rss.TableDropper, recording each call (and
+// its position in a shared event log) so tests can assert both "called once
+// per file id" and "before the feed delete".
+type fakeTableDropper struct {
+	events  *[]string
+	dropped []string
+}
+
+func (d *fakeTableDropper) DropTablesForFile(_ context.Context, fileID string) error {
+	if d.events != nil {
+		*d.events = append(*d.events, "drop:"+fileID)
+	}
+	d.dropped = append(d.dropped, fileID)
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +428,50 @@ func TestDeleteRSSFeed_OK(t *testing.T) {
 
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestDeleteRSSFeed_DropsTablesBeforeDeletingFeed pins R60: DeleteRSSFeed
+// must drop every one of its files' materialised spreadsheet tables BEFORE
+// the feed delete, which relies on files.rss_feed_id ON DELETE CASCADE and
+// never drops the physical tables itself.
+func TestDeleteRSSFeed_DropsTablesBeforeDeletingFeed(t *testing.T) {
+	feed := makeFeed()
+	var events []string
+	store := &mockStore{feed: feed, fileIDs: []string{"file-1", "file-2"}, events: &events}
+	dropper := &fakeTableDropper{events: &events}
+	h := newHandlerForTest(store, &mockValidator{})
+	h.SetTableDropper(dropper)
+
+	req := withKBAccess(newRequest(http.MethodDelete, "/api/kb/"+testKBID+"/rss/"+testFeedID, nil), testKBID)
+	rr := serveFeedID(testFeedID, h.DeleteRSSFeed, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rr.Code, rr.Body.String())
+	}
+	wantEvents := []string{"drop:file-1", "drop:file-2", "delete:" + testFeedID}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Errorf("event order = %v, want %v", events, wantEvents)
+	}
+}
+
+// TestDeleteRSSFeed_NilDropperIsNoop pins the nil-safety half: a deployment
+// without a main pool (or a caller that never wired one) must still delete
+// the feed, unaffected.
+func TestDeleteRSSFeed_NilDropperIsNoop(t *testing.T) {
+	feed := makeFeed()
+	store := &mockStore{feed: feed, fileIDs: []string{"file-1"}}
+	h := newHandlerForTest(store, &mockValidator{})
+	// TableDropper deliberately left nil.
+
+	req := withKBAccess(newRequest(http.MethodDelete, "/api/kb/"+testKBID+"/rss/"+testFeedID, nil), testKBID)
+	rr := serveFeedID(testFeedID, h.DeleteRSSFeed, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if store.deletedFeedID != testFeedID {
+		t.Errorf("deletedFeedID = %q, want %q", store.deletedFeedID, testFeedID)
 	}
 }
 

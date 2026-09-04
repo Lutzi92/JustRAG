@@ -830,6 +830,11 @@ func registerKBRoutes(rc *routeCtx, inviteRL *middleware.RedisRateLimiter) {
 
 	// RSS feeds (KB-level)
 	rssHandler := rss.NewHandler(rss.NewStore(rc.infra.db.Main), rc.infra.asynqClient)
+	// R60: wire the spreadsheet table dropper so deleting a feed also drops
+	// the `tabular.sheet_*` tables its files materialised. DeleteRSSFeed
+	// relies on files.rss_feed_id ON DELETE CASCADE, which removes the
+	// files rows but never drops the physical tables (C1/R20, R60).
+	rssHandler.SetTableDropper(tabular.NewMaterializer(rc.infra.db.Main))
 	rc.mux.Handle("POST /api/kb/{id}/rss", rc.kbEditChain(rssHandler.CreateRSSFeed))
 	rc.mux.Handle("GET /api/kb/{id}/rss", rc.kbViewChain(rssHandler.ListRSSFeeds))
 	rc.mux.Handle("PATCH /api/kb/{id}/rss/{feedId}", rc.kbEditChain(rssHandler.UpdateRSSFeed))
@@ -838,6 +843,12 @@ func registerKBRoutes(rc *routeCtx, inviteRL *middleware.RedisRateLimiter) {
 
 	// Confluence connections (auth only, user-level)
 	confluenceHandler := confluence.NewHandler(confluence.NewStore(rc.infra.db.Main), rc.cfg.JWTSecret, rc.infra.asynqClient)
+	// R60: wire the spreadsheet table dropper so deleting a source also
+	// drops the `tabular.sheet_*` tables its files materialised.
+	// DeleteConfluenceSource relies on files.confluence_source_id ON
+	// DELETE CASCADE, which removes the files rows but never drops the
+	// physical tables (C1/R20, R60).
+	confluenceHandler.SetTableDropper(tabular.NewMaterializer(rc.infra.db.Main))
 	rc.mux.Handle("GET /api/confluence/connections", rc.authMw.Authenticate(http.HandlerFunc(confluenceHandler.GetConnection)))
 	rc.mux.Handle("POST /api/confluence/connections", rc.authMw.Authenticate(http.HandlerFunc(confluenceHandler.CreateConnection)))
 	rc.mux.Handle("PUT /api/confluence/connections/{id}", rc.authMw.Authenticate(http.HandlerFunc(confluenceHandler.UpdateConnection)))
@@ -857,6 +868,12 @@ func registerKBRoutes(rc *routeCtx, inviteRL *middleware.RedisRateLimiter) {
 
 	// Git repo sources (KB-level)
 	gitRepoHandler := gitrepo.NewHandler(gitrepo.NewStore(rc.infra.db.Main), rc.cfg.JWTSecret, rc.infra.asynqClient)
+	// R60: wire the spreadsheet table dropper so deleting a source also
+	// drops the `tabular.sheet_*` tables its files materialised.
+	// DeleteGitRepoSource relies on files.git_repo_source_id ON DELETE
+	// CASCADE, which removes the files rows but never drops the physical
+	// tables (C1/R20, R60).
+	gitRepoHandler.SetTableDropper(tabular.NewMaterializer(rc.infra.db.Main))
 	rc.mux.Handle("POST /api/kb/{id}/git-repos", rc.kbEditChain(gitRepoHandler.CreateSource))
 	rc.mux.Handle("GET /api/kb/{id}/git-repos", rc.kbViewChain(gitRepoHandler.ListSources))
 	rc.mux.Handle("PATCH /api/kb/{id}/git-repos/{sourceId}", rc.kbEditChain(gitRepoHandler.UpdateSource))

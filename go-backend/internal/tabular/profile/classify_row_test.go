@@ -87,6 +87,21 @@ func TestRegionRows(t *testing.T) {
 	if got := RegionRows(Region{Top: 0, Bottom: 5, OpenEnded: true}, 1, 0); got != FallbackRegionRows {
 		t.Errorf("open-ended region rows with sheetRows=0 = %d, want the shared fallback %d", got, FallbackRegionRows)
 	}
+	// R58: a stale/placeholder dimension can declare sheetRows BELOW the
+	// region's own dataStart (a raw-Go-writer xlsx stuck at "A1" is the
+	// real-world example) -- that must read as unknown, not as a
+	// one-row sheet, or IsDerivedRow's threshold collapses to ~0.
+	if got := RegionRows(Region{Top: 0, Bottom: 5, OpenEnded: true}, 14, 1); got != FallbackRegionRows {
+		t.Errorf("open-ended region rows with sheetRows=1 < dataStart=14 = %d, want the shared fallback %d", got, FallbackRegionRows)
+	}
+	if got := RegionRows(Region{Top: 0, Bottom: 5, OpenEnded: true}, 14, 13); got != FallbackRegionRows {
+		t.Errorf("open-ended region rows with sheetRows=13 < dataStart=14 = %d, want the shared fallback %d", got, FallbackRegionRows)
+	}
+	// The boundary: sheetRows == dataStart means exactly one data row, and
+	// it must be trusted (not treated as stale).
+	if got := RegionRows(Region{Top: 0, Bottom: 5, OpenEnded: true}, 14, 14); got != 1 {
+		t.Errorf("open-ended region rows with sheetRows=dataStart=14 = %d, want 1", got)
+	}
 	// Open-ended with a known sheet row count: sized from the sheet's end,
 	// not the fallback constant.
 	if got := RegionRows(Region{Top: 0, Bottom: 5, OpenEnded: true}, 14, 1000); got != 987 {

@@ -6,17 +6,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
 
 type fakeStore struct {
-	created        *CreateGitRepoSourceInput
-	getByID        *GitRepoSourceRow
-	updateCalled   bool
-	lastUpdate     GitRepoSourceUpdate
-	deleteCalled   bool
-	gitRepoEnabled bool // controls GetSiteConfigValue("git_repo_enabled")
+	created         *CreateGitRepoSourceInput
+	getByID         *GitRepoSourceRow
+	updateCalled    bool
+	lastUpdate      GitRepoSourceUpdate
+	deleteCalled    bool
+	gitRepoEnabled  bool             // controls GetSiteConfigValue("git_repo_enabled")
+	filesForSource  []GitRepoFileRow // returned by ListGitRepoFiles
+	events          *[]string        // shared event-order log; nil = untracked
+	deletedSourceID string
 }
 
 func (f *fakeStore) CreateGitRepoSource(_ context.Context, in CreateGitRepoSourceInput) (*GitRepoSourceRow, error) {
@@ -38,13 +42,17 @@ func (f *fakeStore) UpdateGitRepoSource(_ context.Context, _ string, upd GitRepo
 	f.lastUpdate = upd
 	return nil
 }
-func (f *fakeStore) DeleteGitRepoSource(_ context.Context, _ string) error {
+func (f *fakeStore) DeleteGitRepoSource(_ context.Context, sourceID string) error {
 	f.deleteCalled = true
+	f.deletedSourceID = sourceID
+	if f.events != nil {
+		*f.events = append(*f.events, "delete:"+sourceID)
+	}
 	return nil
 }
 func (f *fakeStore) SetGitRepoSyncState(context.Context, string, SyncState) error { return nil }
 func (f *fakeStore) ListGitRepoFiles(context.Context, string) ([]GitRepoFileRow, error) {
-	return nil, nil
+	return f.filesForSource, nil
 }
 func (f *fakeStore) CreateGitRepoFile(context.Context, CreateGitRepoFileInput) (string, error) {
 	return "f1", nil
@@ -174,6 +182,63 @@ func TestDeleteSourceCrossKBReturns404(t *testing.T) {
 	}
 	if fs.deleteCalled {
 		t.Fatal("DeleteGitRepoSource must not be called on cross-KB source")
+	}
+}
+
+// TestDeleteSource_DropsTablesBeforeDeletingSource pins R60: DeleteSource
+// must drop every one of its files' materialised spreadsheet tables BEFORE
+// the source delete, which relies on files.git_repo_source_id ON DELETE
+// CASCADE and never drops the physical tables itself.
+func TestDeleteSource_DropsTablesBeforeDeletingSource(t *testing.T) {
+	var events []string
+	fs := &fakeStore{
+		getByID: &GitRepoSourceRow{ID: "SRC1", KbID: "KB-A"},
+		filesForSource: []GitRepoFileRow{
+			{FileID: "file-1"}, {FileID: "file-2"},
+		},
+		events: &events,
+	}
+	dropper := &fakeTableDropper{events: &events}
+	h := NewHandler(fs, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+	h.SetTableDropper(dropper)
+
+	req := httptest.NewRequest("DELETE", "/api/kb/KB-A/git-repos/SRC1", nil)
+	req.SetPathValue("id", "KB-A")
+	req.SetPathValue("sourceId", "SRC1")
+	rec := httptest.NewRecorder()
+	h.DeleteSource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	wantEvents := []string{"drop:file-1", "drop:file-2", "delete:SRC1"}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Errorf("event order = %v, want %v", events, wantEvents)
+	}
+}
+
+// TestDeleteSource_NilDropperIsNoop pins the nil-safety half: a deployment
+// without a main pool (or a caller that never wired one) must still delete
+// the source, unaffected.
+func TestDeleteSource_NilDropperIsNoop(t *testing.T) {
+	fs := &fakeStore{
+		getByID:        &GitRepoSourceRow{ID: "SRC1", KbID: "KB-A"},
+		filesForSource: []GitRepoFileRow{{FileID: "file-1"}},
+	}
+	h := NewHandler(fs, "test-jwt-secret-at-least-32-bytes-long!!", nil)
+	// TableDropper deliberately left nil.
+
+	req := httptest.NewRequest("DELETE", "/api/kb/KB-A/git-repos/SRC1", nil)
+	req.SetPathValue("id", "KB-A")
+	req.SetPathValue("sourceId", "SRC1")
+	rec := httptest.NewRecorder()
+	h.DeleteSource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if fs.deletedSourceID != "SRC1" {
+		t.Errorf("deletedSourceID = %q, want %q", fs.deletedSourceID, "SRC1")
 	}
 }
 
