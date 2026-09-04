@@ -211,6 +211,14 @@ var snapshotConfigKeys = []string{
 	// surface, presets included.
 	"workspace_analysis_presets",
 	"workspace_comparison_presets",
+	// Sheet profiler (spreadsheet rework Phase 1) registry keys; cross-checked
+	// by snapshot_registry_test.go like the blocks above. Ingest-time knobs
+	// (RequiresReingest) with no pipeline effect until Phase 2 wires ingest,
+	// but still per-KB-overridable, so the snapshot must capture them.
+	"tabular_profile_llm_enabled",
+	"tabular_profile_llm_threshold",
+	"tabular_profile_model",
+	"tabular_profile_sample_rows",
 }
 
 // ---------------------------------------------------------------------------
