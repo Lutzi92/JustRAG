@@ -177,15 +177,21 @@ func tableQueryHandler(cat catalogReader, exec sqlexec.Executor, enabled func(co
 			return mcp.ToolResult{}, fmt.Errorf("table_query: catalog: %w", err)
 		}
 
+		// An empty catalog short-circuits BOTH discovery and execution mode:
+		// there is nothing to describe, and there is no allowlisted table any
+		// SQL could legally reference, so running the SQL through the
+		// validator would only ever surface a confusing "no tabular table"
+		// parser error instead of this same friendly message.
+		if len(entries) == 0 {
+			return mcp.ToolResult{
+				Text: "No spreadsheet tables available in this knowledge base.",
+				Meta: map[string]any{"table_count": 0},
+			}, nil
+		}
+
 		// Discovery mode (explicit, or when no SQL provided).
 		if args.Describe || strings.TrimSpace(args.SQL) == "" {
 			structured, _ := json.Marshal(map[string]any{"tables": entries})
-			if len(entries) == 0 {
-				return mcp.ToolResult{
-					Text: "No spreadsheet tables available in this knowledge base.",
-					Meta: map[string]any{"table_count": 0},
-				}, nil
-			}
 			return mcp.ToolResult{Structured: structured, Meta: map[string]any{"table_count": len(entries)}}, nil
 		}
 
@@ -259,6 +265,43 @@ var tableQueryFromJoinRe = regexp.MustCompile(`(?i)\b(?:from|join)\s+(?:only\s+)
 // group is the bare table name after the schema qualifier.
 var tabularRefRe = regexp.MustCompile(`(?i)\btabular\s*\.\s*"?([a-zA-Z_]\w*)"?`)
 
+// cteFirstNameRe captures the alias of the first CTE declared by a WITH
+// clause: WITH [RECURSIVE] <name> [(cols)] AS (.
+var cteFirstNameRe = regexp.MustCompile(`(?i)\bwith\s+(?:recursive\s+)?([a-zA-Z_]\w*)\s*(?:\([^)]*\))?\s+as\s*\(`)
+
+// cteNextNameRe captures each subsequent comma-separated CTE alias:
+// , <name> [(cols)] AS (.
+var cteNextNameRe = regexp.MustCompile(`(?i),\s*([a-zA-Z_]\w*)\s*(?:\([^)]*\))?\s+as\s*\(`)
+
+// collectCTENames returns the lower-cased set of CTE aliases a WITH clause
+// declares at the start of scan (already quote-stripped). R53: the regex
+// second gate has no notion of CTEs otherwise, so a perfectly legal
+// "WITH t AS (SELECT ... FROM tabular.x) SELECT * FROM t" was rejected with
+// a misleading "must be schema-qualified" error — the outer "FROM t" refers
+// to the CTE, not a real relation, and must be exempted from the
+// tabular-prefix check (the tabularRefRe scan of tabular.<name> references
+// is unaffected: a CTE alias never matches that pattern).
+//
+// Returns an empty set when the query has no WITH clause at all, so the
+// subsequent-alias scan (which is otherwise just "comma, then <name> AS (")
+// can only ever fire once a real WITH clause has been found — it must not
+// degrade into exempting arbitrary bare identifiers.
+func collectCTENames(scan string) map[string]bool {
+	names := map[string]bool{}
+	m := cteFirstNameRe.FindStringSubmatchIndex(scan)
+	if m == nil {
+		return names
+	}
+	names[strings.ToLower(scan[m[2]:m[3]])] = true
+	for _, sm := range cteNextNameRe.FindAllStringSubmatch(scan[m[1]:], -1) {
+		if len(sm) < 2 {
+			continue
+		}
+		names[strings.ToLower(sm[1])] = true
+	}
+	return names
+}
+
 // validateTableQuery enforces the shared read-only shape plus a tabular-table
 // allowlist. allow keys are fully-qualified lowercased names (tabular.<table>).
 //
@@ -286,6 +329,7 @@ func validateTableQuery(q string, allow map[string]bool) error {
 	// would dodge both regexes below and reach another KB's table — a
 	// cross-tenant leak. Quote-stripping makes every table reference scannable.
 	scan := strings.ReplaceAll(strings.TrimSpace(q), `"`, "")
+	cteNames := collectCTENames(scan)
 
 	fromMatches := tableQueryFromJoinRe.FindAllStringSubmatch(scan, -1)
 	if len(fromMatches) == 0 {
@@ -297,6 +341,12 @@ func validateTableQuery(q string, allow map[string]bool) error {
 			continue
 		}
 		name := normalizeQualifiedName(m[1])
+		if cteNames[name] {
+			// A CTE alias, not a real relation — exempt it from the
+			// tabular-prefix check (R53). The tabularRefRe scan below is
+			// unaffected: a bare alias never matches "tabular.<name>".
+			continue
+		}
 		if !strings.HasPrefix(name, prefix) {
 			return fmt.Errorf("table %q must be schema-qualified as %s<name> from describe", m[1], prefix)
 		}

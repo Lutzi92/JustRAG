@@ -132,6 +132,88 @@ func TestTableQueryDiscoveryDescribesColumnRoleAndDescription(t *testing.T) {
 
 func alwaysEnabled(context.Context) bool { return true }
 
+// TestValidateTableQueryCTEAliasExempted pins R53: the regex second gate
+// must recognize a WITH-clause CTE alias referenced in an outer FROM and
+// exempt it from the "must be schema-qualified as tabular.<name>" check —
+// while a bare FROM target that is NOT a declared CTE alias must still be
+// rejected (i.e. the exemption is alias-specific, not "any bare identifier
+// passes"). Mutation: dropping the CTE-alias collection makes the first
+// case here fail with the misleading "must be schema-qualified" error.
+func TestValidateTableQueryCTEAliasExempted(t *testing.T) {
+	allow := map[string]bool{"tabular.sheet_abc_0": true}
+	// Single CTE: the outer FROM t must be exempted (t is a CTE alias, not a
+	// real relation) while the CTE body's own tabular.* reference is still
+	// allowlist-checked.
+	if err := validateTableQuery(`WITH t AS (SELECT 1 FROM tabular.sheet_abc_0) SELECT * FROM t`, allow); err != nil {
+		t.Fatalf("CTE alias wrongly rejected: %v", err)
+	}
+	// Multiple CTEs (comma-separated aliases): both aliases exempted.
+	if err := validateTableQuery(`WITH a AS (SELECT 1 FROM tabular.sheet_abc_0), b AS (SELECT * FROM a) SELECT * FROM b`, allow); err != nil {
+		t.Fatalf("multi-CTE alias wrongly rejected: %v", err)
+	}
+	// A bare FROM target that is NOT a declared CTE alias must still be
+	// rejected — the exemption must not degrade into "any bare identifier
+	// passes."
+	if err := validateTableQuery(`SELECT * FROM z`, allow); err == nil {
+		t.Fatal("bare non-CTE FROM target must still be rejected")
+	}
+}
+
+// TestTableQueryAcceptsCTE is the handler-level companion to
+// TestValidateTableQueryCTEAliasExempted: a CTE statement referencing only
+// allowlisted tabular tables must pass BOTH gates (sqlcheck.Validate and
+// validateTableQuery) and reach the executor.
+func TestTableQueryAcceptsCTE(t *testing.T) {
+	cat := fakeCatalog{entries: []tableEntry{{
+		TableName: "tabular.sheet_abc_0", SheetName: "Q1", FileName: "sales.csv", RowCount: 5,
+	}}}
+	fe := &fakeExecutor{}
+	tool := newTableQueryWithDeps(cat, fe, alwaysEnabled)
+	argsJSON, _ := json.Marshal(map[string]any{
+		"kb_id": "k", "sql": `WITH t AS (SELECT 1 FROM tabular.sheet_abc_0) SELECT * FROM t`,
+	})
+	if _, err := tool.Handler.Invoke(context.Background(), argsJSON); err != nil {
+		t.Fatalf("CTE query wrongly rejected: %v", err)
+	}
+	if fe.lastSQL == "" {
+		t.Fatal("expected the CTE query to reach the executor")
+	}
+}
+
+// TestTableQueryRejectsForeignTableInsideCTE pins that a CTE body
+// referencing a table outside the KB's catalog is still rejected — by the
+// AST gate (sqlcheck.Validate), whose message is surfaced verbatim.
+func TestTableQueryRejectsForeignTableInsideCTE(t *testing.T) {
+	cat := fakeCatalog{entries: []tableEntry{{
+		TableName: "tabular.sheet_abc_0", SheetName: "Q1", FileName: "sales.csv", RowCount: 5,
+	}}}
+	tool := newTableQueryWithDeps(cat, &fakeExecutor{}, alwaysEnabled)
+	argsJSON, _ := json.Marshal(map[string]any{
+		"kb_id": "k", "sql": `WITH t AS (SELECT 1 FROM tabular."other") SELECT * FROM t`,
+	})
+	_, err := tool.Handler.Invoke(context.Background(), argsJSON)
+	if err == nil || !strings.Contains(err.Error(), "not a table of this knowledge base") {
+		t.Fatalf("expected rejection mentioning 'not a table of this knowledge base', got %v", err)
+	}
+}
+
+// TestTableQueryExecutionWithEmptyCatalog pins that the execution path
+// (sql given) returns the same friendly "no tables" message as discovery
+// mode when the KB's catalog is empty, instead of falling into the
+// validator and surfacing a confusing "no tabular table" parser error.
+func TestTableQueryExecutionWithEmptyCatalog(t *testing.T) {
+	cat := fakeCatalog{} // no entries
+	tool := newTableQueryWithDeps(cat, &fakeExecutor{}, alwaysEnabled)
+	argsJSON, _ := json.Marshal(map[string]any{"kb_id": "k", "sql": "SELECT 1 FROM tabular.sheet_abc_0"})
+	res, err := tool.Handler.Invoke(context.Background(), argsJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Text != "No spreadsheet tables available in this knowledge base." {
+		t.Fatalf("expected the no-tables message, got %+v", res)
+	}
+}
+
 // fakeExecutor is the sqlexec.Executor test seam. It records the exact SQL
 // string it was asked to run (post sqlcheck.Validate wrapping) and returns a
 // canned result unless err is set.
