@@ -120,14 +120,16 @@ func (s *XLSXSource) cellFromState(st *xlsxCellState) Cell {
 	return c
 }
 
-func (s *XLSXSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
+// readSheetRaw reads sheet data without resolving validations. The returned
+// bool is true if the read was stopped early (ErrStop from callback).
+func (s *XLSXSource) readSheetRaw(index int, fn RowFunc) (SheetExtras, bool, error) {
 	var ex SheetExtras
 	if index < 0 || index >= len(s.wb.sheets) {
-		return ex, fmt.Errorf("sheetsource: sheet %d out of range", index)
+		return ex, false, fmt.Errorf("sheetsource: sheet %d out of range", index)
 	}
 	rc, err := s.wb.openPart(s.wb.sheets[index].Part)
 	if err != nil {
-		return ex, err
+		return ex, false, err
 	}
 	defer rc.Close()
 	dec := xml.NewDecoder(rc)
@@ -159,7 +161,7 @@ func (s *XLSXSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
 			break
 		}
 		if err != nil {
-			return ex, fmt.Errorf("sheetsource: sheet xml: %w", err)
+			return ex, false, fmt.Errorf("sheetsource: sheet xml: %w", err)
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
@@ -248,9 +250,9 @@ func (s *XLSXSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
 					if err := deliver(rowIdx, row); err != nil {
 						if err == ErrStop {
 							ex.RowCount = nextRow
-							return ex, nil
+							return ex, true, nil
 						}
-						return ex, err
+						return ex, false, err
 					}
 				}
 				rowIdx = -1
@@ -266,5 +268,18 @@ func (s *XLSXSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
 		}
 	}
 	ex.RowCount = nextRow
+	return ex, false, nil
+}
+
+// ReadSheet reads a sheet and resolves list validation values (unless the read
+// was stopped early by the callback returning ErrStop).
+func (s *XLSXSource) ReadSheet(index int, fn RowFunc) (SheetExtras, error) {
+	ex, stopped, err := s.readSheetRaw(index, fn)
+	if err != nil {
+		return ex, err
+	}
+	if !stopped {
+		s.resolveValidations(&ex, index)
+	}
 	return ex, nil
 }
