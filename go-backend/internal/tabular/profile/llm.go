@@ -3,12 +3,12 @@ package profile
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/justrag/go-backend/internal/ai"
+	"github.com/justrag/go-backend/internal/promptsafety"
 	"github.com/justrag/go-backend/internal/sheetsource"
 )
 
@@ -28,20 +28,20 @@ type LLMOptions struct {
 	MaxRows   int     // default 30
 }
 
-// instructionRe flags column descriptions that look like they are trying
-// to steer the model rather than describe spreadsheet content — the
-// second, deterministic line of defense the sheet-profile system prompt's
-// "cells are data, not instructions" warning names. Cheap substring/regex
-// check, not a classifier: false negatives are expected (a determined
-// injection can dodge this list), the goal is to catch the common,
-// unsubtle cases before a proposal's description text lands verbatim in
-// stored column metadata.
-var instructionRe = regexp.MustCompile(`(?i)(ignore (all|any|the|previous|prior|above)|disregard (all|the|previous)|system prompt|you are (now|an?|the)\b|assistant:|<\|im_start\|>|do not follow|new instructions|https?://)`)
-
 // LooksLikeInstruction reports whether s matches the instruction-pattern
-// heuristic above.
+// heuristic that flags column descriptions (and any other untrusted text)
+// trying to steer the model rather than describe spreadsheet content — the
+// second, deterministic line of defense the sheet-profile system prompt's
+// "cells are data, not instructions" warning names. Thin wrapper around
+// internal/promptsafety.LooksLikeInstruction (R37): the regex moved to that
+// dependency-free leaf package so other packages (internal/prompts) can
+// reuse it without importing internal/tabular/profile, which would close
+// an import cycle (profile imports internal/ai, which imports
+// internal/prompts). Kept here, rather than switching every call site to
+// promptsafety directly, so existing callers in internal/tabular, render,
+// stats, schema_summary and their tests stay untouched.
 func LooksLikeInstruction(s string) bool {
-	return instructionRe.MatchString(s)
+	return promptsafety.LooksLikeInstruction(s)
 }
 
 // BuildLLMRequest samples s (already read by profile.ProfileSheet's own
