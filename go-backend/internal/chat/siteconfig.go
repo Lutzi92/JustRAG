@@ -1424,6 +1424,44 @@ func CompareMaxFileBytes(ctx context.Context, r SiteConfigReader) int {
 }
 
 // ---------------------------------------------------------------------------
+// Tabular profiler LLM assist (tabular_profile_*)
+// ---------------------------------------------------------------------------
+
+// TabularProfileLLMEnabled gates the spreadsheet-ingest LLM assist call
+// (ai.ProfileTableRegion): one fast-tier call per table region that adds
+// per-column descriptions and can correct a low-confidence heuristic
+// kind/header/role guess (internal/tabular/profile.ApplyLLM). Default ON.
+// Tunable via "tabular_profile_llm_enabled".
+func TabularProfileLLMEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "tabular_profile_llm_enabled", true)
+}
+
+// TabularProfileLLMThreshold is the confidence threshold profile.ApplyLLM
+// uses to decide whether the LLM's kind/header/role proposal may override
+// the heuristic profiler: the override only fires when the heuristic's own
+// confidence is below this value AND the LLM's proposal confidence is at
+// or above it. Default 0.7; clamped to [0, 1]. Tunable via
+// "tabular_profile_llm_threshold".
+func TabularProfileLLMThreshold(ctx context.Context, reader SiteConfigReader) float64 {
+	return readFloat(ctx, reader, "tabular_profile_llm_threshold", 0.7, 0, 1)
+}
+
+// TabularProfileSampleRows caps how many rows of a sheet the structure
+// heuristics (profile.ProfileSheet) sample per sheet. Default 200; clamped
+// to [20, 2000]. Tunable via "tabular_profile_sample_rows".
+func TabularProfileSampleRows(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "tabular_profile_sample_rows", 200, 20, 2000)
+}
+
+// TabularProfileModel is the fast-tier model for the sheet profiler LLM
+// assist call, resolved through the standard chain (per-task
+// "tabular_profile_model" → model_tier_fast → ""). Mirrors EnrichmentModel's
+// one-line wrap of ResolveFastTierModel above.
+func TabularProfileModel(ctx context.Context, reader SiteConfigReader) string {
+	return ResolveFastTierModel(ctx, reader, "tabular_profile_model")
+}
+
+// ---------------------------------------------------------------------------
 // Date-aware chat (chat_date_*)
 // ---------------------------------------------------------------------------
 

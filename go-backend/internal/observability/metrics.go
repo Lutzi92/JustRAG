@@ -2367,3 +2367,30 @@ func ObserveMultipassTurnSeconds(seconds float64) {
 func ObserveMultipassDropRate(rate float64) {
 	multipassDropRate.Observe(rate)
 }
+
+// --- Tabular profiler LLM assist ------------------------------------------
+
+var tabularProfileLLMTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_tabular_profile_llm_total",
+		Help: "Per-outcome counter for the spreadsheet-ingest LLM profiler " +
+			"assist (one fast-tier call per table region). Outcome values: " +
+			"ok (proposal parsed), parse_error (completion returned but the " +
+			"body did not parse as the proposal JSON), error (completion " +
+			"call itself failed or returned empty).",
+		ConstLabels: commonLabels,
+	},
+	[]string{"outcome"},
+)
+
+// RecordTabularProfileLLM increments the per-outcome counter for one
+// ProfileTableRegion call. Unknown outcome values normalize to "error" so
+// caller-side typos surface visibly.
+func RecordTabularProfileLLM(outcome string) {
+	switch outcome {
+	case "ok", "parse_error", "error":
+	default:
+		outcome = "error"
+	}
+	tabularProfileLLMTotal.WithLabelValues(outcome).Inc()
+}

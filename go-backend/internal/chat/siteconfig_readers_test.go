@@ -1400,6 +1400,69 @@ func TestChatDateReaders(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Tabular profiler LLM assist readers tests
+// ---------------------------------------------------------------------------
+
+func TestTabularProfileReaders(t *testing.T) {
+	ctx := context.Background()
+
+	// Defaults (nil reader → all defaults).
+	if got := TabularProfileLLMEnabled(ctx, nil); got != true {
+		t.Errorf("TabularProfileLLMEnabled default = %v, want true", got)
+	}
+	if got := TabularProfileLLMThreshold(ctx, nil); got != 0.7 {
+		t.Errorf("TabularProfileLLMThreshold default = %v, want 0.7", got)
+	}
+	if got := TabularProfileSampleRows(ctx, nil); got != 200 {
+		t.Errorf("TabularProfileSampleRows default = %d, want 200", got)
+	}
+	if got := TabularProfileModel(ctx, nil); got != "" {
+		t.Errorf("TabularProfileModel default = %q, want empty", got)
+	}
+
+	// Overrides via a struct-backed fake reader.
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"tabular_profile_llm_enabled":   strPtr("false"),
+		"tabular_profile_llm_threshold": strPtr("0.4"),
+		"tabular_profile_sample_rows":   strPtr("500"),
+		"tabular_profile_model":         strPtr("fast-model"),
+	}}
+	if TabularProfileLLMEnabled(ctx, r) != false {
+		t.Error("llm-enabled override not applied")
+	}
+	if TabularProfileLLMThreshold(ctx, r) != 0.4 {
+		t.Error("threshold override not applied")
+	}
+	if TabularProfileSampleRows(ctx, r) != 500 {
+		t.Error("sample-rows override not applied")
+	}
+	if TabularProfileModel(ctx, r) != "fast-model" {
+		t.Error("model override not applied")
+	}
+
+	// Clamping: threshold outside [0, 1] and sample rows outside [20, 2000]
+	// fall back to the default rather than the out-of-range value.
+	clamped := &fakeSiteConfigReader{values: map[string]*string{
+		"tabular_profile_llm_threshold": strPtr("1.5"),
+		"tabular_profile_sample_rows":   strPtr("5"),
+	}}
+	if got := TabularProfileLLMThreshold(ctx, clamped); got != 0.7 {
+		t.Errorf("out-of-range threshold = %v, want default 0.7", got)
+	}
+	if got := TabularProfileSampleRows(ctx, clamped); got != 200 {
+		t.Errorf("out-of-range sample rows = %d, want default 200", got)
+	}
+
+	// Falls through to model_tier_fast when the per-task key is unset.
+	tiered := &fakeSiteConfigReader{values: map[string]*string{
+		"model_tier_fast": strPtr("tier-model"),
+	}}
+	if got := TabularProfileModel(ctx, tiered); got != "tier-model" {
+		t.Errorf("TabularProfileModel fast-tier fallback = %q, want tier-model", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Recency-listing readers tests
 // ---------------------------------------------------------------------------
 
