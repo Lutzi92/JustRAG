@@ -3,6 +3,8 @@ package sheetsource
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -81,26 +83,43 @@ func TestOpenXLSXNumbersFormatsStyles(t *testing.T) {
 	}
 }
 
+// nopWriteCloser wraps an io.Writer to provide a Close() method.
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (nopWriteCloser) Close() error { return nil }
+
 func TestOpenXLSXCorruptPart(t *testing.T) {
 	t.Parallel()
-	// Create a minimal valid XLSX with corrupt sharedStrings data
+	// Create a zip with an entry using unknown compression method 99.
+	// archive/zip reader has no decompressor for 99, so File.Open() fails with ErrAlgorithm.
+	// This exercises the f.Open() error path, not just parsing errors.
 	buf := &bytes.Buffer{}
 	zw := zip.NewWriter(buf)
+	defer zw.Close()
 
-	// Write minimal workbook.xml
+	// Register method 99 so the writer accepts it (but the reader cannot decode it)
+	zw.RegisterCompressor(99, func(w io.Writer) (io.WriteCloser, error) {
+		return nopWriteCloser{w}, nil
+	})
+
+	// Write minimal workbook.xml with standard Deflate
 	workbookXML := `<?xml version="1.0"?><workbook><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`
-	w, _ := zw.Create("xl/workbook.xml")
+	hdr := &zip.FileHeader{Name: "xl/workbook.xml", Method: zip.Deflate}
+	w, _ := zw.CreateHeader(hdr)
 	w.Write([]byte(workbookXML))
 
-	// Write minimal workbook.xml.rels
+	// Write minimal workbook.xml.rels with standard Deflate
 	relsXML := `<?xml version="1.0"?><Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`
-	w, _ = zw.Create("xl/_rels/workbook.xml.rels")
+	hdr = &zip.FileHeader{Name: "xl/_rels/workbook.xml.rels", Method: zip.Deflate}
+	w, _ = zw.CreateHeader(hdr)
 	w.Write([]byte(relsXML))
 
-	// Create sharedStrings.xml entry, but truncate it mid-stream to corrupt it
-	w, _ = zw.Create("xl/sharedStrings.xml")
-	w.Write([]byte(`<?xml version="1.0"?><sst><si><t>test</t></si><si><t>inco`))
-	// Entry is incomplete/invalid XML
+	// Create sharedStrings.xml with unknown method 99: File.Open() will fail
+	hdr = &zip.FileHeader{Name: "xl/sharedStrings.xml", Method: 99}
+	w, _ = zw.CreateHeader(hdr)
+	w.Write([]byte(`<sst><si><t>x</t></si></sst>`))
 
 	zw.Close()
 
@@ -110,13 +129,20 @@ func TestOpenXLSXCorruptPart(t *testing.T) {
 		t.Fatalf("write temp file: %v", err)
 	}
 
-	// Try to open - should get an error from parsing corrupt sharedStrings
-	w_result, err := openXLSX(tmpFile)
+	// Try to open - should get an error from f.Open() failing
+	result, err := openXLSX(tmpFile)
 	if err == nil {
-		w_result.Close()
-		t.Fatal("expected error opening corrupt sharedStrings.xml, got nil")
+		result.Close()
+		t.Fatal("expected error opening zip with unknown compression method, got nil")
 	}
-	if w_result != nil {
-		w_result.Close()
+	if result != nil {
+		result.Close()
+	}
+	// Verify the error is from the f.Open() failure (ErrAlgorithm), not errPartMissing
+	if errors.Is(err, errPartMissing) {
+		t.Errorf("error should not be errPartMissing, got: %v", err)
+	}
+	if !errors.Is(err, zip.ErrAlgorithm) {
+		t.Errorf("error should be or wrap zip.ErrAlgorithm, got: %v", err)
 	}
 }
