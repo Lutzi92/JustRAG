@@ -121,10 +121,10 @@ var kbConfigRegistry = []KBConfigField{
 	{Key: "kg_extraction_enabled", Type: FieldBool, Group: "Ingestion", Label: "Knowledge-graph extraction (graphrag)", Help: "Extract entities + relations at ingest to build the per-KB knowledge graph. Required before graph routing can use this KB.", RequiresReingest: true},
 
 	// --- Tabular (spreadsheet-ingest LLM assist) ---
-	{Key: "tabular_profile_llm_enabled", Type: FieldBool, Group: "Tabular", Label: "Spreadsheet profiler: LLM column descriptions", Help: "One fast-tier call per table region at ingest; adds per-column descriptions and can override a low-confidence header/kind guess.", RequiresReingest: true},
-	{Key: "tabular_profile_llm_threshold", Type: FieldFloat, Group: "Tabular", Label: "Profiler override threshold", Help: "Heuristic confidence below which the LLM's kind/header/role proposal wins (0–1).", Min: f(0), Max: f(1), RequiresReingest: true},
-	{Key: "tabular_profile_model", Type: FieldString, Group: "Tabular", Label: "Profiler model", Help: "Fast-tier model for the sheet profiler; empty = model_tier_fast.", RequiresReingest: true},
-	{Key: "tabular_profile_sample_rows", Type: FieldInt, Group: "Tabular", Label: "Profiler sample rows", Help: "Rows sampled per sheet for structure detection (20–2000).", Min: f(20), Max: f(2000), RequiresReingest: true},
+	{Key: "tabular_profile_llm_enabled", Type: FieldBool, Group: "Tabular", Label: "Spreadsheet profiler: LLM column descriptions", Help: "One fast-tier call per table region at ingest; adds per-column descriptions and can override a low-confidence header/kind guess. (no effect until spreadsheet ingest Phase 2)", RequiresReingest: true},
+	{Key: "tabular_profile_llm_threshold", Type: FieldFloat, Group: "Tabular", Label: "Profiler override threshold", Help: "Heuristic confidence below which the LLM's kind/header/role proposal wins (0–1). (no effect until spreadsheet ingest Phase 2)", Min: f(0), Max: f(1), RequiresReingest: true},
+	{Key: "tabular_profile_model", Type: FieldString, Group: "Tabular", Label: "Profiler model", Help: "Fast-tier model for the sheet profiler; empty = model_tier_fast. (no effect until spreadsheet ingest Phase 2)", RequiresReingest: true},
+	{Key: "tabular_profile_sample_rows", Type: FieldInt, Group: "Tabular", Label: "Profiler sample rows", Help: "Rows sampled per sheet for structure detection (20–2000). (no effect until spreadsheet ingest Phase 2)", Min: f(20), Max: f(2000), RequiresReingest: true},
 
 	// --- Workspace ---
 	{Key: "workspace_analysis_presets", Type: FieldJSON, Group: "Workspace", Label: "Presets: Neue Analyse", Help: `Auswahlvorschläge für das Prompt-Feld im Dialog „Neue Analyse“, als JSON-Liste: [{"label":"Risiken & Maßnahmen","prompt":"Nenne die wichtigsten Risiken und je eine Gegenmaßnahme."}]. Ein Preset füllt das Feld nur vor — die Nutzer können es frei überschreiben. Leerer Wert bedeutet: die eingebauten Standard-Presets gelten. Kein Modellaufruf.`},

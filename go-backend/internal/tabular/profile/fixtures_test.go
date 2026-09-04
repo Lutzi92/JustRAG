@@ -54,24 +54,32 @@ func roleOf(rp profile.RegionProfile, header string) profile.Role {
 	return ""
 }
 
-// aiProposalEchoing builds the proposal a maximally naive LLM would return:
-// it repeats the heuristic's own columns and, for the free-text `Bemerkung`
-// column, echoes the first non-empty data cell — the injection string — as
-// that column's description. ApplyLLM must refuse to store it.
-func aiProposalEchoing(s *sheetsource.Sample, rp profile.RegionProfile) ai.SheetProfileProposal {
+// aiProposalEchoingNth builds the proposal a maximally naive LLM would
+// return: it repeats the heuristic's own columns and, for the free-text
+// `Bemerkung` column, echoes that column's nth non-empty data cell — one of
+// the fixture's hostile strings — as the column's description. ApplyLLM must
+// refuse to store it. It also reports the cell it echoed, so a test can tell
+// "rejected" from "never proposed".
+func aiProposalEchoingNth(s *sheetsource.Sample, rp profile.RegionProfile, n int) (ai.SheetProfileProposal, string) {
 	prop := ai.SheetProfileProposal{Kind: string(rp.Kind), Confidence: 0.99}
+	echoed := ""
 	for _, c := range rp.Columns {
 		pc := ai.SheetProfileColumn{Index: c.Index, Name: c.Header, Role: string(c.Role)}
 		if c.Header == "Bemerkung" {
+			seen := 0
 			for r := rp.DataStart; r <= rp.Region.Bottom && pc.Description == ""; r++ {
 				if c.Index < len(s.Rows[r]) && !s.Rows[r][c.Index].IsEmpty() {
-					pc.Description = s.Rows[r][c.Index].Formatted
+					if seen == n {
+						pc.Description = s.Rows[r][c.Index].Formatted
+						echoed = pc.Description
+					}
+					seen++
 				}
 			}
 		}
 		prop.Columns = append(prop.Columns, pc)
 	}
-	return prop
+	return prop, echoed
 }
 
 func TestGuardHeaderRow14(t *testing.T) {
@@ -256,13 +264,53 @@ func TestGuardODSAndXLSAndCSV(t *testing.T) {
 func TestGuardInjectionCellsNeverInDescriptions(t *testing.T) {
 	t.Parallel()
 	s, p := profileFixture(t, "injection_cells.xlsx", 0)
-	rp := tableRegion(t, p)
-	// Simulate an LLM that echoes a cell into a description.
-	prop := aiProposalEchoing(s, rp)
-	profile.ApplyLLM(&rp, prop, rp.Confidence, profile.LLMOptions{Enabled: true, Threshold: 0.7})
-	for _, c := range rp.Columns {
-		if profile.LooksLikeInstruction(c.Description) {
-			t.Errorf("instruction leaked into description of %s: %q", c.Header, c.Description)
+	base := tableRegion(t, p)
+
+	// The fixture's Bemerkung column carries two hostile cells (an
+	// "ignore all previous instructions" string and a bare URL). Walk both:
+	// an LLM proposal echoes one per run, and ApplyLLM must reject each.
+	// A proposal only ever carries one description per column, so a single
+	// run can filter at most one — the total across the two runs is what the
+	// fixture's two cells are worth.
+	totalFiltered := 0
+	for n := range 2 {
+		rp := base
+		prop, echoed := aiProposalEchoingNth(s, rp, n)
+		if echoed == "" {
+			t.Fatalf("Bemerkung cell #%d not found — the fixture no longer carries two hostile cells", n)
 		}
+		profile.ApplyLLM(&rp, prop, rp.Confidence, profile.LLMOptions{Enabled: true, Threshold: 0.7})
+
+		for _, c := range rp.Columns {
+			if profile.LooksLikeInstruction(c.Description) {
+				t.Errorf("instruction leaked into description of %s: %q", c.Header, c.Description)
+			}
+		}
+		// Without the two assertions below the guard passes vacuously: if the
+		// filter stopped matching, every Description would simply be the raw
+		// cell and the LooksLikeInstruction loop would still find nothing to
+		// complain about only when LooksLikeInstruction itself broke — and if
+		// nothing were ever proposed, it would find nothing either.
+		got, _ := rp.Diagnostics["descriptions_filtered"].(int)
+		if got != 1 {
+			t.Errorf("cell #%d (%q): descriptions_filtered = %v, want 1 (the filter must actually have fired)", n, echoed, rp.Diagnostics["descriptions_filtered"])
+		}
+		totalFiltered += got
+
+		found := false
+		for _, c := range rp.Columns {
+			if c.Header == "Bemerkung" {
+				found = true
+				if c.Description != "" {
+					t.Errorf("cell #%d: Bemerkung description = %q, want empty (the echoed cell must be dropped, not stored)", n, c.Description)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("no Bemerkung column in the profile — the fixture no longer exercises the free-text echo path")
+		}
+	}
+	if totalFiltered != 2 {
+		t.Errorf("descriptions filtered across both hostile cells = %d, want 2", totalFiltered)
 	}
 }

@@ -33,13 +33,20 @@ func formulaSpansRows(formula string) int {
 // rather than a data row, considering only kept columns cols. regionRows is
 // the number of data rows known so far (sample) or total (pass 1). Exported
 // because Phase 2's streaming pass applies it per row.
+//
+// Two independent rules: (a) the first non-empty kept cell is a totals label
+// ("Summe", "Gesamt", …), or (b) some kept cell holds an aggregate formula
+// spanning at least half the region. Rule (a) used to `return` its match
+// result, so a labelled row that failed the regex short-circuited the whole
+// function and rule (b) only ever ran for rows starting with a number —
+// "Jahressumme | =SUM(C4:C400)" was classified as data.
 func IsDerivedRow(cells []sheetsource.Cell, cols []int, regionRows int) bool {
 	for _, c := range cols {
 		if c >= len(cells) || cells[c].IsEmpty() {
 			continue
 		}
-		if cells[c].Kind == sheetsource.KindText {
-			return totalsLabelRe.MatchString(strings.TrimSpace(cells[c].Raw))
+		if cells[c].Kind == sheetsource.KindText && totalsLabelRe.MatchString(strings.TrimSpace(cells[c].Raw)) {
+			return true
 		}
 		break
 	}
@@ -54,7 +61,13 @@ func IsDerivedRow(cells []sheetsource.Cell, cols []int, regionRows int) bool {
 	return false
 }
 
+// atoi parses the all-digit row numbers rangeRe captures. Anything longer than
+// 9 digits is not a spreadsheet row number, and accumulating it would overflow
+// into a meaningless (possibly negative) span, so it reads as 0.
 func atoi(s string) int {
+	if len(s) > 9 {
+		return 0
+	}
 	n := 0
 	for _, ch := range s {
 		n = n*10 + int(ch-'0')
