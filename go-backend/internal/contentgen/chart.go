@@ -220,7 +220,7 @@ func buildChartSQL(entry *tabular.CatalogEntry, p chartParams) (sql string, keys
 
 	// Keep only numeric y columns that actually exist.
 	for _, y := range p.YColumns {
-		if t, ok := cols[y]; ok && (t == tabular.TypeBigint || t == tabular.TypeFloat) {
+		if t, ok := cols[y]; ok && (t == tabular.TypeBigint || t == tabular.TypeFloat || t == tabular.TypeNumeric) {
 			keys = append(keys, y)
 		}
 	}

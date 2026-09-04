@@ -1411,21 +1411,6 @@ export const translations = {
         de: 'Wenn aktiviert, werden hochgeladene Tabellen (.xlsx/.xls/.csv) beim Ingest in native typisierte Postgres-Tabellen materialisiert (statt eingebettet), und das table_query-Tool beantwortet exakte Lookups/Aggregationen/Sortierungen per Read-only-SQL. Erfordert Migration 0048 und die Read-only-Rolle (JUSTRAG_DB_URL_READONLY) mit den GRANTs auf das tabular-Schema. Standard: aus. Nach Aktivierung Tabellen neu ingesten.',
         en: 'When on, uploaded spreadsheets (.xlsx/.xls/.csv) are materialized at ingest into native-typed Postgres tables (instead of embedded), and the table_query tool answers exact lookups / aggregations / filter-sort via read-only SQL. Requires migration 0048 and the read-only role (JUSTRAG_DB_URL_READONLY) with the tabular-schema GRANTs. Default: off. Re-ingest spreadsheets after enabling.',
     },
-    chatTabularSemanticColumnsEnabled: { de: 'Fuzzy-Suche über Freitext-Spalten', en: 'Fuzzy search over free-text columns' },
-    chatTabularSemanticColumnsEnabledHelp: {
-        de: 'Ingest-seitig: bettet Freitext-Spalten (lang + hohe Kardinalität) zeilenweise ein, sodass kb_search passende Zeilen findet; der Agent pivotiert dann via _rowid auf table_query. Erfordert die strukturierte Abfrage oben. Einbettungskosten nur beim Ingest (kein Zeilenlimit). Nach Aktivierung neu ingesten.',
-        en: 'Ingest-side: embeds free-text columns (long + high-cardinality) per row so kb_search can surface matching rows; the agent then pivots via _rowid to table_query. Requires the structured query above. Embedding cost at ingest only (no row cap). Re-ingest after enabling.',
-    },
-    tabularSemanticMinAvgLen: { de: 'Freitext-Schwelle: Mindest-Durchschnittslänge', en: 'Free-text threshold: min average length' },
-    tabularSemanticMinAvgLenHelp: {
-        de: 'Eine TEXT-Spalte wird nur eingebettet, wenn ihre Werte im Mittel mindestens so viele Zeichen haben. Filtert kurze kategoriale Codes heraus. Standard 32; 0 deaktiviert diesen Filter.',
-        en: 'A TEXT column is embedded only if its values average at least this many characters. Filters out short categorical codes. Default 32; 0 disables this filter.',
-    },
-    tabularSemanticMinDistinctRatio: { de: 'Freitext-Schwelle: Mindest-Distinct-Verhältnis', en: 'Free-text threshold: min distinct ratio' },
-    tabularSemanticMinDistinctRatioHelp: {
-        de: 'Eine TEXT-Spalte wird nur eingebettet, wenn mindestens dieser Anteil der nicht-leeren Werte eindeutig ist. Filtert niedrig-kardinale Kategorien (Status, Land) heraus. Bereich 0.0–1.0; Standard 0.6; 0 deaktiviert diesen Filter.',
-        en: 'A TEXT column is embedded only if at least this fraction of non-empty values is unique. Filters out low-cardinality categoricals (status, country). Range 0.0–1.0; default 0.6; 0 disables this filter.',
-    },
     chatTabularChartsEnabled: { de: 'Diagramme in Antworten', en: 'Charts in answers' },
     chatTabularChartsEnabledHelp: {
         de: 'Wenn aktiviert UND die KB Tabellendaten hat, erhält der Antwort-Prompt eine Anleitung, Ergebnisse als ```chart-Block (Recharts-JSON) auszugeben, den die Oberfläche rendert. Aggregationen via table_query (SQL GROUP BY); Nicht-SQL-Umformungen via code_exec (Plan-Phase). Modellabhängig — bei ungültigem JSON zeigt die Oberfläche einen Fallback. Standard: aus.',

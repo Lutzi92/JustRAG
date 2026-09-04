@@ -33,7 +33,7 @@ const SECTION_CONFIGS = [
     { id: 'ingestion', titleKey: 'agentSectionIngestion', i18nKeys: ['doclingEnabled', 'doclingBaseUrl', 'describeImageEnabled', 'describeImageEnabledHelp', 'describeImageModel', 'describeImageModelHelp', 'contextualEnrichment', 'embeddingBatchSize', 'lateChunkingEnabled', 'lateChunkingMaxInputTokens', 'parentChildEnabled', 'parentChunkSize', 'childChunkSize', 'raptorEnabled', 'raptorMinChunks', 'raptorMaxLevels', 'raptorBranchingFactor', 'raptorClusteringAlgorithm', 'raptorLeidenResolution', 'hyPEEnabled', 'hyPEQuestionsPerChunk', 'hyPEModel'], settingKeys: ['docling_enabled', 'docling_base_url', 'describe_image_enabled', 'describe_image_model', 'contextual_enrichment', 'embedding_batch_size', 'late_chunking_enabled', 'late_chunking_max_input_tokens', 'parent_child_enabled', 'parent_chunk_size', 'child_chunk_size', 'raptor_enabled', 'raptor_min_chunks', 'raptor_max_levels', 'raptor_branching_factor', 'raptor_clustering_algorithm', 'raptor_leiden_resolution', 'hype_enabled', 'hype_questions_per_chunk', 'hype_model'] },
     { id: 'observability', titleKey: 'agentSectionObservability', i18nKeys: ['langfuseBaseUrl'], settingKeys: ['langfuse_base_url'] },
     { id: 'tools', titleKey: 'agentSectionTools', i18nKeys: ['chatCodeExecEnabled'], settingKeys: ['mcp_servers', 'chat_use_mcp_tools', 'chat_code_exec_enabled'] },
-    { id: 'tabular', titleKey: 'agentSectionTabular', i18nKeys: ['chatTabularQueryEnabled', 'chatTabularSemanticColumnsEnabled', 'tabularSemanticMinAvgLen', 'tabularSemanticMinDistinctRatio', 'chatTabularChartsEnabled'], settingKeys: ['chat_tabular_query_enabled', 'chat_tabular_semantic_columns_enabled', 'tabular_semantic_min_avg_len', 'tabular_semantic_min_distinct_ratio', 'chat_tabular_charts_enabled'] },
+    { id: 'tabular', titleKey: 'agentSectionTabular', i18nKeys: ['chatTabularQueryEnabled', 'chatTabularChartsEnabled'], settingKeys: ['chat_tabular_query_enabled', 'chat_tabular_charts_enabled'] },
     { id: 'dateAware', titleKey: 'agentSectionDateAware', i18nKeys: ['chatDateAwarenessEnabled', 'chatDateTimezone', 'chatDateToolsEnabled', 'chatDateToolsMaxResults', 'chatRecencyListingEnabled', 'chatRecencyListingNameMatchEnabled', 'chatRecencyListingWindowDays', 'chatRecencyListingMaxResults'], settingKeys: ['chat_date_awareness_enabled', 'chat_date_timezone', 'chat_date_tools_enabled', 'chat_date_tools_max_results', 'chat_recency_listing_enabled', 'chat_recency_listing_name_match_enabled', 'chat_recency_listing_window_days', 'chat_recency_listing_max_results'] },
     { id: 'syncWindow', titleKey: 'agentSectionSyncWindow', i18nKeys: ['syncWindowStartHour', 'syncWindowEndHour', 'syncWindowTimezone'], settingKeys: ['sync_window_start_hour', 'sync_window_end_hour', 'sync_window_timezone'] },
 ] as const;
@@ -90,7 +90,6 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
     const isDescribeImageEnabled = siteConfigs.describe_image_enabled === 'true' || siteConfigs.describe_image_enabled === '1';
     const isContextualEnrichmentEnabled = siteConfigs.contextual_enrichment !== 'false' && siteConfigs.contextual_enrichment !== '0';
     const isQueryCacheEnabled = siteConfigs.query_cache_enabled === 'true' || siteConfigs.query_cache_enabled === '1';
-    const isTabularSemanticEnabled = siteConfigs.chat_tabular_semantic_columns_enabled === 'true' || siteConfigs.chat_tabular_semantic_columns_enabled === '1';
     const isCorpusTableEnabled = siteConfigs.chat_corpus_table_enabled === 'true' || siteConfigs.chat_corpus_table_enabled === '1';
 
     const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => {
@@ -2136,51 +2135,6 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             {t('chatTabularQueryEnabled')}
                         </label>
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatTabularQueryEnabledHelp')}</p>
-                    </div>
-
-                    <div className="input-group" style={{ maxWidth: '600px' }}>
-                        <label htmlFor="chat-tabular-semantic-columns-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
-                            <input
-                                id="chat-tabular-semantic-columns-enabled"
-                                type="checkbox"
-                                checked={isTabularSemanticEnabled}
-                                onChange={e => setSiteConfigs(prev => ({ ...prev, chat_tabular_semantic_columns_enabled: e.target.checked ? 'true' : 'false' }))}
-                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                            />
-                            {t('chatTabularSemanticColumnsEnabled')}
-                        </label>
-                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatTabularSemanticColumnsEnabledHelp')}</p>
-                    </div>
-
-                    <div className="input-group" style={{ maxWidth: '400px' }}>
-                        <label htmlFor="tabular-semantic-min-avg-len">{t('tabularSemanticMinAvgLen')}</label>
-                        <input
-                            id="tabular-semantic-min-avg-len"
-                            type="number"
-                            min={0}
-                            step={1}
-                            value={siteConfigs.tabular_semantic_min_avg_len || '32'}
-                            onChange={e => setSiteConfigs(prev => ({ ...prev, tabular_semantic_min_avg_len: e.target.value }))}
-                            disabled={!isTabularSemanticEnabled}
-                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
-                        />
-                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('tabularSemanticMinAvgLenHelp')}</p>
-                    </div>
-
-                    <div className="input-group" style={{ maxWidth: '400px' }}>
-                        <label htmlFor="tabular-semantic-min-distinct-ratio">{t('tabularSemanticMinDistinctRatio')}</label>
-                        <input
-                            id="tabular-semantic-min-distinct-ratio"
-                            type="number"
-                            min={0}
-                            max={1}
-                            step={0.05}
-                            value={siteConfigs.tabular_semantic_min_distinct_ratio || '0.6'}
-                            onChange={e => setSiteConfigs(prev => ({ ...prev, tabular_semantic_min_distinct_ratio: e.target.value }))}
-                            disabled={!isTabularSemanticEnabled}
-                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
-                        />
-                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('tabularSemanticMinDistinctRatioHelp')}</p>
                     </div>
 
                     <div className="input-group" style={{ maxWidth: '600px' }}>

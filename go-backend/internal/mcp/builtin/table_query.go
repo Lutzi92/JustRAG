@@ -34,9 +34,11 @@ const tableQueryInputSchema = `{
 // exposes to the LLM (decoupled from tabular.CatalogEntry so the test seam
 // doesn't import a pool).
 type tableColumn struct {
-	Name     string `json:"column"`
-	Type     string `json:"type"`
-	Original string `json:"header"`
+	Name        string `json:"column"`
+	Type        string `json:"type"`
+	Original    string `json:"header"`
+	Role        string `json:"role,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type tableEntry struct {
@@ -64,7 +66,7 @@ func (r pgCatalogReader) listForKB(ctx context.Context, kbID string) ([]tableEnt
 	for _, e := range entries {
 		cols := make([]tableColumn, len(e.Columns))
 		for i, c := range e.Columns {
-			cols[i] = tableColumn{Name: c.Name, Type: string(c.Type), Original: c.Original}
+			cols[i] = tableColumn{Name: c.Name, Type: string(c.Type), Original: c.Original, Role: c.Role, Description: c.Description}
 		}
 		out = append(out, tableEntry{
 			TableName: tabular.TabularSchema + "." + e.TableName,

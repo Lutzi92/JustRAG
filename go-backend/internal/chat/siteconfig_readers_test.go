@@ -1462,6 +1462,93 @@ func TestTabularProfileReaders(t *testing.T) {
 	}
 }
 
+// TestTabularCatalogReaders covers the three Phase-2 materializer/catalog
+// limit readers (tabular_max_rows, tabular_embed_max_rows,
+// tabular_column_values_max_distinct): defaults, overrides, and the
+// out-of-range behavior of readInt/parseInt.
+//
+// NOTE on "clamping": readInt/parseInt (siteconfig.go) do NOT clamp an
+// out-of-range value to the nearest bound — an out-of-range value is
+// rejected outright and the reader falls back to its DEFAULT, exactly like
+// TestTabularProfileReaders's "clamped" case above (tabular_profile_llm_threshold
+// "1.5" -> default 0.7, not 1.0; tabular_profile_sample_rows "5" -> default
+// 200, not 20). So "5" for tabular_max_rows (min 1000) yields the default
+// 2_000_000, not 1000. This test asserts the actual fallback-to-default
+// behavior of the existing readers.
+func TestTabularCatalogReaders(t *testing.T) {
+	ctx := context.Background()
+
+	// Defaults (nil reader).
+	if got := TabularMaxRows(ctx, nil); got != 2_000_000 {
+		t.Errorf("TabularMaxRows default = %d, want 2000000", got)
+	}
+	if got := TabularEmbedMaxRows(ctx, nil); got != 50_000 {
+		t.Errorf("TabularEmbedMaxRows default = %d, want 50000", got)
+	}
+	if got := TabularColumnValuesMaxDistinct(ctx, nil); got != 10_000 {
+		t.Errorf("TabularColumnValuesMaxDistinct default = %d, want 10000", got)
+	}
+
+	// Overrides via a struct-backed fake reader.
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"tabular_max_rows":                   strPtr("3000000"),
+		"tabular_embed_max_rows":             strPtr("100000"),
+		"tabular_column_values_max_distinct": strPtr("20000"),
+	}}
+	if got := TabularMaxRows(ctx, r); got != 3_000_000 {
+		t.Errorf("TabularMaxRows override = %d, want 3000000", got)
+	}
+	if got := TabularEmbedMaxRows(ctx, r); got != 100_000 {
+		t.Errorf("TabularEmbedMaxRows override = %d, want 100000", got)
+	}
+	if got := TabularColumnValuesMaxDistinct(ctx, r); got != 20_000 {
+		t.Errorf("TabularColumnValuesMaxDistinct override = %d, want 20000", got)
+	}
+
+	// A valid boundary value within range applies normally: 0 is in
+	// tabular_embed_max_rows's [0, 1_000_000] range (0 = embed nothing but
+	// cards), so it is NOT out-of-range and applies as-is.
+	zero := &fakeSiteConfigReader{values: map[string]*string{
+		"tabular_embed_max_rows": strPtr("0"),
+	}}
+	if got := TabularEmbedMaxRows(ctx, zero); got != 0 {
+		t.Errorf("TabularEmbedMaxRows(\"0\") = %d, want 0", got)
+	}
+
+	// Out-of-range values fall back to the default (see NOTE above) rather
+	// than clamping to the nearest bound.
+	outOfRange := &fakeSiteConfigReader{values: map[string]*string{
+		"tabular_max_rows":                   strPtr("5"),  // below min 1000
+		"tabular_embed_max_rows":             strPtr("-1"), // below min 0
+		"tabular_column_values_max_distinct": strPtr("7"),  // below min 100
+	}}
+	if got := TabularMaxRows(ctx, outOfRange); got != 2_000_000 {
+		t.Errorf("TabularMaxRows(\"5\") = %d, want default 2000000 (fallback, not clamp-to-1000)", got)
+	}
+	if got := TabularEmbedMaxRows(ctx, outOfRange); got != 50_000 {
+		t.Errorf("TabularEmbedMaxRows(\"-1\") = %d, want default 50000 (fallback, not clamp-to-0)", got)
+	}
+	if got := TabularColumnValuesMaxDistinct(ctx, outOfRange); got != 10_000 {
+		t.Errorf("TabularColumnValuesMaxDistinct(\"7\") = %d, want default 10000 (fallback, not clamp-to-100)", got)
+	}
+
+	// Above-max also falls back to default.
+	aboveMax := &fakeSiteConfigReader{values: map[string]*string{
+		"tabular_max_rows":                   strPtr("6000000"), // above max 5000000
+		"tabular_embed_max_rows":             strPtr("2000000"), // above max 1000000
+		"tabular_column_values_max_distinct": strPtr("200000"),  // above max 100000
+	}}
+	if got := TabularMaxRows(ctx, aboveMax); got != 2_000_000 {
+		t.Errorf("TabularMaxRows(above max) = %d, want default 2000000", got)
+	}
+	if got := TabularEmbedMaxRows(ctx, aboveMax); got != 50_000 {
+		t.Errorf("TabularEmbedMaxRows(above max) = %d, want default 50000", got)
+	}
+	if got := TabularColumnValuesMaxDistinct(ctx, aboveMax); got != 10_000 {
+		t.Errorf("TabularColumnValuesMaxDistinct(above max) = %d, want default 10000", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Recency-listing readers tests
 // ---------------------------------------------------------------------------

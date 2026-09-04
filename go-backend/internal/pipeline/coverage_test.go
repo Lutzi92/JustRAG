@@ -293,12 +293,19 @@ var ignoredKeys = map[string]string{
 	// already-ignored describe_image_model.
 	"describe_image_enabled": "utility endpoint (POST /api/describe-image), not part of the answering pipeline",
 
-	// Sheet profiler (spreadsheet rework Phase 1): ingest-time knobs, not a
-	// pipeline node until Phase 2 wires ingest.
-	"tabular_profile_llm_enabled":   "sheet profiler (spreadsheet rework Phase 1): ingest-time knobs, not a pipeline node until Phase 2 wires ingest",
-	"tabular_profile_llm_threshold": "sheet profiler (spreadsheet rework Phase 1): ingest-time knobs, not a pipeline node until Phase 2 wires ingest",
-	"tabular_profile_model":         "sheet profiler (spreadsheet rework Phase 1): ingest-time knobs, not a pipeline node until Phase 2 wires ingest",
-	"tabular_profile_sample_rows":   "sheet profiler (spreadsheet rework Phase 1): ingest-time knobs, not a pipeline node until Phase 2 wires ingest",
+	// Sheet profiler (spreadsheet rework Phase 1): ingest-time knobs. The
+	// profiler runs inside the spreadsheet ingest branch (ingestion-side),
+	// not a chat-pipeline node, so it is not drawn by any NodeSpec.
+	"tabular_profile_llm_enabled":   "sheet profiler (spreadsheet rework Phase 1): ingest-time knob, runs inside the spreadsheet ingest branch (ingestion-side), not a chat-pipeline node",
+	"tabular_profile_llm_threshold": "sheet profiler (spreadsheet rework Phase 1): ingest-time knob, runs inside the spreadsheet ingest branch (ingestion-side), not a chat-pipeline node",
+	"tabular_profile_model":         "sheet profiler (spreadsheet rework Phase 1): ingest-time knob, runs inside the spreadsheet ingest branch (ingestion-side), not a chat-pipeline node",
+	"tabular_profile_sample_rows":   "sheet profiler (spreadsheet rework Phase 1): ingest-time knob, runs inside the spreadsheet ingest branch (ingestion-side), not a chat-pipeline node",
+
+	// Materializer/catalog limits (spreadsheet rework Phase 2): ingest-time
+	// knobs read by the table materializer, not a chat-pipeline node.
+	"tabular_max_rows":                   "materializer limit (spreadsheet rework Phase 2): ingest-time knob, not a chat-pipeline node",
+	"tabular_embed_max_rows":             "materializer limit (spreadsheet rework Phase 2): ingest-time knob, not a chat-pipeline node",
+	"tabular_column_values_max_distinct": "materializer limit (spreadsheet rework Phase 2): ingest-time knob, not a chat-pipeline node",
 }
 
 // TestEveryPipelineFlagIsDrawnOrIgnored is the anti-drift guard (spec §4.4).

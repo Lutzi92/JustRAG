@@ -103,6 +103,41 @@ func TestFieldJSONValidate(t *testing.T) {
 	}
 }
 
+func TestTabularCatalogKeysAreRegistered(t *testing.T) {
+	cases := []struct {
+		key      string
+		min, max float64
+	}{
+		{"tabular_max_rows", 1000, 5_000_000},
+		{"tabular_embed_max_rows", 0, 1_000_000},
+		{"tabular_column_values_max_distinct", 100, 100_000},
+	}
+	for _, c := range cases {
+		fld, ok := Field(c.key)
+		if !ok {
+			t.Fatalf("registry has no %q", c.key)
+		}
+		if fld.Type != FieldInt {
+			t.Errorf("%s.Type = %q, want FieldInt", c.key, fld.Type)
+		}
+		if fld.Group != "Tabular" {
+			t.Errorf("%s.Group = %q, want Tabular", c.key, fld.Group)
+		}
+		if !fld.RequiresReingest {
+			t.Errorf("%s must be flagged RequiresReingest", c.key)
+		}
+		if fld.Min == nil || *fld.Min != c.min {
+			t.Errorf("%s.Min = %v, want %v", c.key, fld.Min, c.min)
+		}
+		if fld.Max == nil || *fld.Max != c.max {
+			t.Errorf("%s.Max = %v, want %v", c.key, fld.Max, c.max)
+		}
+		if !IsPerKB(c.key) {
+			t.Errorf("%s must be per-KB overridable", c.key)
+		}
+	}
+}
+
 func TestPresetKeysAreRegistered(t *testing.T) {
 	for _, key := range []string{"workspace_analysis_presets", "workspace_comparison_presets"} {
 		fld, ok := Field(key)

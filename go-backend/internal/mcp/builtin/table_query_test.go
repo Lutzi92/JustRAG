@@ -103,4 +103,29 @@ func TestTableQueryDiscovery(t *testing.T) {
 	}
 }
 
+// TestTableQueryDiscoveryDescribesColumnRoleAndDescription pins that the
+// Phase-2 profiler's ColumnSpec.Role/Description reach the describe output
+// (tableColumn.Role/Description), not just Name/Type/Original.
+func TestTableQueryDiscoveryDescribesColumnRoleAndDescription(t *testing.T) {
+	cat := fakeCatalog{entries: []tableEntry{{
+		TableName: "tabular.sheet_abc_0", SheetName: "Q1", FileName: "sales.csv",
+		Columns: []tableColumn{{
+			Name: "revenue", Type: "double precision", Original: "Revenue",
+			Role: "measure", Description: "Quarterly revenue in EUR",
+		}},
+		RowCount: 5,
+	}}}
+	tool := newTableQueryWithDeps(cat, nil, alwaysEnabled)
+	res, err := tool.Handler.Invoke(context.Background(), json.RawMessage(`{"kb_id":"k","describe":true}`))
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+	if !strings.Contains(string(res.Structured), `"description":"Quarterly revenue in EUR"`) {
+		t.Fatalf("discovery missing column description: %s", res.Structured)
+	}
+	if !strings.Contains(string(res.Structured), `"role":"measure"`) {
+		t.Fatalf("discovery missing column role: %s", res.Structured)
+	}
+}
+
 func alwaysEnabled(context.Context) bool { return true }
