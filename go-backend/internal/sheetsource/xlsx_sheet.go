@@ -30,7 +30,7 @@ func (s *XLSXSource) Close() error { return s.wb.Close() }
 func (s *XLSXSource) Sheets() []SheetInfo {
 	out := make([]SheetInfo, len(s.wb.sheets))
 	for i, sh := range s.wb.sheets {
-		out[i] = SheetInfo{Index: i, Name: sh.Name, Hidden: sh.Hidden}
+		out[i] = SheetInfo{Index: i, Name: sh.Name, Hidden: sh.Hidden, RowCount: s.wb.sheetRowCount(sh.Part)}
 	}
 	return out
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -125,9 +126,31 @@ type Store interface {
 	GetSiteConfigValue(ctx context.Context, key string) (*string, error)
 }
 
-type PGStore struct{ pool *pgxpool.Pool }
+// TableDropper drops a file's materialised spreadsheet tables (the
+// `tabular.sheet_*` tables), its tabular_column_values rows and its
+// tabular_catalog rows. Satisfied by *tabular.Materializer. See the
+// identical interface documented at internal/files.TableDropper for the
+// full rationale: the catalog row is the only index from a file to its
+// physical tables, so this MUST run before the files row is deleted.
+//
+// Optional: a nil dropper (the NewStore default) leaves the tables alone,
+// which is what a text-only repository (or any caller that never wires
+// SetTableDropper) gets — cheap and correct for the common case.
+type TableDropper interface {
+	DropTablesForFile(ctx context.Context, fileID string) error
+}
+
+type PGStore struct {
+	pool         *pgxpool.Pool
+	tableDropper TableDropper
+}
 
 func NewStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
+
+// SetTableDropper injects the spreadsheet table cleanup hook for
+// DeleteGitRepoFileByID. Optional — nil (the default) leaves materialised
+// tables in place.
+func (s *PGStore) SetTableDropper(d TableDropper) { s.tableDropper = d }
 
 // Compile-time interface assertion.
 var _ Store = (*PGStore)(nil)
@@ -277,6 +300,16 @@ func (s *PGStore) CreateGitRepoFile(ctx context.Context, in CreateGitRepoFileInp
 }
 
 func (s *PGStore) DeleteGitRepoFileByID(ctx context.Context, fileID string) error {
+	// Drop any materialised spreadsheet tables BEFORE the files row goes
+	// away: tabular_catalog is the only index from a file to its physical
+	// tables, so deleting the files row first would orphan them beyond any
+	// future reach (see TableDropper). Best effort, non-fatal.
+	if s.tableDropper != nil {
+		if err := s.tableDropper.DropTablesForFile(ctx, fileID); err != nil {
+			slog.Warn("tabular: drop tables for deleted git repo file failed",
+				"fileId", fileID, "error", err)
+		}
+	}
 	_, err := s.pool.Exec(ctx, `DELETE FROM files WHERE id = $1`, fileID)
 	if err != nil {
 		return fmt.Errorf("DeleteGitRepoFileByID: %w", err)

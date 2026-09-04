@@ -115,7 +115,7 @@ func (m *Materializer) MaterializeRegion(ctx context.Context, in RegionInput) (r
 	// R22: the SAME regionRows the renderer uses for this region, so
 	// ClassifyRow returns the same verdict on both sides and the rendered
 	// block markers address the rows this pass actually materialises.
-	regionRows := profile.RegionRows(in.Profile.Region, in.Profile.DataStart)
+	regionRows := profile.RegionRows(in.Profile.Region, in.Profile.DataStart, in.Sheet.RowCount)
 
 	go func() {
 		defer close(ch)

@@ -131,7 +131,7 @@ func renderTable(b *strings.Builder, fileName string, sp profile.SheetProfile, r
 	// cannot know), because a different regionRows makes IsDerivedRow's
 	// "formula spans half the region" rule fire on one side only — and the
 	// block markers below would then address different rows than _rowid.
-	regionRows := profile.RegionRows(rp.Region, rp.DataStart)
+	regionRows := profile.RegionRows(rp.Region, rp.DataStart, sp.Sheet.RowCount)
 
 	// The budget bounds the RECORDS in a block, but the block that reaches
 	// the chunker is heading + marker + records, so both fixed lines come

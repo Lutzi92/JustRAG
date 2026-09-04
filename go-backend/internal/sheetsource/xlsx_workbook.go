@@ -89,6 +89,47 @@ func (w *xlsxWorkbook) openPart(name string) (io.ReadCloser, error) {
 	return rc, nil
 }
 
+// sheetRowCount parses the `<dimension ref="A1:Z1234"/>` element that, per
+// the OOXML schema, always precedes `<sheetData>` in a worksheet part. It
+// stops scanning at the first of the two: a well-formed dimension yields
+// the row count implied by its ref (a single-cell ref like "A1" yields 1);
+// a missing dimension (or one this can't parse) yields 0. This lets a
+// caller learn the sheet's row count WITHOUT reading the sheet body, unlike
+// SheetExtras.RowCount which is only known after a full pass.
+func (w *xlsxWorkbook) sheetRowCount(part string) int {
+	rc, err := w.openPart(part)
+	if err != nil {
+		return 0
+	}
+	defer rc.Close()
+	dec := xml.NewDecoder(rc)
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return 0
+		}
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		switch se.Name.Local {
+		case "dimension":
+			rng, err := ParseRange(attr(se, "ref"))
+			if err != nil {
+				return 0
+			}
+			if n := rng.ToRow - rng.FromRow + 1; n > 0 {
+				return n
+			}
+			return 0
+		case "sheetData":
+			// The dimension element always precedes sheetData; reaching
+			// sheetData first means there was none to find.
+			return 0
+		}
+	}
+}
+
 // parseWorkbook reads xl/workbook.xml (sheet list + state + date1904 +
 // definedNames) and xl/_rels/workbook.xml.rels (r:id -> part path).
 func (w *xlsxWorkbook) parseWorkbook() error {

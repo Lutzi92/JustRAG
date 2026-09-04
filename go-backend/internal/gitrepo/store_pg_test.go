@@ -1,6 +1,7 @@
 package gitrepo
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -13,6 +14,55 @@ func TestNewStoreNonNil(t *testing.T) {
 	if s == nil {
 		t.Fatal("NewStore(nil) returned nil")
 	}
+}
+
+// fakeTableDropper records each DropTablesForFile call so the ordering test
+// below can assert it ran.
+type fakeTableDropper struct{ called []string }
+
+func (d *fakeTableDropper) DropTablesForFile(_ context.Context, fileID string) error {
+	d.called = append(d.called, fileID)
+	return nil
+}
+
+// TestDeleteGitRepoFileByIDDropsTablesBeforeRowDelete pins the Phase-3
+// carry: DeleteGitRepoFileByID must drop a file's materialised spreadsheet
+// tables BEFORE the files row delete (see TableDropper's doc comment for
+// why deleting the row first orphans them beyond any future reach).
+//
+// This has no real-DB seam (a genuine delete needs a live pool), so the
+// ordering is pinned the same way *PGStore itself would panic: NewStore(nil)
+// has no pool, so s.pool.Exec panics -- reaching that panic proves the
+// dropper call sits strictly before it, since a swapped or dropped call
+// would either never run or run after the (fatal) panic.
+func TestDeleteGitRepoFileByIDDropsTablesBeforeRowDelete(t *testing.T) {
+	s := NewStore(nil)
+	d := &fakeTableDropper{}
+	s.SetTableDropper(d)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected a panic from the nil-pool Exec (proves the dropper ran first, not that Exec is reachable)")
+		}
+		if want := []string{"file-1"}; len(d.called) != 1 || d.called[0] != want[0] {
+			t.Errorf("dropper called = %v, want %v", d.called, want)
+		}
+	}()
+	_ = s.DeleteGitRepoFileByID(context.Background(), "file-1")
+}
+
+// TestDeleteGitRepoFileByIDNilDropperSkipsCleanly pins the nil-safety half:
+// with no dropper wired, the nil check itself must not panic before ever
+// reaching the (nil-pool) Exec.
+func TestDeleteGitRepoFileByIDNilDropperSkipsCleanly(t *testing.T) {
+	s := NewStore(nil)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected a panic from the nil-pool Exec")
+		}
+	}()
+	_ = s.DeleteGitRepoFileByID(context.Background(), "file-1")
 }
 
 func TestToGitRepoSourceRow(t *testing.T) {

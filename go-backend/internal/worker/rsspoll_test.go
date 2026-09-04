@@ -3,13 +3,18 @@ package worker
 import (
 	"context"
 	"errors"
+	"io"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/mmcdole/gofeed"
 
 	"github.com/justrag/go-backend/internal/fetcher"
+	"github.com/justrag/go-backend/internal/files"
+	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/rss"
+	"github.com/justrag/go-backend/internal/storage"
 	"github.com/justrag/go-backend/internal/widcert"
 )
 
@@ -200,5 +205,139 @@ func TestResolveRSSItemContent_NonWIDUnaffected(t *testing.T) {
 	}
 	if !strings.Contains(out, "Detailed advisory body") {
 		t.Errorf("non-WID link should use generic full-text path, got: %q", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// rollbackRSSItem
+// ---------------------------------------------------------------------------
+
+// fakeFileStore implements files.Store; only DeleteFileRecord is exercised
+// by rollbackRSSItem, but Go requires every method.
+type fakeFileStore struct {
+	events        *[]string
+	deletedFileID string
+}
+
+var _ files.Store = (*fakeFileStore)(nil)
+
+func (f *fakeFileStore) GetFileByID(context.Context, string) (*files.FileInfo, error) {
+	return nil, nil
+}
+func (f *fakeFileStore) DeleteFileRecord(_ context.Context, id string) error {
+	if f.events != nil {
+		*f.events = append(*f.events, "delete-record:"+id)
+	}
+	f.deletedFileID = id
+	return nil
+}
+func (f *fakeFileStore) GetKBByID(context.Context, string) (*kbaccess.KnowledgeBase, error) {
+	return nil, nil
+}
+func (f *fakeFileStore) GetKBRole(context.Context, string, string) (string, error) { return "", nil }
+func (f *fakeFileStore) CreateFile(context.Context, files.CreateFileData) (*files.FileRecord, error) {
+	return nil, nil
+}
+func (f *fakeFileStore) GetKBFileLimits(context.Context, string) (*files.KBFileLimits, error) {
+	return nil, nil
+}
+func (f *fakeFileStore) ResetFileForRetry(context.Context, string) (bool, error) { return false, nil }
+func (f *fakeFileStore) ListErrorFiles(context.Context, string) ([]*files.FileInfo, error) {
+	return nil, nil
+}
+func (f *fakeFileStore) MarkFileError(context.Context, string, string, string) error { return nil }
+
+// fakeRSSStorage implements storage.Storage as pure no-ops, recording the
+// one path rollbackRSSItem deletes.
+type fakeRSSStorage struct {
+	events             *[]string
+	deletedStoragePath string
+}
+
+var _ storage.Storage = (*fakeRSSStorage)(nil)
+
+func (s *fakeRSSStorage) StoreFile(context.Context, string, []byte, string) error { return nil }
+func (s *fakeRSSStorage) StoreFileFromReader(context.Context, string, io.Reader, string) error {
+	return nil
+}
+func (s *fakeRSSStorage) ReadFile(context.Context, string) ([]byte, error) { return nil, nil }
+func (s *fakeRSSStorage) ReadFileStream(context.Context, string) (io.ReadCloser, error) {
+	return nil, nil
+}
+func (s *fakeRSSStorage) DeleteFile(_ context.Context, storagePath string) error {
+	if s.events != nil {
+		*s.events = append(*s.events, "delete-file:"+storagePath)
+	}
+	s.deletedStoragePath = storagePath
+	return nil
+}
+func (s *fakeRSSStorage) DeleteFiles(context.Context, []string) error   { return nil }
+func (s *fakeRSSStorage) DeleteDirectory(context.Context, string) error { return nil }
+func (s *fakeRSSStorage) FileExists(context.Context, string) (bool, error) {
+	return false, nil
+}
+func (s *fakeRSSStorage) IsS3() bool { return false }
+
+// fakeRSSTableDropper implements rssTableDropper, recording each call (and
+// its position in a shared event log) so the ordering test can assert it
+// ran BEFORE the file-record delete.
+type fakeRSSTableDropper struct {
+	events  *[]string
+	dropped []string
+}
+
+func (d *fakeRSSTableDropper) DropTablesForFile(_ context.Context, fileID string) error {
+	if d.events != nil {
+		*d.events = append(*d.events, "drop:"+fileID)
+	}
+	d.dropped = append(d.dropped, fileID)
+	return nil
+}
+
+// TestRollbackRSSItemDropsTablesBeforeDeletingRecord pins the Phase-3 carry:
+// rollbackRSSItem must drop a file's materialised spreadsheet tables BEFORE
+// it deletes the files row (see rssTableDropper's doc comment for why
+// deleting the row first orphans them beyond any future reach).
+func TestRollbackRSSItemDropsTablesBeforeDeletingRecord(t *testing.T) {
+	var events []string
+	dropper := &fakeRSSTableDropper{events: &events}
+	fileStore := &fakeFileStore{events: &events}
+	stor := &fakeRSSStorage{events: &events}
+	deps := RSSPollDeps{
+		FileStore:    fileStore,
+		Storage:      stor,
+		TableDropper: dropper,
+	}
+
+	rollbackRSSItem(context.Background(), deps, "file-1", "rss/kb/file-1.md")
+
+	wantEvents := []string{"drop:file-1", "delete-record:file-1", "delete-file:rss/kb/file-1.md"}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Errorf("event order = %v, want %v", events, wantEvents)
+	}
+	if want := []string{"file-1"}; !reflect.DeepEqual(dropper.dropped, want) {
+		t.Errorf("dropped = %v, want %v", dropper.dropped, want)
+	}
+}
+
+// TestRollbackRSSItemNilDropperIsNoop pins the nil-safety half: a
+// deployment without a main pool (or a caller that never wired one) must
+// still roll back the file record and storage blob, unaffected.
+func TestRollbackRSSItemNilDropperIsNoop(t *testing.T) {
+	fileStore := &fakeFileStore{}
+	stor := &fakeRSSStorage{}
+	deps := RSSPollDeps{
+		FileStore: fileStore,
+		Storage:   stor,
+		// TableDropper deliberately left nil.
+	}
+
+	rollbackRSSItem(context.Background(), deps, "file-1", "rss/kb/file-1.md")
+
+	if fileStore.deletedFileID != "file-1" {
+		t.Errorf("deletedFileID = %q, want %q", fileStore.deletedFileID, "file-1")
+	}
+	if stor.deletedStoragePath != "rss/kb/file-1.md" {
+		t.Errorf("deletedStoragePath = %q, want %q", stor.deletedStoragePath, "rss/kb/file-1.md")
 	}
 }

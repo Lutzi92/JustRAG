@@ -72,22 +72,28 @@ func TestClassifyRowDerivedMatchesIsDerivedRow(t *testing.T) {
 }
 
 // TestRegionRows pins R22's shared regionRows: an exact height for a closed
-// region, the shared constant for an open-ended one. Both the materialiser
-// (which streams and cannot know the sheet's end) and the renderer (which
-// buffers up to tabular_embed_max_rows and does see a maxRowSeen) must call
-// this, or IsDerivedRow's "formula spans half the region" rule fires on one
-// side only and the rendered markers stop addressing the same rows as
-// _rowid.
+// region; for an open-ended one, the sheet's declared row count (from the
+// xlsx <dimension> ref, sheetsource.SheetInfo.RowCount) when known, else the
+// shared fallback. Both the materialiser (which streams and cannot know the
+// sheet's end) and the renderer (which buffers up to tabular_embed_max_rows
+// and does see a maxRowSeen) must call this, or IsDerivedRow's "formula
+// spans half the region" rule fires on one side only and the rendered
+// markers stop addressing the same rows as _rowid.
 func TestRegionRows(t *testing.T) {
 	t.Parallel()
-	if got := RegionRows(Region{Top: 0, Bottom: 99}, 1); got != 99 {
+	if got := RegionRows(Region{Top: 0, Bottom: 99}, 1, 0); got != 99 {
 		t.Errorf("closed region rows = %d, want 99", got)
 	}
-	if got := RegionRows(Region{Top: 0, Bottom: 5, OpenEnded: true}, 1); got != FallbackRegionRows {
-		t.Errorf("open-ended region rows = %d, want the shared fallback %d", got, FallbackRegionRows)
+	if got := RegionRows(Region{Top: 0, Bottom: 5, OpenEnded: true}, 1, 0); got != FallbackRegionRows {
+		t.Errorf("open-ended region rows with sheetRows=0 = %d, want the shared fallback %d", got, FallbackRegionRows)
+	}
+	// Open-ended with a known sheet row count: sized from the sheet's end,
+	// not the fallback constant.
+	if got := RegionRows(Region{Top: 0, Bottom: 5, OpenEnded: true}, 14, 1000); got != 987 {
+		t.Errorf("open-ended region rows with sheetRows=1000 dataStart=14 = %d, want 987", got)
 	}
 	// A degenerate region (data start past the bottom) must not go negative.
-	if got := RegionRows(Region{Top: 0, Bottom: 2}, 10); got != 0 {
+	if got := RegionRows(Region{Top: 0, Bottom: 2}, 10, 0); got != 0 {
 		t.Errorf("degenerate region rows = %d, want 0", got)
 	}
 }

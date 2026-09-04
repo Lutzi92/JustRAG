@@ -47,9 +47,10 @@ type Validation struct {
 }
 
 type SheetInfo struct {
-	Index  int
-	Name   string
-	Hidden bool // hidden or veryHidden
+	Index    int
+	Name     string
+	Hidden   bool // hidden or veryHidden
+	RowCount int  // declared row count from the sheet's <dimension ref="A1:Z1234"/> (xlsx only); 0 = unknown. Known BEFORE any read, unlike SheetExtras.RowCount below.
 }
 
 type SheetExtras struct {

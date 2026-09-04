@@ -84,26 +84,38 @@ func abs(n int) int {
 
 // FallbackRegionRows is the region size assumed for an OPEN-ENDED table
 // region — one whose true bottom is not known until the sheet has been read
-// to the end. Ruling R22: the materialiser (streaming, one pass) and the
-// renderer (buffered, but bounded by tabular_embed_max_rows) must feed
-// IsDerivedRow the SAME regionRows for the same region, or an aggregate
-// formula spanning half the region is a totals row on one side and a data
-// row on the other — which desynchronises the renderer's block markers from
-// the materialised _rowid values. sheetsource.SheetInfo carries no row
-// count (SheetExtras.RowCount is only known AFTER a full read, i.e. too
-// late for the materialiser's single streaming pass), so both sides use
-// this constant instead of anything they could each measure differently.
-// The value only scales rule (b)'s "spans at least half the region"
-// threshold; it is deliberately large enough that a formula over a handful
-// of rows in a long sheet is not mistaken for a grand total.
+// to the end, AND whose sheet carries no usable row count either (an
+// xlsx's <dimension> was absent/stale, or the file is .xls/.ods/.csv, none
+// of which populate sheetsource.SheetInfo.RowCount). Ruling R22: the
+// materialiser (streaming, one pass) and the renderer (buffered, but
+// bounded by tabular_embed_max_rows) must feed IsDerivedRow the SAME
+// regionRows for the same region, or an aggregate formula spanning half the
+// region is a totals row on one side and a data row on the other — which
+// desynchronises the renderer's block markers from the materialised
+// _rowid values. When the sheet's row count IS known up front (an xlsx's
+// <dimension ref> — see sheetsource.SheetInfo.RowCount), both sides derive
+// the same regionRows from it instead of falling back to this constant;
+// this fallback is what they use when it isn't. The value only scales rule
+// (b)'s "spans at least half the region" threshold; it is deliberately
+// large enough that a formula over a handful of rows in a long sheet is
+// not mistaken for a grand total.
 const FallbackRegionRows = 1000
 
 // RegionRows is the row count both the materialiser and the renderer must
 // pass to ClassifyRow/IsDerivedRow for a region: the region's exact height
-// when profiling bounded it, the shared fallback when it is open-ended.
-// dataStart is the region's first data row (RegionProfile.DataStart).
-func RegionRows(r Region, dataStart int) int {
+// when profiling bounded it; when it is open-ended, the sheet's declared
+// row count minus the rows before dataStart (when sheetRows is known), else
+// the shared fallback. dataStart is the region's first data row
+// (RegionProfile.DataStart); sheetRows is the sheet's
+// sheetsource.SheetInfo.RowCount (0 = unknown).
+func RegionRows(r Region, dataStart int, sheetRows int) int {
 	if r.OpenEnded {
+		if sheetRows > 0 {
+			if n := sheetRows - dataStart + 1; n > 0 {
+				return n
+			}
+			return 1
+		}
 		return FallbackRegionRows
 	}
 	if n := r.Bottom - dataStart + 1; n > 0 {

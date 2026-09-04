@@ -46,15 +46,29 @@ type siteConfigReader interface {
 	GetSiteConfigValue(ctx context.Context, key string) (*string, error)
 }
 
+// rssTableDropper drops a file's materialised spreadsheet tables (the
+// `tabular.sheet_*` tables), its tabular_column_values rows and its
+// tabular_catalog rows. Satisfied by *tabular.Materializer. See the
+// identical interface documented at internal/files.TableDropper for the
+// full rationale: the catalog row is the only index from a file to its
+// physical tables, so this MUST run before the files row is deleted.
+//
+// Optional: a nil dropper leaves the tables alone, which is what an RSS
+// item -- never a spreadsheet in practice -- costs nothing for.
+type rssTableDropper interface {
+	DropTablesForFile(ctx context.Context, fileID string) error
+}
+
 // RSSPollDeps holds the dependencies for the RSS poll handler.
 type RSSPollDeps struct {
-	RSSStore    rss.RSSStore
-	FileStore   files.Store
-	Storage     storage.Storage
-	AsynqClient *asynq.Client
-	Fetcher     urlFetcher
-	WIDClient   widResolver      // optional; nil disables WID enrichment
-	SiteConfig  siteConfigReader // optional; nil = kill switch defaults ON
+	RSSStore     rss.RSSStore
+	FileStore    files.Store
+	Storage      storage.Storage
+	AsynqClient  *asynq.Client
+	Fetcher      urlFetcher
+	WIDClient    widResolver      // optional; nil disables WID enrichment
+	SiteConfig   siteConfigReader // optional; nil = kill switch defaults ON
+	TableDropper rssTableDropper  // optional; nil leaves materialised tables in place
 }
 
 // NewRSSPollHandler returns an asynq.HandlerFunc that polls an RSS feed,
@@ -158,11 +172,11 @@ func NewRSSPollHandler(deps RSSPollDeps) asynq.HandlerFunc {
 				asynq.MaxRetry(3),
 				asynq.Timeout(jobs.TimeoutFor(jobs.TypeFileProcessing)),
 			); enqErr != nil {
-				// Roll back: remove the orphaned file record and storage blob
-				// so the next poll can retry this item cleanly.
+				// Roll back: remove the orphaned file record, its storage
+				// blob, and any materialised spreadsheet tables, so the next
+				// poll can retry this item cleanly.
 				slog.Error("failed to enqueue RSS item processing, rolling back", "fileId", fileRecord.ID, "error", enqErr)
-				_ = deps.FileStore.DeleteFileRecord(ctx, fileRecord.ID)
-				_ = deps.Storage.DeleteFile(ctx, storagePath)
+				rollbackRSSItem(ctx, deps, fileRecord.ID, storagePath)
 				continue
 			}
 
@@ -178,6 +192,27 @@ func NewRSSPollHandler(deps RSSPollDeps) asynq.HandlerFunc {
 		slog.Info("RSS poll completed", "feedId", feedID, "newItems", newCount, "totalItems", totalItems)
 		return nil
 	}
+}
+
+// rollbackRSSItem removes an orphaned file record, its storage blob, and any
+// materialised spreadsheet tables (dropped BEFORE the row delete, matching
+// every other delete path — see rssTableDropper) after enqueueing that
+// file's processing job failed. Best effort: every step continues past its
+// own failure, since a partially-cleaned-up orphan can be retried by the
+// next poll either way, and a stuck orphan blocking that retry would be
+// worse. The RSS item is never ingested at this point (enqueue itself
+// failed), so it has no materialised tables in the common case — a nil or
+// no-op TableDropper costs nothing here. Extracted from NewRSSPollHandler's
+// enqueue-failure branch so it is testable without a live asynq client.
+func rollbackRSSItem(ctx context.Context, deps RSSPollDeps, fileID, storagePath string) {
+	if deps.TableDropper != nil {
+		if err := deps.TableDropper.DropTablesForFile(ctx, fileID); err != nil {
+			slog.Warn("tabular: drop tables for rolled-back rss file failed",
+				"fileId", fileID, "error", err)
+		}
+	}
+	_ = deps.FileStore.DeleteFileRecord(ctx, fileID)
+	_ = deps.Storage.DeleteFile(ctx, storagePath)
 }
 
 // rssItemHash returns a stable hex hash derived from the item's GUID or link.

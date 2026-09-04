@@ -229,6 +229,14 @@ func RunWorker(cfg *config.Config) error {
 
 	// Register handlers
 	mux := asynq.NewServeMux()
+	// Single Materializer instance: it doubles as the ingester's table
+	// writer AND the TableDropper every delete path outside internal/files
+	// (Confluence/git-repo/RSS sync) must run before removing a files row —
+	// otherwise the tabular_catalog row that indexes a file's physical
+	// tables is gone while the tables themselves are still there,
+	// unreachably orphaned. See internal/files.TableDropper for the full
+	// rationale.
+	tableDropper := tabular.NewMaterializer(db.Main)
 	confStore := confluence.NewStore(db.Main)
 	fileHandler := worker.NewFileProcessingHandler(proc, kbStore, searchService, stor)
 	fileHandler = worker.MarkErrorOnExhaustion(fileHandler, filesStore)
@@ -243,19 +251,20 @@ func RunWorker(cfg *config.Config) error {
 	urlHandler := worker.MarkErrorOnExhaustion(worker.NewURLProcessingHandler(proc, stor, kbStore, searchService), filesStore)
 	mux.HandleFunc(jobs.TypeURLProcessing, worker.Instrument(urlHandler))
 	mux.HandleFunc(jobs.TypeRSSPoll, worker.Instrument(worker.NewRSSPollHandler(worker.RSSPollDeps{
-		RSSStore:    rss.NewStore(db.Main),
-		FileStore:   filesStore,
-		Storage:     stor,
-		AsynqClient: rssClient,
-		Fetcher:     sharedFetcher,
-		WIDClient:   widcert.NewClient(),
-		SiteConfig:  chatStore,
+		RSSStore:     rss.NewStore(db.Main),
+		FileStore:    filesStore,
+		Storage:      stor,
+		AsynqClient:  rssClient,
+		Fetcher:      sharedFetcher,
+		WIDClient:    widcert.NewClient(),
+		SiteConfig:   chatStore,
+		TableDropper: tableDropper,
 	})))
 	proc.SetSiteConfigReader(chatStore)
 	proc.SetKBOverrideLister(kbconfig.NewStore(db.Main))
 	proc.SetMainDB(db.Main)
 	proc.SetVectorPool(db.Vector)
-	proc.SetIngester(processor.NewIngesterAdapter(ingest.New(tabular.NewMaterializer(db.Main), nil)))
+	proc.SetIngester(processor.NewIngesterAdapter(ingest.New(tableDropper, nil)))
 	proc.SetKGEventPublisher(kgevents.NewPublisher(rdb.Client))
 	proc.SetKGDeleter(kg.NewPgStore(db.Main))
 	mux.HandleFunc(jobs.TypeResearchExecution, worker.Instrument(worker.NewResearchExecutionHandler(aiResolver, searchService, rdb.Client, chatStore, sharedFetcher)))
@@ -313,10 +322,12 @@ func RunWorker(cfg *config.Config) error {
 		AsynqClient:  rssClient,
 		Storage:      stor,
 		ChunkService: chunkService,
+		TableDropper: tableDropper,
 	})))
 
 	// Git-repo sync: clone/pull repository, diff against stored SHAs, enqueue changed files.
 	gitStore := gitrepo.NewStore(db.Main)
+	gitStore.SetTableDropper(tableDropper)
 	gitSafeRT := fetcher.SafeHTTPClient(0).Transport // SSRF-safe RoundTripper (no client-level timeout; ctx bounds the clone)
 	gitrepo.InstallSafeGitTransport(gitSafeRT)
 	mux.HandleFunc(jobs.TypeGitRepoSync, worker.Instrument(gitrepo.NewSyncHandler(gitrepo.SyncDeps{

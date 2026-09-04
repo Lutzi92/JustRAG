@@ -43,6 +43,20 @@ type ChunkDeleter interface {
 	DeleteChunksByFileIDsAllDims(ctx context.Context, fileIDs []string) error
 }
 
+// TableDropper drops a file's materialised spreadsheet tables (the
+// `tabular.sheet_*` tables), its tabular_column_values rows and its
+// tabular_catalog rows. Satisfied by *tabular.Materializer. See the
+// identical interface documented at internal/files.TableDropper for the
+// full rationale: the catalog row is the only index from a file to its
+// physical tables, so this MUST run before the files row is deleted.
+//
+// Optional: a nil dropper leaves the tables alone, which is what a
+// text-only deployment (or a unit test with no main pool) gets — a
+// Confluence attachment need not be a spreadsheet for this to be safe.
+type TableDropper interface {
+	DropTablesForFile(ctx context.Context, fileID string) error
+}
+
 // SyncDeps holds the dependencies needed by the confluence sync handler.
 type SyncDeps struct {
 	Store        ConfluenceStore
@@ -50,6 +64,7 @@ type SyncDeps struct {
 	AsynqClient  *asynq.Client
 	Storage      storage.Storage
 	ChunkService ChunkDeleter
+	TableDropper TableDropper // optional; nil leaves materialised tables in place
 }
 
 // NewSyncHandler returns an asynq.HandlerFunc that processes confluence-sync jobs.
@@ -608,6 +623,21 @@ func deleteConfluenceFiles(ctx context.Context, deps SyncDeps, files []Confluenc
 	}
 	if len(paths) > 0 {
 		_ = deps.Storage.DeleteFiles(ctx, paths)
+	}
+
+	// Drop any materialised spreadsheet tables BEFORE the files rows go
+	// away: the tabular_catalog row is the only index from a file to its
+	// physical tables, so deleting the files row first would orphan them
+	// beyond any future reach (see TableDropper). Best effort, one file at
+	// a time, non-fatal — leaving the files row behind for the sake of a
+	// tabular cleanup would strand attachments in the UI.
+	if deps.TableDropper != nil {
+		for _, id := range ids {
+			if err := deps.TableDropper.DropTablesForFile(ctx, id); err != nil {
+				slog.Warn("tabular: drop tables for deleted confluence file failed",
+					"fileId", id, "error", err)
+			}
+		}
 	}
 
 	// Delete DB records.
