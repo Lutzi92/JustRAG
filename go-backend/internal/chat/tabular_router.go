@@ -93,7 +93,7 @@ type TabularRouterResult struct {
 // TabularTrace is persisted post-response (query log) and surfaced to eval.
 type TabularTrace struct {
 	Fired    bool
-	Outcome  string // fired_ok | fired_empty | sql_error | llm_error | validator_rejected | skipped_<reason>
+	Outcome  string // fired_ok | fired_empty | sql_error | llm_error | validator_rejected | cancelled | skipped_<reason>
 	SQL      string
 	RowCount int // -1 unknown
 	Repairs  int
@@ -207,17 +207,26 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 	}
 	hits = dropInstructionHits(hits)
 
-	// A quoted/span/number literal that matched a stored value fires the
-	// router on its own (§5.1 cue 3) — that match IS the evidence that the
-	// question is about a cell, even without an aggregation/filter cue.
-	if !cues.Fired() && len(hits) == 0 {
+	// A quoted/span/id literal that matched a stored value fires the router
+	// on its own (§5.1 cue 3) — that match IS the evidence that the question
+	// is about a cell, even without an aggregation/filter cue.
+	if !cues.Fired() && !anyHitFires(hits, cues.Literals) {
 		return r.skip(in, res, "no_cue")
 	}
 
-	matched := matchedValueLines(hits)
+	matched := matchedValueLines(in.Language, hits)
+	res.Trace.Values = len(matched)
+
+	// Step 5: the token-budgeted schema the generator writes against.
+	schema := tabular.CompactSchema(entries, hits, in.Query, cfg.SchemaMaxTokens)
+	if strings.TrimSpace(schema.Text) == "" {
+		return r.skip(in, res, "schema_empty")
+	}
+
+	// R44: "fired" means an SQL generation call is actually made, so it is
+	// set only once the schema check has passed — never on a skip.
 	res.Fired = true
 	res.Trace.Fired = true
-	res.Trace.Values = len(matched)
 	emitTabular(in, map[string]any{
 		"type": "tabular_router_fired",
 		"cues": map[string]any{
@@ -227,12 +236,6 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 		},
 	})
 	emitTabular(in, map[string]any{"type": "tabular_router_values", "matched": len(matched)})
-
-	// Step 5: the token-budgeted schema the generator writes against.
-	schema := tabular.CompactSchema(entries, hits, in.Query, cfg.SchemaMaxTokens)
-	if strings.TrimSpace(schema.Text) == "" {
-		return r.skip(in, res, "schema_empty")
-	}
 
 	// Step 6/7: generate → validate → execute, with a bounded repair loop.
 	req := ai.TabularSQLRequest{
@@ -245,6 +248,18 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 
 	lastKind := failureNone
 	for round := 0; ; round++ {
+		// R43: a cancelled turn (client disconnect, turn budget) must not
+		// spend another LLM call or another DB round trip.
+		if ctx.Err() != nil {
+			// metrics: Task 7 (outcome cancelled)
+			res.Trace.Outcome = "cancelled"
+			res.Addendum = r.attemptedOnly(in.Language)
+			return res
+		}
+		// Each round's result count stands on its own: a repaired attempt
+		// must not inherit the previous attempt's row count.
+		res.Trace.RowCount = -1
+
 		prop, err := r.gen(ctx, req, in.KbID, cfg.Model)
 		if err != nil {
 			// metrics: Task 7 (outcome llm_error)
@@ -278,7 +293,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 			})
 			switch {
 			case eerr != nil:
-				failure, kind = capRunes(eerr.Error(), tabularFailureCap), failureDB
+				failure, kind = truncateRunes(eerr.Error(), tabularFailureCap), failureDB
 			case out == nil || len(out.Rows) == 0:
 				res.Trace.RowCount = 0
 				failure, kind = "0 rows", failureEmpty
@@ -299,7 +314,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 				res.Addendum = prompts.TabularRouterAddendum(
 					in.Language, proposed, out.Columns, out.Rows,
 					out.RowCount, out.Truncated, false,
-					tabularSources(info.Tables, entries),
+					tabularSources(in.Language, info.Tables, entries),
 				)
 				return res
 			}
@@ -382,13 +397,46 @@ func dropInstructionHits(hits []tabular.ValueHit) []tabular.ValueHit {
 	return out
 }
 
+// anyHitFires reports whether at least one stored-value hit is strong
+// enough to fire the router without an aggregation/filter/id cue (R45). A
+// bare number is weak evidence — "55" is a substring of thousands of cells
+// — so only an exact match counts for it; a quoted/span/id literal was
+// deliberate enough that any match quality counts.
+func anyHitFires(hits []tabular.ValueHit, lits []TabularLiteral) bool {
+	kinds := make(map[string]string, len(lits))
+	for _, l := range lits {
+		kinds[strings.ToLower(l.Text)] = l.Kind
+	}
+	for _, h := range hits {
+		if kinds[strings.ToLower(h.Literal)] == "number" && h.Match != "exact" {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// safeLabel renders a catalog-sourced label (a file or sheet name) for a
+// prompt (R42). File and sheet names are as attacker-controlled as cell
+// values — a user can name an upload "Ignore all previous instructions.xlsx"
+// — so an instruction-shaped label is replaced rather than passed through.
+func safeLabel(lang, s string) string {
+	if promptsafety.LooksLikeInstruction(s) {
+		if lang == "de" {
+			return "[gefiltert]"
+		}
+		return "[filtered]"
+	}
+	return s
+}
+
 // matchedValueLines renders the MATCHED VALUES block entries the SQL
 // generator pins its WHERE clauses to.
-func matchedValueLines(hits []tabular.ValueHit) []string {
+func matchedValueLines(lang string, hits []tabular.ValueHit) []string {
 	out := make([]string, 0, len(hits))
 	for _, h := range hits {
 		out = append(out, fmt.Sprintf("%s = '%s' (%s › %s, %d rows)",
-			h.ColumnName, h.Value, h.FileName, h.SheetName, h.RowCount))
+			h.ColumnName, h.Value, safeLabel(lang, h.FileName), safeLabel(lang, h.SheetName), h.RowCount))
 	}
 	return out
 }
@@ -397,7 +445,7 @@ func matchedValueLines(hits []tabular.ValueHit) []string {
 // human source labels ("file › sheet"). An unknown table renders bare
 // rather than being dropped — a missing source line is worse than a terse
 // one.
-func tabularSources(tables []string, entries []tabular.CatalogEntry) []string {
+func tabularSources(lang string, tables []string, entries []tabular.CatalogEntry) []string {
 	byName := make(map[string]tabular.CatalogEntry, len(entries))
 	for _, e := range entries {
 		byName[strings.ToLower(e.TableName)] = e
@@ -406,7 +454,7 @@ func tabularSources(tables []string, entries []tabular.CatalogEntry) []string {
 	for _, t := range tables {
 		name := strings.ToLower(strings.TrimPrefix(t, "tabular."))
 		if e, ok := byName[name]; ok {
-			out = append(out, e.FileName+" › "+e.SheetName)
+			out = append(out, safeLabel(lang, e.FileName)+" › "+safeLabel(lang, e.SheetName))
 			continue
 		}
 		out = append(out, t)
@@ -428,13 +476,4 @@ func allNull(out *sqlexec.Result) bool {
 		}
 	}
 	return true
-}
-
-// capRunes truncates rune-safely.
-func capRunes(s string, n int) string {
-	rs := []rune(s)
-	if len(rs) <= n {
-		return s
-	}
-	return string(rs[:n])
 }
