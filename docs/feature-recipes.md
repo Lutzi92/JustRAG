@@ -195,19 +195,24 @@ Migration **0046**. Mutually exclusive with `parent_child_enabled` (skipped at i
 ## Structured spreadsheet Q&A (table_query)
 
 ```
-chat_tabular_query_enabled            = true     # Phase 1: ingest-time materializer + table_query tool
-chat_tabular_semantic_columns_enabled = true     # Phase 2: embed free-text columns for fuzzy search (orthogonal)
-tabular_semantic_min_avg_len          = 32       # Phase 2: min mean cell length to treat TEXT as free text
-tabular_semantic_min_distinct_ratio   = 0.6      # Phase 2: min distinct-value ratio (skips categoricals)
-chat_tabular_charts_enabled           = true     # Phase 3: chart prompt-guidance (no new tool/migration)
+chat_tabular_query_enabled          = true       # master gate: streaming materialiser + table_query tool
+tabular_profile_llm_enabled         = true       # per-region LLM column descriptions / low-confidence overrides
+tabular_profile_llm_threshold       = 0.7        # heuristic confidence below which the LLM proposal wins
+tabular_profile_model               = <small>    # falls through to model_tier_fast
+tabular_profile_sample_rows         = 200        # rows sampled per sheet for structure detection [20,2000]
+tabular_max_rows                    = 2000000    # per table region: rows past this dropped from the SQL table (and counted)
+tabular_embed_max_rows              = 50000      # per table region: rows past this are SQL-only, not embedded in the hybrid text page
+tabular_column_values_max_distinct  = 10000      # per column: above this no tabular_column_values row is written (fuzzy lookup falls back to BM25/ILIKE)
+chat_tabular_charts_enabled         = true       # Phase 3: chart prompt-guidance (no new tool/migration)
 ```
 
-Migration **0048** (`tabular` schema + `tabular_catalog`). Phase 1 materializes `.xlsx`/`.xls`/`.csv` into native-typed tables; only a per-sheet summary card is vector-embedded (divert, not hybrid). `table_query` runs read-only SELECTs through `JUSTRAG_DB_URL_READONLY` with the per-KB catalog allowlist. Re-ingest spreadsheets after enabling.
+Migrations **0048** (`tabular` schema + `tabular_catalog`) and **0069** (catalog v2 columns, `tabular_column_values`, `tabular_query_log`, `files.parse_report`/`stage_detail`). The 2026-09-04 spreadsheet-ingest rework's Phase 2 replaced the Phase-1 buffered-memory materializer with a streaming reader (`sheetsource`) → profiler (`tabular/profile`) → typed Postgres tables (`internal/tabular`; a majority-numeric TEXT column or a `RoleMeasure` column additionally gets a `_num` shadow column, primary stays text) + a key:value hybrid text render (`tabular/render`, one profile card per table region) for the standard chunk/embed pipeline — see the `chat_tabular_*`/`tabular_*` entry in CLAUDE.md's Quick reference for the current mechanism (this recipe's full rewrite is tracked for Phase 4). The three `chat_tabular_semantic_columns_enabled`/`tabular_semantic_min_avg_len`/`tabular_semantic_min_distinct_ratio` free-text-column-embedding keys from the earlier Phase-2 draft are **REMOVED** (superseded by the hybrid render + `tabular_column_values` value index). `table_query` runs read-only SELECTs through `JUSTRAG_DB_URL_READONLY` with the per-KB catalog allowlist. **Any `tabular_*`/`tabular_profile_*` key change needs a re-ingest to take effect** (values are baked in at ingest time) — re-upload the file, or use the per-KB rematerialise endpoint `POST /api/kb/{id}/tabular/rematerialize` (kbAdmin), which re-ingests every spreadsheet file in the KB via `TypeReEmbedding`.
 
-**OPERATOR PREREQUISITE** — run once as DB owner/superuser after migration 0048:
+**OPERATOR PREREQUISITE** — run once as DB owner/superuser after migration 0048 (and `tabular_column_values` again after 0069):
 
 ```sql
 GRANT SELECT ON tabular_catalog TO <readonly_role>;          -- required: tool reads catalog through readonly pool
+GRANT SELECT ON tabular_column_values TO <readonly_role>;    -- required: fuzzy free-text-cell value lookup (0069)
 GRANT USAGE ON SCHEMA tabular TO <readonly_role>;
 GRANT SELECT ON ALL TABLES IN SCHEMA tabular TO <readonly_role>;
 ALTER DEFAULT PRIVILEGES FOR ROLE <db_user> IN SCHEMA tabular
@@ -218,7 +223,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE <db_user> IN SCHEMA tabular
 
 **SECURITY:** the read-only role's `search_path` must **NOT** include `tabular`. Per-KB isolation depends on schema-qualified `tabular.<name>` references — unqualified table names must fail to resolve so a prompt-injected bare name cannot bypass the catalog allowlist. The pool additionally sets `default_transaction_read_only=on` per session (writes fail even if the role's grants are ever fat-fingered); an explicit `default_transaction_read_only` in the `JUSTRAG_DB_URL_READONLY` DSN overrides it, same as `statement_timeout`.
 
-**Phase 1 limits:** first row = header; multi-row headers / merged cells / legacy BIFF `.xls` fall back to text; sheet buffered in memory before `COPY` (multi-hundred-MB spike at 1M rows). **Phase 2:** synthetic `_rowid bigint` + per-row embeddings for heuristic-selected TEXT columns; fuzzy hit → `table_query WHERE _rowid IN (...)`. **Phase 3:** prompt-guidance only — Recharts JSON in a ` ```chart ` block rendered by the frontend ChartRenderer; non-SQL reshapes use code_exec (gated by `chat_code_exec_enabled`). Specs in `docs/superpowers/specs/2026-05-28-tabular-data-qa-design.md` (+phase2/3).
+**Phase 3:** prompt-guidance only — Recharts JSON in a ` ```chart ` block rendered by the frontend ChartRenderer; non-SQL reshapes use code_exec (gated by `chat_code_exec_enabled`). Specs in `docs/superpowers/specs/2026-05-28-tabular-data-qa-design.md` (Phase 1) and `docs/superpowers/specs/2026-09-04-spreadsheet-ingest-rework-design.md` (Phase 2, current mechanism).
 
 ## HyPE — hypothetical prompt embeddings (ingest + retrieval)
 

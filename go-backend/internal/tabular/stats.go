@@ -132,11 +132,25 @@ func (a *ColumnAccumulator) classify(c sheetsource.Cell) (string, sheetsource.Ce
 	if f, ok := profile.ParseNumber(raw, a.Profile.DecimalComma); ok {
 		return strconv.FormatFloat(f, 'f', -1, 64), sheetsource.KindNumber
 	}
-	switch l := strings.ToLower(raw); {
-	case boolTrue[l]:
-		return "true", sheetsource.KindBool
-	case boolFalse[l]:
-		return "false", sheetsource.KindBool
+	// Only fold a bare text token like "Nein"/"Ja" into the canonical
+	// "true"/"false" pair when the PROFILER already decided this column is
+	// boolean (<=2 distinct values, every one a bool token — see
+	// profile/roles.go's decideRole). A categorical column that happens to
+	// have one bool-token-shaped value among 3+ distinct values (e.g.
+	// "Denkmalschutz": Nein / Einzelkulturdenkmal / Ensembleschutz) is NOT
+	// boolean; gating on Role here mirrors the LeadingZero/LongDigits guard
+	// above (LooksLikeIDValue) — without it, a materialized TEXT column
+	// silently mangled "Nein" into the English "false", losing the
+	// original wording even though FinalSpec correctly kept the column
+	// TypeText (found by the Phase-2 header_row14_metadata.xlsx
+	// acceptance test, task-10-report.md).
+	if a.Profile.Role == profile.RoleBool {
+		switch l := strings.ToLower(raw); {
+		case boolTrue[l]:
+			return "true", sheetsource.KindBool
+		case boolFalse[l]:
+			return "false", sheetsource.KindBool
+		}
 	}
 	return raw, sheetsource.KindText
 }
