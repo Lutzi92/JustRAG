@@ -39,7 +39,6 @@ type Parser interface {
 
 const (
 	TextMaxChars = 5_000_000
-	ExcelMaxRows = 10_000
 	PDFMaxPages  = 500
 )
 

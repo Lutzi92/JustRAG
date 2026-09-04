@@ -46,7 +46,6 @@ require (
 require (
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/extrame/ole2 v0.0.0-20160812065207-d69429661ad7
-	github.com/extrame/xls v0.0.1
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/imroc/req/v3 v3.57.0
 	github.com/klauspost/compress v1.18.4

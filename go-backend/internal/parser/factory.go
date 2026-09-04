@@ -40,10 +40,7 @@ func DefaultFactoryWith(transcriber Transcriber, frontParsers ...Parser) *Factor
 		}
 	}
 	f.Register(&PDFParser{})
-	f.Register(&CSVParser{})
-	f.Register(&XLSXParser{})
-	f.Register(&XLSParser{})
-	f.Register(&OdsParser{})
+	f.Register(&SpreadsheetParser{})
 	f.Register(&DocxParser{})
 	f.Register(&PptxParser{})
 	f.Register(&OdtParser{})

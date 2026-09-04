@@ -5,31 +5,34 @@ import (
 	"testing"
 )
 
-func TestFactorySelectsCSVParser(t *testing.T) {
+func TestFactorySelectsSpreadsheetParser(t *testing.T) {
 	t.Parallel()
 	f := DefaultFactory(nil)
 
-	t.Run("by MIME type", func(t *testing.T) {
-		t.Parallel()
-		p := f.GetParser("text/csv", "data.csv")
-		if p == nil {
-			t.Fatal("expected a parser, got nil")
-		}
-		if p.Name() != "CSVParser" {
-			t.Fatalf("expected CSVParser, got %s", p.Name())
-		}
-	})
-
-	t.Run("by extension only", func(t *testing.T) {
-		t.Parallel()
-		p := f.GetParser("application/octet-stream", "report.csv")
-		if p == nil {
-			t.Fatal("expected a parser, got nil")
-		}
-		if p.Name() != "CSVParser" {
-			t.Fatalf("expected CSVParser, got %s", p.Name())
-		}
-	})
+	for _, c := range []struct {
+		name, mime, fileName string
+	}{
+		{"csv extension", "application/octet-stream", "report.csv"},
+		{"xlsx extension", "application/octet-stream", "report.xlsx"},
+		{"xls extension", "application/octet-stream", "report.xls"},
+		{"ods extension", "application/octet-stream", "report.ods"},
+		{"csv MIME", "text/csv", "data.csv"},
+		{"xls MIME", "application/vnd.ms-excel", "x"},
+		{"xlsx MIME", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "x"},
+		{"ods MIME", "application/vnd.oasis.opendocument.spreadsheet", "x"},
+	} {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			p := f.GetParser(c.mime, c.fileName)
+			if p == nil {
+				t.Fatal("expected a parser, got nil")
+			}
+			if p.Name() != "spreadsheet" {
+				t.Fatalf("expected spreadsheet, got %s", p.Name())
+			}
+		})
+	}
 }
 
 func TestFactorySelectsTextParserAsCatchAll(t *testing.T) {

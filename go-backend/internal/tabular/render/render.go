@@ -9,10 +9,18 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/sheetsource"
 	"github.com/justrag/go-backend/internal/tabular/profile"
 )
+
+// Page is one sheet's rendered page (ruling R5: render's own type, not
+// parser.PageText — internal/parser now imports internal/tabular/ingest,
+// which imports this package, so importing parser here would be a cycle).
+// Task 6's ingester converts this to parser.PageText field-for-field.
+type Page struct {
+	PageNumber int // 1-based
+	Text       string
+}
 
 // Options bound the text output; TableName is the materialised table for the
 // marker line ("" when the region was not materialised).
@@ -45,7 +53,7 @@ type RegionRender struct {
 // SheetRender carries the per-sheet render outcome.
 type SheetRender struct {
 	Sheet   sheetsource.SheetInfo
-	Page    parser.PageText // PageNumber = sheet index + 1
+	Page    Page // PageNumber = sheet index + 1
 	Regions []RegionRender
 }
 
@@ -69,7 +77,7 @@ func RenderSheet(src sheetsource.Source, fileName string, sp profile.SheetProfil
 		opts.EmbedMaxRows = defaultEmbedMaxRows
 	}
 
-	out := SheetRender{Sheet: sp.Sheet, Page: parser.PageText{PageNumber: sp.Sheet.Index + 1}}
+	out := SheetRender{Sheet: sp.Sheet, Page: Page{PageNumber: sp.Sheet.Index + 1}}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "### %s › %s", fileName, sp.Sheet.Name)
