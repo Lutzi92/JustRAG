@@ -223,6 +223,15 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 		return r.skip(in, res, "schema_empty")
 	}
 
+	// R43 + R44: the gate, ListByKB, LookupValues and CompactSchema above do
+	// real work, so the turn can already be dead by the time the loop is
+	// reached. Check here as well as inside the loop: no SQL generation call
+	// will happen, so this must NOT be reported as fired and must not emit
+	// the fired/values events.
+	if ctx.Err() != nil {
+		return r.cancelled(in, res)
+	}
+
 	// R44: "fired" means an SQL generation call is actually made, so it is
 	// set only once the schema check has passed — never on a skip.
 	res.Fired = true
@@ -251,10 +260,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 		// R43: a cancelled turn (client disconnect, turn budget) must not
 		// spend another LLM call or another DB round trip.
 		if ctx.Err() != nil {
-			// metrics: Task 7 (outcome cancelled)
-			res.Trace.Outcome = "cancelled"
-			res.Addendum = r.attemptedOnly(in.Language)
-			return res
+			return r.cancelled(in, res)
 		}
 		// Each round's result count stands on its own: a repaired attempt
 		// must not inherit the previous attempt's row count.
@@ -356,6 +362,17 @@ func (r *TabularRouter) skip(in TabularRouterInput, res TabularRouterResult, rea
 	// metrics: Task 7 (outcome skipped_<reason>)
 	res.Trace.Outcome = "skipped_" + reason
 	emitTabular(in, map[string]any{"type": "tabular_router_skipped", "reason": reason})
+	return res
+}
+
+// cancelled records an abandoned turn (R43): the client is gone or the turn
+// budget is spent, so no further LLM call and no further DB round trip is
+// made. res.Fired is left exactly as the caller had it — false before the
+// generation loop (no SQL call was made, R44), true once inside it.
+func (r *TabularRouter) cancelled(in TabularRouterInput, res TabularRouterResult) TabularRouterResult {
+	// metrics: Task 7 (outcome cancelled)
+	res.Trace.Outcome = "cancelled"
+	res.Addendum = r.attemptedOnly(in.Language)
 	return res
 }
 

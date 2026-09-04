@@ -802,6 +802,51 @@ func TestRouterStopsOnCancelledContext(t *testing.T) {
 	}
 }
 
+func TestRouterCancelledBeforeLoopIsNotFired(t *testing.T) {
+	// The gate, ListByKB, LookupValues and CompactSchema all do real work
+	// under the turn budget, so a turn can be dead before the generation
+	// loop is ever reached. R44 (fired <=> an SQL call was made) must hold
+	// there too.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cat := &fakeCat{has: true, entries: []tabular.CatalogEntry{testTabularEntry()}}
+	gen := &fakeGen{steps: []genStep{{prop: sqlProp(`SELECT count(*) AS n FROM tabular.gebaeude LIMIT 5`)}}}
+	ex := &fakeExec{results: []execStep{{res: &sqlexec.Result{
+		Columns: []string{"n"}, Rows: []map[string]any{{"n": 1}}, RowCount: 1,
+	}}}}
+	r := newTestRouter(cat, ex, gen.fn, testTabularCfg(), nil)
+
+	var evs []map[string]any
+	res := r.Run(ctx, TabularRouterInput{
+		KbID: "kb1", Query: "Wie viele Gebäude gibt es?", Language: "de",
+		Emit: collectEvents(&evs),
+	})
+
+	if res.Trace.Outcome != "cancelled" {
+		t.Fatalf("outcome = %q, want cancelled", res.Trace.Outcome)
+	}
+	// Mutation guard: removing the pre-loop ctx check makes these red.
+	if res.Fired || res.Trace.Fired {
+		t.Fatalf("no SQL call was made, so the turn must not be reported as fired")
+	}
+	if len(gen.reqs) != 0 || len(ex.calls) != 0 {
+		t.Fatalf("gen=%d exec=%d, want no work on a dead turn", len(gen.reqs), len(ex.calls))
+	}
+	for _, ty := range eventTypes(evs) {
+		if ty == "tabular_router_fired" || ty == "tabular_router_values" {
+			t.Fatalf("events = %v, must not announce a firing that never happened", eventTypes(evs))
+		}
+	}
+	if !strings.Contains(res.Addendum, "abgerufenen Kontext") {
+		t.Fatalf("addendum must be attempted-only:\n%s", res.Addendum)
+	}
+	// The retrieval hints still stand — the KB does have tables.
+	if !res.ForceSimpleArm {
+		t.Fatalf("ForceSimpleArm must be true whenever the KB has tables")
+	}
+}
+
 func TestRouterSchemaEmptyIsNotFired(t *testing.T) {
 	// The KB has rows in the catalog, but none of them is a queryable
 	// table (e.g. only cover sheets), so CompactSchema renders nothing.
