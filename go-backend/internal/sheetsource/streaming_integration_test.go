@@ -11,10 +11,14 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// TestStreamingMemoryGuard generates a 100 000-row workbook and asserts the
+// TestStreamingMemoryGuard generates a 300 000-row workbook and asserts the
 // streaming reader's heap growth stays bounded (spec §1.1 F5, §7.1
-// large_synthetic). The bound is generous; it guards against a return to
-// whole-sheet buffering, not against small regressions.
+// large_synthetic). Fix-round-1 tightening: 100k rows fully buffered was
+// itself only ~60-100 MiB, comfortably under a 150 MiB bound, so the guard
+// could not fail even on a regression to whole-sheet buffering; 300k rows
+// and a 64 MiB bound close that gap. runtime.GC() runs immediately before
+// BOTH snapshots so retained rows show up in the delta and transient
+// garbage does not.
 func TestStreamingMemoryGuard(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "large.xlsx")
 	f := excelize.NewFile()
@@ -25,7 +29,8 @@ func TestStreamingMemoryGuard(t *testing.T) {
 	if err := sw.SetRow("A1", []any{"Beleg", "Lieferant", "Material", "Menge", "Preis"}); err != nil {
 		t.Fatal(err)
 	}
-	for r := 2; r <= 100_001; r++ {
+	const numRows = 300_000
+	for r := 2; r <= numRows+1; r++ {
 		if err := sw.SetRow(fmt.Sprintf("A%d", r), []any{4008000000 + r, fmt.Sprintf("Lieferant %d", r%500), 931404826 + r%10000, float64(r%50) + 0.5, float64(r%1000) * 1.25}); err != nil {
 			t.Fatal(err)
 		}
@@ -50,12 +55,13 @@ func TestStreamingMemoryGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime.GC()
 	runtime.ReadMemStats(&after)
-	if ex.RowCount != 100_001 || rows != 100_001 {
+	if ex.RowCount != numRows+1 || rows != numRows+1 {
 		t.Fatalf("rows=%d count=%d", rows, ex.RowCount)
 	}
 	grew := int64(after.HeapAlloc) - int64(before.HeapAlloc)
-	if grew > 150<<20 {
-		t.Fatalf("heap grew by %d MiB while streaming 100k rows; whole-sheet buffering suspected", grew>>20)
+	if grew > 64<<20 {
+		t.Fatalf("heap grew by %d MiB while streaming %d rows; whole-sheet buffering suspected", grew>>20, numRows)
 	}
 }

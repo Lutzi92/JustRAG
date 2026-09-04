@@ -109,8 +109,12 @@ func TestParseListRef(t *testing.T) {
 // TestResolveValidationsCapsReReads covers the Phase-1 final-review parked
 // finding: each range validation re-streams the referenced sheet, so an
 // unbounded number of them is O(N x sheet) re-reads. resolveValidations must
-// resolve at most maxListValidations per sheet, leaving the rest Values ==
-// nil rather than re-streaming without bound.
+// resolve at most maxListValidations range-ref (re-streaming) validations
+// per sheet, leaving the rest Values == nil rather than re-streaming without
+// bound. Inline lists carry no I/O cost and must never be capped: a fix-round
+// finding caught resolveValidations counting them against the cap too, which
+// let cheap inline dropdowns starve the expensive range-ref resolutions the
+// cap exists to bound.
 func TestResolveValidationsCapsReReads(t *testing.T) {
 	t.Parallel()
 	src, err := OpenXLSX("testdata/header_row14_metadata.xlsx")
@@ -119,17 +123,36 @@ func TestResolveValidationsCapsReReads(t *testing.T) {
 	}
 	defer src.Close()
 	ex := SheetExtras{}
-	for i := 0; i < maxListValidations+5; i++ {
+	const numInline = 60
+	const numRange = maxListValidations + 5
+	for i := 0; i < numInline; i++ {
+		ex.Validations = append(ex.Validations, Validation{Ref: `"x"`})
+	}
+	for i := 0; i < numRange; i++ {
 		ex.Validations = append(ex.Validations, Validation{Ref: "Dropdown!$C$6:$C$8"})
 	}
 	src.resolveValidations(&ex, 0)
-	resolved := 0
-	for _, v := range ex.Validations {
+	inlineResolved, rangeResolved, rangeUnresolved := 0, 0, 0
+	for i, v := range ex.Validations {
+		if i < numInline {
+			if v.Values != nil {
+				inlineResolved++
+			}
+			continue
+		}
 		if v.Values != nil {
-			resolved++
+			rangeResolved++
+		} else {
+			rangeUnresolved++
 		}
 	}
-	if resolved != maxListValidations {
-		t.Fatalf("resolved %d validations, want cap %d", resolved, maxListValidations)
+	if inlineResolved != numInline {
+		t.Errorf("inline resolved = %d, want all %d (inline lists must never be capped)", inlineResolved, numInline)
+	}
+	if rangeResolved != maxListValidations {
+		t.Errorf("range resolved = %d, want cap %d", rangeResolved, maxListValidations)
+	}
+	if want := numRange - maxListValidations; rangeUnresolved != want {
+		t.Errorf("range unresolved = %d, want %d", rangeUnresolved, want)
 	}
 }

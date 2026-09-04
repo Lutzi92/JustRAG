@@ -6,9 +6,11 @@ const (
 	maxListValues = 1000
 	maxListCells  = 10_000
 	// maxListValidations bounds how many range-ref list validations
-	// resolveValidations resolves per sheet: each resolution re-streams the
-	// referenced sheet, so the cap bounds O(N x sheet) re-reads. Validations
-	// beyond the cap keep Values == nil.
+	// resolveValidations resolves per sheet: each such resolution re-streams
+	// the referenced sheet, so the cap bounds O(N x sheet) re-reads. Inline
+	// lists (quoted comma-separated literals) do no I/O and are never
+	// counted against this cap. Range-ref validations beyond the cap keep
+	// Values == nil.
 	maxListValidations = 50
 )
 
@@ -41,16 +43,16 @@ func splitInlineList(ref string) []string {
 func (s *XLSXSource) resolveValidations(ex *SheetExtras, sheetIdx int) {
 	resolved := 0
 	for i := range ex.Validations {
-		// Cap resolutions per sheet: leave the rest Values == nil rather
-		// than re-streaming without bound.
-		if resolved >= maxListValidations {
-			continue
-		}
 		v := &ex.Validations[i]
 		sheet, rng, inline := parseListRef(v.Ref)
 		if inline {
+			// No I/O here, so inline lists are never capped.
 			v.Values = splitInlineList(v.Ref)
-			resolved++
+			continue
+		}
+		// Cap re-streaming resolutions per sheet: leave the rest Values ==
+		// nil rather than re-reading the referenced sheet without bound.
+		if resolved >= maxListValidations {
 			continue
 		}
 		// Check defined names first when no sheet is specified
