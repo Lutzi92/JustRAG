@@ -274,7 +274,17 @@ func TabularRouterAddendum(lang string, sql string, columns []string, rows []map
 // exceeds 20 rows: a literal '|' would otherwise be read as a column
 // delimiter, and a literal newline would break the row across multiple
 // Markdown lines. Applied to header cells as well as data cells.
+//
+// Backslashes are doubled FIRST, before '|' is escaped to '\|': under GFM,
+// an escape only "counts" when it's an odd number of backslashes
+// immediately before the escaped character — an even run (including a
+// pre-existing single backslash left un-doubled) reads as a literal
+// backslash followed by an UNESCAPED pipe, reopening the phantom-column
+// bug this function exists to close. Escaping order matters: doubling
+// backslashes after inserting '\|' would double the backslash that '|'
+// insertion just added, breaking the escape.
 func escapeTableCell(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, "|", `\|`)
 	s = strings.ReplaceAll(s, "\n", " ")
 	return s

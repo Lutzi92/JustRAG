@@ -326,3 +326,52 @@ func TestTabularRouterAddendum_MarkdownTableEscapesHeaderCell(t *testing.T) {
 		t.Errorf("expected escaped header cell 'a\\|b' in output:\n%s", out)
 	}
 }
+
+// --- Fix round 2: doubled backslashes must precede pipe escaping ---
+
+func TestTabularRouterAddendum_MarkdownTableEscapesBackslashBeforePipe(t *testing.T) {
+	rows := make([]map[string]any, 21)
+	for i := range rows {
+		rows[i] = map[string]any{"a": "x"}
+	}
+	rows[0] = map[string]any{"a": `A\|B`}
+	columns := []string{"a"}
+	out := TabularRouterAddendum("en", "SELECT a FROM t", columns, rows, 21, false, false, nil)
+
+	// Two backslashes for the literal '\', one more escaping the '|'.
+	want := `A\\\|B`
+	if !strings.Contains(out, want) {
+		t.Fatalf("expected escaped cell %q in output:\n%s", want, out)
+	}
+
+	var rowLine string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, want) {
+			rowLine = l
+			break
+		}
+	}
+	if rowLine == "" {
+		t.Fatalf("row line not found in output:\n%s", out)
+	}
+	// Strip doubled-backslash pairs first, then escaped-pipe pairs, so
+	// what remains is only the real (unescaped) column-delimiter pipes.
+	withoutEscapes := strings.ReplaceAll(rowLine, `\\`, "\x00")
+	withoutEscapes = strings.ReplaceAll(withoutEscapes, `\|`, "\x00")
+	if n := strings.Count(withoutEscapes, "|"); n != len(columns)+1 {
+		t.Errorf("row has %d unescaped pipe delimiters, want %d: %q", n, len(columns)+1, rowLine)
+	}
+}
+
+func TestTabularRouterAddendum_MarkdownTableEscapesBareBackslash(t *testing.T) {
+	rows := make([]map[string]any, 21)
+	for i := range rows {
+		rows[i] = map[string]any{"a": "x"}
+	}
+	rows[0] = map[string]any{"a": `C:\Temp`}
+	out := TabularRouterAddendum("en", "SELECT a FROM t", []string{"a"}, rows, 21, false, false, nil)
+	want := `C:\\Temp`
+	if !strings.Contains(out, want) {
+		t.Errorf("expected escaped cell %q in output:\n%s", want, out)
+	}
+}
