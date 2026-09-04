@@ -153,3 +153,31 @@ func TestDetectRegionsContinuationUnderMiddleBlock(t *testing.T) {
 		t.Errorf("region[2]: expected {0,4,2,4,false}, got %+v", regs[2])
 	}
 }
+
+func TestDetectRegionsTwoContinuationsSameBlock(t *testing.T) {
+	t.Parallel()
+	s := grid(
+		"H|.|H",
+		"#|.|#",
+		"#|.|#",
+		".|.|.",
+		"#|.|#",
+		"#|.|#",
+	)
+	regs := DetectRegions(s, func(r int, _ Region) float64 {
+		if r == 0 {
+			return 0.9
+		}
+		return 0.1
+	})
+	if len(regs) != 2 {
+		t.Errorf("expected 2 regions, got %d: %+v", len(regs), regs)
+		return
+	}
+	if regs[0] != (Region{0, 0, 5, 0, true}) {
+		t.Errorf("region[0]: expected {0,0,5,0,true}, got %+v", regs[0])
+	}
+	if regs[1] != (Region{0, 2, 5, 2, true}) {
+		t.Errorf("region[1]: expected {0,2,5,2,true}, got %+v", regs[1])
+	}
+}

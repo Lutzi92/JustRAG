@@ -48,6 +48,25 @@ func DetectRegions(s *sheetsource.Sample, score HeaderScoreFunc) []Region {
 			r++
 		}
 		blockBottom := r - 1
+
+		// Snapshot previous block information before processing current block's candidates
+		// This prevents mutations during column block processing from affecting the lookup
+		prevBlockBottom := -1
+		prevBlockStart := -1
+		prevBlockEnd := len(outInternal)
+		if len(outInternal) > 0 {
+			prevBlockBottom = outInternal[len(outInternal)-1].blockBottom
+			prevBlockEnd = len(outInternal)
+			// Find the start index of the previous block
+			for i := len(outInternal) - 1; i >= 0; i-- {
+				if outInternal[i].blockBottom == prevBlockBottom {
+					prevBlockStart = i
+				} else {
+					break
+				}
+			}
+		}
+
 		c := 0
 		for c < s.Width {
 			if !colHasAny(g, blockTop, blockBottom, c) {
@@ -73,36 +92,33 @@ func DetectRegions(s *sheetsource.Sample, score HeaderScoreFunc) []Region {
 
 			// Look for a previous-block region to merge with
 			merged := false
-			if len(outInternal) > 0 {
-				prevBlockBottom := outInternal[len(outInternal)-1].blockBottom
-				if blockTop == prevBlockBottom+2 { // exactly one blank row between blocks
-					// Find overlapping region from previous block with largest overlap
-					bestIdx := -1
-					bestOverlap := 0
-					for i := len(outInternal) - 1; i >= 0 && outInternal[i].blockBottom == prevBlockBottom; i-- {
-						prevReg := outInternal[i].region
-						overlap := min(prevReg.Right, right) - max(prevReg.Left, left) + 1
-						narrow := min(prevReg.Right-prevReg.Left, right-left) + 1
-						if overlap > 0 && float64(overlap) >= 0.8*float64(narrow) {
-							if overlap > bestOverlap {
-								bestOverlap = overlap
-								bestIdx = i
-							}
+			if prevBlockStart >= 0 && blockTop == prevBlockBottom+2 { // exactly one blank row between blocks
+				// Find overlapping region from previous block (using snapshot) with largest overlap
+				bestIdx := -1
+				bestOverlap := 0
+				for i := prevBlockEnd - 1; i >= prevBlockStart; i-- {
+					prevReg := outInternal[i].region
+					overlap := min(prevReg.Right, right) - max(prevReg.Left, left) + 1
+					narrow := min(prevReg.Right-prevReg.Left, right-left) + 1
+					if overlap > 0 && float64(overlap) >= 0.8*float64(narrow) {
+						if overlap > bestOverlap {
+							bestOverlap = overlap
+							bestIdx = i
 						}
 					}
-					if bestIdx >= 0 && score(trimmedTop, reg) < continuationHeaderScore {
-						// Merge into found region
-						outInternal[bestIdx].region.Bottom = trimmedBottom
-						outInternal[bestIdx].region.OpenEnded = reg.OpenEnded
-						if reg.Left < outInternal[bestIdx].region.Left {
-							outInternal[bestIdx].region.Left = reg.Left
-						}
-						if reg.Right > outInternal[bestIdx].region.Right {
-							outInternal[bestIdx].region.Right = reg.Right
-						}
-						outInternal[bestIdx].blockBottom = blockBottom
-						merged = true
+				}
+				if bestIdx >= 0 && score(trimmedTop, reg) < continuationHeaderScore {
+					// Merge into found region
+					outInternal[bestIdx].region.Bottom = trimmedBottom
+					outInternal[bestIdx].region.OpenEnded = reg.OpenEnded
+					if reg.Left < outInternal[bestIdx].region.Left {
+						outInternal[bestIdx].region.Left = reg.Left
 					}
+					if reg.Right > outInternal[bestIdx].region.Right {
+						outInternal[bestIdx].region.Right = reg.Right
+					}
+					outInternal[bestIdx].blockBottom = blockBottom
+					merged = true
 				}
 			}
 			if !merged {
