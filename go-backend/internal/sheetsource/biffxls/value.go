@@ -14,6 +14,7 @@ type CellValue struct {
 	IsFormula bool
 	IsDate    bool // XF number format classified as date
 	IsPercent bool
+	Unit      string // literal unit from the number-format code ("€", "m²", …)
 }
 
 // valuer is implemented by every content handler that can report a typed

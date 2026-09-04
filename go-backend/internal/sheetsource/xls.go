@@ -102,7 +102,7 @@ func stopOrErr(err error, ex *SheetExtras, r int) error {
 }
 
 func cellFromXLS(cv biffxls.CellValue, date1904 bool) Cell {
-	c := Cell{IsFormula: cv.IsFormula}
+	c := Cell{IsFormula: cv.IsFormula, Style: CellStyle{Unit: cv.Unit}}
 	switch {
 	case cv.IsError:
 		c.Kind, c.Raw = KindError, cv.Text

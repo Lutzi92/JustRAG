@@ -82,16 +82,24 @@ type RK uint32
 func (rk RK) number() (intNum int64, floatNum float64, isFloat bool) {
 	multiplied := rk & 1
 	isInt := rk & 2
-	val := rk >> 2
 	if isInt == 0 {
 		isFloat = true
-		floatNum = math.Float64frombits(uint64(val) << 34)
+		floatNum = math.Float64frombits(uint64(rk>>2) << 34)
 		if multiplied != 0 {
 			floatNum = floatNum / 100
 		}
 		return
 	}
-	return int64(val), 0, false
+	// FORK FIX: the fInt payload is a *signed* 30-bit value and upstream shifted
+	// it as an unsigned uint32, so every negative RK integer came back as a
+	// number near 2^30 (RK 0xFFFFFFEE, i.e. -5, decoded as 1073741819).
+	// Upstream also ignored the fX100 flag on this path, so 1.25 stored as
+	// 125x100 decoded as 125.
+	val := int64(int32(rk) >> 2)
+	if multiplied != 0 {
+		return 0, float64(val) / 100, true
+	}
+	return val, 0, false
 }
 
 func (rk RK) String() string {
@@ -218,7 +226,7 @@ func (c *FormulaCol) Value(wb *WorkBook) CellValue {
 	}
 	cv.IsNumber = true
 	cv.Number = math.Float64frombits(binary.LittleEndian.Uint64(r[:]))
-	cv.IsDate, cv.IsPercent = wb.FormatIsDate(c.Header.IndexXf)
+	cv.IsDate, cv.IsPercent, cv.Unit = wb.FormatInfo(c.Header.IndexXf)
 	cv.Text = strconv.FormatFloat(cv.Number, 'f', -1, 64)
 	return cv
 }

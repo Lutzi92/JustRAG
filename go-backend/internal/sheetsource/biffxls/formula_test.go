@@ -108,20 +108,62 @@ func TestClassifyCustomFormat(t *testing.T) {
 	cases := []struct {
 		code          string
 		date, percent bool
+		unit          string
 	}{
-		{`General`, false, false},
-		{`0.00`, false, false},
-		{`0.0%`, false, true},
-		{`DD.MM.YYYY`, true, false},
-		{`hh:mm:ss`, true, false},
-		{`#,##0.00\ "€"`, false, false}, // the XfRk.String bug: not a date
-		{`#,##0.00\ [$€-407]`, false, false},
-		{`0 "m"`, false, false}, // literal m is a unit, not a month
+		{`General`, false, false, ""},
+		{`0.00`, false, false, ""},
+		{`0.0%`, false, true, ""},
+		{`DD.MM.YYYY`, true, false, ""},
+		{`hh:mm:ss`, true, false, ""},
+		{`#,##0.00\ "€"`, false, false, "€"}, // the XfRk.String bug: not a date
+		{`#,##0.00\ [$€-407]`, false, false, "€"},
+		{`0 "m"`, false, false, "m"}, // literal m is a unit, not a month
 	}
 	for _, c := range cases {
-		d, p, _ := classifyCustomFormat(c.code)
-		if d != c.date || p != c.percent {
-			t.Errorf("classifyCustomFormat(%q) = date:%v percent:%v, want date:%v percent:%v", c.code, d, p, c.date, c.percent)
+		d, p, u := classifyCustomFormat(c.code)
+		if d != c.date || p != c.percent || u != c.unit {
+			t.Errorf("classifyCustomFormat(%q) = date:%v percent:%v unit:%q, want date:%v percent:%v unit:%q",
+				c.code, d, p, u, c.date, c.percent, c.unit)
 		}
+	}
+}
+
+// FormatInfo is what carries the unit out to the profiler; the fixture has no
+// unit-formatted cell (its only custom format is "General"), so the wiring is
+// pinned on a synthetic workbook instead.
+func TestFormatInfoReportsUnit(t *testing.T) {
+	t.Parallel()
+	wb := &WorkBook{Formats: map[uint16]*Format{}}
+	wb.addXf(&Xf8{Format: 164}) // xf 0 -> custom currency
+	wb.addXf(&Xf8{Format: 9})   // xf 1 -> builtin percent
+	wb.addXf(&Xf8{Format: 14})  // xf 2 -> builtin date
+	cur := &Format{str: `#,##0.00\ "€"`}
+	cur.Head.Index = 164
+	wb.addFormat(cur)
+
+	for _, c := range []struct {
+		xf            uint16
+		date, percent bool
+		unit          string
+	}{
+		{0, false, false, "€"},
+		{1, false, true, ""},
+		{2, true, false, ""},
+		{99, false, false, ""}, // out of range
+	} {
+		d, p, u := wb.FormatInfo(c.xf)
+		if d != c.date || p != c.percent || u != c.unit {
+			t.Errorf("FormatInfo(%d) = date:%v percent:%v unit:%q, want date:%v percent:%v unit:%q",
+				c.xf, d, p, u, c.date, c.percent, c.unit)
+		}
+		if dd, pp := wb.FormatIsDate(c.xf); dd != c.date || pp != c.percent {
+			t.Errorf("FormatIsDate(%d) = %v/%v, want %v/%v", c.xf, dd, pp, c.date, c.percent)
+		}
+	}
+
+	// And the unit must survive into the typed cell value.
+	n := &NumberCol{Index: 0, Float: 12.5}
+	if got := n.ValueAt(wb, 0); got.Unit != "€" || got.Number != 12.5 {
+		t.Errorf("NumberCol.ValueAt = %+v, want Number 12.5 Unit €", got)
 	}
 }

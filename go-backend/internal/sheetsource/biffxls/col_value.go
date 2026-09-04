@@ -17,7 +17,7 @@ func (xf *XfRk) value(wb *WorkBook) CellValue {
 		f = float64(i)
 	}
 	cv := CellValue{IsNumber: true, Number: f, Text: strconv.FormatFloat(f, 'f', -1, 64)}
-	cv.IsDate, cv.IsPercent = wb.FormatIsDate(xf.Index)
+	cv.IsDate, cv.IsPercent, cv.Unit = wb.FormatInfo(xf.Index)
 	return cv
 }
 
@@ -32,7 +32,7 @@ func (c *MulBlankCol) ValueAt(_ *WorkBook, _ int) CellValue { return CellValue{}
 
 func (c *NumberCol) ValueAt(wb *WorkBook, _ int) CellValue {
 	cv := CellValue{IsNumber: true, Number: c.Float, Text: strconv.FormatFloat(c.Float, 'f', -1, 64)}
-	cv.IsDate, cv.IsPercent = wb.FormatIsDate(c.Index)
+	cv.IsDate, cv.IsPercent, cv.Unit = wb.FormatInfo(c.Index)
 	return cv
 }
 

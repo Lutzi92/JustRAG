@@ -3,6 +3,8 @@ package sheetsource
 import (
 	"reflect"
 	"testing"
+
+	"github.com/justrag/go-backend/internal/sheetsource/biffxls"
 )
 
 func TestXLSSourceReadsFormulaResults(t *testing.T) {
@@ -100,6 +102,43 @@ func TestXLSSourceCellKindsAndErrStop(t *testing.T) {
 	}
 	if c := rows[0][0]; c.Kind != KindText || c.Raw != "Nr." {
 		t.Errorf("A1 = %+v, want text", c)
+	}
+}
+
+// cellFromXLS is the only place the fork's CellValue becomes a Cell; the
+// fixture carries no unit-formatted or percent cell (its one custom format is
+// "General"), so the mapping is pinned directly.
+func TestCellFromXLS(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		cv   biffxls.CellValue
+		want Cell
+	}{
+		{"number with unit",
+			biffxls.CellValue{IsNumber: true, Number: 12.5, Unit: "€"},
+			Cell{Kind: KindNumber, Raw: "12.5", Formatted: "12.5", Style: CellStyle{Unit: "€"}}},
+		{"percent is scaled and marked",
+			biffxls.CellValue{IsNumber: true, Number: 0.125, IsPercent: true},
+			Cell{Kind: KindNumber, Raw: "12.5", Formatted: "12.5%", Style: CellStyle{Percent: true}}},
+		{"date serial",
+			biffxls.CellValue{IsNumber: true, Number: 45000, IsDate: true},
+			Cell{Kind: KindDate, Raw: "2023-03-15", Formatted: "2023-03-15"}},
+		{"error beats number",
+			biffxls.CellValue{IsError: true, Text: "#DIV/0!", IsFormula: true},
+			Cell{Kind: KindError, Raw: "#DIV/0!", Formatted: "#DIV/0!", IsFormula: true}},
+		{"bool",
+			biffxls.CellValue{IsBool: true, Text: "true"},
+			Cell{Kind: KindBool, Raw: "true", Formatted: "true"}},
+		{"text", biffxls.CellValue{Text: "Ja"}, Cell{Kind: KindText, Raw: "Ja", Formatted: "Ja"}},
+		{"empty", biffxls.CellValue{}, Cell{Kind: KindEmpty}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := cellFromXLS(c.cv, false); got != c.want {
+				t.Errorf("cellFromXLS(%+v) = %+v, want %+v", c.cv, got, c.want)
+			}
+		})
 	}
 }
 
