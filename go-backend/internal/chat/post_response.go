@@ -159,17 +159,30 @@ func (h *Handler) runPostResponseTasks(
 		}
 	}
 
-	// Tabular router SQL audit log (Task 7, R26): write one
+	// Tabular router SQL audit log (Task 7, R26; R59): write one
 	// tabular_query_log row for every turn the router had an opinion
-	// on — including skipped outcomes, which are cheap and are what
-	// makes fire-rate analysis possible from the table alone. Runs
-	// only when a router is actually wired (trace != nil, set by
-	// PrepareChatContext/RunSupervisorChat) and a logger is
-	// configured (WithTabularQueryLog); either being absent is a
+	// on — including most skipped outcomes, which are cheap and are
+	// what makes fire-rate analysis possible from the table alone.
+	// The two exceptions are skipped_disabled and skipped_no_tables:
+	// with the router attached to every KB (not just ones with
+	// spreadsheet data), these two outcomes fire on essentially every
+	// chat turn deployment-wide — a KB with no tabular data at all,
+	// or the feature turned off — and logging them would grow the
+	// table unboundedly for zero analytical value (the fire-rate
+	// denominator only ever counts fired vs. eligible questions, and
+	// neither of these outcomes is ever "eligible" in a way that
+	// changes that ratio). Every other skipped_* reason (no_cue,
+	// catalog_error, schema_empty) only occurs on a KB that DOES have
+	// tables, so those stay logged — they're the interesting "why
+	// didn't the router fire on a KB that could have answered this"
+	// signal. Runs only when a router is actually wired (trace !=
+	// nil, set by PrepareChatContext/RunSupervisorChat) and a logger
+	// is configured (WithTabularQueryLog); either being absent is a
 	// normal deployment shape, not an error. Fire-and-forget: a
 	// failed insert only costs one row of observability, never the
 	// chat turn, so it logs a warning and moves on.
-	if trace != nil && h.tabularQueryLog != nil {
+	if trace != nil && h.tabularQueryLog != nil &&
+		trace.Outcome != "skipped_disabled" && trace.Outcome != "skipped_no_tables" {
 		wg.Add(1)
 		safego.GoCtx(ctx, func() {
 			defer wg.Done()

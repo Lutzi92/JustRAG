@@ -115,6 +115,39 @@ func TestRunPostResponseTasks_TabularTrace_EmptyMessageID(t *testing.T) {
 	}
 }
 
+// TestRunPostResponseTasks_SkippedDisabled_NoQueryLogCall and
+// TestRunPostResponseTasks_SkippedNoTables_NoQueryLogCall are the R59
+// storage-growth fix: with the router attached to every KB, these two
+// outcomes fire on essentially every chat turn deployment-wide (no router
+// wired at all / a KB with no tabular data), so logging them would grow
+// tabular_query_log unboundedly for zero analytical value. Every other
+// skipped_* reason only occurs on a KB that DOES have tables and stays
+// logged (see TestRunPostResponseTasks_TabularTrace_InsertsQueryLog and the
+// package's other skipped_* outcomes, which are not filtered).
+func TestRunPostResponseTasks_SkippedDisabled_NoQueryLogCall(t *testing.T) {
+	logger := &fakeTabularQueryLogger{}
+	h := newTabularTestHandler(logger)
+
+	trace := &TabularTrace{Fired: false, Outcome: "skipped_disabled", Question: "q"}
+	h.runPostResponseTasks(context.Background(), "q", "a", "context", "kb-1", "en", "ai-msg-1", nil, nil, trace)
+
+	if calls := logger.calls(); len(calls) != 0 {
+		t.Fatalf("want 0 InsertQueryLog calls for skipped_disabled, got %d", len(calls))
+	}
+}
+
+func TestRunPostResponseTasks_SkippedNoTables_NoQueryLogCall(t *testing.T) {
+	logger := &fakeTabularQueryLogger{}
+	h := newTabularTestHandler(logger)
+
+	trace := &TabularTrace{Fired: false, Outcome: "skipped_no_tables", Question: "q"}
+	h.runPostResponseTasks(context.Background(), "q", "a", "context", "kb-1", "en", "ai-msg-1", nil, nil, trace)
+
+	if calls := logger.calls(); len(calls) != 0 {
+		t.Fatalf("want 0 InsertQueryLog calls for skipped_no_tables, got %d", len(calls))
+	}
+}
+
 func TestRunPostResponseTasks_NilTrace_NoQueryLogCall(t *testing.T) {
 	logger := &fakeTabularQueryLogger{}
 	h := newTabularTestHandler(logger)
