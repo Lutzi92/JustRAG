@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/justrag/go-backend/internal/tabular/sqlexec"
 )
 
 func TestValidateTableQueryScoping(t *testing.T) {
@@ -129,3 +131,132 @@ func TestTableQueryDiscoveryDescribesColumnRoleAndDescription(t *testing.T) {
 }
 
 func alwaysEnabled(context.Context) bool { return true }
+
+// fakeExecutor is the sqlexec.Executor test seam. It records the exact SQL
+// string it was asked to run (post sqlcheck.Validate wrapping) and returns a
+// canned result unless err is set.
+type fakeExecutor struct {
+	lastSQL string
+	result  *sqlexec.Result
+	err     error
+}
+
+func (f *fakeExecutor) Execute(_ context.Context, sql string, _ sqlexec.Options) (*sqlexec.Result, error) {
+	f.lastSQL = sql
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.result != nil {
+		return f.result, nil
+	}
+	return &sqlexec.Result{Columns: []string{"x"}, Rows: []map[string]any{{"x": "1"}}, RowCount: 1}, nil
+}
+
+// TestTableQueryDiscoveryDescribesShadowAndIDColumns pins that Phase-3
+// discovery output surfaces the profiler's shadow-column linkage and the
+// per-table id-role column names, not just Role/Description (already
+// covered by TestTableQueryDiscoveryDescribesColumnRoleAndDescription).
+func TestTableQueryDiscoveryDescribesShadowAndIDColumns(t *testing.T) {
+	cat := fakeCatalog{entries: []tableEntry{{
+		TableName: "tabular.sheet_x_0", SheetName: "Gebaeude", FileName: "buildings.xlsx",
+		Columns: []tableColumn{
+			{Name: "gebaeude", Type: "text", Original: "Gebaeude", Role: "id"},
+			{Name: "baujahr", Type: "text", Original: "Baujahr", Role: "measure"},
+			{Name: "baujahr_num", Type: "numeric", Original: "Baujahr", Role: "measure", ShadowOf: "baujahr"},
+		},
+		IDColumns: []string{"gebaeude"},
+		RowCount:  3,
+	}}}
+	tool := newTableQueryWithDeps(cat, nil, alwaysEnabled)
+	res, err := tool.Handler.Invoke(context.Background(), json.RawMessage(`{"kb_id":"k","describe":true}`))
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+	if !strings.Contains(string(res.Structured), `"shadow_of":"baujahr"`) {
+		t.Fatalf("discovery missing shadow_of: %s", res.Structured)
+	}
+	if !strings.Contains(string(res.Structured), `"id_columns":["gebaeude"]`) {
+		t.Fatalf("discovery missing id_columns: %s", res.Structured)
+	}
+}
+
+// TestTableQueryRejectsForeignTable pins that the AST validator
+// (sqlcheck.Validate), not just the legacy regex, rejects a table that
+// isn't in this KB's catalog — with an error the LLM can act on.
+func TestTableQueryRejectsForeignTable(t *testing.T) {
+	cat := fakeCatalog{entries: []tableEntry{{
+		TableName: "tabular.sheet_abc_0", SheetName: "Q1", FileName: "sales.csv", RowCount: 5,
+	}}}
+	tool := newTableQueryWithDeps(cat, &fakeExecutor{}, alwaysEnabled)
+	argsJSON, _ := json.Marshal(map[string]any{"kb_id": "k", "sql": `SELECT * FROM tabular."other"`})
+	_, err := tool.Handler.Invoke(context.Background(), argsJSON)
+	if err == nil || !strings.Contains(err.Error(), "not a table of this knowledge base") {
+		t.Fatalf("expected rejection mentioning 'not a table of this knowledge base', got %v", err)
+	}
+}
+
+// TestTableQueryWrapsLimitTo200 pins that a router/LLM-supplied LIMIT above
+// the cap reaches the executor already wrapped down to LIMIT 200 by
+// sqlcheck.Validate, rather than being trusted verbatim.
+func TestTableQueryWrapsLimitTo200(t *testing.T) {
+	cat := fakeCatalog{entries: []tableEntry{{
+		TableName: "tabular.sheet_abc_0", SheetName: "Q1", FileName: "sales.csv", RowCount: 5,
+	}}}
+	fe := &fakeExecutor{}
+	tool := newTableQueryWithDeps(cat, fe, alwaysEnabled)
+	argsJSON, _ := json.Marshal(map[string]any{"kb_id": "k", "sql": "SELECT * FROM tabular.sheet_abc_0 LIMIT 5000"})
+	if _, err := tool.Handler.Invoke(context.Background(), argsJSON); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(fe.lastSQL, "LIMIT 200") {
+		t.Fatalf("expected executor to receive SQL wrapped with LIMIT 200, got %q", fe.lastSQL)
+	}
+}
+
+// TestTableQueryResultIncludesSource pins that a successful query result
+// carries the source file/sheet/table the rows came from (R27 / task-6),
+// not just rows/columns/row_count/truncated.
+func TestTableQueryResultIncludesSource(t *testing.T) {
+	cat := fakeCatalog{entries: []tableEntry{{
+		TableName: "tabular.sheet_abc_0", SheetName: "Q1", FileName: "sales.csv", FileID: "f1", RowCount: 5,
+	}}}
+	fe := &fakeExecutor{result: &sqlexec.Result{
+		Columns: []string{"revenue"}, Rows: []map[string]any{{"revenue": "100"}}, RowCount: 1,
+	}}
+	tool := newTableQueryWithDeps(cat, fe, alwaysEnabled)
+	argsJSON, _ := json.Marshal(map[string]any{"kb_id": "k", "sql": "SELECT revenue FROM tabular.sheet_abc_0"})
+	res, err := tool.Handler.Invoke(context.Background(), argsJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var parsed struct {
+		Source []struct {
+			FileName string `json:"file_name"`
+		} `json:"source"`
+	}
+	if err := json.Unmarshal(res.Structured, &parsed); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(parsed.Source) == 0 || parsed.Source[0].FileName != "sales.csv" {
+		t.Fatalf("expected source[0].file_name = sales.csv, got %+v", parsed.Source)
+	}
+}
+
+// TestTableQueryRejectsPgReadFile pins that the AST validator's function
+// allowlist — not just the regex/keyword denylist — rejects a
+// non-allowlisted function call. Mutation coverage: skipping
+// sqlcheck.Validate would let this through, since pg_read_file is neither a
+// denied keyword nor a FROM/JOIN target the legacy regex inspects.
+func TestTableQueryRejectsPgReadFile(t *testing.T) {
+	cat := fakeCatalog{entries: []tableEntry{{
+		TableName: "tabular.sheet_abc_0", SheetName: "Q1", FileName: "sales.csv", RowCount: 5,
+	}}}
+	tool := newTableQueryWithDeps(cat, &fakeExecutor{}, alwaysEnabled)
+	argsJSON, _ := json.Marshal(map[string]any{
+		"kb_id": "k", "sql": "SELECT pg_read_file('/etc/passwd') FROM tabular.sheet_abc_0",
+	})
+	_, err := tool.Handler.Invoke(context.Background(), argsJSON)
+	if err == nil {
+		t.Fatal("expected pg_read_file to be rejected")
+	}
+}
