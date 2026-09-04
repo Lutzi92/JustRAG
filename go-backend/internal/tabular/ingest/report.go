@@ -56,26 +56,6 @@ func cardStatsFromResult(rr *tabular.RegionResult, rp profile.RegionProfile) []r
 	return out
 }
 
-// cardStatsFromProfile maps a region's heuristic ColumnProfiles to the
-// renderer's profile-card shape (render-only path, no materialiser stats
-// available): Top is the first 5 ListValues, no type/min/max.
-func cardStatsFromProfile(rp profile.RegionProfile) []render.ColumnCardStat {
-	out := make([]render.ColumnCardStat, 0, len(rp.Columns))
-	for _, c := range rp.Columns {
-		top := c.ListValues
-		if len(top) > 5 {
-			top = top[:5]
-		}
-		out = append(out, render.ColumnCardStat{
-			Header:      strings.Join(strings.Fields(c.Header), " "),
-			Role:        string(c.Role),
-			Description: c.Description,
-			Top:         top,
-		})
-	}
-	return out
-}
-
 // SanitizeNote truncates s to 200 runes and strips newlines, for report
 // Notes entries built from arbitrary error text.
 func SanitizeNote(s string) string {

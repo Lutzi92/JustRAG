@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"errors"
 
 	"github.com/justrag/go-backend/internal/ai"
 )
@@ -15,7 +16,14 @@ type AIProfiler struct {
 	KBID, Lang, Model string
 }
 
-// ProfileTableRegion implements profile.LLMProfiler.
+// ProfileTableRegion implements profile.LLMProfiler. A nil Resolver is a
+// caller wiring bug (Task 6/7 must not build an AIProfiler without one), but
+// Ingest treats every LLMProfiler failure as soft (logged, heuristic kept —
+// see ingester.go), so this must return an error rather than let
+// ai.ProfileTableRegion panic dereferencing a nil resolver.
 func (p *AIProfiler) ProfileTableRegion(ctx context.Context, req ai.SheetProfileRequest) (ai.SheetProfileProposal, error) {
+	if p.Resolver == nil {
+		return ai.SheetProfileProposal{}, errors.New("tabular/ingest: nil ai resolver")
+	}
 	return ai.ProfileTableRegion(ctx, p.Resolver, req, p.KBID, p.Lang, p.Model)
 }

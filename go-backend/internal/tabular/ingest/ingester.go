@@ -127,93 +127,39 @@ func (g *Ingester) Ingest(ctx context.Context, in Input) (*Result, error) {
 	}
 
 	sheets := src.Sheets()
+	if len(sheets) == 0 {
+		return nil, fmt.Errorf("ingest: %q has no sheets", in.FileName)
+	}
 	res := &Result{Report: tabular.ParseReport{Version: 1, Materialised: materialise}}
 	var pages []Page
+	var anySheetOK bool
 
+	// Ruling R13: a per-sheet failure (a corrupt sheet, a read error partway
+	// through) is fail-soft — it must not abort the rest of the file. This
+	// matters most on a re-ingest: DropTablesForFile has already run above,
+	// so aborting Ingest entirely on sheet k's error would leave every
+	// OTHER sheet's tables dropped too, with nothing materialised to
+	// replace them. Ingest only returns an error when the source can't be
+	// opened at all (above), it has no sheets (above), or every sheet
+	// failed (below).
 	for _, info := range sheets {
 		progress(fmt.Sprintf("Blatt %d/%d · Profil", info.Index+1, len(sheets)))
-		sample, err := sheetsource.CollectSample(src, info.Index, opts.SampleRows)
+
+		page, rep, err := g.ingestSheet(ctx, src, info, len(sheets), in, opts, materialise, res, progress)
 		if err != nil {
-			return nil, fmt.Errorf("ingest: sheet %q: %w", info.Name, err)
+			logctx.From(ctx).Warn("tabular: sheet failed; skipping", "sheet", info.Name, "error", err.Error())
+			note := fmt.Sprintf("Blatt konnte nicht gelesen werden: %s", SanitizeNote(err.Error()))
+			rep = tabular.SheetReport{Name: info.Name, Hidden: info.Hidden, HeaderRow: -1, Notes: []string{note}}
+			page = Page{Number: info.Index + 1, Text: fmt.Sprintf("# %s\n\nBlatt konnte nicht gelesen werden.", info.Name)}
+		} else {
+			anySheetOK = true
 		}
-		sp := profile.ProfileSheet(sample, profile.Options{})
-		rep := tabular.SheetReport{Name: info.Name, Kind: string(sp.Kind), Hidden: info.Hidden, HeaderRow: -1}
-		names := render.TableNames{}
-		cardStats := map[[2]int][]render.ColumnCardStat{}
-		rowCounts := map[[2]int]int{}
-
-		for ri := range sp.Regions {
-			rp := &sp.Regions[ri]
-			if rp.Kind != profile.KindTable {
-				continue
-			}
-
-			if g.llm != nil && opts.LLM.Enabled {
-				req := profile.BuildLLMRequest(sample, *rp, in.FileName, opts.LLM.MaxRows)
-				if prop, err := g.llm.ProfileTableRegion(ctx, req); err != nil {
-					logctx.From(ctx).Warn("tabular: profiler llm failed; using heuristics", "sheet", info.Name, "region", ri, "error", err.Error())
-				} else {
-					profile.ApplyLLM(rp, prop, rp.Confidence, opts.LLM)
-				}
-			}
-
-			if rep.HeaderRow < 0 && len(rp.HeaderRows) > 0 {
-				rep.HeaderRow = rp.HeaderRows[len(rp.HeaderRows)-1]
-				rep.Columns = len(rp.Columns)
-				rep.DroppedColumns = len(rp.Dropped)
-			}
-			rep.UsedLLM = rep.UsedLLM || rp.UsedLLM
-			if fe, ok := rp.Diagnostics["formula_cells_empty"].(int); ok {
-				rep.FormulaCellsEmpty = fe
-			}
-
-			key := [2]int{info.Index, ri}
-			if materialise {
-				rr, err := g.mat.MaterializeRegion(ctx, tabular.RegionInput{
-					Source: src, SheetIndex: info.Index, Sheet: info, Profile: *rp, RegionIndex: ri,
-					FileID: in.FileID, KBID: in.KBID, FileName: in.FileName, MaxRows: opts.MaxRows, MaxDistinct: opts.MaxDistinct,
-					Progress: func(rows int) {
-						progress(fmt.Sprintf("Blatt %d/%d · %d Zeilen", info.Index+1, len(sheets), rows))
-					},
-				})
-				if err != nil {
-					logctx.From(ctx).Warn("tabular: materialise failed; text path only", "sheet", info.Name, "region", ri, "error", err.Error())
-					rep.Notes = append(rep.Notes, fmt.Sprintf("region %d: materialisation failed: %s", ri, SanitizeNote(err.Error())))
-					res.Report.Materialised = false
-				} else {
-					names[key] = rr.TableName
-					res.Tables = append(res.Tables, rr.TableName)
-					rep.Tables = append(rep.Tables, rr.TableName)
-					rep.RowsRead += int(rr.RowsRead)
-					rep.RowsMaterialised += int(rr.RowsMaterialised)
-					rep.CoercionFailures += int(rr.CoercionFailures)
-					if rr.RowsDropped > 0 {
-						rep.Notes = append(rep.Notes, fmt.Sprintf("region %d: %d rows past tabular_max_rows dropped", ri, rr.RowsDropped))
-					}
-					cardStats[key] = cardStatsFromResult(rr, *rp)
-					rowCounts[key] = int(rr.RowsMaterialised)
-				}
-			}
-			if _, ok := cardStats[key]; !ok {
-				cardStats[key] = cardStatsFromProfile(*rp)
-			}
-		}
-
-		sr, err := render.RenderSheet(src, in.FileName, sp, names, render.Options{
-			ChunkSize: opts.ChunkSize, EmbedMaxRows: opts.EmbedMaxRows, CardStats: cardStats, RowCounts: rowCounts,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("ingest: render %q: %w", info.Name, err)
-		}
-		for _, r := range sr.Regions {
-			rep.RowsEmbedded += r.RowsEmbedded
-			rep.RowsPastCap += r.RowsPastCap
-		}
-		if !materialise {
-			rep.RowsRead = rep.RowsEmbedded + rep.RowsPastCap
-		}
-		pages = append(pages, Page{Number: sr.Page.PageNumber, Text: sr.Page.Text})
+		pages = append(pages, page)
 		res.Report.Sheets = append(res.Report.Sheets, rep)
+	}
+
+	if !anySheetOK {
+		return nil, fmt.Errorf("ingest: every sheet in %q failed", in.FileName)
 	}
 
 	texts := make([]string, len(pages))
@@ -223,4 +169,104 @@ func (g *Ingester) Ingest(ctx context.Context, in Input) (*Result, error) {
 	res.Pages = pages
 	res.Text = strings.Join(texts, "\n\n")
 	return res, nil
+}
+
+// ingestSheet runs one sheet's profile → LLM-assist → materialise → render
+// sequence. A materialise failure on one table REGION is handled inside
+// this method and never returned as an error (existing fail-soft
+// behaviour, unchanged); an error returned by this method means the whole
+// SHEET could not be profiled or rendered (CollectSample/RenderSheet
+// failed), which Ingest's caller turns into the placeholder page/report
+// per ruling R13. res.Tables is mutated directly for any region that did
+// materialise before such a failure, since that table genuinely exists in
+// Postgres regardless of whether this sheet's own report/page could be
+// built.
+func (g *Ingester) ingestSheet(ctx context.Context, src sheetsource.Source, info sheetsource.SheetInfo, sheetCount int, in Input, opts Options, materialise bool, res *Result, progress func(string)) (Page, tabular.SheetReport, error) {
+	sample, err := sheetsource.CollectSample(src, info.Index, opts.SampleRows)
+	if err != nil {
+		return Page{}, tabular.SheetReport{}, fmt.Errorf("collect sample: %w", err)
+	}
+	sp := profile.ProfileSheet(sample, profile.Options{})
+	rep := tabular.SheetReport{Name: info.Name, Kind: string(sp.Kind), Hidden: info.Hidden, HeaderRow: -1}
+	names := render.TableNames{}
+	cardStats := map[[2]int][]render.ColumnCardStat{}
+	rowCounts := map[[2]int]int{}
+
+	for ri := range sp.Regions {
+		rp := &sp.Regions[ri]
+		if rp.Kind != profile.KindTable {
+			continue
+		}
+
+		if g.llm != nil && opts.LLM.Enabled {
+			req := profile.BuildLLMRequest(sample, *rp, in.FileName, opts.LLM.MaxRows)
+			if prop, err := g.llm.ProfileTableRegion(ctx, req); err != nil {
+				logctx.From(ctx).Warn("tabular: profiler llm failed; using heuristics", "sheet", info.Name, "region", ri, "error", err.Error())
+			} else {
+				profile.ApplyLLM(rp, prop, rp.Confidence, opts.LLM)
+			}
+		}
+
+		if rep.HeaderRow < 0 && len(rp.HeaderRows) > 0 {
+			rep.HeaderRow = rp.HeaderRows[len(rp.HeaderRows)-1]
+			rep.Columns = len(rp.Columns)
+			rep.DroppedColumns = len(rp.Dropped)
+		}
+		rep.UsedLLM = rep.UsedLLM || rp.UsedLLM
+		if fe, ok := rp.Diagnostics["formula_cells_empty"].(int); ok {
+			rep.FormulaCellsEmpty = fe
+		}
+
+		key := [2]int{info.Index, ri}
+		if materialise {
+			rr, err := g.mat.MaterializeRegion(ctx, tabular.RegionInput{
+				Source: src, SheetIndex: info.Index, Sheet: info, Profile: *rp, RegionIndex: ri,
+				FileID: in.FileID, KBID: in.KBID, FileName: in.FileName, MaxRows: opts.MaxRows, MaxDistinct: opts.MaxDistinct,
+				Progress: func(rows int) {
+					progress(fmt.Sprintf("Blatt %d/%d · %d Zeilen", info.Index+1, sheetCount, rows))
+				},
+			})
+			if err != nil {
+				logctx.From(ctx).Warn("tabular: materialise failed; text path only", "sheet", info.Name, "region", ri, "error", err.Error())
+				rep.Notes = append(rep.Notes, fmt.Sprintf("region %d: materialisation failed: %s", ri, SanitizeNote(err.Error())))
+				res.Report.Materialised = false
+			} else {
+				names[key] = rr.TableName
+				res.Tables = append(res.Tables, rr.TableName)
+				rep.Tables = append(rep.Tables, rr.TableName)
+				rep.RowsRead += int(rr.RowsRead)
+				rep.RowsMaterialised += int(rr.RowsMaterialised)
+				rep.CoercionFailures += int(rr.CoercionFailures)
+				if rr.RowsDropped > 0 {
+					rep.Notes = append(rep.Notes, fmt.Sprintf("region %d: %d rows past tabular_max_rows dropped", ri, rr.RowsDropped))
+				}
+				cardStats[key] = cardStatsFromResult(rr, *rp)
+				rowCounts[key] = int(rr.RowsMaterialised)
+			}
+		}
+		// R13/round-1 fix: no ingest-side fallback here. render/kv.go's
+		// renderTable already falls back to columnCardStatsFromProfile
+		// + rowCount = RowsEmbedded+RowsPastCap when a region's key is
+		// ABSENT from CardStats — pre-filling cardStats[key] for every
+		// unmaterialised region (render-only mode, or a per-region
+		// materialise failure) defeated that fallback's row-count arm
+		// and always printed "0 Zeilen" on the card (RenderSheet hasn't
+		// run yet at this point in the loop, so RowsEmbedded/RowsPastCap
+		// aren't known here either way).
+	}
+
+	sr, err := render.RenderSheet(src, in.FileName, sp, names, render.Options{
+		ChunkSize: opts.ChunkSize, EmbedMaxRows: opts.EmbedMaxRows, CardStats: cardStats, RowCounts: rowCounts,
+	})
+	if err != nil {
+		return Page{}, tabular.SheetReport{}, fmt.Errorf("render: %w", err)
+	}
+	for _, r := range sr.Regions {
+		rep.RowsEmbedded += r.RowsEmbedded
+		rep.RowsPastCap += r.RowsPastCap
+	}
+	if !materialise {
+		rep.RowsRead = rep.RowsEmbedded + rep.RowsPastCap
+	}
+	return Page{Number: sr.Page.PageNumber, Text: sr.Page.Text}, rep, nil
 }

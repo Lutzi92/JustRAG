@@ -122,6 +122,12 @@ func TestIngestRenderOnlyAndLLMFailureAreSoft(t *testing.T) {
 	if res.Report.Materialised || len(res.Tables) != 0 || !strings.Contains(res.Pages[0].Text, "[rows 1–8]") || !strings.Contains(res.Pages[0].Text, "Lieferantennummer: 0002001919") {
 		t.Errorf("render-only: %+v\n%s", res.Report, res.Pages[0].Text)
 	}
+	// Round-1 fix: the card's row count must come from render's own
+	// RowsEmbedded+RowsPastCap fallback (true row count for this fixture is
+	// 8), not a stale ingest-side pre-fill that always read "0 Zeilen".
+	if !strings.Contains(res.Pages[0].Text, "8 Zeilen") || strings.Contains(res.Pages[0].Text, "0 Zeilen") {
+		t.Errorf("render-only card row count wrong:\n%s", res.Pages[0].Text)
+	}
 	if res.Report.Sheets[0].UsedLLM {
 		t.Error("failed LLM call must not be reported as used")
 	}
@@ -137,5 +143,46 @@ func TestIngestMaterialiseFailureKeepsText(t *testing.T) {
 	}
 	if res.Report.Materialised || len(res.Report.Sheets[0].Notes) == 0 || !strings.Contains(res.Pages[0].Text, "Lieferantennummer: 0002001919") {
 		t.Errorf("failure must be soft: %+v", res.Report)
+	}
+	// Round-1 fix: a per-region materialise failure must not leave the
+	// card reading "0 Zeilen" either — render's fallback still knows the
+	// true row count (8) from what it actually rendered.
+	if !strings.Contains(res.Pages[0].Text, "8 Zeilen") || strings.Contains(res.Pages[0].Text, "0 Zeilen") {
+		t.Errorf("materialise-failure card row count wrong:\n%s", res.Pages[0].Text)
+	}
+}
+
+func TestWithLLMShallowCopy(t *testing.T) {
+	t.Parallel()
+	fm := &fakeMat{}
+	fl := &fakeLLM{}
+	g := New(fm, nil)
+	g2 := g.WithLLM(fl)
+
+	if g2 == g {
+		t.Error("WithLLM must return a new *Ingester, not mutate/alias the receiver")
+	}
+	if g2.mat != g.mat {
+		t.Errorf("WithLLM must preserve the materialiser: g.mat=%v g2.mat=%v", g.mat, g2.mat)
+	}
+	if g2.llm != profile.LLMProfiler(fl) {
+		t.Errorf("g2.llm = %v, want fl", g2.llm)
+	}
+	if g.llm != nil {
+		t.Errorf("original g.llm must stay nil after WithLLM on the copy, got %v", g.llm)
+	}
+
+	// WithLLM(nil) on an ingester that already has an LLM returns a copy
+	// without one, and again does not mutate the original.
+	g3 := New(fm, fl)
+	g4 := g3.WithLLM(nil)
+	if g4 == g3 {
+		t.Error("WithLLM(nil) must return a new *Ingester")
+	}
+	if g4.llm != nil {
+		t.Errorf("g4.llm = %v, want nil", g4.llm)
+	}
+	if g3.llm != profile.LLMProfiler(fl) {
+		t.Errorf("original g3.llm must be unchanged, got %v", g3.llm)
 	}
 }
