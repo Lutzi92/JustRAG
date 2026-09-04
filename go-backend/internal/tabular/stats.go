@@ -157,18 +157,24 @@ func (a *ColumnAccumulator) Canonical(c sheetsource.Cell) (string, bool) {
 
 // FinalSpec decides the SQL type(s) after the pass (spec §4.1): primary + optional shadow.
 //
-// The shadow case (last) is intentionally not gated on Role == RoleMeasure:
-// a column the profiler classified RoleText because it falls short of the
-// >=90% numeric threshold in profile.decideRole (e.g. "Baujahr" with a
-// couple of "2007; Anbau 2018"-style annotations mixed into otherwise plain
-// years) still has a real, aggregatable numeric subset worth exposing as a
-// shadow column — the primary stays text (preserving the annotations
+// Ruling R9: the shadow case (last) fires when the column is genuinely
+// mixed (0 < Numeric < n) AND EITHER the profiler already called it a
+// Measure OR a plain majority of its values parse as numbers
+// (Numeric*2 >= n). Spec §4.1's own example is "Baujahr" — a build-year
+// column with a couple of "2007; Anbau 2018"-style annotations mixed into
+// otherwise plain years — which profile.decideRole's >=90% threshold pins
+// RoleText (see profile/fixtures_test.go), not RoleMeasure, at 8-of-10
+// numeric. The majority arm exists specifically so that case still gets a
+// "baujahr_num" shadow: the primary stays text (preserving the annotations
 // verbatim, which is the whole reason the profiler didn't call it Measure),
 // while the shadow lets table_query SUM/AVG over the values that do parse.
-// Gating on Numeric>0 && Numeric<n alone is safe here because every case
-// that would make a Role-based restriction matter (RoleID, RoleBool,
-// RoleDate, a fully numeric column) is already handled by an earlier case in
-// this switch, which stops at the first match.
+// Below a plain majority (e.g. 1-of-10 numeric), a RoleText column is just
+// text with an occasional numeral in it, not a numeric-annotated column —
+// no shadow. Every case that would make a Role-based restriction matter for
+// the OTHER roles (RoleID, RoleBool, RoleDate, a fully numeric column) is
+// already handled by an earlier case in this switch, which stops at the
+// first match, so this rule only ever governs RoleMeasure/RoleText/
+// RoleCategory columns that reach it.
 func (a *ColumnAccumulator) FinalSpec() (ColumnSpec, *ColumnSpec) {
 	n := a.NonEmpty
 	base := ColumnSpec{Original: a.Profile.Header, Name: a.Name, Role: string(a.Profile.Role), Description: a.Profile.Description, Type: TypeText}
@@ -183,7 +189,7 @@ func (a *ColumnAccumulator) FinalSpec() (ColumnSpec, *ColumnSpec) {
 		}
 	case n > 0 && a.Numeric == n:
 		base.Type = TypeNumeric
-	case a.Numeric > 0 && a.Numeric < n:
+	case a.Numeric > 0 && a.Numeric < n && (a.Profile.Role == profile.RoleMeasure || a.Numeric*2 >= n):
 		shadow := ColumnSpec{Original: a.Profile.Header + " (Zahl)", Name: trimTo(a.Name, maxIdentBytes-4) + "_num", Type: TypeNumeric, Role: string(profile.RoleMeasure), ShadowOf: a.Name}
 		return base, &shadow
 	}

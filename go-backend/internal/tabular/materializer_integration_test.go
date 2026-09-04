@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -150,9 +151,84 @@ func TestMaterializeRegionIDsAndDerivedRows(t *testing.T) {
 	if tot.RowsMaterialised != 10 || tot.DerivedRowsSkipped != 2 {
 		t.Errorf("totals: %+v", tot)
 	}
+	// Every row counted in RowsRead lands in exactly one of the other
+	// buckets (RegionResult's own contract).
+	if tot.RowsRead != tot.RowsMaterialised+tot.RowsDropped+tot.DerivedRowsSkipped+tot.RowsSkippedEmpty {
+		t.Errorf("row bucket identity broken: %+v", tot)
+	}
 	var sum float64
 	_ = pool.QueryRow(context.Background(), fmt.Sprintf(`SELECT SUM("bgf") FROM tabular.%q`, tot.TableName)).Scan(&sum)
 	if sum != 10400 {
 		t.Errorf("SUM(bgf) = %v want the workbook's own cached total 10400", sum)
+	}
+}
+
+// TestMaterializeRegionMaxRowsCap covers item 3 of fix round 1: the MaxRows
+// cap check must happen BEFORE any accumulator is touched, so rows past the
+// cap are counted in RowsDropped without affecting stats or the
+// distinct-value maps at all. A bug that ran Add() before checking the cap
+// would inflate NonEmpty beyond RowsMaterialised, driving
+// ColumnStat.NullCount (totalRows - NonEmpty) negative, and would leak
+// dropped rows' values into tabular_column_values.
+func TestMaterializeRegionMaxRowsCap(t *testing.T) {
+	pool := openMainPool(t)
+	fileID, kbID := seedFile(t, pool)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "maxrows.csv")
+	if err := os.WriteFile(path, []byte("Name,Value\nA,1\nB,2\nC,3\nD,4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src, err := sheetsource.Open(path, "maxrows.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	sample, err := sheetsource.CollectSample(src, 0, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := profile.ProfileSheet(sample, profile.Options{})
+	var rp profile.RegionProfile
+	for _, r := range sp.Regions {
+		if r.Kind == profile.KindTable {
+			rp = r
+			break
+		}
+	}
+	m := NewMaterializer(pool)
+	res, err := m.MaterializeRegion(context.Background(), RegionInput{Source: src, SheetIndex: 0, Sheet: sample.Info, Profile: rp,
+		FileID: fileID, KBID: kbID, FileName: "maxrows.csv", MaxRows: 2, MaxDistinct: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.DropTablesForFile(context.Background(), fileID) })
+
+	if res.RowsMaterialised != 2 {
+		t.Errorf("RowsMaterialised = %d, want 2", res.RowsMaterialised)
+	}
+	if res.RowsDropped != 2 {
+		t.Errorf("RowsDropped = %d, want 2", res.RowsDropped)
+	}
+	for _, st := range res.Stats {
+		if st.NullCount < 0 {
+			t.Errorf("stat %+v has a negative NullCount — an accumulator ran on a dropped row", st)
+		}
+	}
+
+	rows, err := pool.Query(context.Background(), `SELECT value FROM tabular_column_values WHERE table_name=$1 AND column_name='name' ORDER BY value`, res.TableName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vals []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		vals = append(vals, v)
+	}
+	rows.Close()
+	if len(vals) != 2 || vals[0] != "A" || vals[1] != "B" {
+		t.Errorf("tabular_column_values for name = %v, want [A B] (only the first 2 rows, admitted under MaxRows, may appear)", vals)
 	}
 }

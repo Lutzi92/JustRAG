@@ -518,13 +518,21 @@ func (p *Processor) runTabularMaterializer(ctx context.Context, filePath, fileNa
 	return strings.Join(cards, "\n\n"), nil
 }
 
-// embedTabularRowChunks embeds the Phase-2 free-text row-chunks produced by the
+// embedTabularRowChunks embeds the Phase-1 free-text row-chunks produced by the
 // materializer and stores them in the dim-keyed chunk table. Each chunk's
-// Content carries the `[tabular.<table> row <id>]` source header (built by
-// tabular.BuildRowChunkContent) so the agent can pivot to table_query; Metadata
-// records the table + rowid for a future cleaner-surfacing path. Reuses the
-// standard embedding batch size + cache. file_id ties the chunks to the file so
-// cascade-delete / re-ingest clean them up with no extra code.
+// Content carries a `[tabular.<table> row <id>]` source header so the agent
+// can pivot to table_query; Metadata records the table + rowid for a future
+// cleaner-surfacing path. Reuses the standard embedding batch size + cache.
+// file_id ties the chunks to the file so cascade-delete / re-ingest clean
+// them up with no extra code.
+//
+// This whole call chain is currently dead: internal/tabular's Phase-1
+// Materialize (and the BuildRowChunkContent helper that built the header
+// this comment describes) were removed in the 2026-09-04 spreadsheet-ingest
+// rework's Task 4; the tabular package's compat stub always errors, so
+// runTabularMaterializer never reaches this function. Task 7 rewires ingest
+// onto the Phase-2 materializer and either restores an equivalent row-chunk
+// path or removes this function — not touched here.
 func (p *Processor) embedTabularRowChunks(ctx context.Context, fileID, kbID string, sheets []tabular.SheetResult, pgConfig string) error {
 	embeddingBatchSize := resolveEmbeddingBatchSize(ctx, p.siteConfigReader)
 	type pending struct {

@@ -59,6 +59,29 @@ func TestFinalSpecRules(t *testing.T) {
 	}
 }
 
+// TestFinalSpecShadowGateR9 covers Ruling R9: a RoleText column only gets a
+// numeric shadow when it's genuinely mixed AND at least half its values are
+// numeric (or the profiler already called it Measure). Below that majority,
+// a RoleText column is just text with an occasional numeral in it, not a
+// numeric-annotated column like spec §4.1's "Baujahr" example.
+func TestFinalSpecShadowGateR9(t *testing.T) {
+	t.Parallel()
+	// RoleText, 1 numeric out of 10 -> below the majority threshold -> no shadow.
+	minority := mkAcc(profile.RoleText, "Kommentar", false,
+		num("42"), txt("foo"), txt("bar"), txt("baz"), txt("qux"),
+		txt("quux"), txt("corge"), txt("grault"), txt("garply"), txt("waldo"))
+	if p, s := minority.FinalSpec(); p.Type != TypeText || s != nil {
+		t.Errorf("1-of-10 numeric RoleText must not get a shadow: %+v %+v", p, s)
+	}
+	// RoleText, 8 numeric out of 10 (Baujahr's own shape, spec §4.1's example) -> majority arm fires -> shadow.
+	majority := mkAcc(profile.RoleText, "Baujahr", false,
+		num("1972"), txt("2007; Anbau 2018"), num("1890"), num("1961"), txt("1964, 1533"),
+		num("2016"), num("1975"), num("1988"), num("1967"), num("2008"))
+	if p, s := majority.FinalSpec(); p.Type != TypeText || s == nil || s.Type != TypeNumeric || s.Name != "baujahr_num" || s.ShadowOf != "baujahr" {
+		t.Errorf("8-of-10 numeric RoleText must get a shadow: %+v %+v", p, s)
+	}
+}
+
 func TestStatValueSetAndSamplesAreFiltered(t *testing.T) {
 	t.Parallel()
 	acc := NewAccumulators([]profile.ColumnProfile{{Index: 0, Header: "Bemerkung", Role: profile.RoleText}}, StatsOptions{MaxDistinct: 10})[0]

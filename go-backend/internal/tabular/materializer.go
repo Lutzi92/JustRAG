@@ -42,12 +42,14 @@ type RegionInput struct {
 	Progress               func(rowsDone int) // called every 10 000 data rows; may be nil
 }
 
-// RegionResult reports what MaterializeRegion did.
+// RegionResult reports what MaterializeRegion did. Every row counted in
+// RowsRead lands in exactly one of the other four row buckets:
+// RowsRead == RowsMaterialised + RowsDropped + DerivedRowsSkipped + RowsSkippedEmpty.
 type RegionResult struct {
-	TableName                                                                     string
-	Columns                                                                       []ColumnSpec // primaries + shadows in table order (after _rowid)
-	Stats                                                                         []ColumnStat
-	RowsRead, RowsMaterialised, RowsDropped, DerivedRowsSkipped, CoercionFailures int64
+	TableName                                                                                       string
+	Columns                                                                                         []ColumnSpec // primaries + shadows in table order (after _rowid)
+	Stats                                                                                           []ColumnStat
+	RowsRead, RowsMaterialised, RowsDropped, DerivedRowsSkipped, RowsSkippedEmpty, CoercionFailures int64
 }
 
 // rowSource adapts a channel of COPY-ready rows to pgx.CopyFromSource.
@@ -115,7 +117,17 @@ func (m *Materializer) MaterializeRegion(ctx context.Context, in RegionInput) (r
 		defer close(ch)
 		var ordinal int64
 		_, rerr := in.Source.ReadSheet(in.SheetIndex, func(r int, cells []sheetsource.Cell) error {
-			if cells == nil || r < in.Profile.DataStart || (!in.Profile.Region.OpenEnded && r > in.Profile.Region.Bottom) {
+			// R12: once we're past a closed region's last row there is
+			// nothing left in this region for the rest of the file (an
+			// open-ended region has no such bound — it reaches the last
+			// sample row by construction, meaning data continues past it).
+			// ErrStop is not surfaced as an error by any sheetsource.Source
+			// implementation (each treats it as "stop, no error" internally
+			// — see RowFunc's doc comment and e.g. XLSXSource.readSheetRaw).
+			if !in.Profile.Region.OpenEnded && r > in.Profile.Region.Bottom {
+				return sheetsource.ErrStop
+			}
+			if cells == nil || r < in.Profile.DataStart {
 				return nil
 			}
 			res.RowsRead++
@@ -123,6 +135,11 @@ func (m *Materializer) MaterializeRegion(ctx context.Context, in RegionInput) (r
 				res.DerivedRowsSkipped++
 				return nil
 			}
+			// Canonicalize every kept cell first — a pure read of cell
+			// state, independent of accumulator state — so emptiness and
+			// the MaxRows cap can both be decided BEFORE any accumulator is
+			// touched. A row dropped for the cap must not affect stats or
+			// the distinct-value maps at all.
 			row := make([]any, 1, len(accs)+1)
 			empty := true
 			for _, a := range accs {
@@ -130,7 +147,6 @@ func (m *Materializer) MaterializeRegion(ctx context.Context, in RegionInput) (r
 				if a.Profile.Index < len(cells) {
 					c = cells[a.Profile.Index]
 				}
-				a.Add(c)
 				if v, ok := a.Canonical(c); ok {
 					row = append(row, v)
 					empty = false
@@ -139,11 +155,19 @@ func (m *Materializer) MaterializeRegion(ctx context.Context, in RegionInput) (r
 				}
 			}
 			if empty {
+				res.RowsSkippedEmpty++
 				return nil
 			}
 			if ordinal >= int64(in.MaxRows) {
 				res.RowsDropped++
 				return nil
+			}
+			for _, a := range accs {
+				var c sheetsource.Cell
+				if a.Profile.Index < len(cells) {
+					c = cells[a.Profile.Index]
+				}
+				a.Add(c)
 			}
 			ordinal++
 			row[0] = ordinal
@@ -183,7 +207,7 @@ func (m *Materializer) MaterializeRegion(ctx context.Context, in RegionInput) (r
 	if _, err = m.pool.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s.%s ADD PRIMARY KEY (%s)`, q(TabularSchema), q(table), q(RowIDColumn))); err != nil {
 		return nil, fmt.Errorf("tabular: primary key: %w", err)
 	}
-	if res.CoercionFailures, err = m.countCoercionFailures(ctx, stage, specs); err != nil {
+	if res.CoercionFailures, err = m.countCoercionFailures(ctx, stage, specs, stats); err != nil {
 		return nil, err
 	}
 
@@ -265,31 +289,46 @@ func assembleSpecs(accs []*ColumnAccumulator, n int64) ([]ColumnSpec, []ColumnSt
 	return specs, stats
 }
 
-// countCoercionFailures runs one SELECT over the staging table that sums,
-// per non-text typed column, the rows where the source text was non-NULL but
-// the cast produced NULL — the CASE in castValue makes "empty" and
-// "failed to cast" otherwise indistinguishable in the typed table alone.
-func (m *Materializer) countCoercionFailures(ctx context.Context, stage string, specs []ColumnSpec) (int64, error) {
+// countCoercionFailures runs one SELECT over the staging table with one
+// COALESCE(SUM(...), 0) term per non-text, non-shadow column — the rows
+// where the source text was non-NULL but the guarded cast in castValue
+// produced NULL, i.e. a value that didn't fit its inferred type ("empty" and
+// "failed to cast" are otherwise indistinguishable in the typed table
+// alone). specs and stats are 1:1 (assembleSpecs's contract), so each
+// counted column's result is written straight into the matching
+// stats[i].CoercionFailed; the return value is their sum.
+//
+// R11: shadow columns are excluded from the count. A shadow's source values
+// that don't parse as numbers are not coercion failures — they are exactly
+// why the primary column stayed text instead of becoming numeric.
+func (m *Materializer) countCoercionFailures(ctx context.Context, stage string, specs []ColumnSpec, stats []ColumnStat) (int64, error) {
 	var exprs []string
-	for _, c := range specs {
-		if c.Type == TypeText {
+	var targets []int // indices into stats/specs, parallel to exprs
+	for i, c := range specs {
+		if c.Type == TypeText || c.ShadowOf != "" {
 			continue
-		}
-		src := c.Name
-		if c.ShadowOf != "" {
-			src = c.ShadowOf
 		}
 		exprs = append(exprs, fmt.Sprintf(
 			`COALESCE(SUM(CASE WHEN %s IS NOT NULL AND (%s) IS NULL THEN 1 ELSE 0 END), 0)`,
-			q(src), castValue(c)))
+			q(c.Name), castValue(c)))
+		targets = append(targets, i)
 	}
 	if len(exprs) == 0 {
 		return 0, nil
 	}
-	sql := fmt.Sprintf(`SELECT %s FROM %s.%s`, strings.Join(exprs, " + "), q(TabularSchema), q(stage))
-	var total int64
-	if err := m.pool.QueryRow(ctx, sql).Scan(&total); err != nil {
+	sql := fmt.Sprintf(`SELECT %s FROM %s.%s`, strings.Join(exprs, ", "), q(TabularSchema), q(stage))
+	dest := make([]any, len(exprs))
+	counts := make([]int64, len(exprs))
+	for i := range counts {
+		dest[i] = &counts[i]
+	}
+	if err := m.pool.QueryRow(ctx, sql).Scan(dest...); err != nil {
 		return 0, fmt.Errorf("tabular: coercion failures: %w", err)
+	}
+	var total int64
+	for i, n := range counts {
+		stats[targets[i]].CoercionFailed = n
+		total += n
 	}
 	return total, nil
 }

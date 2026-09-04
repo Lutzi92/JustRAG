@@ -350,27 +350,32 @@ func TestCascadeDropsTabularTables(t *testing.T) {
 	_, kbID, fileIDs := seedFixture(t, mainPool, false)
 	fileID := fileIDs[0]
 
-	// Write a tiny CSV to a temp path and materialize it.
-	dir := t.TempDir()
-	csvPath := dir + "/data.csv"
-	if err := os.WriteFile(csvPath, []byte("Product,Units\nAlpha,10\nBeta,20\n"), 0o600); err != nil {
-		t.Fatalf("write temp CSV: %v", err)
-	}
-
 	ctx := context.Background()
-	m := tabular.NewMaterializer(mainPool)
-	res, err := m.Materialize(ctx, csvPath, "data.csv", fileID, kbID, tabular.SemanticOptions{})
-	if err != nil {
-		t.Fatalf("Materialize: %v", err)
+
+	// Ruling R10: Phase-1's Materialize is gone (internal/tabular Task 4), so
+	// this test creates the physical table + catalog row directly instead of
+	// materializing a real spreadsheet — the cascade contract under test is
+	// "the DDL table gets dropped on KB delete", not the materializer itself
+	// (that's covered by internal/tabular's own integration tests).
+	tableName := tabular.TableNameForRegion(fileID, 0, 0)
+	if _, err := mainPool.Exec(ctx, fmt.Sprintf(
+		`CREATE TABLE tabular.%q ("_rowid" bigint PRIMARY KEY, "product" text, "units" numeric)`, tableName)); err != nil {
+		t.Fatalf("create tabular table: %v", err)
 	}
-	if len(res.Sheets) == 0 {
-		t.Fatal("expected at least one sheet in materialization result")
+	if err := tabular.NewCatalog(mainPool).Insert(ctx, tabular.CatalogEntry{
+		FileID: fileID, KBID: kbID, SheetName: "data", TableName: tableName, FileName: "data.csv",
+		Columns: []tabular.ColumnSpec{
+			{Original: "Product", Name: "product", Type: tabular.TypeText},
+			{Original: "Units", Name: "units", Type: tabular.TypeNumeric},
+		},
+		RowCount: 2, SheetKind: "table", HeaderRow: 0,
+	}); err != nil {
+		t.Fatalf("catalog insert: %v", err)
 	}
-	tableName := res.Sheets[0].TableName
 
 	// Confirm the physical table exists before deletion.
 	var existsBefore bool
-	err = mainPool.QueryRow(ctx,
+	err := mainPool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
 		 WHERE table_schema='tabular' AND table_name=$1)`,
 		tableName).Scan(&existsBefore)

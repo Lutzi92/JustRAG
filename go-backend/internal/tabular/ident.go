@@ -1,7 +1,7 @@
 // Identifier sanitization for materialized tabular tables/columns (Phase 2).
 // Exported so both the materializer and the profiler can share one
-// transliteration + dedup rule; infer.go's unexported sanitizeIdentifier/
-// dedupeIdentifiers are the Phase-1 originals and are deleted in Task 4.
+// transliteration + dedup rule; the Phase-1 originals (unexported
+// sanitizeIdentifier/dedupeIdentifiers in the now-deleted infer.go) are gone.
 package tabular
 
 import (
