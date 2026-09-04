@@ -81,3 +81,44 @@ func TestJoinHeader(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// TestHeaderBlockTwoIndexRows: two consecutive index-shaped rows directly
+// above the anchor must not both be treated as the index row. Only the one
+// adjacent to the header block (row 1) is the index row; row 0 (also
+// index-shaped, but not adjacent once row 1 is claimed) stops the upward
+// extension and is reported as prose, not swallowed as (or leaking past) the
+// index row.
+func TestHeaderBlockTwoIndexRows(t *testing.T) {
+	t.Parallel()
+	s := grid(
+		"1|2|3",
+		"1|2|3",
+		"Name|Wert|Note",
+		"a|#|#",
+		"b|#|#",
+		"c|#|#",
+	)
+	for r := 0; r < 2; r++ {
+		for c := 0; c < 3; c++ {
+			s.Rows[r][c].Kind = sheetsource.KindNumber
+		}
+	}
+	boldRow(s, 2)
+	reg := Region{Top: 0, Left: 0, Bottom: 5, Right: 2, OpenEnded: true}
+	hb, ok := detectHeaderBlock(s, reg, 3)
+	if !ok {
+		t.Fatal("no header found")
+	}
+	if hb.IndexRow != 1 {
+		t.Errorf("IndexRow = %d, want 1", hb.IndexRow)
+	}
+	if len(hb.Rows) != 1 || hb.Rows[0] != 2 {
+		t.Errorf("Rows = %v, want [2]", hb.Rows)
+	}
+	if len(hb.ProseAbove) != 1 || hb.ProseAbove[0] != "1 2 3" {
+		t.Errorf("ProseAbove = %v, want [\"1 2 3\"]", hb.ProseAbove)
+	}
+	if hb.DataStart != 3 {
+		t.Errorf("DataStart = %d, want 3", hb.DataStart)
+	}
+}

@@ -262,9 +262,16 @@ func findAnchor(s *sheetsource.Sample, reg Region, modal int) (row int, score fl
 // extendUp extends the header block upward from the anchor row (R1): a row
 // joins when all its filled cells are non-value-like text and either has
 // more than 2 filled cells or carries a wide merged group label. An index
-// row (1..n) directly above is captured separately and skipped, without
-// stopping the extension. Stops at the first blank row, the first row
-// failing the join rule, or after maxHeaderRows-1 extra rows.
+// row (1..n) is captured separately (not joined) only when it sits directly
+// against the block being built so far (r == rows[0]-1 at the moment it is
+// examined) — true by construction for the first index-shaped row met,
+// since the loop walks upward one row at a time from the block's current
+// top. After that one is recorded, extension continues past it (a
+// group-header row may still join above the index row), but a second
+// index-shaped row is never adjacent to the (unchanged) block top and stops
+// the extension outright rather than being recorded or joined. Stops at the
+// first blank row, the first row failing the join rule, or after
+// maxHeaderRows-1 extra rows.
 func extendUp(s *sheetsource.Sample, reg Region, anchor, maxHeaderRows int) (rows []int, indexRow int) {
 	rows = []int{anchor}
 	indexRow = -1
@@ -273,8 +280,11 @@ func extendUp(s *sheetsource.Sample, reg Region, anchor, maxHeaderRows int) (row
 			break
 		}
 		if isIndexRow(s, r, reg) {
-			indexRow = r
-			continue
+			if indexRow == -1 && r == rows[0]-1 {
+				indexRow = r
+				continue
+			}
+			break // a second (or non-adjacent) index-shaped row stops the extension
 		}
 		if !allNonValueText(s, r, reg) || (filledCount(s, r, reg) <= 2 && !hasWideMergeAnchor(s, r, reg)) {
 			break
@@ -282,7 +292,23 @@ func extendUp(s *sheetsource.Sample, reg Region, anchor, maxHeaderRows int) (row
 		rows = append([]int{r}, rows...)
 	}
 	sort.Ints(rows)
+	// Defensive guard: the recorded index row is only ever adjacent to the row
+	// that was rows[0] at the time it was recorded, and that row is never
+	// removed from rows afterward — so indexRow+1 always stays a member of
+	// rows. This can't currently fail; kept in case a future rule changes that.
+	if indexRow != -1 && !containsInt(rows, indexRow+1) {
+		indexRow = -1
+	}
 	return rows, indexRow
+}
+
+func containsInt(xs []int, v int) bool {
+	for _, x := range xs {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // prependProse collects every region row above blockTop (title rows,
