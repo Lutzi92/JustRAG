@@ -107,18 +107,32 @@ func GenerateTabularSQL(ctx context.Context, resolver *ConfigResolver, req Tabul
 // slices from the first '{' to the last '}'. Same two-step strategy as
 // parseSheetProfileJSON / parseKGJSON / parsePlanQueriesJSON in this
 // package.
+//
+// {"sql": ""} is normalised to SQL == nil (normalizeEmptySQL): an
+// empty-but-non-nil string is not a usable SQL statement, and treating it
+// as distinct from null would push that special case onto every caller
+// that only wants to branch on "did the model propose SQL or not".
 func parseTabularSQLJSON(text string) (TabularSQLProposal, error) {
 	var out TabularSQLProposal
 	trimmed := strings.TrimSpace(text)
 	if err := json.Unmarshal([]byte(trimmed), &out); err == nil {
-		return out, nil
+		return normalizeEmptySQL(out), nil
 	}
 	start := strings.Index(trimmed, "{")
 	end := strings.LastIndex(trimmed, "}")
 	if start >= 0 && end > start {
 		if err := json.Unmarshal([]byte(trimmed[start:end+1]), &out); err == nil {
-			return out, nil
+			return normalizeEmptySQL(out), nil
 		}
 	}
 	return TabularSQLProposal{}, fmt.Errorf("not valid JSON: %s", firstNChars(text, 120))
+}
+
+// normalizeEmptySQL collapses an empty-string SQL to nil, see
+// parseTabularSQLJSON's doc comment.
+func normalizeEmptySQL(p TabularSQLProposal) TabularSQLProposal {
+	if p.SQL != nil && strings.TrimSpace(*p.SQL) == "" {
+		p.SQL = nil
+	}
+	return p
 }

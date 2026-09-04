@@ -2,10 +2,28 @@ package prompts
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/justrag/go-backend/internal/promptsafety"
 )
+
+// fenceRunRe matches a run of three or more backticks — the token that
+// opens/closes every fenced data block this file inserts untrusted content
+// into (SCHEMA, MATCHED VALUES, QUESTION, PREVIOUS ATTEMPT, FAILURE,
+// TABLES, and the addendum's sql block).
+var fenceRunRe = regexp.MustCompile("`{3,}")
+
+// fenceSafe replaces every run of three or more backticks in s with three
+// U+2035 REVERSED PRIME characters (‵‵‵) (R40). Untrusted data (a user's
+// question, a matched cell value, schema text echoed back from a repair
+// round, …) that reaches one of this file's fenced blocks must not be able
+// to forge its own closing fence and smuggle fake "instructions" past the
+// data boundary into the rest of the prompt. Every data value inserted
+// inside a fenced block in this file goes through this first.
+func fenceSafe(s string) string {
+	return fenceRunRe.ReplaceAllString(s, "‵‵‵")
+}
 
 // TabularSQLSystemPrompt is the rules block for the tabular router's
 // SQL-generation call (spec §5.1 step 4). It asks the model to produce one
@@ -73,7 +91,11 @@ func TabularSQLUserPrompt(lang, schemaText string, matchedValues []string, quest
 		matchedText = "(keine)"
 	}
 	if len(matchedValues) > 0 {
-		matchedText = "- " + strings.Join(matchedValues, "\n- ")
+		escaped := make([]string, len(matchedValues))
+		for i, v := range matchedValues {
+			escaped[i] = fenceSafe(v)
+		}
+		matchedText = "- " + strings.Join(escaped, "\n- ")
 	}
 
 	intro := "Use the following schema, matched stored values, and question to produce the SQL described above."
@@ -82,7 +104,7 @@ func TabularSQLUserPrompt(lang, schemaText string, matchedValues []string, quest
 	}
 
 	return fmt.Sprintf("%s\n\n```SCHEMA\n%s\n```\n\n```MATCHED VALUES\n%s\n```\n\n```QUESTION\n%s\n```\n",
-		intro, schemaText, matchedText, question)
+		intro, fenceSafe(schemaText), matchedText, fenceSafe(question))
 }
 
 // tabularCapFallbackChars bounds the FAILURE block defensively. Callers
@@ -101,7 +123,7 @@ func TabularSQLRepairPrompt(lang, previousSQL, failure string) string {
 		lead = "Der vorherige Versuch ist fehlgeschlagen. Korrigiere das SQL."
 	}
 	return fmt.Sprintf("%s\n\n```PREVIOUS ATTEMPT\n%s\n```\n\n```FAILURE\n%s\n```\n",
-		lead, previousSQL, capChars(failure, tabularCapFallbackChars))
+		lead, fenceSafe(previousSQL), fenceSafe(capChars(failure, tabularCapFallbackChars)))
 }
 
 // TabularChartGuidance is declared in prompts.go (§ answer-prompt chart
@@ -130,11 +152,11 @@ func TabularGuidance(lang, catalogSummary string, chartsOn bool) string {
 	if lang == "de" {
 		b.WriteString("## Tabellen\n")
 		b.WriteString("Wenn im Kontext eine \"TABELLENABFRAGE\"-Ergänzung vorhanden ist, bevorzuge deren Ergebnis für Zählungen, Summen und exakte Werte gegenüber freier Textsuche. Zitiere Tabellenergebnisse als Datei › Blatt › Zeilen. Wenn ein Ergebnis begrenzt (\"capped\") wurde, sage das explizit. Erfinde niemals eine Zeile, die nicht im Ergebnis steht.\n\n")
-		b.WriteString("```TABLES\n" + catalogSummary + "\n```\n")
+		b.WriteString("```TABLES\n" + fenceSafe(catalogSummary) + "\n```\n")
 	} else {
 		b.WriteString("## Tables\n")
 		b.WriteString("When a \"TABLE QUERY\" addendum is present in the context, prefer its result for counts, sums, and exact values over free-text search. Cite table results as file › sheet › rows. When a result was capped, say so explicitly. Never invent a row that is not in the result.\n\n")
-		b.WriteString("```TABLES\n" + catalogSummary + "\n```\n")
+		b.WriteString("```TABLES\n" + fenceSafe(catalogSummary) + "\n```\n")
 	}
 
 	if chartsOn {
@@ -176,7 +198,7 @@ func TabularRouterAddendum(lang string, sql string, columns []string, rows []map
 		return b.String()
 	}
 
-	b.WriteString("```sql\n" + strings.TrimSpace(sql) + "\n```\n\n")
+	b.WriteString("```sql\n" + fenceSafe(strings.TrimSpace(sql)) + "\n```\n\n")
 
 	filtered := "[filtered]"
 	if de {
@@ -202,7 +224,11 @@ func TabularRouterAddendum(lang string, sql string, columns []string, rows []map
 			b.WriteString("- " + strings.Join(parts, "; ") + "\n")
 		}
 	} else {
-		b.WriteString("| " + strings.Join(columns, " | ") + " |\n")
+		headerCells := make([]string, len(columns))
+		for i, c := range columns {
+			headerCells[i] = escapeTableCell(c)
+		}
+		b.WriteString("| " + strings.Join(headerCells, " | ") + " |\n")
 		sep := make([]string, len(columns))
 		for i := range sep {
 			sep[i] = "---"
@@ -211,7 +237,7 @@ func TabularRouterAddendum(lang string, sql string, columns []string, rows []map
 		for _, row := range rows {
 			cells := make([]string, 0, len(columns))
 			for _, col := range columns {
-				cells = append(cells, renderCell(row[col]))
+				cells = append(cells, escapeTableCell(renderCell(row[col])))
 			}
 			b.WriteString("| " + strings.Join(cells, " | ") + " |\n")
 		}
@@ -241,6 +267,17 @@ func TabularRouterAddendum(lang string, sql string, columns []string, rows []map
 	}
 
 	return b.String()
+}
+
+// escapeTableCell prepares one cell (a column name in the header row, or a
+// rendered result value) for the markdown table rendered once a result
+// exceeds 20 rows: a literal '|' would otherwise be read as a column
+// delimiter, and a literal newline would break the row across multiple
+// Markdown lines. Applied to header cells as well as data cells.
+func escapeTableCell(s string) string {
+	s = strings.ReplaceAll(s, "|", `\|`)
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
 }
 
 // capChars is a rune-safe truncation helper, local to this file so it

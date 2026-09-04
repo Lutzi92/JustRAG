@@ -165,3 +165,30 @@ func TestGenerateTabularSQL_TimeoutBoundedAt10s(t *testing.T) {
 		t.Errorf("context deadline exceeded the 10s budget")
 	}
 }
+
+// TestGenerateTabularSQL_EmptySQLStringNormalizedToNil covers Fix round 1's
+// Minor item: {"sql": ""} must behave exactly like {"sql": null} for
+// callers, not leave them with a non-nil-but-useless SQL pointer.
+func TestGenerateTabularSQL_EmptySQLStringNormalizedToNil(t *testing.T) {
+	r := stubCompletion(t, `{"sql":"","rationale":"cannot answer","confidence":0}`)
+	req := TabularSQLRequest{Lang: "en", TodayISO: "2026-09-04", SchemaText: "tabular.foo", Question: "q?"}
+	prop, err := GenerateTabularSQL(context.Background(), r, req, "kb1", "")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if prop.SQL != nil {
+		t.Errorf("expected nil SQL for an empty string, got %+v", *prop.SQL)
+	}
+}
+
+func TestGenerateTabularSQL_WhitespaceOnlySQLStringNormalizedToNil(t *testing.T) {
+	r := stubCompletion(t, `{"sql":"   ","rationale":"cannot answer","confidence":0}`)
+	req := TabularSQLRequest{Lang: "en", TodayISO: "2026-09-04", SchemaText: "tabular.foo", Question: "q?"}
+	prop, err := GenerateTabularSQL(context.Background(), r, req, "kb1", "")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if prop.SQL != nil {
+		t.Errorf("expected nil SQL for a whitespace-only string, got %+v", *prop.SQL)
+	}
+}
