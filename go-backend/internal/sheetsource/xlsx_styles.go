@@ -3,63 +3,9 @@ package sheetsource
 import (
 	"encoding/xml"
 	"io"
-	"strings"
+
+	"github.com/justrag/go-backend/internal/sheetsource/numfmt"
 )
-
-var builtinDateFmts = map[int]bool{14: true, 15: true, 16: true, 17: true, 18: true, 19: true, 20: true, 21: true, 22: true,
-	27: true, 28: true, 29: true, 30: true, 31: true, 32: true, 33: true, 34: true, 35: true, 36: true,
-	45: true, 46: true, 47: true, 50: true, 51: true, 52: true, 53: true, 54: true, 55: true, 56: true, 57: true, 58: true}
-
-func classifyNumFmt(id int, code string) (date, percent bool, unit string) {
-	if code == "" {
-		return builtinDateFmts[id], id == 9 || id == 10, ""
-	}
-	var rest, units strings.Builder
-	for i := 0; i < len(code); i++ {
-		switch c := code[i]; c {
-		case '"':
-			j := strings.IndexByte(code[i+1:], '"')
-			if j < 0 {
-				j = len(code) - i - 1
-			}
-			lit := strings.TrimSpace(code[i+1 : i+1+j])
-			if lit != "" {
-				units.WriteString(lit)
-			}
-			i += j + 1
-		case '[':
-			j := strings.IndexByte(code[i:], ']')
-			if j < 0 {
-				j = len(code) - i - 1
-			}
-			sec := code[i+1 : i+j]
-			if strings.HasPrefix(sec, "$") { // [$€-407] currency section
-				cur, _, _ := strings.Cut(sec[1:], "-")
-				if cur = strings.TrimSpace(cur); cur != "" {
-					units.WriteString(cur)
-				}
-			}
-			i += j
-		case '\\':
-			if i+1 < len(code) {
-				e := code[i+1]
-				if e != ' ' && (e < '0' || e > '9') {
-					units.WriteByte(e)
-				}
-				i++
-			}
-		default:
-			rest.WriteByte(c)
-		}
-	}
-	r := strings.ToLower(rest.String())
-	if strings.TrimSpace(r) == "general" {
-		return false, false, strings.TrimSpace(units.String())
-	}
-	percent = strings.Contains(r, "%")
-	date = strings.ContainsAny(r, "ydhs") || (strings.Contains(r, "m") && !strings.ContainsAny(r, "0#?"))
-	return date, percent, strings.TrimSpace(units.String())
-}
 
 // parseStyles reads xl/styles.xml into w.xfs. Only the attributes the
 // profiler needs are kept; everything else is skipped.
@@ -120,7 +66,7 @@ func parseStyles(r io.Reader) ([]xfInfo, error) {
 			case "xf":
 				if section == "cellXfs" {
 					id := atoiAttr(t, "numFmtId")
-					d, p, u := classifyNumFmt(id, numFmts[id])
+					d, p, u := numfmt.Classify(id, numFmts[id])
 					x := xfInfo{NumFmtID: id, Date: d, Percent: p, Unit: u}
 					if fi := atoiAttr(t, "fontId"); fi < len(fontsBold) {
 						x.Bold = fontsBold[fi]

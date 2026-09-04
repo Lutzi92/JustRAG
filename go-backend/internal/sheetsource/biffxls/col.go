@@ -6,6 +6,8 @@ import (
 	"math"
 	"strconv"
 	"time"
+
+	"github.com/justrag/go-backend/internal/sheetsource/numfmt"
 )
 
 // content type
@@ -54,7 +56,7 @@ func (xf *XfRk) String(wb *WorkBook) string {
 			// date, so a currency or thousands format came back as an RFC3339
 			// timestamp. Only render a date when the format code says so.
 			if cf := wb.Formats[fNo]; cf != nil {
-				if isDate, _, _ := classifyCustomFormat(cf.str); isDate {
+				if isDate, _, _ := numfmt.Classify(int(fNo), cf.str); isDate {
 					i, f, isFloat := xf.Rk.number()
 					if !isFloat {
 						f = float64(i)

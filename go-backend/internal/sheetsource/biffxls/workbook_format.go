@@ -1,5 +1,7 @@
 package biffxls
 
+import "github.com/justrag/go-backend/internal/sheetsource/numfmt"
+
 // FORK ADDITION (not upstream): number-format classification and the date-mode
 // accessor. Upstream keeps Xfs/Formats/dateMode but exposes no way to ask what
 // a cell's number format actually means.
@@ -17,15 +19,14 @@ func (w *WorkBook) FormatInfo(xf uint16) (date, percent bool, unit string) {
 	if int(xf) >= len(w.Xfs) {
 		return false, false, ""
 	}
-	fNo := w.Xfs[xf].formatNo()
-	switch {
-	case fNo == 9 || fNo == 10:
-		return false, true, ""
-	case (fNo >= 14 && fNo <= 22) || (fNo >= 27 && fNo <= 36) || (fNo >= 45 && fNo <= 47) || (fNo >= 50 && fNo <= 58):
-		return true, false, ""
+	fNo := int(w.Xfs[xf].formatNo())
+	// A built-in id wins over any format code recorded for it, matching the
+	// pre-fork behaviour; everything else is classified from its code.
+	if numfmt.IsBuiltin(fNo) {
+		return numfmt.Classify(fNo, "")
 	}
-	if f := w.Formats[fNo]; f != nil {
-		return classifyCustomFormat(f.str)
+	if f := w.Formats[uint16(fNo)]; f != nil {
+		return numfmt.Classify(fNo, f.str)
 	}
 	return false, false, ""
 }

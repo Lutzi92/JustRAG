@@ -103,31 +103,6 @@ func TestLastDefinedColIgnoresColMac(t *testing.T) {
 	}
 }
 
-func TestClassifyCustomFormat(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		code          string
-		date, percent bool
-		unit          string
-	}{
-		{`General`, false, false, ""},
-		{`0.00`, false, false, ""},
-		{`0.0%`, false, true, ""},
-		{`DD.MM.YYYY`, true, false, ""},
-		{`hh:mm:ss`, true, false, ""},
-		{`#,##0.00\ "€"`, false, false, "€"}, // the XfRk.String bug: not a date
-		{`#,##0.00\ [$€-407]`, false, false, "€"},
-		{`0 "m"`, false, false, "m"}, // literal m is a unit, not a month
-	}
-	for _, c := range cases {
-		d, p, u := classifyCustomFormat(c.code)
-		if d != c.date || p != c.percent || u != c.unit {
-			t.Errorf("classifyCustomFormat(%q) = date:%v percent:%v unit:%q, want date:%v percent:%v unit:%q",
-				c.code, d, p, u, c.date, c.percent, c.unit)
-		}
-	}
-}
-
 // FormatInfo is what carries the unit out to the profiler; the fixture has no
 // unit-formatted cell (its only custom format is "General"), so the wiring is
 // pinned on a synthetic workbook instead.
