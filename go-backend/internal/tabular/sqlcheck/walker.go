@@ -1,17 +1,32 @@
 package sqlcheck
 
 // Ported from github.com/auxten/postgresql-parser's pkg/walk/walker.go
-// (same origin AST shapes), adapted to cockroachdb-parser's package paths
-// and to a stop-propagating recursive walk (the upstream walker's `stop`
-// only broke the innermost loop; ours short-circuits the whole traversal
-// once Fn reports a violation).
-
+// (same origin AST shapes), adapted to cockroachdb-parser's package paths,
+// to a stop-propagating recursive walk (the upstream walker's `stop` only
+// broke the innermost loop; ours short-circuits the whole traversal once
+// Fn reports a violation), and — per the 2026-09 security review (R38) —
+// to fail CLOSED: every node type this switch does not explicitly
+// recognize (as either a container to descend into, or a leaf with no
+// children worth inspecting) is treated as a validation error rather than
+// silently skipped. The original port only added descend cases for the
+// constructs its own test suite happened to exercise; anything else
+// (ARRAY(subquery), a WINDOW clause, ORDER BY inside an aggregate call,
+// OFFSET, COLLATE, NULLIF, a subscript, IS OF, IF(...)) was invisible to
+// the walker, so a table or function reference hidden inside one of those
+// bypassed both allowlists undetected. Fail-closed means a *future* gap of
+// the same shape produces a rejected query, not a silent bypass.
 import (
 	"github.com/cockroachdb/cockroachdb-parser/pkg/sql/sem/tree"
 )
 
 // visitor walks statements and expressions; Fn returns true to stop.
 type visitor struct{ Fn func(node any) (stop bool) }
+
+// unrecognized wraps a node the switch below has no explicit case for. Fn
+// is still invoked with it (same call convention as every other node) so
+// sqlcheck's callback is the single place that turns "I don't recognize
+// this" into a rejection error.
+type unrecognized struct{ node any }
 
 func (v *visitor) walk(stmts []tree.Statement) {
 	for _, s := range stmts {
@@ -32,7 +47,9 @@ func (v *visitor) nodes(ns ...any) bool {
 }
 
 // node dispatches on the concrete AST types the router can produce. Add a
-// case here when a new construct must be inspected.
+// case here when a new construct must be inspected. The default arm is
+// the fail-closed guarantee (R38): anything not listed below — container
+// or leaf — is reported to Fn as unrecognized and stops the walk.
 func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch table over the AST is clearer than splitting it
 	if n == nil {
 		return false
@@ -41,11 +58,14 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 		return true
 	}
 	if _, ok := n.(tree.Datum); ok {
-		// Already-resolved literal values are leaves.
+		// Already-resolved literal values (NULL, and any constant the
+		// parser folded to a typed Datum) are leaves.
 		return false
 	}
 	switch t := n.(type) {
 	case *tree.AliasedTableExpr:
+		return v.node(t.Expr)
+	case *tree.ParenTableExpr:
 		return v.node(t.Expr)
 	case *tree.AndExpr:
 		return v.nodes(t.Left, t.Right)
@@ -53,6 +73,8 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 		return v.node(t.Expr)
 	case *tree.Array:
 		return v.node(t.Exprs)
+	case *tree.ArrayFlatten:
+		return v.node(t.Subquery)
 	case *tree.BinaryExpr:
 		return v.nodes(t.Left, t.Right)
 	case *tree.CaseExpr:
@@ -74,6 +96,8 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 				return true
 			}
 		}
+	case *tree.CollateExpr:
+		return v.node(t.Expr)
 	case *tree.ComparisonExpr:
 		return v.nodes(t.Left, t.Right)
 	case *tree.CTE:
@@ -94,11 +118,36 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 		if t.WindowDef != nil && v.node(t.WindowDef) {
 			return true
 		}
+		if len(t.OrderBy) > 0 && v.node(t.OrderBy) {
+			return true
+		}
 		return v.nodes(t.Exprs, t.Filter)
+	case *tree.IfExpr:
+		return v.nodes(t.Cond, t.True, t.Else)
+	case *tree.IndirectionExpr:
+		if v.node(t.Expr) {
+			return true
+		}
+		for _, sub := range t.Indirection {
+			if sub == nil {
+				continue
+			}
+			if v.nodes(sub.Begin, sub.End) {
+				return true
+			}
+		}
+	case *tree.IsOfTypeExpr:
+		return v.node(t.Expr)
+	case *tree.IsNullExpr:
+		return v.node(t.Expr)
+	case *tree.IsNotNullExpr:
+		return v.node(t.Expr)
 	case *tree.JoinTableExpr:
 		return v.nodes(t.Left, t.Right, t.Cond)
 	case *tree.NotExpr:
 		return v.node(t.Expr)
+	case *tree.NullIfExpr:
+		return v.nodes(t.Expr1, t.Expr2)
 	case *tree.OnJoinCond:
 		return v.node(t.Expr)
 	case *tree.Order:
@@ -133,7 +182,12 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 		}
 		return v.node(t.Select)
 	case *tree.Limit:
-		return v.node(t.Count)
+		if t.Count != nil && v.node(t.Count) {
+			return true
+		}
+		if t.Offset != nil {
+			return v.node(t.Offset)
+		}
 	case *tree.SelectClause:
 		if v.node(t.Exprs) {
 			return true
@@ -151,6 +205,11 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 		}
 		for _, g := range t.GroupBy {
 			if v.node(g) {
+				return true
+			}
+		}
+		for _, w := range t.Window {
+			if v.node(w) {
 				return true
 			}
 		}
@@ -222,6 +281,20 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 				return true
 			}
 		}
+
+	// Leaves: no children worth inspecting (no relation or function
+	// reference can hide inside these). Listed explicitly rather than
+	// falling through to a permissive default, per R38.
+	case *tree.NumVal, *tree.StrVal, *tree.UnresolvedName,
+		tree.UnqualifiedStar, *tree.AllColumnsSelector, *tree.ColumnItem,
+		tree.DefaultVal:
+		return false
+
+	default:
+		if v.Fn != nil {
+			v.Fn(unrecognized{node: t})
+		}
+		return true
 	}
 	return false
 }

@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -46,15 +48,7 @@ type readOnly struct{ pool *pgxpool.Pool }
 func NewReadOnly(pool *pgxpool.Pool) Executor { return &readOnly{pool: pool} }
 
 func (e *readOnly) Execute(ctx context.Context, sql string, opts Options) (*Result, error) {
-	if opts.Timeout <= 0 {
-		opts.Timeout = 5 * time.Second
-	}
-	if opts.RowCap <= 0 {
-		opts.RowCap = 200
-	}
-	if opts.ByteCap <= 0 {
-		opts.ByteCap = 64 << 10
-	}
+	opts = resolveOptions(opts)
 	start := time.Now()
 	tx, err := e.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
@@ -113,16 +107,125 @@ func (e *readOnly) Execute(ctx context.Context, sql string, opts Options) (*Resu
 	return res, nil
 }
 
-// normalise renders pgtype values (numeric, date, timestamp) as JSON-safe
-// strings/numbers so rows marshal without pgx-specific types.
+// resolveOptions applies the package defaults (R39: the timeout is also
+// clamped to a minimum of 1ms — Postgres treats statement_timeout = 0 as
+// "disabled", so a caller-supplied sub-millisecond duration would silently
+// turn INTO no timeout at all rather than an aggressively short one).
+func resolveOptions(opts Options) Options {
+	if opts.Timeout <= 0 {
+		opts.Timeout = 5 * time.Second
+	} else if opts.Timeout < time.Millisecond {
+		opts.Timeout = time.Millisecond
+	}
+	if opts.RowCap <= 0 {
+		opts.RowCap = 200
+	}
+	if opts.ByteCap <= 0 {
+		opts.ByteCap = 64 << 10
+	}
+	return opts
+}
+
+// normalise renders pgx/pgtype values as JSON-safe strings/numbers so rows
+// marshal without pgx-specific types (I2). pgtype.Numeric, pgtype.Interval
+// and a UUID's [16]byte have no String()/fmt.Stringer, so — unlike every
+// other pgtype the default type map decodes to (time.Time, []byte, or a
+// type with a String() method) — they would otherwise reach json.Marshal
+// as opaque structs (e.g. {"Int":..,"Exp":..,...}) instead of a usable
+// value.
 func normalise(v any) any {
 	switch x := v.(type) {
 	case time.Time:
 		return x.Format(time.RFC3339)
 	case []byte:
 		return string(x)
+	case [16]byte:
+		return uuidString(x)
+	case pgtype.Numeric:
+		return numericValue(x)
+	case pgtype.Interval:
+		return intervalValue(x)
 	case fmt.Stringer:
 		return x.String()
 	}
 	return v
+}
+
+// uuidString renders a UUID's raw bytes in canonical 8-4-4-4-12 hex form.
+func uuidString(b [16]byte) string {
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// numericValue renders a Postgres NUMERIC as a float64 when it is finite
+// and exactly representable in IEEE-754 double precision, and as its
+// canonical decimal string otherwise — documented choice (I2): most
+// spreadsheet cell values (currency, measurements, counts) both fit in a
+// float64 and round-trip exactly, so returning a JSON number keeps the
+// common case ergonomic for callers; falling back to the exact decimal
+// string for NaN/Infinity or a value a float64 cannot hold exactly avoids
+// silently truncating precision instead of just being less convenient.
+func numericValue(n pgtype.Numeric) any {
+	if !n.Valid {
+		return nil
+	}
+	if n.NaN {
+		return "NaN"
+	}
+	switch n.InfinityModifier {
+	case pgtype.Infinity:
+		return "Infinity"
+	case pgtype.NegativeInfinity:
+		return "-Infinity"
+	}
+	if f, err := n.Float64Value(); err == nil && f.Valid && numericExactlyFloat64(n, f.Float64) {
+		return f.Float64
+	}
+	if canonical, err := n.Value(); err == nil {
+		if s, ok := canonical.(string); ok {
+			return s
+		}
+	}
+	return fmt.Sprintf("%v", n)
+}
+
+// numericExactlyFloat64 reports whether f is the exact value of n (n.Int *
+// 10^n.Exp), using arbitrary-precision rational comparison rather than a
+// decimal-text round-trip, so it can't mis-classify a value that merely
+// happens to format the same after rounding.
+func numericExactlyFloat64(n pgtype.Numeric, f float64) bool {
+	exact := new(big.Rat)
+	if n.Int != nil {
+		exact.SetInt(n.Int)
+	}
+	if n.Exp != 0 {
+		exp := n.Exp
+		if exp < 0 {
+			exp = -exp
+		}
+		pow := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil))
+		if n.Exp > 0 {
+			exact.Mul(exact, pow)
+		} else {
+			exact.Quo(exact, pow)
+		}
+	}
+	fr := new(big.Rat).SetFloat64(f)
+	if fr == nil {
+		return false
+	}
+	return exact.Cmp(fr) == 0
+}
+
+// intervalValue renders a Postgres INTERVAL in its canonical text form
+// (e.g. "1 day", "3 mons 2 days 00:00:01").
+func intervalValue(i pgtype.Interval) any {
+	if !i.Valid {
+		return nil
+	}
+	if v, err := i.Value(); err == nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return fmt.Sprintf("%v", i)
 }

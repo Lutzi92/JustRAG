@@ -25,6 +25,14 @@ func TestValidateAcceptsRouterShapes(t *testing.T) {
 		{"join", `SELECT a."id", b."val" FROM tabular."sheet_ab12_0_0" a JOIN tabular."sheet_ab12_0_1" b ON a."id" = b."id"`, 2, true, nil},
 		{"trailing-semicolon", `SELECT 1 FROM tabular."sheet_ab12_0_0";`, 1, true, nil},
 		{"limit-too-large", `SELECT "a" FROM tabular."sheet_ab12_0_0" LIMIT 5000`, 1, true, nil},
+		// Fix round 1 (C1): pin the supported surface alongside the fix for
+		// the nine unreachable-AST paths below, so a future change can't
+		// silently narrow it back down.
+		{"string-agg-orderby", `SELECT string_agg("a", ',' ORDER BY "a") FROM tabular."sheet_ab12_0_0"`, 1, true, []string{"string_agg"}},
+		{"nullif", `SELECT NULLIF("a", '') FROM tabular."sheet_ab12_0_0"`, 1, true, nil},
+		{"offset", `SELECT "a" FROM tabular."sheet_ab12_0_0" OFFSET 10`, 1, true, nil},
+		{"case", `SELECT CASE WHEN "a" > 1 THEN 'x' ELSE 'y' END FROM tabular."sheet_ab12_0_0"`, 1, true, nil},
+		{"paren-union", `(SELECT 1 FROM tabular."sheet_ab12_0_0") UNION (SELECT 2 FROM tabular."sheet_ab12_0_0")`, 1, true, nil},
 	}
 	for _, c := range cases {
 		c := c
@@ -75,6 +83,81 @@ func TestValidateRejects(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsHiddenPaths is the C1 fix: nine AST paths the walker
+// previously had no descend case for, so a relation or function reference
+// reachable only through that path bypassed both allowlists undetected.
+// Each payload is the security review's verbatim example (a forbidden
+// relation or forbidden function reachable ONLY via the named path — if
+// any of these were instead reachable some other way too, the test
+// wouldn't isolate the specific gap). A tenth case (IFERROR) is not one of
+// the nine but exercises the fail-closed default arm directly: it is a
+// construct this package still has no explicit case for, so — unlike the
+// other nine, each of which now has a bespoke descend case — its rejection
+// depends entirely on the default arm (see the mutation-test evidence in
+// the report).
+func TestValidateRejectsHiddenPaths(t *testing.T) {
+	t.Parallel()
+	bad := map[string]string{
+		"array-flatten":       `SELECT ARRAY(SELECT tablename::text FROM pg_tables) FROM tabular."sheet_ab12_0_0"`,
+		"window-partition":    `SELECT SUM("a") OVER w FROM tabular."sheet_ab12_0_0" WINDOW w AS (PARTITION BY (SELECT count(*) FROM public.users))`,
+		"funcexpr-orderby":    `SELECT string_agg("a", ',' ORDER BY current_setting('x')) FROM tabular."sheet_ab12_0_0"`,
+		"limit-offset":        `SELECT 1 FROM tabular."sheet_ab12_0_0" OFFSET (SELECT count(*) FROM pg_ls_dir('/'))`,
+		"collate":             `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = ((SELECT name FROM public.users LIMIT 1) COLLATE "en")`,
+		"nullif-hidden":       `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE NULLIF((SELECT name FROM public.users LIMIT 1), '') IS NOT NULL`,
+		"indirection":         `SELECT ("a")[(SELECT count(*) FROM public.users)] FROM tabular."sheet_ab12_0_0"`,
+		"is-of-type":          `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE (SELECT name FROM public.users LIMIT 1) IS OF (text)`,
+		"if-expr":             `SELECT IF((SELECT count(*) FROM public.users) > 0, 1, 2) FROM tabular."sheet_ab12_0_0"`,
+		"fail-closed-default": `SELECT IFERROR((SELECT name FROM public.users LIMIT 1), 'x') FROM tabular."sheet_ab12_0_0"`,
+	}
+	for name, sql := range bad {
+		if _, _, err := Validate(sql, allow, 200); err == nil {
+			t.Errorf("%s: accepted %q", name, sql)
+		}
+	}
+}
+
+// TestValidateLimitTopLevelOnly is the I1 fix: info.Limit (and the
+// wrap-or-not decision) must reflect only the top-level statement's own
+// LIMIT, never one nested inside a subquery.
+func TestValidateLimitTopLevelOnly(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, sql string
+	}{
+		{"nested-limit-under-outer-limit", `SELECT "a" FROM (SELECT "a" FROM tabular."sheet_ab12_0_0" LIMIT 10) z LIMIT 5000`},
+		{"nested-limit-no-outer-limit", `SELECT * FROM tabular."sheet_ab12_0_0" CROSS JOIN (SELECT 1 FROM tabular."sheet_ab12_0_1" LIMIT 10) z`},
+		{"negative-limit", `SELECT "a" FROM tabular."sheet_ab12_0_0" LIMIT -1`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			exec, info, err := Validate(c.sql, allow, 200)
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if !strings.HasPrefix(exec, "SELECT * FROM (") || !strings.HasSuffix(exec, ") AS _validated LIMIT 200") {
+				t.Errorf("expected the nested LIMIT to be ignored and the statement wrapped, got exec=%q info.Limit=%d", exec, info.Limit)
+			}
+		})
+	}
+}
+
+// TestValidateCanonicalTableName is the I3 fix: the table-name check uses
+// the parser's own structured Schema/Object fields (and its identifier
+// folding: unquoted parts lower-cased, quoted parts verbatim) instead of
+// rendering + blanket-lower-casing + quote-stripping the whole name.
+func TestValidateCanonicalTableName(t *testing.T) {
+	t.Parallel()
+	if _, _, err := Validate(`SELECT 1 FROM "tabular.sheet_ab12_0_0"`, allow, 200); err == nil {
+		t.Error("a single quoted identifier containing a literal dot must not be treated as schema.table")
+	}
+	if _, _, err := Validate(`SELECT 1 FROM TABULAR."SHEET_AB12_0_0"`, allow, 200); err == nil {
+		t.Error("a quoted upper-case object name is a different relation from the lower-case allow-listed one")
+	}
+	if _, _, err := Validate(`SELECT 1 FROM Tabular."sheet_ab12_0_0"`, allow, 200); err != nil {
+		t.Errorf("an unquoted schema must fold case-insensitively: %v", err)
+	}
+}
+
 func TestValidateIsAggregate(t *testing.T) {
 	t.Parallel()
 	_, info, err := Validate(`SELECT SUM("bgf_num") FROM tabular."sheet_ab12_0_0"`, allow, 200)
@@ -84,6 +167,25 @@ func TestValidateIsAggregate(t *testing.T) {
 	_, info, _ = Validate(`SELECT "bgf_num" FROM tabular."sheet_ab12_0_0"`, allow, 200)
 	if info.IsAggregate {
 		t.Fatal("plain projection flagged as aggregate")
+	}
+}
+
+// TestReadOnlyShape is the R39 fix: the denied-keyword scan ignores
+// double-quoted identifiers and single-quoted string literals (so a
+// column literally named "update", or a string literal containing "SET",
+// doesn't false-positive), while an actual UPDATE statement is still
+// rejected; and a leading "(" is accepted so a parenthesized UNION operand
+// passes the shape gate.
+func TestReadOnlyShape(t *testing.T) {
+	t.Parallel()
+	if err := ReadOnlyShape(`SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "update" = 'A SET B'`); err != nil {
+		t.Errorf("a quoted column named update and a string literal containing SET must not trip the keyword scan: %v", err)
+	}
+	if err := ReadOnlyShape(`UPDATE tabular.x SET a=1`); err == nil {
+		t.Error("an actual UPDATE ... SET statement must still be rejected")
+	}
+	if err := ReadOnlyShape(`(SELECT 1 FROM tabular."sheet_ab12_0_0") UNION (SELECT 2 FROM tabular."sheet_ab12_0_0")`); err != nil {
+		t.Errorf("a leading ( before a parenthesized UNION operand must be accepted: %v", err)
 	}
 }
 

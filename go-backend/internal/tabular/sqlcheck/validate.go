@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/cockroachdb/cockroachdb-parser/pkg/sql/parser"
@@ -42,7 +41,7 @@ var aggregateNames = map[string]bool{
 
 // Info is what the validator learned about an accepted statement.
 type Info struct {
-	Tables      []string // schema-qualified, lower-cased, as referenced (CTE names excluded)
+	Tables      []string // "tabular.<name>", per the parser's own identifier folding (CTE names excluded)
 	Functions   []string // lower-cased
 	HasCTE      bool
 	HasSubquery bool
@@ -81,11 +80,15 @@ func Validate(sql string, allowedTables map[string]bool, maxLimit int) (string, 
 		return "", info, ErrNotSelect
 	}
 
+	// CTE aliases are matched by identity against the parser's own folded
+	// Name (unquoted parts already lower-cased, quoted parts preserved
+	// verbatim) — no extra case-folding here, so a quoted mixed-case CTE
+	// alias behaves the same way Postgres itself would treat it (I3).
 	cteNames := map[string]bool{}
 	if sel.With != nil {
 		info.HasCTE = true
 		for _, c := range sel.With.CTEList {
-			cteNames[strings.ToLower(string(c.Name.Alias))] = true
+			cteNames[string(c.Name.Alias)] = true
 		}
 	}
 
@@ -107,14 +110,13 @@ func Validate(sql string, allowedTables map[string]bool, maxLimit int) (string, 
 			funcs[fn] = true
 		case *tree.Subquery:
 			info.HasSubquery = true
-		case *tree.Limit:
-			if n.Count != nil {
-				if lit, ok := n.Count.(*tree.NumVal); ok {
-					if i, err := strconv.Atoi(lit.OrigString()); err == nil {
-						info.Limit = i
-					}
-				}
-			}
+		case unrecognized:
+			// R38 fail-closed: the walker's structural switch has no case
+			// for this concrete AST type, so it cannot vouch that no table
+			// or function reference is hiding inside it. Reject rather
+			// than silently skip.
+			verr = fmt.Errorf("sqlcheck: unsupported SQL construct %T", n.node)
+			return true
 		}
 		return false
 	}}
@@ -124,6 +126,18 @@ func Validate(sql string, allowedTables map[string]bool, maxLimit int) (string, 
 	}
 	if len(tables) == 0 {
 		return "", info, errors.New("sqlcheck: statement references no tabular table")
+	}
+
+	// I1: info.Limit reflects only the TOP-LEVEL statement's own LIMIT, read
+	// directly off sel.Limit rather than recorded by the generic walk (which
+	// would fire for every *tree.Limit anywhere in the tree, including one
+	// on a nested subquery — letting an inner "LIMIT 10" mask an outer
+	// LIMIT 5000, or mask the absence of any outer LIMIT at all). The walk
+	// above still descends into every Limit node's Count/Offset expressions
+	// (including nested ones) for table/function validation; this is a
+	// separate, narrower read solely for the wrap-or-not decision.
+	if sel.Limit != nil {
+		info.Limit = limitCount(sel.Limit.Count)
 	}
 
 	for t := range tables {
@@ -149,28 +163,64 @@ func Validate(sql string, allowedTables map[string]bool, maxLimit int) (string, 
 	return fmt.Sprintf("SELECT * FROM (%s) AS _validated LIMIT %d", trimmed, maxLimit), info, nil
 }
 
-// checkTable validates a single table reference: CTE aliases are skipped
-// (they aren't real relations), everything else must be schema-qualified
-// under "tabular." and present in allowedTables. A zero-value TableName
-// (e.g. surfaced via *tree.Order.Table when ordering by an expression, not
-// an index) stringifies to "" and is skipped rather than rejected.
+// checkTable validates a single table reference (I3). It uses the
+// PARSER's OWN structured fields (SchemaName/ObjectName/ExplicitSchema)
+// rather than rendering the name via String() and lower-casing the whole
+// result: cockroachdb-parser already applies the correct SQL identifier
+// folding at parse time (an unquoted part is folded to lower case, a
+// quoted part is preserved verbatim), so re-lower-casing after the fact
+// would wrongly conflate a quoted `"SHEET_X"` (a different relation) with
+// unquoted/lower-quoted `sheet_x`, and stripping quote characters out of
+// the rendered string would wrongly conflate a single quoted identifier
+// that merely CONTAINS a literal dot (e.g. "tabular.sheet_x", one
+// unqualified relation) with an actual schema.table reference.
+//
+// CTE aliases are skipped (they aren't real relations). A zero-value
+// TableName (e.g. surfaced via *tree.Order.Table when ordering by an
+// expression, not an index) has an empty ObjectName and is skipped rather
+// than rejected.
 func checkTable(tn *tree.TableName, cteNames, allowedTables, tables map[string]bool, verr *error) bool {
-	name := strings.ToLower(tn.String())
-	name = strings.ReplaceAll(name, `"`, "")
-	if name == "" {
+	object := string(tn.ObjectName)
+	if object == "" {
 		return false
 	}
-	if cteNames[name] {
-		return false
-	}
-	if !strings.HasPrefix(name, "tabular.") {
-		*verr = fmt.Errorf("sqlcheck: relation %q is outside the tabular schema", name)
+	if !tn.ExplicitSchema {
+		if cteNames[object] {
+			return false
+		}
+		*verr = fmt.Errorf("sqlcheck: relation %q is outside the tabular schema", object)
 		return true
 	}
-	if !allowedTables[name] {
-		*verr = fmt.Errorf("sqlcheck: relation %q is not a table of this knowledge base", name)
+	schema := string(tn.SchemaName)
+	full := schema + "." + object
+	if schema != "tabular" {
+		*verr = fmt.Errorf("sqlcheck: relation %q is outside the tabular schema", full)
 		return true
 	}
-	tables[name] = true
+	if !allowedTables[full] {
+		*verr = fmt.Errorf("sqlcheck: relation %q is not a table of this knowledge base", full)
+		return true
+	}
+	tables[full] = true
 	return false
+}
+
+// limitCount extracts a top-level LIMIT count as a plain int for the
+// wrap-or-not decision (I1). Anything that isn't a bare integer literal —
+// absent, LIMIT ALL, a placeholder, an expression, a subquery — returns 0
+// ("treat as absent", i.e. wrap), which is the safe default: only a LIMIT
+// we can read and prove is small enough is allowed to skip wrapping.
+func limitCount(count tree.Expr) int {
+	if count == nil {
+		return 0
+	}
+	lit, ok := count.(*tree.NumVal)
+	if !ok {
+		return 0
+	}
+	i, err := lit.AsInt64()
+	if err != nil {
+		return 0
+	}
+	return int(i)
 }
