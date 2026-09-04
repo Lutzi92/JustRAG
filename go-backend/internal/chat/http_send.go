@@ -796,6 +796,15 @@ func (h *Handler) tryDeepChat(
 		chatCtx, err = RunDriftChat(ctx, h.aiResolver, h.searchService, driftParams, collectEmit)
 
 	case OrchSupervisor:
+		// Resolved HERE, not at wiring time: h is the per-KB handler
+		// (SendMessage swapped it via forKB before calling tryDeepChat),
+		// so this reader carries the KB's kb_site_configs overrides. The
+		// router's own cfgFn only ever sees the global reader.
+		var tabularCfg *TabularRouterConfig
+		if h.siteConfigReader != nil {
+			cfg := ResolveTabularRouterConfig(ctx, h.siteConfigReader)
+			tabularCfg = &cfg
+		}
 		supervisorParams := SupervisorChatParams{
 			KbID:            kbID,
 			Query:           searchQuery,
@@ -810,6 +819,7 @@ func (h *Handler) tryDeepChat(
 			MultiSpecialist: ChatSupervisorMultiSpecialist(ctx, h.siteConfigReader),
 			TabularRouter:   h.tabularRouter,
 
+			TabularRouterConfig:      tabularCfg,
 			SufficientContextEnabled: ChatSufficientContextEnabled(ctx, h.siteConfigReader),
 			SufficientContextModel:   ResolveFastTierModel(ctx, h.siteConfigReader, "chat_sufficient_context_model"),
 		}

@@ -145,3 +145,118 @@ func TestPrepareChatContext_NilTabularRouterUnchanged(t *testing.T) {
 			chatCtx.SystemPrompt, want)
 	}
 }
+
+// TestPrepareChatContext_TabularRouterNoTablesUnchanged is the case that
+// covers every non-spreadsheet KB in a deployment where the router IS wired:
+// the gate answers "no tabular data" and the turn must be indistinguishable
+// from the pre-hook pipeline — original query, no forced arm, byte-identical
+// prompt. Only the trace records that the router looked.
+func TestPrepareChatContext_TabularRouterNoTablesUnchanged(t *testing.T) {
+	searcher := &tabRecordingSearcher{chunks: tabTestChunks()}
+	cat := &fakeCat{has: false}
+	router := newTestRouter(cat, &fakeExec{}, (&fakeGen{}).fn, testTabularCfg(), nil)
+
+	chatCtx, err := PrepareChatContext(context.Background(), nil, searcher, nil, ChatContextParams{
+		KbID:          "kb1",
+		SearchQuery:   tabTestQuery,
+		Language:      "de",
+		TabularRouter: router,
+	})
+	if err != nil {
+		t.Fatalf("PrepareChatContext: %v", err)
+	}
+	if searcher.gotQuery != tabTestQuery {
+		t.Fatalf("search query = %q, want the original %q", searcher.gotQuery, tabTestQuery)
+	}
+	if searcher.gotForce {
+		t.Fatalf("ForceBM25SimpleArm must stay false on a KB with no tables")
+	}
+	if chatCtx.TabularTrace == nil || chatCtx.TabularTrace.Outcome != "skipped_no_tables" {
+		t.Fatalf("TabularTrace = %+v, want Outcome skipped_no_tables", chatCtx.TabularTrace)
+	}
+	want := prompts.ChatSystemPromptWithDate("de", "") + "\n\nCONTEXT:\n" + chatCtx.Context
+	if chatCtx.SystemPrompt != want {
+		t.Fatalf("a no-tables KB must get the pre-hook prompt:\ngot:  %q\nwant: %q",
+			chatCtx.SystemPrompt, want)
+	}
+}
+
+// TestPrepareChatContext_TabularRouterSkipsPromotionUnderEnhance guards R50:
+// under an explicit Enhance mode the search service rewrites/expands the
+// query it is given and persists the outcome as messages.enhanced_query, so
+// handing it the router's quoted phrasing would surface router-inserted
+// quotes to the user. The other two hints must survive.
+func TestPrepareChatContext_TabularRouterSkipsPromotionUnderEnhance(t *testing.T) {
+	searcher := &tabRecordingSearcher{chunks: tabTestChunks()}
+
+	chatCtx, err := PrepareChatContext(context.Background(), nil, searcher, nil, ChatContextParams{
+		KbID:          "kb1",
+		SearchQuery:   tabTestQuery,
+		Language:      "de",
+		Enhance:       "rewrite",
+		TabularRouter: tabFiringRouter(),
+	})
+	if err != nil {
+		t.Fatalf("PrepareChatContext: %v", err)
+	}
+	if searcher.gotQuery != tabTestQuery {
+		t.Fatalf("search query = %q, want the ORIGINAL %q under Enhance", searcher.gotQuery, tabTestQuery)
+	}
+	if !searcher.gotForce {
+		t.Fatalf("the forced keyword arm must survive an Enhance mode")
+	}
+	if !strings.Contains(chatCtx.SystemPrompt, "TABELLENABFRAGE") {
+		t.Fatalf("the SQL addendum must survive an Enhance mode")
+	}
+}
+
+// TestPrepareChatContext_TabularRouterUsesPerKBConfig guards R49: the chat
+// handler overlays its SiteConfigReader per KB, so the config the router
+// obeys must be the one resolved from THIS request's reader — not the
+// wiring-time cfgFn, which closes over the global reader only.
+func TestPrepareChatContext_TabularRouterUsesPerKBConfig(t *testing.T) {
+	// cfgFn says "enabled"; the per-KB reader says the master flag is off.
+	// The reader must win, or a per-KB kill switch is a silent no-op.
+	searcher := &tabRecordingSearcher{chunks: tabTestChunks()}
+	reader := stubReader{vals: map[string]string{"chat_tabular_query_enabled": "false"}}
+
+	chatCtx, err := PrepareChatContext(context.Background(), nil, searcher, reader, ChatContextParams{
+		KbID:          "kb1",
+		SearchQuery:   tabTestQuery,
+		Language:      "de",
+		TabularRouter: tabFiringRouter(),
+	})
+	if err != nil {
+		t.Fatalf("PrepareChatContext: %v", err)
+	}
+	if chatCtx.TabularTrace == nil || chatCtx.TabularTrace.Outcome != "skipped_disabled" {
+		t.Fatalf("TabularTrace = %+v, want skipped_disabled from the per-KB reader", chatCtx.TabularTrace)
+	}
+	if searcher.gotQuery != tabTestQuery || searcher.gotForce {
+		t.Fatalf("a disabled router must leave retrieval untouched (query %q, force %v)",
+			searcher.gotQuery, searcher.gotForce)
+	}
+
+	// The mirror image: the same cfgFn, a reader that switches both flags
+	// on — the router fires.
+	searcher2 := &tabRecordingSearcher{chunks: tabTestChunks()}
+	on := stubReader{vals: map[string]string{
+		"chat_tabular_query_enabled":  "true",
+		"chat_tabular_router_enabled": "true",
+	}}
+	chatCtx2, err := PrepareChatContext(context.Background(), nil, searcher2, on, ChatContextParams{
+		KbID:          "kb1",
+		SearchQuery:   tabTestQuery,
+		Language:      "de",
+		TabularRouter: tabFiringRouter(),
+	})
+	if err != nil {
+		t.Fatalf("PrepareChatContext: %v", err)
+	}
+	if chatCtx2.TabularTrace == nil || chatCtx2.TabularTrace.Outcome != "fired_ok" {
+		t.Fatalf("TabularTrace = %+v, want fired_ok when the per-KB reader enables it", chatCtx2.TabularTrace)
+	}
+	if searcher2.gotQuery != tabTestPromoted {
+		t.Fatalf("search query = %q, want %q", searcher2.gotQuery, tabTestPromoted)
+	}
+}

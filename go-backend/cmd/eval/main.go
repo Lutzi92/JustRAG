@@ -194,6 +194,23 @@ func main() {
 			}
 			return ""
 		}
+		// R30/R51: build the deterministic tabular router ONCE, for the
+		// default dispatch path. The eval binary has only the main pool,
+		// so the read-only executor wraps it in a READ ONLY transaction —
+		// and every statement is validated before it is ever executed.
+		// Deliberately NOT wired into the --orchestrator-dispatch=false
+		// branch: that branch exists to produce byte-stable diffs against
+		// pre-2026-05 retrieval-only runs and must stay router-free.
+		tabularRouter := chat.NewTabularRouter(
+			tabular.NewCatalog(db.Main),
+			sqlexec.NewReadOnly(db.Main),
+			func(ctx context.Context, req ai.TabularSQLRequest, kbID, model string) (ai.TabularSQLProposal, error) {
+				return ai.GenerateTabularSQL(ctx, aiResolver, req, kbID, model)
+			},
+			func(ctx context.Context) chat.TabularRouterConfig {
+				return chat.ResolveTabularRouterConfig(ctx, chatStore)
+			},
+		)
 		if *teamID != "" {
 			teamStore := agentteams.NewStore(db.Main)
 			adapter = eval.NewTeamDispatchAdapter(
@@ -212,39 +229,17 @@ func main() {
 				siteReader,
 				getKbSystemPrompt,
 				flags,
+				eval.WithTabularRouter(tabularRouter),
 			)
 			slog.Info("eval: orchestrator-dispatch mode on (production-parity routing)")
 		} else {
-			// R30: exercise the deterministic tabular path the way
-			// production does. The eval binary has only the main pool, so
-			// the read-only executor wraps it in a READ ONLY transaction —
-			// the statement is validated before it is ever executed, and
-			// eval runs against a corpus the operator already owns.
-			tabularRouter := chat.NewTabularRouter(
-				tabular.NewCatalog(db.Main),
-				sqlexec.NewReadOnly(db.Main),
-				func(ctx context.Context, req ai.TabularSQLRequest, kbID, model string) (ai.TabularSQLProposal, error) {
-					return ai.GenerateTabularSQL(ctx, aiResolver, req, kbID, model)
-				},
-				func(ctx context.Context) chat.TabularRouterConfig {
-					return chat.TabularRouterConfig{
-						Enabled: chat.ChatTabularQueryEnabled(ctx, chatStore) &&
-							chat.ChatTabularRouterEnabled(ctx, chatStore),
-						Model:      chat.ChatTabularRouterModel(ctx, chatStore),
-						MaxRows:    chat.ChatTabularRouterMaxRows(ctx, chatStore),
-						MaxRepairs: chat.ChatTabularRouterMaxRepairs(ctx, chatStore),
-						Timeout: time.Duration(chat.ChatTabularRouterTimeoutMs(ctx, chatStore)) *
-							time.Millisecond,
-						SchemaMaxTokens: chat.ChatTabularRouterSchemaMaxTokens(ctx, chatStore),
-					}
-				},
-			)
+			// Router-free by design: this is the byte-stable
+			// retrieval-only comparison branch.
 			adapter = eval.NewProductionContextAdapter(
 				aiResolver,
 				searchService,
 				siteReader,
 				flags,
-				eval.WithTabularRouter(tabularRouter),
 			)
 		}
 	} else {

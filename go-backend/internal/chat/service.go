@@ -479,6 +479,7 @@ func runCRAG(
 	cfg cragConfig,
 	result *vector.SearchResult,
 	params ChatContextParams,
+	forceSimpleArm bool,
 ) bool {
 	if !cfg.enabled || !result.Graded {
 		return false
@@ -535,6 +536,11 @@ func runCRAG(
 			Grade:       true,
 			GraderModel: cfg.graderModel,
 			QueryType:   params.QueryType,
+			// The retry searches the same corpus, so it needs the same
+			// keyword arm: dropping the tabular router's override here
+			// would silently re-rank the CRAG second round under a
+			// different BM25 regime than the first.
+			ForceBM25SimpleArm: forceSimpleArm,
 		}
 		retry, err := searchSvc.Search(ctx, params.KbID, rewritten, 0, retryOpts)
 		if err != nil || retry == nil || len(retry.Chunks) == 0 {
@@ -963,15 +969,31 @@ func PrepareChatContext(
 	var tabularAddendum string
 	var tabularTrace *TabularTrace
 	if params.TabularRouter != nil {
-		tab := params.TabularRouter.Run(ctx, TabularRouterInput{
+		in := TabularRouterInput{
 			KbID:     params.KbID,
 			Query:    params.SearchQuery,
 			Language: params.Language,
 			Emit:     params.Emit,
-		})
+		}
+		// Resolve the config from THIS request's reader: the chat handler
+		// overlays it per KB (Handler.forKB), so the router's wiring-time
+		// cfgFn — which closes over the global reader — would ignore a
+		// per-KB `chat_tabular_router_enabled = false`. A nil reader
+		// (eval / public API) falls back to that cfgFn.
+		if siteConfig != nil {
+			cfg := ResolveTabularRouterConfig(ctx, siteConfig)
+			in.Config = &cfg
+		}
+		tab := params.TabularRouter.Run(ctx, in)
 		tabularTrace = tab.Trace
 		tabularAddendum = tab.Addendum
-		if tab.SearchQuery != "" {
+		// The promoted query is a BM25 phrase hint, and it is dropped
+		// under an explicit Enhance mode: the search service would feed it
+		// to RewriteQuery / ExpandQuery / SpellCorrect and persist the
+		// result as messages.enhanced_query, i.e. the user would see their
+		// own question with router-inserted quotes in it. The other two
+		// hints (forced keyword arm, result addendum) are unaffected.
+		if tab.SearchQuery != "" && params.Enhance == "" {
 			searchQuery = tab.SearchQuery
 		}
 		opts.ForceBM25SimpleArm = tab.ForceSimpleArm
@@ -1018,7 +1040,7 @@ func PrepareChatContext(
 		return nil, fmt.Errorf("chat: search: %w", err)
 	}
 
-	abstain := runCRAG(ctx, aiResolver, searchSvc, cragCfg, result, params)
+	abstain := runCRAG(ctx, aiResolver, searchSvc, cragCfg, result, params, opts.ForceBM25SimpleArm)
 
 	// Expand chunks with neighboring content from same file.
 	if result.ContextWindowSize > 0 && result.TableName != "" {

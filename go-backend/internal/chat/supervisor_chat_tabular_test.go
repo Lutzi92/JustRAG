@@ -74,6 +74,42 @@ func TestRunSupervisorChat_TabularRouterHintsAndAddendum(t *testing.T) {
 	}
 }
 
+// TestRunSupervisorChat_TabularRouterConfigOverridesCfgFn guards R49 on the
+// Supervisor path: the supervisor has no SiteConfigReader, so the per-KB
+// config arrives on the params (resolved in http_send.go AFTER forKB). A
+// cfgFn that says "enabled" must not override a params config that says off.
+func TestRunSupervisorChat_TabularRouterConfigOverridesCfgFn(t *testing.T) {
+	s := &tabSupSearcher{}
+	off := TabularRouterConfig{Enabled: false}
+
+	ctxOut, err := runSupervisorChatTestable(
+		context.Background(),
+		nil,
+		s,
+		func(_, _ string) bool { return false },
+		SupervisorChatParams{
+			KbID:                "kb1",
+			Query:               tabTestQuery,
+			Language:            "de",
+			TabularRouter:       tabFiringRouter(), // cfgFn: enabled
+			TabularRouterConfig: &off,
+		},
+		func(map[string]any) {},
+	)
+	if err != nil {
+		t.Fatalf("runSupervisorChatTestable: %v", err)
+	}
+	if ctxOut.TabularTrace == nil || ctxOut.TabularTrace.Outcome != "skipped_disabled" {
+		t.Fatalf("TabularTrace = %+v, want skipped_disabled from the per-KB config", ctxOut.TabularTrace)
+	}
+	if s.gotQuery != tabTestQuery || s.gotForce {
+		t.Fatalf("a disabled router must leave retrieval untouched (query %q, force %v)", s.gotQuery, s.gotForce)
+	}
+	if strings.Contains(ctxOut.SystemPrompt, "TABELLENABFRAGE") {
+		t.Fatalf("a disabled router must inject no addendum")
+	}
+}
+
 func TestRunSupervisorChat_NilTabularRouterUnchanged(t *testing.T) {
 	s := &tabSupSearcher{}
 	ctxOut, err := runSupervisorChatTestable(

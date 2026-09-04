@@ -952,7 +952,7 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 		return chat.ChatTabularQueryEnabled(ctx, rc.chatStore)
 	}
 	if rc.infra.sqlToolDB != nil {
-		mcpRegistry.RegisterBuiltin(builtin.NewTableQuery(rc.infra.sqlToolDB, tabularEnabled))
+		mcpRegistry.RegisterBuiltin(builtin.NewTableQuery(rc.infra.sqlToolDB, sqlexec.NewReadOnly(rc.infra.sqlToolDB), tabularEnabled))
 	} else {
 		mcpRegistry.RegisterBuiltin(builtin.NewTableQueryUnconfigured())
 	}
@@ -1032,24 +1032,19 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 			func(ctx context.Context, req ai.TabularSQLRequest, kbID, model string) (ai.TabularSQLProposal, error) {
 				return ai.GenerateTabularSQL(ctx, rc.aiResolver, req, kbID, model)
 			},
+			// Fallback config only: the chat paths resolve the six keys
+			// themselves from the per-KB overlaid reader and pass the
+			// result via TabularRouterInput.Config. This closure reads the
+			// GLOBAL reader, so it would miss a per-KB override.
 			func(ctx context.Context) chat.TabularRouterConfig {
-				return chat.TabularRouterConfig{
-					// Two gates: the tabular master flag AND the router's
-					// own kill switch. Either off ⇒ the router skips
-					// before it touches the database.
-					Enabled: chat.ChatTabularQueryEnabled(ctx, rc.chatStore) &&
-						chat.ChatTabularRouterEnabled(ctx, rc.chatStore),
-					Model:      chat.ChatTabularRouterModel(ctx, rc.chatStore),
-					MaxRows:    chat.ChatTabularRouterMaxRows(ctx, rc.chatStore),
-					MaxRepairs: chat.ChatTabularRouterMaxRepairs(ctx, rc.chatStore),
-					Timeout: time.Duration(chat.ChatTabularRouterTimeoutMs(ctx, rc.chatStore)) *
-						time.Millisecond,
-					SchemaMaxTokens: chat.ChatTabularRouterSchemaMaxTokens(ctx, rc.chatStore),
-				}
+				return chat.ResolveTabularRouterConfig(ctx, rc.chatStore)
 			},
 		)
-	} else {
-		slog.Warn("tabular router disabled; set JUSTRAG_DB_URL_READONLY to a SELECT-only role to enable the deterministic spreadsheet path")
+	} else if chat.ChatTabularQueryEnabled(context.Background(), rc.chatStore) {
+		// Only worth an operator's attention when the tabular feature is
+		// actually switched on — otherwise the missing read-only role is
+		// the expected state, not a misconfiguration.
+		slog.Warn("tabular router disabled although chat_tabular_query_enabled is on; set JUSTRAG_DB_URL_READONLY to a SELECT-only role to enable the deterministic spreadsheet path")
 	}
 
 	chatOpts := []chat.HandlerOption{

@@ -79,6 +79,14 @@ type TabularRouterInput struct {
 	Query    string
 	Language string
 	Emit     func(map[string]any)
+	// Config is the per-turn configuration resolved by the caller from the
+	// reader that is actually in force for this KB. The chat handler
+	// overlays its SiteConfigReader per KB (Handler.forKB), so a config
+	// resolved once at wiring time — the router's own cfgFn, which closes
+	// over the GLOBAL reader — would silently ignore a per-KB
+	// `chat_tabular_router_enabled = false`. Nil falls back to cfgFn,
+	// which is what callers without a reader (tests, eval) rely on.
+	Config *TabularRouterConfig
 }
 
 // TabularRouterResult is what the two chat paths apply.
@@ -163,10 +171,20 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 	}
 
 	// Step 1: the flag decides before anything touches the database.
-	if r.cfgFn == nil || r.cat == nil || r.exec == nil || r.gen == nil {
+	// in.Config (resolved by the caller from the per-KB overlaid reader)
+	// wins over the wiring-time cfgFn; see TabularRouterInput.Config.
+	if r.cat == nil || r.exec == nil || r.gen == nil {
 		return r.skip(in, res, "disabled")
 	}
-	cfg := r.cfgFn(ctx)
+	var cfg TabularRouterConfig
+	switch {
+	case in.Config != nil:
+		cfg = *in.Config
+	case r.cfgFn != nil:
+		cfg = r.cfgFn(ctx)
+	default:
+		return r.skip(in, res, "disabled")
+	}
 	if !cfg.Enabled {
 		return r.skip(in, res, "disabled")
 	}

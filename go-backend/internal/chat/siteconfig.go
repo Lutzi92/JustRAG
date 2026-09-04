@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/siteconfig"
@@ -971,6 +972,26 @@ func ChatTabularChartsEnabled(ctx context.Context, reader SiteConfigReader) bool
 // Tunable via "chat_tabular_router_enabled".
 func ChatTabularRouterEnabled(ctx context.Context, reader SiteConfigReader) bool {
 	return readBool(ctx, reader, "chat_tabular_router_enabled", true)
+}
+
+// ResolveTabularRouterConfig reads one complete TabularRouterConfig from a
+// SiteConfigReader. It is the SINGLE definition of the router's config
+// resolution: the dispatch-time wiring (internal/app), the standard chat
+// path and the Supervisor path all go through it, so a per-KB overlay
+// reader (Handler.forKB) and the global reader cannot disagree about what
+// the six keys mean. Enabled is the AND of the tabular master flag and the
+// router's own kill switch.
+func ResolveTabularRouterConfig(ctx context.Context, reader SiteConfigReader) TabularRouterConfig {
+	return TabularRouterConfig{
+		Enabled: ChatTabularQueryEnabled(ctx, reader) &&
+			ChatTabularRouterEnabled(ctx, reader),
+		Model:      ChatTabularRouterModel(ctx, reader),
+		MaxRows:    ChatTabularRouterMaxRows(ctx, reader),
+		MaxRepairs: ChatTabularRouterMaxRepairs(ctx, reader),
+		Timeout: time.Duration(ChatTabularRouterTimeoutMs(ctx, reader)) *
+			time.Millisecond,
+		SchemaMaxTokens: ChatTabularRouterSchemaMaxTokens(ctx, reader),
+	}
 }
 
 // ChatTabularRouterModel returns the model the router's SQL generator uses.

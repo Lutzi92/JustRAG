@@ -136,8 +136,12 @@ func NewOrchestratorDispatchAdapter(
 	siteCfg chat.SiteConfigReader,
 	kbSystemPrompt func(ctx context.Context, kbID string) string,
 	flags EvalFlags,
+	prodOpts ...ProductionAdapterOption,
 ) *OrchestratorDispatchAdapter {
-	prod := NewProductionContextAdapter(aiResolver, searchService, siteCfg, flags)
+	// prodOpts reach the embedded production adapter, which serves this
+	// adapter's standard-fallback route — that is where the tabular
+	// router has to land for a default --production-context run.
+	prod := NewProductionContextAdapter(aiResolver, searchService, siteCfg, flags, prodOpts...)
 	bg := context.Background()
 	planningModel := chat.ChatPlanExecuteModel(bg, siteCfg)
 	if planningModel == "" {

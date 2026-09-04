@@ -60,6 +60,13 @@ type SupervisorChatParams struct {
 	// its result rows as a system-prompt addendum. Nil disables it
 	// (nil-receiver safe regardless).
 	TabularRouter *TabularRouter
+	// TabularRouterConfig is the router's config resolved by the caller
+	// from the reader in force for THIS KB (the handler overlays it per
+	// KB — see Handler.forKB). The supervisor has no SiteConfigReader of
+	// its own, so like SufficientContextEnabled the flag arrives
+	// pre-resolved. Nil falls back to the router's wiring-time cfgFn,
+	// which reads the global reader only.
+	TabularRouterConfig *TabularRouterConfig
 }
 
 // RunSupervisorChat is the production entry point. It routes the query
@@ -131,12 +138,17 @@ func runSupervisorChatTestable(
 			Query:    params.Query,
 			Language: params.Language,
 			Emit:     emit,
+			Config:   params.TabularRouterConfig,
 		})
 		tabularTrace = tab.Trace
 		tabularAddendum = tab.Addendum
 		if tab.SearchQuery != "" {
-			// Retrieval only — params.Query stays the user's phrasing for
-			// the sufficient-context gate and the enumeration classifier.
+			// Retrieval only. The supervisor's routing classifier and the
+			// specialists both read in.Query, so they see the promoted
+			// phrasing; params.Query keeps the user's wording for the
+			// sufficient-context gate below. Note the supervisor
+			// carries no Enhance mode, so unlike the standard path there
+			// is no query-rewriting stage to feed the quotes into.
 			in.Query = tab.SearchQuery
 		}
 		in.ForceBM25SimpleArm = tab.ForceSimpleArm
