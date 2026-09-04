@@ -81,6 +81,7 @@ import (
 	"github.com/justrag/go-backend/internal/sserelay"
 	"github.com/justrag/go-backend/internal/systemhealth"
 	"github.com/justrag/go-backend/internal/tabular"
+	"github.com/justrag/go-backend/internal/tabular/rematerialize"
 	"github.com/justrag/go-backend/internal/usage"
 	"github.com/justrag/go-backend/internal/users"
 	"github.com/justrag/go-backend/internal/vector"
@@ -289,7 +290,8 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 		// kbAdminChain is the plain four-role gate: KB role 'admin' or better,
 		// independent of the system role. It carries the per-KB decisions any
 		// KB admin may make — description/prompt/models, membership,
-		// categories, canonicalize, community build. One exception sits
+		// categories, canonicalize, community build, tabular rematerialize.
+		// One exception sits
 		// inside PATCH /api/kb/{id}: the `name` field is owner-only
 		// (system admin on a public KB) — see kbaccess.CanRename.
 		kbAdminChain: func(h http.HandlerFunc) http.Handler {
@@ -563,6 +565,13 @@ func registerAdminRoutes(rc *routeCtx) {
 		func(ctx context.Context, r kggraph.CanonReader) bool { return community.Enabled(ctx, r) },
 	)
 	rc.mux.Handle("POST /api/kb/{id}/communities/build", rc.kbAdminChain(communitiesHandler.PostBuildCommunities))
+
+	// Admin-triggered tabular rematerialize: re-ingests every spreadsheet
+	// file in a KB (full re-embedding pipeline, which also rebuilds the
+	// per-file SQL tables) so an operator can apply changed tabular_*
+	// settings without re-uploading. No tabular-only job type.
+	rematerializeHandler := rematerialize.NewHandler(rc.infra.asynqClient, rc.filesStore, rc.chatStore)
+	rc.mux.Handle("POST /api/kb/{id}/tabular/rematerialize", rc.kbAdminChain(rematerializeHandler.PostRematerialize))
 
 	// Phase 1 §1.4 admin agent-metrics panel — per-(window,kb) outcome
 	// distributions for the agentic / plan-execute / CRAG paths. Reads

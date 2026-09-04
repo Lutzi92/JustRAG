@@ -31,7 +31,7 @@ func (s kbStoreStub) GetKBRole(_ context.Context, _, _ string) (string, error) {
 // user from a valid JWT) is not needed and would reject every request with
 // 401. kbAdminChain is the plain four-role gate — no system-role term — and
 // carries the per-KB decisions any KB admin may make (rename, membership,
-// categories, canonicalize, community build).
+// categories, canonicalize, community build, tabular rematerialize).
 func buildAdminChain(kbMw *kbaccess.Middleware) func(http.HandlerFunc) http.Handler {
 	return func(h http.HandlerFunc) http.Handler {
 		return kbMw.RequireKBRole(kbaccess.RoleAdmin)(http.HandlerFunc(h))
@@ -265,6 +265,27 @@ func TestKbAdminChain_EditRoleRejected(t *testing.T) {
 	}
 	if handlerCalled {
 		t.Fatal("expected handler NOT to be called")
+	}
+}
+
+// TestTabularRematerializeIsOnKbAdminChain pins the mount point for the
+// per-KB tabular rematerialize endpoint (task 9): it must sit on
+// kbAdminChain alongside its siblings canonicalize and communities/build,
+// not on kbAdvancedChain (that surface requires a system role in addition to
+// KB role admin, and rematerialize — like canonicalize/communities — is an
+// ordinary per-KB admin decision) and not on some looser chain. Reads
+// routes.go's actual registration via the routeChains helper in
+// advanced_routes_test.go rather than rebuilding the chain locally, so
+// moving the route in routes.go turns this test red.
+func TestTabularRematerializeIsOnKbAdminChain(t *testing.T) {
+	chains := routeChains(t)
+	const pattern = "POST /api/kb/{id}/tabular/rematerialize"
+	got, ok := chains[pattern]
+	if !ok {
+		t.Fatalf("%s is not registered in routes.go", pattern)
+	}
+	if got != "kbAdminChain" {
+		t.Errorf("%s is on rc.%s, want rc.kbAdminChain", pattern, got)
 	}
 }
 

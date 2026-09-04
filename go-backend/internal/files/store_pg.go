@@ -369,3 +369,43 @@ func (s *PGStore) ListErrorFiles(ctx context.Context, kbID string) ([]*FileInfo,
 	}
 	return out, nil
 }
+
+// ListSpreadsheetFiles returns the FileInfo of every spreadsheet file
+// (.xlsx/.xls/.ods/.csv/.tsv, matched case-insensitively on the file name)
+// in kbID that has passed through ingestion at least once — status
+// 'completed', 'partial', or 'error' (the same recovery-inclusive set as
+// ListReembedableFilesByKBID: an errored spreadsheet still needs its old
+// chunks and tables torn down and rebuilt). Backs the per-KB tabular
+// rematerialize endpoint, which enqueues one re-embedding job per row
+// returned here so an operator can apply changed tabular_* settings without
+// re-uploading. Oldest first (stable order).
+func (s *PGStore) ListSpreadsheetFiles(ctx context.Context, kbID string) ([]*FileInfo, error) {
+	const sql = `
+		SELECT id, kb_id, name, type, storage_path
+		FROM files
+		WHERE kb_id = $1
+		  AND status IN ('completed', 'partial', 'error')
+		  AND (
+			lower(name) LIKE '%.xlsx' OR
+			lower(name) LIKE '%.xls' OR
+			lower(name) LIKE '%.ods' OR
+			lower(name) LIKE '%.csv' OR
+			lower(name) LIKE '%.tsv'
+		  )
+		ORDER BY created_at`
+	rows, err := pgxutil.QueryRows[fileInfoDBRow](ctx, s.pool, sql, kbID)
+	if err != nil {
+		return nil, fmt.Errorf("ListSpreadsheetFiles: %w", err)
+	}
+	out := make([]*FileInfo, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, &FileInfo{
+			ID:          r.ID,
+			KbID:        r.KbID,
+			Name:        r.Name,
+			Type:        r.Type,
+			StoragePath: r.StoragePath,
+		})
+	}
+	return out, nil
+}
