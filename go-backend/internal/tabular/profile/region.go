@@ -7,6 +7,12 @@ type HeaderScoreFunc func(rowIdx int, reg Region) float64
 
 const continuationHeaderScore = 0.35
 
+// regionWithBlockBottom tracks a region and its untrimmed row-block bottom.
+type regionWithBlockBottom struct {
+	region      Region
+	blockBottom int
+}
+
 func filledGrid(s *sheetsource.Sample) [][]bool {
 	g := make([][]bool, len(s.Rows))
 	for r := range s.Rows {
@@ -30,62 +36,87 @@ func filledGrid(s *sheetsource.Sample) [][]bool {
 
 func DetectRegions(s *sheetsource.Sample, score HeaderScoreFunc) []Region {
 	g := filledGrid(s)
-	var out []Region
+	var outInternal []regionWithBlockBottom
 	r := 0
 	for r < len(g) {
 		if !rowHasAny(g[r]) {
 			r++
 			continue
 		}
-		top := r
+		blockTop := r
 		for r < len(g) && rowHasAny(g[r]) {
 			r++
 		}
-		bottom := r - 1
+		blockBottom := r - 1
 		c := 0
 		for c < s.Width {
-			if !colHasAny(g, top, bottom, c) {
+			if !colHasAny(g, blockTop, blockBottom, c) {
 				c++
 				continue
 			}
 			left := c
-			for c < s.Width && colHasAny(g, top, bottom, c) {
+			for c < s.Width && colHasAny(g, blockTop, blockBottom, c) {
 				c++
 			}
 			right := c - 1
-			// Trim rows from the bottom where all columns in [left, right] are empty
-			trimmedBottom := bottom
-			for trimmedBottom >= top && allColsEmpty(g, trimmedBottom, left, right) {
+			// Trim top: find first row in [blockTop, blockBottom] with a filled cell in [left, right]
+			trimmedTop := blockTop
+			for trimmedTop <= blockBottom && allColsEmpty(g, trimmedTop, left, right) {
+				trimmedTop++
+			}
+			// Trim bottom: find last row in [blockTop, blockBottom] with a filled cell in [left, right]
+			trimmedBottom := blockBottom
+			for trimmedBottom >= trimmedTop && allColsEmpty(g, trimmedBottom, left, right) {
 				trimmedBottom--
 			}
-			reg := Region{Top: top, Left: left, Bottom: trimmedBottom, Right: right, OpenEnded: trimmedBottom == len(g)-1}
-			if n := len(out); n > 0 && continues(out[n-1], reg, score) {
-				out[n-1].Bottom = reg.Bottom
-				out[n-1].OpenEnded = reg.OpenEnded
-				if reg.Left < out[n-1].Left {
-					out[n-1].Left = reg.Left
+			reg := Region{Top: trimmedTop, Left: left, Bottom: trimmedBottom, Right: right, OpenEnded: trimmedBottom == len(g)-1}
+
+			// Look for a previous-block region to merge with
+			merged := false
+			if len(outInternal) > 0 {
+				prevBlockBottom := outInternal[len(outInternal)-1].blockBottom
+				if blockTop == prevBlockBottom+2 { // exactly one blank row between blocks
+					// Find overlapping region from previous block with largest overlap
+					bestIdx := -1
+					bestOverlap := 0
+					for i := len(outInternal) - 1; i >= 0 && outInternal[i].blockBottom == prevBlockBottom; i-- {
+						prevReg := outInternal[i].region
+						overlap := min(prevReg.Right, right) - max(prevReg.Left, left) + 1
+						narrow := min(prevReg.Right-prevReg.Left, right-left) + 1
+						if overlap > 0 && float64(overlap) >= 0.8*float64(narrow) {
+							if overlap > bestOverlap {
+								bestOverlap = overlap
+								bestIdx = i
+							}
+						}
+					}
+					if bestIdx >= 0 && score(trimmedTop, reg) < continuationHeaderScore {
+						// Merge into found region
+						outInternal[bestIdx].region.Bottom = trimmedBottom
+						outInternal[bestIdx].region.OpenEnded = reg.OpenEnded
+						if reg.Left < outInternal[bestIdx].region.Left {
+							outInternal[bestIdx].region.Left = reg.Left
+						}
+						if reg.Right > outInternal[bestIdx].region.Right {
+							outInternal[bestIdx].region.Right = reg.Right
+						}
+						outInternal[bestIdx].blockBottom = blockBottom
+						merged = true
+					}
 				}
-				if reg.Right > out[n-1].Right {
-					out[n-1].Right = reg.Right
-				}
-				continue
 			}
-			out = append(out, reg)
+			if !merged {
+				outInternal = append(outInternal, regionWithBlockBottom{region: reg, blockBottom: blockBottom})
+			}
 		}
 	}
-	return out
-}
 
-func continues(prev, next Region, score HeaderScoreFunc) bool {
-	if next.Top != prev.Bottom+2 { // exactly one blank row between
-		return false
+	// Extract regions from internal representation
+	var out []Region
+	for _, rb := range outInternal {
+		out = append(out, rb.region)
 	}
-	overlap := min(prev.Right, next.Right) - max(prev.Left, next.Left) + 1
-	narrow := min(prev.Right-prev.Left, next.Right-next.Left) + 1
-	if overlap <= 0 || float64(overlap) < 0.8*float64(narrow) {
-		return false
-	}
-	return score(next.Top, next) < continuationHeaderScore
+	return out
 }
 
 func rowHasAny(row []bool) bool {

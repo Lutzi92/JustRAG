@@ -109,3 +109,47 @@ func TestDetectRegionsTitleThenTable(t *testing.T) {
 		t.Errorf("regions = %+v", regs)
 	}
 }
+
+func TestDetectRegionsTrimsTop(t *testing.T) {
+	t.Parallel()
+	s := grid(
+		"A|.|.|.",
+		".|.|B|X",
+		".|.|C|Y",
+	)
+	regs := DetectRegions(s, func(int, Region) float64 { return 0.9 })
+	if len(regs) != 2 || regs[0] != (Region{0, 0, 0, 0, false}) || regs[1] != (Region{1, 2, 2, 3, true}) {
+		t.Errorf("regions = %+v", regs)
+	}
+}
+
+func TestDetectRegionsContinuationUnderMiddleBlock(t *testing.T) {
+	t.Parallel()
+	s := grid(
+		"H|.|H|.|H",
+		"#|.|#|.|#",
+		"#|.|#|.|#",
+		".|.|.|.|.",
+		".|.|#|.|.",
+		".|.|#|.|.",
+	)
+	regs := DetectRegions(s, func(r int, _ Region) float64 {
+		if r == 0 {
+			return 0.9
+		}
+		return 0.1
+	})
+	if len(regs) != 3 {
+		t.Errorf("expected 3 regions, got %d: %+v", len(regs), regs)
+		return
+	}
+	if regs[0] != (Region{0, 0, 2, 0, false}) {
+		t.Errorf("region[0]: expected {0,0,2,0,false}, got %+v", regs[0])
+	}
+	if regs[1] != (Region{0, 2, 5, 2, true}) {
+		t.Errorf("region[1]: expected {0,2,5,2,true}, got %+v", regs[1])
+	}
+	if regs[2] != (Region{0, 4, 2, 4, false}) {
+		t.Errorf("region[2]: expected {0,4,2,4,false}, got %+v", regs[2])
+	}
+}
