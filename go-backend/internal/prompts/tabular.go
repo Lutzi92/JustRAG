@@ -259,9 +259,9 @@ func TabularRouterAddendum(lang string, sql string, columns []string, rows []map
 
 	if capped {
 		if de {
-			b.WriteString(fmt.Sprintf("Das Ergebnis wurde auf %d Zeilen begrenzt; es gibt weitere Zeilen.\n", rowCount))
+			b.WriteString(fmt.Sprintf("Das Ergebnis wurde auf %d Zeilen begrenzt; es können weitere Zeilen existieren (Zahl unbekannt).\n", rowCount))
 		} else {
-			b.WriteString(fmt.Sprintf("The result was capped at %d rows; more rows exist.\n", rowCount))
+			b.WriteString(fmt.Sprintf("The result was capped at %d rows; more rows may exist (count unknown).\n", rowCount))
 		}
 	}
 
