@@ -13,6 +13,7 @@ import (
 
 	"github.com/cockroachdb/cockroachdb-parser/pkg/sql/parser"
 	"github.com/cockroachdb/cockroachdb-parser/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroachdb-parser/pkg/sql/types"
 )
 
 // DefaultFunctionAllowlist is the closed set of functions router SQL may
@@ -92,6 +93,16 @@ func Validate(sql string, allowedTables map[string]bool, maxLimit int) (string, 
 		}
 	}
 
+	// R48(d): a qualified column/star reference (`alias.col`, `schema.table.col`,
+	// `schema.table.*`) names a table too, and that table must be one this
+	// query actually declared — collect the set of acceptable single-token
+	// qualifiers (every AliasedTableExpr alias, every CTE name, and every
+	// bare table object name, aliased or not) with a separate, best-effort
+	// collector pass before the real validation walk. Best-effort because a
+	// query that trips the fail-closed default gets rejected regardless of
+	// how much of the tree the collector reached (see collectAliases).
+	declaredAliases := collectAliases(sel, cteNames)
+
 	tables := map[string]bool{}
 	funcs := map[string]bool{}
 	var verr error
@@ -108,8 +119,26 @@ func Validate(sql string, allowedTables map[string]bool, maxLimit int) (string, 
 				return true
 			}
 			funcs[fn] = true
+		case *tree.CastExpr:
+			// R48(a): a cast to any reg* type (regclass, regproc, regtype,
+			// regnamespace, ...) resolves an arbitrary string to a catalog
+			// OID at execution time — effectively a second, un-audited
+			// object-name-to-existence oracle alongside the table/function
+			// allowlists ('pg_class'::regclass::text, CAST('x' AS regclass)).
+			if typ, ok := n.Type.(*types.T); ok && strings.HasPrefix(strings.ToLower(typ.PGName()), "reg") {
+				verr = fmt.Errorf("sqlcheck: cast to %q is not allowed", typ.PGName())
+				return true
+			}
+		case *tree.UnresolvedName:
+			if err := checkQualifiedName(n, declaredAliases, allowedTables); err != nil {
+				verr = err
+				return true
+			}
 		case *tree.Subquery:
 			info.HasSubquery = true
+		case disallowed:
+			verr = fmt.Errorf("sqlcheck: %s", n.reason)
+			return true
 		case unrecognized:
 			// R38 fail-closed: the walker's structural switch has no case
 			// for this concrete AST type, so it cannot vouch that no table
@@ -191,6 +220,16 @@ func checkTable(tn *tree.TableName, cteNames, allowedTables, tables map[string]b
 		*verr = fmt.Errorf("sqlcheck: relation %q is outside the tabular schema", object)
 		return true
 	}
+	// R48(c): a 3-part reference (catalog.schema.table) targets a
+	// different database than the one sqlexec's pool is connected to —
+	// Postgres itself has no cross-database queries within one connection,
+	// so this can only be an attempt to smuggle a name past the schema
+	// check (or, at best, a guaranteed execution error). Reject outright
+	// rather than silently ignoring the catalog part.
+	if tn.ExplicitCatalog {
+		*verr = fmt.Errorf("sqlcheck: relation %q must not specify a catalog", string(tn.CatalogName)+"."+string(tn.SchemaName)+"."+object)
+		return true
+	}
 	schema := string(tn.SchemaName)
 	full := schema + "." + object
 	if schema != "tabular" {
@@ -203,6 +242,70 @@ func checkTable(tn *tree.TableName, cteNames, allowedTables, tables map[string]b
 	}
 	tables[full] = true
 	return false
+}
+
+// collectAliases gathers every single-token qualifier a qualified column
+// reference in this statement may legitimately use: table aliases
+// (AliasedTableExpr.As), CTE names (already collected by the caller), and
+// the bare object name of every table reference, aliased or not (so
+// `FROM tabular."sheet_x"` — no alias — still lets a query write
+// `sheet_x."col"`, matching how Postgres itself resolves it). This is a
+// separate, best-effort pass over the same tree using the same visitor:
+// best-effort because if the tree also contains something the main walk
+// will fail-closed reject, this collector may hit the same node and stop
+// early too — harmless, since that query is rejected either way.
+func collectAliases(sel *tree.Select, cteNames map[string]bool) map[string]bool {
+	aliases := map[string]bool{}
+	for name := range cteNames {
+		aliases[name] = true
+	}
+	c := &visitor{Fn: func(node any) bool {
+		switch n := node.(type) {
+		case *tree.AliasedTableExpr:
+			if n.As.Alias != "" {
+				aliases[string(n.As.Alias)] = true
+			}
+		case *tree.TableName:
+			if n.ObjectName != "" {
+				aliases[string(n.ObjectName)] = true
+			}
+		case tree.TableName:
+			if n.ObjectName != "" {
+				aliases[string(n.ObjectName)] = true
+			}
+		}
+		return false
+	}}
+	c.walk([]tree.Statement{sel})
+	return aliases
+}
+
+// checkQualifiedName is R48(d): a qualified *tree.UnresolvedName — a
+// column reference (`alias.col`) or star (`schema.table.*`) with one or
+// more qualifying parts — must resolve to something this query actually
+// declared. Parts is stored in REVERSE order (column, table, schema,
+// catalog); NumParts says how many of those (from the front) are
+// populated. A bare column/star (NumParts < 2) has no qualifier to check.
+func checkQualifiedName(n *tree.UnresolvedName, declaredAliases, allowedTables map[string]bool) error {
+	switch n.NumParts {
+	case 0, 1:
+		return nil
+	case 2:
+		qualifier := n.Parts[1]
+		if declaredAliases[qualifier] {
+			return nil
+		}
+		return fmt.Errorf("sqlcheck: qualified reference %q does not resolve to a table declared in this query", qualifier)
+	case 3:
+		table, schema := n.Parts[1], n.Parts[2]
+		full := schema + "." + table
+		if schema == "tabular" && allowedTables[full] {
+			return nil
+		}
+		return fmt.Errorf("sqlcheck: qualified reference %q is not a table of this knowledge base", full)
+	default:
+		return fmt.Errorf("sqlcheck: qualified reference with a catalog part is not allowed")
+	}
 }
 
 // limitCount extracts a top-level LIMIT count as a plain int for the

@@ -28,6 +28,13 @@ type visitor struct{ Fn func(node any) (stop bool) }
 // this" into a rejection error.
 type unrecognized struct{ node any }
 
+// disallowed wraps a RECOGNIZED construct that this switch categorically
+// rejects regardless of content (unlike unrecognized, which is for a
+// concrete type this package has no case for at all). Used for CRDB-only
+// syntax that cannot even execute against the real Postgres backend
+// (AS OF SYSTEM TIME, index hints) — fail round 2, R48(b).
+type disallowed struct{ reason string }
+
 func (v *visitor) walk(stmts []tree.Statement) {
 	for _, s := range stmts {
 		if v.node(s) {
@@ -64,6 +71,15 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 	}
 	switch t := n.(type) {
 	case *tree.AliasedTableExpr:
+		// R48(b): index hints (@{FORCE_INDEX=...}) are CRDB-only syntax
+		// that can't execute against the real Postgres backend anyway, and
+		// aren't part of the router's supported surface.
+		if t.IndexFlags != nil {
+			if v.Fn != nil {
+				v.Fn(disallowed{reason: "index hints are not allowed"})
+			}
+			return true
+		}
 		return v.node(t.Expr)
 	case *tree.ParenTableExpr:
 		return v.node(t.Expr)
@@ -109,6 +125,14 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 			}
 		}
 	case *tree.From:
+		// R48(b): AS OF SYSTEM TIME is CRDB-only syntax (real Postgres has
+		// no equivalent), and its expression is otherwise never visited.
+		if t.AsOf.Expr != nil {
+			if v.Fn != nil {
+				v.Fn(disallowed{reason: "AS OF SYSTEM TIME is not allowed"})
+			}
+			return true
+		}
 		for _, tbl := range t.Tables {
 			if v.node(tbl) {
 				return true
@@ -150,6 +174,11 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 		return v.nodes(t.Expr1, t.Expr2)
 	case *tree.OnJoinCond:
 		return v.node(t.Expr)
+	case *tree.UsingJoinCond, tree.NaturalJoinCond:
+		// Leaf: USING (...) carries only column NAMES (tree.NameList), and
+		// NATURAL carries nothing at all — neither can hide a relation or
+		// function reference. Fix round 2 (regression): both hit the
+		// fail-closed default before this case existed.
 	case *tree.Order:
 		return v.nodes(t.Expr, t.Table)
 	case tree.OrderBy:
@@ -285,9 +314,27 @@ func (v *visitor) node(n any) bool { //nolint:gocyclo,funlen // one dispatch tab
 	// Leaves: no children worth inspecting (no relation or function
 	// reference can hide inside these). Listed explicitly rather than
 	// falling through to a permissive default, per R38.
-	case *tree.NumVal, *tree.StrVal, *tree.UnresolvedName,
-		tree.UnqualifiedStar, *tree.AllColumnsSelector, *tree.ColumnItem,
-		tree.DefaultVal:
+	//
+	// *tree.AllColumnsSelector and *tree.ColumnItem are deliberately NOT
+	// listed here (fix round 2, R48(d)): both are documented in
+	// cockroachdb-parser itself as intermediate, post-name-resolution
+	// structures ("ColumnItems... still need to undergo name resolution"),
+	// and empirically parser.Parse (no resolver in this pipeline) never
+	// produces them — every qualified column/star reference this package
+	// has observed parses to *tree.UnresolvedName instead (see the case
+	// below, and checkQualifiedName in validate.go). If some SQL shape or
+	// a future parser version ever does produce one, it now fails closed
+	// via the default arm rather than being silently treated as safe.
+	case *tree.NumVal, *tree.StrVal, tree.UnqualifiedStar, tree.DefaultVal:
+		return false
+
+	case *tree.UnresolvedName:
+		// Leaf structurally (a name has no sub-expressions to descend
+		// into), but NOT unconditionally safe: a qualified reference
+		// (NumParts >= 2) names a table, and that table must be one this
+		// query is actually allowed to touch (R48(d) — checked in Fn via
+		// checkQualifiedName, since it needs the allowlist and the
+		// declared-alias set that Validate collects).
 		return false
 
 	default:

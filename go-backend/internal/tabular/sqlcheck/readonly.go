@@ -27,6 +27,21 @@ var deniedKeywords = []string{
 // call). A single alternation also short-circuits on the first match.
 var deniedKeywordRe = regexp.MustCompile(`(?i)\b(?:` + strings.Join(deniedKeywords, "|") + `)\b`)
 
+// dollarQuoteRe matches a Postgres dollar-quote opener: "$$" or a tagged
+// "$tag$" (tag = identifier characters). Fix round 2 (R46): stripQuotedAndLiteralText
+// only understands '...'/"..." pairs; a single-quote character INSIDE a
+// dollar-quoted string (e.g. $$'$$) desyncs its quote-parity tracking, so
+// everything after it — including real SQL keywords — can end up wrongly
+// blanked or wrongly left visible, depending on how the desync lands. Rather
+// than teach the stripper a third quoting convention (and risk the same
+// class of desync against some fourth one later), any statement containing
+// a dollar-quote opener is rejected outright: dollar-quoting is not part of
+// the router's supported surface, so there is no accept-side cost.
+// "$5" (a dollar amount inside an ordinary literal) does not match: the
+// second alternative requires an identifier-lead byte, not a digit, and
+// neither alternative matches a lone "$".
+var dollarQuoteRe = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)?\$`)
+
 // ReadOnlyShape applies the format rules shared by sql_query, table_query
 // and the tabular router: SELECT-only (optionally preceded by WITH, or by
 // one or more "(" — CTEs are legal router output, and so is a
@@ -39,23 +54,30 @@ func ReadOnlyShape(q string) error {
 	if trimmed == "" {
 		return fmt.Errorf("empty query")
 	}
+	if dollarQuoteRe.MatchString(trimmed) {
+		return fmt.Errorf("dollar-quoted strings are not allowed")
+	}
 	upper := strings.ToUpper(strings.TrimLeft(trimmed, "( \t\n"))
 	startsSelect := strings.HasPrefix(upper, "SELECT ") || strings.HasPrefix(upper, "SELECT\n") || strings.HasPrefix(upper, "SELECT\t")
 	startsWith := strings.HasPrefix(upper, "WITH ") || strings.HasPrefix(upper, "WITH\n") || strings.HasPrefix(upper, "WITH\t")
 	if !startsSelect && !startsWith {
 		return fmt.Errorf("query must start with SELECT")
 	}
-	if strings.Contains(strings.TrimRight(trimmed, "; \n\t"), ";") {
+	// R39/R46: every check from here on judges only real SQL syntax, never
+	// the contents of a double-quoted identifier (a column literally named
+	// "update") or a single-quoted string literal (e.g. 'A SET B', or one
+	// containing a literal ';' or '--') that merely LOOKS like a keyword,
+	// statement separator, or comment marker. Safe now that dollar-quoting
+	// (the one construct stripQuotedAndLiteralText cannot parse) is
+	// rejected above rather than fed into it.
+	stripped := stripQuotedAndLiteralText(trimmed)
+	if strings.Contains(strings.TrimRight(stripped, "; \n\t"), ";") {
 		return fmt.Errorf("only one statement allowed (no internal `;`)")
 	}
-	if strings.Contains(trimmed, "--") || strings.Contains(trimmed, "/*") {
+	if strings.Contains(stripped, "--") || strings.Contains(stripped, "/*") {
 		return fmt.Errorf("comments are not allowed")
 	}
-	// R39: the denied-keyword scan judges only real SQL syntax, never the
-	// contents of a double-quoted identifier (a column literally named
-	// "update") or a single-quoted string literal (e.g. 'A SET B') that
-	// merely contains a keyword-shaped substring.
-	if m := deniedKeywordRe.FindString(stripQuotedAndLiteralText(trimmed)); m != "" {
+	if m := deniedKeywordRe.FindString(stripped); m != "" {
 		return fmt.Errorf("disallowed keyword: %s", strings.ToUpper(m))
 	}
 	return nil

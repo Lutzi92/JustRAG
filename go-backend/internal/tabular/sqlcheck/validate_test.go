@@ -33,6 +33,15 @@ func TestValidateAcceptsRouterShapes(t *testing.T) {
 		{"offset", `SELECT "a" FROM tabular."sheet_ab12_0_0" OFFSET 10`, 1, true, nil},
 		{"case", `SELECT CASE WHEN "a" > 1 THEN 'x' ELSE 'y' END FROM tabular."sheet_ab12_0_0"`, 1, true, nil},
 		{"paren-union", `(SELECT 1 FROM tabular."sheet_ab12_0_0") UNION (SELECT 2 FROM tabular."sheet_ab12_0_0")`, 1, true, nil},
+		// Fix round 2 (regression 1 / R38): USING (...) and NATURAL JOIN
+		// newly hit the fail-closed default (*tree.UsingJoinCond,
+		// tree.NaturalJoinCond had no case).
+		{"join-using", `SELECT 1 FROM tabular."sheet_ab12_0_0" a JOIN tabular."sheet_ab12_0_1" b USING ("id")`, 2, true, nil},
+		{"natural-join", `SELECT 1 FROM tabular."sheet_ab12_0_0" NATURAL JOIN tabular."sheet_ab12_0_1"`, 2, true, nil},
+		// Fix round 2 (R48(d)): a qualified column reference using a
+		// declared table ALIAS (not a real schema/table name) must still
+		// be accepted.
+		{"alias-qualified-column", `SELECT a."id" FROM tabular."sheet_ab12_0_0" a`, 1, true, nil},
 	}
 	for _, c := range cases {
 		c := c
@@ -155,6 +164,70 @@ func TestValidateCanonicalTableName(t *testing.T) {
 	}
 	if _, _, err := Validate(`SELECT 1 FROM Tabular."sheet_ab12_0_0"`, allow, 200); err != nil {
 		t.Errorf("an unquoted schema must fold case-insensitively: %v", err)
+	}
+}
+
+// TestValidateRejectsDollarQuotes is the R46 fix (fix round 2, regression
+// 2): stripQuotedAndLiteralText only understands '...'/"..." pairs, so a
+// single quote INSIDE a dollar-quoted string desyncs its quote-parity
+// tracking and can let real SQL (here, a DML statement inside a CTE) pass
+// the shape gate. Both dollar-tag forms are rejected outright, verbatim
+// from the re-review; a dollar sign inside an ORDINARY literal (no
+// dollar-quote syntax) must still be accepted.
+func TestValidateRejectsDollarQuotes(t *testing.T) {
+	t.Parallel()
+	bad := map[string]string{
+		"dollar-hidden-insert-cte": `WITH y AS (SELECT $$'$$ AS c), x AS (INSERT INTO tabular."sheet_ab12_0_0" VALUES (1) RETURNING $$'$$) SELECT * FROM x`,
+		"dollar-tag-hidden":        `WITH y AS (SELECT $q$'$q$ AS c), x AS (INSERT INTO tabular."sheet_ab12_0_0" VALUES (1) RETURNING $q$'$q$) SELECT * FROM x`,
+	}
+	for name, sql := range bad {
+		if _, _, err := Validate(sql, allow, 200); err == nil {
+			t.Errorf("%s: accepted %q", name, sql)
+		}
+	}
+	if _, _, err := Validate(`SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE "a" = '$5'`, allow, 200); err != nil {
+		t.Errorf("a dollar sign inside an ordinary literal must not be treated as a dollar-quote opener: %v", err)
+	}
+}
+
+// TestValidateRejectsMinors is the R48 minors: reg* casts (a), AS OF
+// SYSTEM TIME and index hints (b, CRDB-only syntax that can't execute
+// against the real Postgres backend), an explicit catalog part (c), and a
+// qualified reference to a relation outside the FROM clause (d).
+func TestValidateRejectsMinors(t *testing.T) {
+	t.Parallel()
+	bad := map[string]string{
+		"regclass-cast-postfix":   `SELECT 'pg_class'::regclass::text FROM tabular."sheet_ab12_0_0"`,
+		"regclass-cast-func":      `SELECT CAST('x' AS regclass) FROM tabular."sheet_ab12_0_0"`,
+		"as-of-system-time":       `SELECT 1 FROM tabular."sheet_ab12_0_0" AS OF SYSTEM TIME '-1s'`,
+		"index-hint":              `SELECT 1 FROM tabular."sheet_ab12_0_0"@{FORCE_INDEX=x}`,
+		"explicit-catalog":        `SELECT 1 FROM somedb.tabular."sheet_ab12_0_0"`,
+		"qualified-foreign-star":  `SELECT tabular."sheet_zz99_0_0".* FROM tabular."sheet_ab12_0_0"`,
+		"qualified-public-column": `SELECT public.users.name FROM tabular."sheet_ab12_0_0"`,
+	}
+	for name, sql := range bad {
+		if _, _, err := Validate(sql, allow, 200); err == nil {
+			t.Errorf("%s: accepted %q", name, sql)
+		}
+	}
+}
+
+// TestValidateRejectsParenTableExprAndIsNull is R48(e): ParenTableExpr
+// wrapping a foreign relation (already fixed while cross-checking the
+// TableExpr closed family in fix round 1 — pinned here with dedicated
+// tests) and IS [NOT] NULL wrapping a foreign subquery.
+func TestValidateRejectsParenTableExprAndIsNull(t *testing.T) {
+	t.Parallel()
+	bad := map[string]string{
+		"paren-table-join":   `SELECT 1 FROM (tabular."sheet_ab12_0_0" JOIN tabular."sheet_zz99_0_0" ON true)`,
+		"paren-table-nested": `SELECT 1 FROM ((SELECT 1 FROM tabular."sheet_zz99_0_0")) z`,
+		"is-null":            `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE (SELECT 1 FROM tabular."sheet_zz99_0_0") IS NULL`,
+		"is-not-null":        `SELECT 1 FROM tabular."sheet_ab12_0_0" WHERE (SELECT 1 FROM tabular."sheet_zz99_0_0") IS NOT NULL`,
+	}
+	for name, sql := range bad {
+		if _, _, err := Validate(sql, allow, 200); err == nil {
+			t.Errorf("%s: accepted %q", name, sql)
+		}
 	}
 }
 

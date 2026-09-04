@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -156,14 +155,19 @@ func uuidString(b [16]byte) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// numericValue renders a Postgres NUMERIC as a float64 when it is finite
-// and exactly representable in IEEE-754 double precision, and as its
-// canonical decimal string otherwise — documented choice (I2): most
-// spreadsheet cell values (currency, measurements, counts) both fit in a
-// float64 and round-trip exactly, so returning a JSON number keeps the
-// common case ergonomic for callers; falling back to the exact decimal
-// string for NaN/Infinity or a value a float64 cannot hold exactly avoids
-// silently truncating precision instead of just being less convenient.
+// numericValue renders a Postgres NUMERIC as its canonical decimal string
+// (e.g. "19.99", "1.5", "3", "NaN") — fix round 2, R47. Round 1 returned a
+// float64 for values it judged "exactly representable", but that judgment
+// itself was type-dependent noise a caller can't predict from the query
+// alone: the same column value ("3") could come back as int-shaped float64
+// 3 for one row and a string for another depending on the specific decimal
+// stored, and "exactly representable in float64" is not the same property
+// as "the value the operator/LLM expects to see" for currency-shaped data.
+// A single, predictable string representation is simpler for callers to
+// consume (parse once, decide precision themselves) and can never lose or
+// misrepresent precision. Integer columns (int2/int4/int8) are unaffected:
+// pgx decodes those to native Go int16/int32/int64, which already fall
+// through to the default `return v` case below untouched.
 func numericValue(n pgtype.Numeric) any {
 	if !n.Valid {
 		return nil
@@ -177,43 +181,12 @@ func numericValue(n pgtype.Numeric) any {
 	case pgtype.NegativeInfinity:
 		return "-Infinity"
 	}
-	if f, err := n.Float64Value(); err == nil && f.Valid && numericExactlyFloat64(n, f.Float64) {
-		return f.Float64
-	}
 	if canonical, err := n.Value(); err == nil {
 		if s, ok := canonical.(string); ok {
 			return s
 		}
 	}
 	return fmt.Sprintf("%v", n)
-}
-
-// numericExactlyFloat64 reports whether f is the exact value of n (n.Int *
-// 10^n.Exp), using arbitrary-precision rational comparison rather than a
-// decimal-text round-trip, so it can't mis-classify a value that merely
-// happens to format the same after rounding.
-func numericExactlyFloat64(n pgtype.Numeric, f float64) bool {
-	exact := new(big.Rat)
-	if n.Int != nil {
-		exact.SetInt(n.Int)
-	}
-	if n.Exp != 0 {
-		exp := n.Exp
-		if exp < 0 {
-			exp = -exp
-		}
-		pow := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil))
-		if n.Exp > 0 {
-			exact.Mul(exact, pow)
-		} else {
-			exact.Quo(exact, pow)
-		}
-	}
-	fr := new(big.Rat).SetFloat64(f)
-	if fr == nil {
-		return false
-	}
-	return exact.Cmp(fr) == 0
 }
 
 // intervalValue renders a Postgres INTERVAL in its canonical text form
