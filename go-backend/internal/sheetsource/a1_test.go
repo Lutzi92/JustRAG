@@ -9,6 +9,7 @@ func TestParseCellRef(t *testing.T) {
 		row, col int
 	}{
 		{"A1", 0, 0}, {"B14", 13, 1}, {"$C$6", 5, 2}, {"AA10", 9, 26}, {"aw662", 661, 48},
+		{"XFD1", 0, 16383}, // max valid column
 	}
 	for _, c := range cases {
 		r, col, err := ParseCellRef(c.in)
@@ -16,8 +17,11 @@ func TestParseCellRef(t *testing.T) {
 			t.Errorf("ParseCellRef(%q) = %d,%d,%v want %d,%d", c.in, r, col, err, c.row, c.col)
 		}
 	}
-	if _, _, err := ParseCellRef("1A"); err == nil {
-		t.Error("expected error for 1A")
+	// Invalid cases
+	for _, invalid := range []string{"1A", "Liste1", "ABCD1", "XFE1"} {
+		if _, _, err := ParseCellRef(invalid); err == nil {
+			t.Errorf("expected error for %q", invalid)
+		}
 	}
 }
 

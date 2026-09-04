@@ -8,7 +8,7 @@ import (
 func ParseCellRef(ref string) (row, col int, err error) {
 	ref = strings.ReplaceAll(strings.TrimSpace(ref), "$", "")
 	i := 0
-	for i < len(ref) && ref[i] >= 'A' && ref[i] <= 'Z' || i < len(ref) && ref[i] >= 'a' && ref[i] <= 'z' {
+	for i < len(ref) && i < 3 && ref[i] >= 'A' && ref[i] <= 'Z' || i < len(ref) && i < 3 && ref[i] >= 'a' && ref[i] <= 'z' {
 		c := ref[i]
 		if c >= 'a' {
 			c -= 'a' - 'A'
@@ -17,6 +17,10 @@ func ParseCellRef(ref string) (row, col int, err error) {
 		i++
 	}
 	if i == 0 || i == len(ref) {
+		return 0, 0, fmt.Errorf("sheetsource: bad cell ref %q", ref)
+	}
+	// Reject columns beyond XFD (16384 in 1-indexed, 16383 in 0-indexed)
+	if col > 16384 {
 		return 0, 0, fmt.Errorf("sheetsource: bad cell ref %q", ref)
 	}
 	n := 0

@@ -41,7 +41,8 @@ func (s *XLSXSource) resolveValidations(ex *SheetExtras, sheetIdx int) {
 			v.Values = splitInlineList(v.Ref)
 			continue
 		}
-		if rng != "" && !strings.ContainsAny(rng, ":$") && !isCellRef(rng) { // defined name
+		// Check defined names first when no sheet is specified
+		if sheet == "" && rng != "" {
 			if def, ok := s.wb.definedNames[rng]; ok {
 				sheet, rng, _ = parseListRef(def)
 			}
@@ -59,6 +60,7 @@ func (s *XLSXSource) resolveValidations(ex *SheetExtras, sheetIdx int) {
 			for j, sh := range s.wb.sheets {
 				if sh.Name == sheet {
 					target = j
+					break // stop on first match
 				}
 			}
 			if target < 0 {
@@ -67,11 +69,6 @@ func (s *XLSXSource) resolveValidations(ex *SheetExtras, sheetIdx int) {
 		}
 		v.Values = s.readRangeValues(target, r)
 	}
-}
-
-func isCellRef(s string) bool {
-	_, _, err := ParseCellRef(s)
-	return err == nil
 }
 
 func (s *XLSXSource) readRangeValues(sheetIdx int, r Range) []string {
@@ -86,6 +83,9 @@ func (s *XLSXSource) readRangeValues(sheetIdx int, r Range) []string {
 		for c := r.FromCol; c <= r.ToCol && c < len(cells); c++ {
 			if !cells[c].IsEmpty() {
 				out = append(out, cells[c].Raw)
+				if len(out) >= maxListValues {
+					return ErrStop
+				}
 			}
 		}
 		return nil
