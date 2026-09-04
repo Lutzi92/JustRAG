@@ -45,6 +45,7 @@ import (
 	"github.com/justrag/go-backend/internal/safego"
 	"github.com/justrag/go-backend/internal/storage"
 	"github.com/justrag/go-backend/internal/tabular"
+	"github.com/justrag/go-backend/internal/tabular/ingest"
 	"github.com/justrag/go-backend/internal/vector"
 	"github.com/justrag/go-backend/internal/widcert"
 	"github.com/justrag/go-backend/internal/worker"
@@ -254,7 +255,7 @@ func RunWorker(cfg *config.Config) error {
 	proc.SetKBOverrideLister(kbconfig.NewStore(db.Main))
 	proc.SetMainDB(db.Main)
 	proc.SetVectorPool(db.Vector)
-	proc.SetMaterializer(tabular.NewMaterializer(db.Main))
+	proc.SetIngester(processor.NewIngesterAdapter(ingest.New(tabular.NewMaterializer(db.Main), nil)))
 	proc.SetKGEventPublisher(kgevents.NewPublisher(rdb.Client))
 	proc.SetKGDeleter(kg.NewPgStore(db.Main))
 	mux.HandleFunc(jobs.TypeResearchExecution, worker.Instrument(worker.NewResearchExecutionHandler(aiResolver, searchService, rdb.Client, chatStore, sharedFetcher)))

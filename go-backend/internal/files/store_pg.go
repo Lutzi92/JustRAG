@@ -254,9 +254,35 @@ func (s *PGStore) UpdateFileStage(ctx context.Context, fileID, stage string, ind
 // ClearFileStage nulls the stage columns — the file is no longer actively
 // ingesting (done, errored, or abandoned). Idempotent.
 func (s *PGStore) ClearFileStage(ctx context.Context, fileID string) error {
-	const sql = `UPDATE files SET current_stage = NULL, stage_index = NULL, stage_total = NULL WHERE id = $1`
+	const sql = `UPDATE files SET current_stage = NULL, stage_index = NULL, stage_total = NULL, stage_detail = NULL WHERE id = $1`
 	if _, err := s.pool.Exec(ctx, sql, fileID); err != nil {
 		return fmt.Errorf("ClearFileStage: %w", err)
+	}
+	return nil
+}
+
+// SetFileParseReport records the per-file spreadsheet ingest report (sheet
+// kinds, header rows, row counts, coercion failures — see
+// internal/tabular.ParseReport). May contain cell-derived text (column
+// names, sample-derived diagnostics), so callers must never log it in full.
+func (s *PGStore) SetFileParseReport(ctx context.Context, fileID string, report []byte) error {
+	const sql = `UPDATE files SET parse_report = $1::jsonb WHERE id = $2`
+	if _, err := s.pool.Exec(ctx, sql, report, fileID); err != nil {
+		return fmt.Errorf("SetFileParseReport: %w", err)
+	}
+	return nil
+}
+
+// UpdateFileStageDetail records a human-readable progress detail for the
+// current stage (e.g. "Blatt 2/3 · 120000 Zeilen") so the upload spinner can
+// show more than a bare n/x during a long spreadsheet materialisation. Also
+// bumps progress_updated_at — see UpdateFileStage's comment on why a stage
+// transition doubles as a liveness heartbeat. An empty detail clears the
+// column (NULLIF) rather than storing "".
+func (s *PGStore) UpdateFileStageDetail(ctx context.Context, fileID, detail string) error {
+	const sql = `UPDATE files SET stage_detail = NULLIF($1, ''), progress_updated_at = NOW() WHERE id = $2`
+	if _, err := s.pool.Exec(ctx, sql, detail, fileID); err != nil {
+		return fmt.Errorf("UpdateFileStageDetail: %w", err)
 	}
 	return nil
 }

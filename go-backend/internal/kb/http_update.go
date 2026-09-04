@@ -86,6 +86,7 @@ type FileRow struct {
 	CurrentStage       *string   `json:"currentStage,omitempty" db:"current_stage"`
 	StageIndex         *int      `json:"stageIndex,omitempty"   db:"stage_index"`
 	StageTotal         *int      `json:"stageTotal,omitempty"   db:"stage_total"`
+	StageDetail        *string   `json:"stageDetail,omitempty"  db:"stage_detail"`
 	RSSFeedID          *string   `json:"rssFeedId"          db:"rss_feed_id"`
 	ConfluenceSourceID *string   `json:"confluenceSourceId" db:"confluence_source_id"`
 	CreatedAt          time.Time `json:"createdAt"           db:"created_at"`

@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"github.com/justrag/go-backend/internal/parser"
+	"github.com/justrag/go-backend/internal/tabular"
+	"github.com/justrag/go-backend/internal/tabular/ingest"
+	"github.com/justrag/go-backend/internal/tabular/profile"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -16,11 +19,21 @@ import (
 
 var _ ProcessorStore = (*mockStore)(nil)
 
+// stageInfo captures the most recent UpdateFileStage call for one file:
+// total is constant across a file's whole run (it's the static plan size),
+// so tests only need the last-observed value.
+type stageInfo struct {
+	index, total int
+}
+
 type mockStore struct {
-	statuses   []string
-	progresses []int
-	errStages  []string
-	errMsgs    []string
+	statuses        []string
+	progresses      []int
+	errStages       []string
+	errMsgs         []string
+	stages          map[string]stageInfo
+	parseReports    map[string][]byte
+	lastStageDetail map[string]string
 }
 
 func (m *mockStore) UpdateFileStatus(_ context.Context, _ string, status string) error {
@@ -40,11 +53,31 @@ func (m *mockStore) MarkFileError(_ context.Context, _ string, stage, message st
 	return nil
 }
 
-func (m *mockStore) UpdateFileStage(context.Context, string, string, int, int) error {
+func (m *mockStore) UpdateFileStage(_ context.Context, fileID, _ string, index, total int) error {
+	if m.stages == nil {
+		m.stages = make(map[string]stageInfo)
+	}
+	m.stages[fileID] = stageInfo{index: index, total: total}
 	return nil
 }
 
 func (m *mockStore) ClearFileStage(context.Context, string) error {
+	return nil
+}
+
+func (m *mockStore) SetFileParseReport(_ context.Context, fileID string, report []byte) error {
+	if m.parseReports == nil {
+		m.parseReports = make(map[string][]byte)
+	}
+	m.parseReports[fileID] = report
+	return nil
+}
+
+func (m *mockStore) UpdateFileStageDetail(_ context.Context, fileID, detail string) error {
+	if m.lastStageDetail == nil {
+		m.lastStageDetail = make(map[string]string)
+	}
+	m.lastStageDetail[fileID] = detail
 	return nil
 }
 
@@ -71,6 +104,14 @@ func (s *contextCapturingStore) UpdateFileStage(context.Context, string, string,
 }
 
 func (s *contextCapturingStore) ClearFileStage(context.Context, string) error {
+	return nil
+}
+
+func (s *contextCapturingStore) SetFileParseReport(context.Context, string, []byte) error {
+	return nil
+}
+
+func (s *contextCapturingStore) UpdateFileStageDetail(context.Context, string, string) error {
 	return nil
 }
 
@@ -549,5 +590,89 @@ func TestClearStaleKG_ToleratesDeleterError(t *testing.T) {
 
 	if len(spy.calls) != 1 {
 		t.Errorf("want deleter invoked once even on error, got %d calls", len(spy.calls))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SpreadsheetIngester seam test
+// ---------------------------------------------------------------------------
+
+// fakeIngester is a plain SpreadsheetIngester fake: it records every Ingest
+// call and, per ruling R15, WithLLM records the LLM it received and returns
+// itself (WithLLM on the real *ingest.Ingester returns a shallow copy, not
+// the interface, so the fake mirrors "record + return something usable").
+//
+// The result's Text/Pages are deliberately whitespace-only: ProcessFile's
+// aiResolver is nil in this test (no embedding provider configured), so a
+// non-empty rendered text would reach the real embedding call and panic on
+// a nil *ai.ConfigResolver. splitter.Split trims and drops whitespace-only
+// input, so buildIndexedChunks yields zero chunks and ProcessFile takes its
+// existing "0 chunks → completed" early return right after storing the
+// parse report and clearing the stage detail — both of which are set before
+// that check, so this still exercises everything under test.
+type fakeIngester struct {
+	calls []ingest.Input
+	llm   profile.LLMProfiler
+}
+
+func (f *fakeIngester) Ingest(_ context.Context, in ingest.Input) (*ingest.Result, error) {
+	f.calls = append(f.calls, in)
+	return &ingest.Result{
+		Text:  "   ",
+		Pages: []ingest.Page{{Number: 1, Text: "   "}},
+		Report: tabular.ParseReport{
+			Version: 1,
+			Sheets:  []tabular.SheetReport{{Name: "S", Kind: "table"}},
+		},
+	}, nil
+}
+
+func (f *fakeIngester) WithLLM(llm profile.LLMProfiler) SpreadsheetIngester {
+	f.llm = llm
+	return f
+}
+
+// TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment verifies that a
+// spreadsheet file with an ingester wired routes through it (not the
+// factory's SpreadsheetParser), stores the parse report, and that the stage
+// plan excludes enrich/kg/hype/raptor even though contextual_enrichment is
+// explicitly on in site_config — isSpreadsheet must force it off.
+func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
+	store := &mockStore{}
+	p := NewProcessor(parser.DefaultFactoryWith(nil), nil, nil, store)
+	p.SetSiteConfigReader(&fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_query_enabled": strPtr("true"),
+		"contextual_enrichment":      strPtr("true"),
+	}})
+	ing := &fakeIngester{}
+	p.SetIngester(ing)
+
+	_ = p.ProcessFile(context.Background(), ProcessFileInput{
+		FileID:    "f1",
+		FilePath:  "../sheetsource/testdata/ids_leading_zero.xlsx",
+		FileName:  "ids_leading_zero.xlsx",
+		MimeType:  "",
+		KBID:      "kb",
+		ChunkSize: 512,
+	})
+
+	if len(ing.calls) != 1 || !ing.calls[0].Options.Materialize {
+		t.Fatalf("ingester calls: %+v", ing.calls)
+	}
+	if store.parseReports["f1"] == nil || !strings.Contains(string(store.parseReports["f1"]), `"kind":"table"`) {
+		t.Errorf("parse report not stored: %s", store.parseReports["f1"])
+	}
+	// parse + tabular + embed: buildStagePlan always includes parse and
+	// embed; tabular is added because materialise is on; enrich/kg/hype/
+	// raptor are excluded because isSpreadsheet forces them off. The embed
+	// stage is never actually reached in this test (0 chunks → early
+	// return before stageEmbed's setStage call), but plan.total() is fixed
+	// for the whole plan, so the last stage call recorded (tabular) still
+	// carries the full total.
+	if store.stages["f1"].total != 3 {
+		t.Errorf("stage total = %d, want 3", store.stages["f1"].total)
+	}
+	if store.lastStageDetail["f1"] != "" {
+		t.Errorf("stage detail must be cleared at the end, got %q", store.lastStageDetail["f1"])
 	}
 }

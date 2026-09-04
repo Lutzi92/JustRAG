@@ -138,6 +138,14 @@ func (f *fakeFileStore) ClearFileStage(context.Context, string) error {
 	return nil
 }
 
+func (f *fakeFileStore) SetFileParseReport(context.Context, string, []byte) error {
+	return nil
+}
+
+func (f *fakeFileStore) UpdateFileStageDetail(context.Context, string, string) error {
+	return nil
+}
+
 func (f *fakeFileStore) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()

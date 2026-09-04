@@ -1461,6 +1461,30 @@ func TabularProfileModel(ctx context.Context, reader SiteConfigReader) string {
 	return ResolveFastTierModel(ctx, reader, "tabular_profile_model")
 }
 
+// TabularMaxRows caps how many data rows of a table region the materializer
+// loads into its native-typed Postgres table before dropping (and counting)
+// the rest. Default 2,000,000; clamped to [1000, 5,000,000]. Tunable via
+// "tabular_max_rows".
+func TabularMaxRows(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "tabular_max_rows", 2_000_000, 1000, 5_000_000)
+}
+
+// TabularEmbedMaxRows caps how many rows of an unmaterialised (or
+// render-only) table region the hybrid renderer embeds inline as text
+// before switching to a summary card. Default 50,000; clamped to
+// [0, 1,000,000]. Tunable via "tabular_embed_max_rows".
+func TabularEmbedMaxRows(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "tabular_embed_max_rows", 50_000, 0, 1_000_000)
+}
+
+// TabularColumnValuesMaxDistinct caps how many distinct values per column
+// the materializer tracks before giving up on cardinality stats for that
+// column. Default 10,000; clamped to [100, 100,000]. Tunable via
+// "tabular_column_values_max_distinct".
+func TabularColumnValuesMaxDistinct(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "tabular_column_values_max_distinct", 10_000, 100, 100_000)
+}
+
 // ---------------------------------------------------------------------------
 // Date-aware chat (chat_date_*)
 // ---------------------------------------------------------------------------
