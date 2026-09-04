@@ -306,7 +306,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 		res.Trace.SQL = proposed
 
 		var failure string
-		kind := failureNone
+		var kind failureKind
 
 		execSQL, info, verr := sqlcheck.Validate(proposed, schema.AllowedTables, cfg.MaxRows)
 		if verr != nil {
@@ -329,6 +329,12 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 				// Success — a clean result is never re-reviewed.
 				res.Trace.Outcome = "fired_ok"
 				res.Trace.RowCount = out.RowCount
+				// I1: Executor.Truncated is only set on an (RowCap+1)-th
+				// row, but sqlcheck.Validate already wrapped the statement
+				// to `LIMIT cfg.MaxRows` — so a result that exactly fills
+				// the cap never trips Truncated even though more rows may
+				// exist. RowCount hitting the cap is the same signal.
+				capped := out.Truncated || out.RowCount >= cfg.MaxRows
 				observability.RecordTabularRouter(res.Trace.Outcome)
 				observability.RecordTabularRouterRows(out.RowCount)
 				observability.RecordTabularRouterRepairs(res.Trace.Repairs)
@@ -336,11 +342,11 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 				emitTabular(in, map[string]any{
 					"type":      "tabular_router_rows",
 					"row_count": out.RowCount,
-					"capped":    out.Truncated,
+					"capped":    capped,
 				})
 				res.Addendum = prompts.TabularRouterAddendum(
 					in.Language, proposed, out.Columns, out.Rows,
-					out.RowCount, out.Truncated, false,
+					out.RowCount, capped, false,
 					tabularSources(in.Language, info.Tables, entries),
 				)
 				return res
@@ -380,8 +386,20 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 // skip records a non-fired outcome, emits the skipped event and returns the
 // result as-is — SearchQuery/ForceSimpleArm keep whatever the algorithm had
 // already established (a skip after the gate still forces the keyword arm).
+//
+// M4 (R61): "disabled" is the one reason excluded from the event and the
+// metric. It fires on every chat turn of every KB that has the feature (or
+// this deployment's read-only DSN) turned off — i.e. potentially every
+// turn, deployment-wide — so unlike every other skip reason (which needs a
+// tabular KB to even reach it) it carries no diagnostic value proportional
+// to its volume: an operator who wants to know whether the router is off
+// already knows it from the config, not from a trajectory event or a
+// counter increment on every message.
 func (r *TabularRouter) skip(in TabularRouterInput, res TabularRouterResult, reason string) TabularRouterResult {
 	res.Trace.Outcome = "skipped_" + reason
+	if reason == "disabled" {
+		return res
+	}
 	observability.RecordTabularRouter(res.Trace.Outcome)
 	emitTabular(in, map[string]any{"type": "tabular_router_skipped", "reason": reason})
 	return res
@@ -474,8 +492,12 @@ func safeLabel(lang, s string) string {
 func matchedValueLines(lang string, hits []tabular.ValueHit) []string {
 	out := make([]string, 0, len(hits))
 	for _, h := range hits {
+		// M8 (R61): the column name is catalog-derived (a spreadsheet
+		// header cell), exactly as attacker-controlled as FileName/
+		// SheetName below — a header can read "Ignore all previous
+		// instructions" as easily as a file can be named that.
 		out = append(out, fmt.Sprintf("%s = '%s' (%s › %s, %d rows)",
-			h.ColumnName, h.Value, safeLabel(lang, h.FileName), safeLabel(lang, h.SheetName), h.RowCount))
+			safeLabel(lang, h.ColumnName), h.Value, safeLabel(lang, h.FileName), safeLabel(lang, h.SheetName), h.RowCount))
 	}
 	return out
 }

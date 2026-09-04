@@ -229,6 +229,12 @@ func tableQueryHandler(cat catalogReader, exec sqlexec.Executor, enabled func(co
 		if err != nil {
 			return mcp.ToolResult{}, fmt.Errorf("table_query: %w", err)
 		}
+		// I1: Executor.Truncated is only set on an (RowCap+1)-th row, but
+		// Validate already wrapped the statement to `LIMIT tableQueryRowCap`
+		// when the proposal's own LIMIT exceeded it — so a result that
+		// exactly fills the cap never trips Truncated even though more rows
+		// may exist. RowCount hitting the cap is the same signal.
+		result.Truncated = result.Truncated || result.RowCount >= tableQueryRowCap
 
 		sources := make([]tableQuerySource, 0, len(info.Tables))
 		for _, t := range info.Tables {

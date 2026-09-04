@@ -3,6 +3,8 @@ package sqlcheck
 import (
 	"strings"
 	"testing"
+
+	"github.com/cockroachdb/cockroachdb-parser/pkg/sql/types"
 )
 
 var allow = map[string]bool{"tabular.sheet_ab12_0_0": true, "tabular.sheet_ab12_0_1": true}
@@ -50,7 +52,6 @@ func TestValidateAcceptsRouterShapes(t *testing.T) {
 		{"bare-tablename-qualified-column", `SELECT "sheet_ab12_0_0"."id" FROM tabular."sheet_ab12_0_0"`, 1, true, nil},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			exec, info, err := Validate(c.sql, allow, 200)
@@ -304,6 +305,36 @@ func TestValidateRejectsRegTypeArrays(t *testing.T) {
 		if _, _, err := Validate(sql, allow, 200); err != nil {
 			t.Errorf("%s: rejected %q: %v", name, sql, err)
 		}
+	}
+}
+
+// TestFindRegTypeDepthGuardFailsClosed is M7: the parser never produces a
+// type graph deep enough to trip findRegType's depth guard (comment says
+// "single-digit" nesting), so this cannot be reached through Validate/SQL
+// text — there is no SQL surface that nests an ARRAY type 17+ deep. The
+// guard is exercised directly instead, building the nested *types.T by hand
+// via repeated types.MakeArray (which the package doc for MakeArray says
+// accepts an ArrayFamily element, i.e. arrays of arrays are legal to
+// construct). Before the fix, hitting the guard returned "" — the same
+// value as "no reg* type found", i.e. "allow the cast" — so a pathological
+// type deep enough to hit it would have sailed through checkCastType
+// unaudited; the fix returns a non-empty sentinel so it fails closed.
+func TestFindRegTypeDepthGuardFailsClosed(t *testing.T) {
+	t.Parallel()
+	// 20 levels of ARRAY-of-ARRAY around a plain, non-reg base type: deep
+	// enough that findRegType's depth>16 guard fires before the recursion
+	// ever runs out of ArrayContents() to peel (which would otherwise
+	// legitimately return "" at the base type, proving nothing about the
+	// guard itself).
+	typ := types.Int
+	for i := 0; i < 20; i++ {
+		typ = types.MakeArray(typ)
+	}
+	if got := findRegType(typ, 0); got == "" {
+		t.Fatalf("findRegType at depth > 16 = %q, want a non-empty sentinel (fail closed)", got)
+	}
+	if err := checkCastType(typ); err == nil {
+		t.Fatalf("checkCastType accepted a type graph deep enough to trip the depth guard")
 	}
 }
 

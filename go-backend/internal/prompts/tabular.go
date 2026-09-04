@@ -209,6 +209,13 @@ func TabularRouterAddendum(lang string, sql string, columns []string, rows []map
 			return "NULL"
 		}
 		s := fmt.Sprintf("%v", v)
+		// I3: a cell's embedded newlines must not survive into the ≤ 20-row
+		// KV block — each row is one "- col: value; ..." line, and an
+		// unreplaced "\n" lets a cell fake a fresh line (e.g. a bogus
+		// "## RULE" heading) that reads as outside the data. Applied BEFORE
+		// the instruction check so the check itself sees the single-line
+		// text a human reader would.
+		s = newlineSafe(s)
 		if promptsafety.LooksLikeInstruction(s) {
 			return filtered
 		}
@@ -259,6 +266,11 @@ func TabularRouterAddendum(lang string, sql string, columns []string, rows []map
 	}
 
 	for _, src := range sources {
+		// I3: same newline hazard as renderCell above — a source label
+		// (file › sheet name) is catalog data, and an embedded newline
+		// would let it emit a second "line" the reader mistakes for
+		// content outside the source annotation.
+		src = newlineSafe(src)
 		if de {
 			b.WriteString("Quelle: " + src + "\n")
 		} else {
@@ -267,6 +279,18 @@ func TabularRouterAddendum(lang string, sql string, columns []string, rows []map
 	}
 
 	return b.String()
+}
+
+// newlineSafeReplacer collapses CR and LF to a single space. Shared by the
+// ≤ 20-row KV renderCell path and the source-label lines (I3): both are
+// single logical lines in the addendum, and an untouched "\r"/"\n" in
+// attacker-controlled cell or catalog data would let it forge a fake line
+// break the reader takes as structure rather than data. The markdown-table
+// path (> 20 rows) already handles this via escapeTableCell below.
+var newlineSafeReplacer = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ")
+
+func newlineSafe(s string) string {
+	return newlineSafeReplacer.Replace(s)
 }
 
 // escapeTableCell prepares one cell (a column name in the header row, or a

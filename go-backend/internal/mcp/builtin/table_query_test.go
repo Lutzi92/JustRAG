@@ -324,6 +324,37 @@ func TestTableQueryResultIncludesSource(t *testing.T) {
 	}
 }
 
+// TestTableQueryReportsTruncatedWhenRowCountHitsCap is I1: sqlexec.Result.
+// Truncated is only set by the executor on an (RowCap+1)-th row, but the
+// tool always validates the SQL down to LIMIT tableQueryRowCap (200) first
+// — so a result that exactly fills the cap looks complete (Truncated:
+// false, RowCount == 200) even though more rows may exist. The tool must
+// report truncated:true from the row count alone in that case.
+func TestTableQueryReportsTruncatedWhenRowCountHitsCap(t *testing.T) {
+	rows := make([]map[string]any, tableQueryRowCap)
+	for i := range rows {
+		rows[i] = map[string]any{"x": i}
+	}
+	cat := fakeCatalog{entries: []tableEntry{{
+		TableName: "tabular.sheet_abc_0", SheetName: "Q1", FileName: "sales.csv", RowCount: 1000,
+	}}}
+	fe := &fakeExecutor{result: &sqlexec.Result{
+		Columns: []string{"x"}, Rows: rows, RowCount: tableQueryRowCap, Truncated: false,
+	}}
+	tool := newTableQueryWithDeps(cat, fe, alwaysEnabled)
+	argsJSON, _ := json.Marshal(map[string]any{"kb_id": "k", "sql": "SELECT x FROM tabular.sheet_abc_0"})
+	res, err := tool.Handler.Invoke(context.Background(), argsJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(res.Structured), `"truncated":true`) {
+		t.Fatalf("expected structured result to report truncated:true, got %s", res.Structured)
+	}
+	if truncated, _ := res.Meta["truncated"].(bool); !truncated {
+		t.Fatalf("expected Meta[truncated] = true, got %+v", res.Meta)
+	}
+}
+
 // TestTableQueryRejectsPgReadFile pins that the AST validator's function
 // allowlist — not just the regex/keyword denylist — rejects a
 // non-allowlisted function call. Mutation coverage: skipping

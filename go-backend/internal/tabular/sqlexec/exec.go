@@ -1,8 +1,12 @@
-// Package sqlexec runs validated router SQL against the main Postgres pool
-// in a time-boxed, read-only transaction, with row and byte caps on the
-// returned result. It trusts the caller (sqlcheck.Validate) to have already
-// checked the statement shape; this package's only defence-in-depth is the
-// transaction's access mode and statement_timeout.
+// Package sqlexec runs validated router SQL in a time-boxed, read-only
+// transaction, with row and byte caps on the returned result. In production
+// the pool it wraps is the dedicated SELECT-only pool (JUSTRAG_DB_URL_READONLY),
+// the same boundary the sql_query/table_query MCP tools use — never the
+// main read/write pool; cmd/eval is the sole exception, wrapping the main
+// pool because it has no read-only DSN available (R30). It trusts the
+// caller (sqlcheck.Validate) to have already checked the statement shape;
+// this package's own defence-in-depth is the transaction's access mode and
+// statement_timeout.
 package sqlexec
 
 import (

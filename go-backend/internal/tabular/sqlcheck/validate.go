@@ -347,9 +347,19 @@ func checkCastType(t tree.ResolvableTypeReference) error {
 // by peeling ARRAY wrappers and descending into tuple members, or "" when
 // there is none. depth is a guard against a pathological or cyclic type
 // graph; the nesting a parser-produced type can carry is single-digit.
+//
+// M7: depth > 16 must NOT return "" — "" is checkCastType's "no reg* type
+// found, allow the cast" signal, so returning it here would let a type
+// graph deep enough to hit the guard sail through unaudited (the one case
+// this guard exists to stop). A depth this deep never comes from the
+// parser, so hitting it at all is itself the suspicious case; fail closed
+// with a non-empty sentinel instead.
 func findRegType(t *types.T, depth int) string {
-	if t == nil || depth > 16 {
+	if t == nil {
 		return ""
+	}
+	if depth > 16 {
+		return "<depth-exceeded>"
 	}
 	if name := t.PGName(); strings.HasPrefix(strings.ToLower(name), "reg") {
 		return name
