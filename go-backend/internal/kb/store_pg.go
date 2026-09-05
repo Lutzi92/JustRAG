@@ -2,6 +2,7 @@ package kb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/pgxutil"
 	"github.com/justrag/go-backend/internal/store"
+	"github.com/justrag/go-backend/internal/tabular"
 )
 
 // PGStore is a PostgreSQL-backed implementation of kb.Store and
@@ -583,6 +585,56 @@ func (s *PGStore) ListFiles(ctx context.Context, kbID string, limit, offset int)
 		}
 	}
 	return result, rows[0].TotalCount, nil
+}
+
+// fileRefRow is an internal struct with db tags for scanning GetFileByID.
+type fileRefRow struct {
+	ID   string `db:"id"`
+	KbID string `db:"kb_id"`
+}
+
+// GetFileByID returns the (id, kb_id) of fileID, or (nil, nil) when no such
+// file exists — see the Store interface doc comment for why this mirrors
+// internal/files.PGStore.GetFileByID's not-found convention rather than
+// store.ErrNotFound.
+func (s *PGStore) GetFileByID(ctx context.Context, fileID string) (*FileRef, error) {
+	row, err := pgxutil.QueryOne[fileRefRow](ctx, s.pool,
+		`SELECT id::text, kb_id::text FROM files WHERE id = $1`, fileID)
+	if err != nil {
+		return nil, fmt.Errorf("GetFileByID: %w", err)
+	}
+	if row == nil {
+		return nil, nil
+	}
+	return &FileRef{ID: row.ID, KbID: row.KbID}, nil
+}
+
+// fileParseReportRow is an internal struct with db tags for scanning
+// GetFileParseReport.
+type fileParseReportRow struct {
+	ParseReport json.RawMessage `db:"parse_report"`
+}
+
+// GetFileParseReport returns the file's persisted spreadsheet ingest report
+// (files.parse_report), nil when that column is NULL, or store.ErrNotFound
+// when no file with that id exists.
+func (s *PGStore) GetFileParseReport(ctx context.Context, fileID string) (json.RawMessage, error) {
+	row, err := pgxutil.QueryOne[fileParseReportRow](ctx, s.pool,
+		`SELECT parse_report FROM files WHERE id = $1`, fileID)
+	if err != nil {
+		return nil, fmt.Errorf("GetFileParseReport: %w", err)
+	}
+	if row == nil {
+		return nil, fmt.Errorf("GetFileParseReport: %w", store.ErrNotFound)
+	}
+	return row.ParseReport, nil
+}
+
+// ListTabularCatalogByFile returns the tabular_catalog rows for fileID
+// (empty for a non-spreadsheet file). Delegates to tabular.Catalog, which
+// owns the join with files for the file-name column.
+func (s *PGStore) ListTabularCatalogByFile(ctx context.Context, fileID string) ([]tabular.CatalogEntry, error) {
+	return tabular.NewCatalog(s.pool).ListByFile(ctx, fileID)
 }
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ import (
 
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/httputil"
+	"github.com/justrag/go-backend/internal/tabular"
 )
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,29 @@ type Store interface {
 	ListGlobalKnowledgeBases(ctx context.Context, userID string, isAdmin bool) ([]KBRow, error)
 	GetKnowledgeBase(ctx context.Context, kbID, userID string) (*KBRow, error)
 	CreateKnowledgeBase(ctx context.Context, name string, description *string, userID string, systemPrompt *string) (*KBRow, error)
+
+	// GetFileByID returns the (id, kb_id) of fileID, or (nil, nil) when no
+	// such file exists — mirrors internal/files.PGStore.GetFileByID's
+	// not-found convention. GetFileTabular uses it to reject a file id that
+	// belongs to a different KB than {id} in the route (kbViewChain only
+	// proves the caller holds view on {id}, not that {fileId} is one of its
+	// files).
+	GetFileByID(ctx context.Context, fileID string) (*FileRef, error)
+	// GetFileParseReport returns the file's persisted spreadsheet ingest
+	// report (files.parse_report), nil when that column is NULL — a
+	// non-spreadsheet file, or one not yet materialised. Returns
+	// store.ErrNotFound when no file with that id exists.
+	GetFileParseReport(ctx context.Context, fileID string) (json.RawMessage, error)
+	// ListTabularCatalogByFile returns the tabular_catalog rows for fileID
+	// (empty for a non-spreadsheet file).
+	ListTabularCatalogByFile(ctx context.Context, fileID string) ([]tabular.CatalogEntry, error)
+}
+
+// FileRef is the minimal file/KB-ownership pair GetFileTabular's cross-KB
+// guard needs.
+type FileRef struct {
+	ID   string
+	KbID string
 }
 
 // ---------------------------------------------------------------------------

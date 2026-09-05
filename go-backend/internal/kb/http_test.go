@@ -11,6 +11,7 @@ import (
 
 	"github.com/justrag/go-backend/internal/auth"
 	"github.com/justrag/go-backend/internal/kb"
+	"github.com/justrag/go-backend/internal/tabular"
 )
 
 // ---------------------------------------------------------------------------
@@ -28,6 +29,15 @@ type mockStore struct {
 	gotIsAdmin bool
 	// gotKBID records the id GetKnowledgeBase was called with.
 	gotKBID string
+
+	// GetFileTabular fakes — see http_tabular_test.go.
+	fileRef        *kb.FileRef
+	fileRefErr     error
+	parseReport    json.RawMessage
+	parseReportErr error
+	catalogEntries []tabular.CatalogEntry
+	catalogErr     error
+	gotFileID      string
 }
 
 func (m *mockStore) ListKnowledgeBases(_ context.Context, _ string, _, _ int) ([]kb.KBRow, error) {
@@ -46,6 +56,19 @@ func (m *mockStore) GetKnowledgeBase(_ context.Context, kbID, _ string) (*kb.KBR
 
 func (m *mockStore) CreateKnowledgeBase(_ context.Context, _ string, _ *string, _ string, _ *string) (*kb.KBRow, error) {
 	return m.kb, m.err
+}
+
+func (m *mockStore) GetFileByID(_ context.Context, fileID string) (*kb.FileRef, error) {
+	m.gotFileID = fileID
+	return m.fileRef, m.fileRefErr
+}
+
+func (m *mockStore) GetFileParseReport(_ context.Context, _ string) (json.RawMessage, error) {
+	return m.parseReport, m.parseReportErr
+}
+
+func (m *mockStore) ListTabularCatalogByFile(_ context.Context, _ string) ([]tabular.CatalogEntry, error) {
+	return m.catalogEntries, m.catalogErr
 }
 
 // ---------------------------------------------------------------------------
