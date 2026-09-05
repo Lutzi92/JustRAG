@@ -53,6 +53,15 @@ func TestCheckRegression_ExactlyAtThresholdIsNotARegression(t *testing.T) {
 	}
 }
 
+func TestCheckRegression_MRRExactlyAtThresholdIsNotARegression(t *testing.T) {
+	base := mkReport(0.90, 0.90, nil)
+	cand := mkReport(0.90, 0.87, nil) // recall unchanged; MRR exactly -3pp
+	regs := CheckRegression(base, cand, RegressionThresholds{RecallPP: 2, MRRPP: 3})
+	if len(regs) != 0 {
+		t.Fatalf("MRR exactly at threshold must not flag, got %+v", regs)
+	}
+}
+
 func TestCheckRegression_RouteOnlyInCandidateIsIgnored(t *testing.T) {
 	base := mkReport(0.90, 0.90, nil)
 	cand := mkReport(0.90, 0.90, map[string][2]float64{"lookup": {0.10, 0.10}})
@@ -74,6 +83,18 @@ func TestWriteDeltaTable_ContainsRoutesAndMarksRegressions(t *testing.T) {
 		if !strings.Contains(out, needle) {
 			t.Errorf("delta table missing %q:\n%s", needle, out)
 		}
+	}
+}
+
+func TestRoundPP_AbsorbsFloat64Noise(t *testing.T) {
+	// b, c as typed float64 variables (not untyped constants, which the
+	// compiler would fold in arbitrary precision) reproduce the real
+	// runtime noise: (c-b)*100 lands on -2.0000000000000018, not the
+	// exact -2.0 a naive reading of the arithmetic suggests. roundPP must
+	// collapse that noise away.
+	var b, c float64 = 0.90, 0.88
+	if got := roundPP((c - b) * 100); got != -2 {
+		t.Fatalf("roundPP((c-b)*100) = %v, want -2", got)
 	}
 }
 
