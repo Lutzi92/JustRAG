@@ -1105,7 +1105,7 @@ func RecordKeywordArmMode(mode string) {
 var bm25ModeFallbackTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name:        "rag_bm25_mode_fallback_total",
-		Help:        "Per-reason counter for a per-query fallback from bm25 scoring mode back to ts_rank. reason=no_stats is the only outcome today: the KB's dimension has no usable bm25_kb_stats_<dim> row yet (new KB, or the refresher hasn't run since ingestion).",
+		Help:        "Per-reason counter for a per-query fallback from bm25 scoring mode back to ts_rank. reason=no_stats: the KB's dimension has no usable bm25_kb_stats_<dim> row yet (new KB, or the refresher hasn't run since ingestion). reason=no_simple_stats: the 'simple' arm specifically has no usable stats row (e.g. backfilled without a subsequent refresh) while 'lang' does.",
 		ConstLabels: commonLabels,
 	},
 	[]string{"reason"},

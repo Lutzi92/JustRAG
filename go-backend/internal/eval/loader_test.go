@@ -201,6 +201,47 @@ func TestParseGoldenSetContent_DuplicateID(t *testing.T) {
 	}
 }
 
+// TestParseGoldenSetContent_RejectsTurns (finding F3): the DB/admin path
+// must reject a multi-turn row outright rather than silently dropping the
+// turns and running an empty top-level question, since ExpandTurns is
+// never called on this path (runner_inproc.go, admin eval handlers).
+func TestParseGoldenSetContent_RejectsTurns(t *testing.T) {
+	raw := json.RawMessage(`[
+		{"id":"conv1","kb_id":"kb-1","language":"en","turns":[
+			{"question":"Who leads the project?","kind":"corpus","must_cite_file_names":["f1"]},
+			{"question":"And who leads it?","kind":"pronoun_ref","must_cite_file_names":["f1"]}
+		]}
+	]`)
+	_, err := ParseGoldenSetContent(raw)
+	if err == nil {
+		t.Fatal("expected error for a multi-turn row, got nil")
+	}
+	if !strings.Contains(err.Error(), "supported only by cmd/eval") {
+		t.Errorf("expected cmd/eval-only rejection message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "conv1") {
+		t.Errorf("expected the offending question id in the error, got: %v", err)
+	}
+}
+
+// TestParseGoldenSetJSONL_StillAcceptsTurns locks in that the file-upload
+// path (what cmd/eval itself reads) is unaffected by the DB-path rejection
+// above — cmd/eval is the only caller of ExpandTurns and must keep working.
+func TestParseGoldenSetJSONL_StillAcceptsTurns(t *testing.T) {
+	content := `{"id":"conv1","kb_id":"kb-1","language":"en","turns":[{"question":"Who leads the project?","kind":"corpus","must_cite_file_names":["f1"]},{"question":"And who leads it?","kind":"pronoun_ref","must_cite_file_names":["f1"]}]}
+`
+	qs, err := ParseGoldenSetJSONL(strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(qs) != 1 {
+		t.Fatalf("expected 1 question, got %d", len(qs))
+	}
+	if len(qs[0].Turns) != 2 {
+		t.Fatalf("expected 2 turns, got %d", len(qs[0].Turns))
+	}
+}
+
 func TestParseGoldenSetContent_InvalidJSON(t *testing.T) {
 	_, err := ParseGoldenSetContent(json.RawMessage(`not-json`))
 	if err == nil {

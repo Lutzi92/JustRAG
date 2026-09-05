@@ -76,6 +76,12 @@ work cleanly end to end.
 | (b) on   | 0.704 | 0.801 | 0.807 | 0.691 | 0.774 | 0.800 | 1.000 |
 | (c) off2 | 0.542 | 0.648 | 0.651 | 0.507 | 0.600 | 0.800 | 1.000 |
 
+The six recency-listing questions (`cert-r01`..`cert-r06`) carry up to 26
+must-cite files each against a k=10 retrieval cap, so their own recall is
+structurally bounded well below 1.0 regardless of retrieval quality — this
+caps the overall-recall figures above too, since those six questions are
+part of the n=25 overall average.
+
 `enumeration` (n=3, the cross-advisory questions) is identical across all
 three runs — those don't involve a NEU/UPDATE tie so the recency prior has
 nothing to break there, and the run-to-run noise happens to land on

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/justrag/go-backend/internal/admineval"
 	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
@@ -497,12 +498,14 @@ func RunWorker(cfg *config.Config) error {
 	// deferred DB-pool teardown below cannot race in-flight queries.
 	var stopMaintenance func()
 	if cfg.WorkerMaintenance {
+		bm25Refresher := vector.NewBM25StatsRefresher(db.Vector, db.Main)
+		bm25Refresher.ModeEnabled = bm25ScoringModeEnabledAnywhere(db.Main)
 		stopMaintenance = worker.StartMaintenance(ctx, worker.MaintenanceConfig{
 			MainDB:               db.Main,
 			VectorDB:             db.Vector,
 			StuckFileTimeout:     cfg.StuckFileTimeout,
 			TabularOrphanSweeper: tabular.NewOrphanSweeper(db.Main),
-			BM25StatsRefresher:   vector.NewBM25StatsRefresher(db.Vector, db.Main),
+			BM25StatsRefresher:   bm25Refresher,
 		})
 	}
 	defer func() {
@@ -582,6 +585,39 @@ func RunWorker(cfg *config.Config) error {
 
 	slog.Info("worker stopped gracefully")
 	return nil
+}
+
+// bm25ScoringModeEnabledAnywhere returns a vector.BM25StatsRefresher.
+// ModeEnabled closure (finding F1): the BM25 stats sweep is pure overhead —
+// ts_stat() over every chunk table, twice per KB per tick — in a deployment
+// where every KB stays on the default ts_rank scoring mode, since nothing
+// ever reads the bm25_kb_stats_<dim>/bm25_term_stats_<dim> rows it produces.
+// Returns true (run the sweep) when either the global site_config
+// bm25_scoring_mode is "bm25", or at least one KB overrides it to "bm25" in
+// kb_site_configs. Fails open on a read error (logs and returns true)
+// rather than silently going stats-blind for a KB that just flipped the
+// mode.
+func bm25ScoringModeEnabledAnywhere(mainDB *pgxpool.Pool) func(ctx context.Context) bool {
+	return func(ctx context.Context) bool {
+		if mainDB == nil {
+			return false
+		}
+		global, err := siteconfig.NewStore(mainDB).GetSiteConfigValue(ctx, "bm25_scoring_mode")
+		if err != nil {
+			slog.Error("bm25.mode_enabled_check.global_read_failed", "error", err)
+			return true
+		}
+		if global != nil && *global == "bm25" {
+			return true
+		}
+		var overridden bool
+		const q = `SELECT EXISTS(SELECT 1 FROM kb_site_configs WHERE key = 'bm25_scoring_mode' AND value = 'bm25')`
+		if err := mainDB.QueryRow(ctx, q).Scan(&overridden); err != nil {
+			slog.Error("bm25.mode_enabled_check.override_read_failed", "error", err)
+			return true
+		}
+		return overridden
+	}
 }
 
 // siteConfigReaderForDocling is the minimum interface buildDoclingClient

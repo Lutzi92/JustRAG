@@ -1,6 +1,8 @@
 package vector
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -91,5 +93,99 @@ func TestBuildTermStatsRefreshSQL(t *testing.T) {
 	bareSQL := buildTermStatsRefreshSQL(kbID, 1536, "lang")
 	if !strings.Contains(bareSQL, `FROM "document_chunks" WHERE`) {
 		t.Errorf("1536-dim SQL should use the bare table name, got %q", bareSQL)
+	}
+}
+
+// TestSweep_ModeDisabled_SkipsRefreshEntirely (finding F1): when
+// ModeEnabled is wired and reports false, Sweep must return (0, nil)
+// without touching either pool. Uses a nil vectorDB/mainDB deliberately —
+// if the mode gate did not short-circuit before the pool-nil check (or
+// were bypassed), this would still trivially return 0 via that separate
+// guard, so the assertion that matters is that ModeEnabled was actually
+// invoked. Mutation: deleting the ModeEnabled check from Sweep still
+// passes the refreshed==0 assertion (via the vectorDB nil guard) but fails
+// the "was invoked" assertion.
+func TestSweep_ModeDisabled_SkipsRefreshEntirely(t *testing.T) {
+	called := false
+	r := &BM25StatsRefresher{
+		ModeEnabled: func(ctx context.Context) bool {
+			called = true
+			return false
+		},
+	}
+	refreshed, err := r.Sweep(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("Sweep err = %v, want nil", err)
+	}
+	if refreshed != 0 {
+		t.Fatalf("refreshed = %d, want 0", refreshed)
+	}
+	if !called {
+		t.Fatal("ModeEnabled was never invoked — Sweep must check it before returning")
+	}
+}
+
+// TestSweep_NilModeEnabled_DoesNotPanic locks in that a nil ModeEnabled
+// (the common case — most callers don't wire a mode gate) behaves exactly
+// like before: Sweep proceeds to its normal nil-pool short-circuit rather
+// than panicking on a nil func call.
+func TestSweep_NilModeEnabled_DoesNotPanic(t *testing.T) {
+	r := &BM25StatsRefresher{}
+	refreshed, err := r.Sweep(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("Sweep err = %v, want nil", err)
+	}
+	if refreshed != 0 {
+		t.Fatalf("refreshed = %d, want 0 (no vectorDB configured)", refreshed)
+	}
+}
+
+// TestRunBM25Sweep_CountsAttemptsNotSuccesses (finding F2): two stale
+// targets, the first refresh fails, limit=1 -> exactly one ATTEMPT is
+// made (not one success then a retry into the second target). Mutation:
+// reverting the budget check to `if limit > 0 && successes >= limit`
+// (counting only non-error refreshes) would let this loop attempt the
+// second target too, since the first "succeeded" 0 times — that turns the
+// attemptedKBs-length and calls-len assertions below to 2, failing this test.
+func TestRunBM25Sweep_CountsAttemptsNotSuccesses(t *testing.T) {
+	targets := []bm25SweepTarget{
+		{kbID: uuid.MustParse("11111111-1111-1111-1111-111111111111"), dim: 768},
+		{kbID: uuid.MustParse("22222222-2222-2222-2222-222222222222"), dim: 768},
+	}
+	var calls []uuid.UUID
+	refreshFn := func(ctx context.Context, kbID uuid.UUID, dim int) error {
+		calls = append(calls, kbID)
+		return errors.New("boom: refresh always fails in this test")
+	}
+
+	attempted := runBM25Sweep(context.Background(), targets, 1, refreshFn)
+
+	if attempted != 1 {
+		t.Fatalf("attempted = %d, want 1", attempted)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("refreshFn called %d times, want exactly 1", len(calls))
+	}
+	if calls[0] != targets[0].kbID {
+		t.Fatalf("wrong kb attempted first: got %s, want %s", calls[0], targets[0].kbID)
+	}
+}
+
+// TestRunBM25Sweep_UnlimitedAttemptsEveryTarget locks in the limit=0
+// ("unlimited") convention runBM25Sweep shares with Sweep.
+func TestRunBM25Sweep_UnlimitedAttemptsEveryTarget(t *testing.T) {
+	targets := []bm25SweepTarget{
+		{kbID: uuid.MustParse("11111111-1111-1111-1111-111111111111"), dim: 768},
+		{kbID: uuid.MustParse("22222222-2222-2222-2222-222222222222"), dim: 4096},
+		{kbID: uuid.MustParse("33333333-3333-3333-3333-333333333333"), dim: 4096},
+	}
+	calls := 0
+	refreshFn := func(ctx context.Context, kbID uuid.UUID, dim int) error {
+		calls++
+		return nil
+	}
+	attempted := runBM25Sweep(context.Background(), targets, 0, refreshFn)
+	if attempted != len(targets) || calls != len(targets) {
+		t.Fatalf("attempted=%d calls=%d, want %d each", attempted, calls, len(targets))
 	}
 }

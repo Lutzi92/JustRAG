@@ -13,6 +13,15 @@ import (
 // into a slice of Questions. Applies the same validation as LoadGoldenSet.
 // Returns an error with a 1-based index into the array when any question fails
 // validation.
+//
+// Multi-turn rows (turns) are rejected here: ExpandTurns — the only code
+// that replays a conversation row into per-turn Questions with History —
+// is called exclusively by cmd/eval (see cmd/eval/main.go). The DB/admin
+// path this function backs (runner_inproc.go, the admin eval handlers)
+// never calls ExpandTurns, so a turns row saved through the admin UI would
+// otherwise run silently as an empty top-level question instead of the
+// authored conversation. ParseGoldenSetJSONL (the file-upload path
+// cmd/eval itself reads through) keeps accepting turns rows.
 func ParseGoldenSetContent(raw json.RawMessage) ([]Question, error) {
 	var qs []Question
 	if err := json.Unmarshal(raw, &qs); err != nil {
@@ -20,6 +29,9 @@ func ParseGoldenSetContent(raw json.RawMessage) ([]Question, error) {
 	}
 	seen := make(map[string]int, len(qs))
 	for i, q := range qs {
+		if len(q.Turns) > 0 {
+			return nil, fmt.Errorf("question %q: multi-turn rows (turns) are supported only by cmd/eval; the in-app eval runner cannot replay conversations", q.ID)
+		}
 		if err := validateQuestion(q); err != nil {
 			return nil, fmt.Errorf("validate question %d: %w", i+1, err)
 		}

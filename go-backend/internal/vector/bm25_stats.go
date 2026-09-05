@@ -90,7 +90,7 @@ func EnsureBM25StatsTables(ctx context.Context, exec ChunkTableExec, dimensions 
 	termSQL := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS "%s" (
 			kb_id     uuid NOT NULL,
-			arm       text NOT NULL,
+			arm       text NOT NULL CHECK (arm IN ('lang','simple')),
 			lexeme    text NOT NULL,
 			doc_count integer NOT NULL,
 			PRIMARY KEY (kb_id, arm, lexeme)
@@ -141,6 +141,15 @@ type BM25StatsRefresher struct {
 	// StaleMaxAge overrides the default staleness threshold (W2-R5's 24h)
 	// used by Sweep when calling StaleKBs. Zero uses defaultBM25StatsMaxAge.
 	StaleMaxAge time.Duration
+
+	// ModeEnabled optionally gates Sweep on whether BM25 scoring mode is
+	// enabled anywhere (globally or per-KB): the refresh loop is pure
+	// overhead — ts_stat() over every chunk table, twice per KB per tick —
+	// for a deployment that never reads these stats because every KB stays
+	// on ts_rank. Nil (the default) always runs, which keeps unit tests
+	// that don't wire a mode check simple. Non-nil and false makes Sweep
+	// return early (0, nil) with a Debug log instead of touching the DB.
+	ModeEnabled func(ctx context.Context) bool
 }
 
 // NewBM25StatsRefresher creates a BM25StatsRefresher backed by the given
@@ -173,6 +182,16 @@ func (r *BM25StatsRefresher) RefreshKB(ctx context.Context, kbID uuid.UUID, dim 
 		return fmt.Errorf("bm25 refresh kb=%s dim=%d: begin tx: %w", kbID, dim, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Relax the pooled connection's default statement_timeout (mirrors
+	// EnsureBM25StatsTables, which uses 0/unlimited for the one-time DDL):
+	// ts_stat() over a large KB's tsvector column can legitimately run
+	// longer than the query-path default, and this refresh is a background
+	// maintenance sweep, not a user-facing request. 10min (not 0/unlimited)
+	// still bounds a single KB from wedging the sweep goroutine forever.
+	if _, err := tx.Exec(ctx, `SET LOCAL statement_timeout = '10min'`); err != nil {
+		return fmt.Errorf("bm25 refresh kb=%s dim=%d: relax statement_timeout: %w", kbID, dim, err)
+	}
 
 	for _, arm := range []string{bm25ArmLang, bm25ArmSimple} {
 		start := time.Now()
@@ -277,6 +296,10 @@ func (r *BM25StatsRefresher) StaleKBs(ctx context.Context, dim int, maxAge time.
 		return nil, fmt.Errorf("bm25 stale kbs: invalid table name for dim %d", dim)
 	}
 
+	// ORDER BY newest DESC so a sweep whose stale backlog exceeds its
+	// per-tick budget (Sweep's limit) rotates deterministically toward the
+	// most recently changed KBs first, rather than an arbitrary/stable-scan
+	// order that could starve a busy KB behind a large pile of old ones.
 	query := fmt.Sprintf(`
 		SELECT c.kb_id
 		FROM (SELECT kb_id, max(created_at) AS newest FROM "%s" GROUP BY kb_id) c
@@ -284,6 +307,7 @@ func (r *BM25StatsRefresher) StaleKBs(ctx context.Context, dim int, maxAge time.
 		WHERE s.kb_id IS NULL
 		   OR s.refreshed_at < c.newest
 		   OR s.refreshed_at < now() - ($1 * interval '1 second')
+		ORDER BY c.newest DESC
 	`, chunkTable, kbStatsTable, bm25ArmLang)
 
 	rows, err := r.vectorDB.Query(ctx, query, maxAge.Seconds())
@@ -345,9 +369,23 @@ func (r *BM25StatsRefresher) StaleKBs(ctx context.Context, dim int, maxAge time.
 // Sweep refreshes up to limit stale KBs (W2-R5 staleness, StaleMaxAge
 // threshold) across every dim reported by ListChunkTableDimensions.
 // Per-KB errors are logged and skipped so one bad KB can't stall the
-// sweep; the returned count is how many KBs were actually refreshed.
+// sweep; the returned count is how many refresh ATTEMPTS were made
+// (fix round 2: previously counted only successes, so N permanently
+// failing KBs could retry unboundedly within one call instead of being
+// capped by limit like everything else).
+//
+// When ModeEnabled is set and reports false, Sweep returns (0, nil)
+// immediately without touching either pool — the refresh loop is pure
+// overhead for a deployment where no KB reads these stats.
 func (r *BM25StatsRefresher) Sweep(ctx context.Context, limit int) (refreshed int, err error) {
-	if r == nil || r.vectorDB == nil {
+	if r == nil {
+		return 0, nil
+	}
+	if r.ModeEnabled != nil && !r.ModeEnabled(ctx) {
+		slog.Debug("bm25.stats.sweep_skipped_mode_disabled")
+		return 0, nil
+	}
+	if r.vectorDB == nil {
 		return 0, nil
 	}
 	maxAge := r.StaleMaxAge
@@ -369,18 +407,44 @@ func (r *BM25StatsRefresher) Sweep(ctx context.Context, limit int) (refreshed in
 			slog.Error("bm25.stats.sweep_list_failed", "dim", dim, "error", serr)
 			continue
 		}
-		for _, kbID := range stale {
-			if limit > 0 && refreshed >= limit {
-				break
-			}
-			if rerr := r.RefreshKB(ctx, kbID, dim); rerr != nil {
-				slog.Error("bm25.stats.sweep_refresh_failed", "kb_id", kbID.String(), "dim", dim, "error", rerr)
-				continue
-			}
-			refreshed++
+		targets := make([]bm25SweepTarget, len(stale))
+		for i, kbID := range stale {
+			targets[i] = bm25SweepTarget{kbID: kbID, dim: dim}
 		}
+		remaining := 0 // 0 = unlimited, matching runBM25Sweep's convention
+		if limit > 0 {
+			remaining = limit - refreshed
+		}
+		refreshed += runBM25Sweep(ctx, targets, remaining, r.RefreshKB)
 	}
 	return refreshed, nil
+}
+
+// bm25SweepTarget pairs a stale KB with the dim its stats live under —
+// runBM25Sweep's flat unit of work.
+type bm25SweepTarget struct {
+	kbID uuid.UUID
+	dim  int
+}
+
+// runBM25Sweep drives the budget-counted refresh loop over targets,
+// attempting up to limit (0 = unlimited) targets regardless of per-attempt
+// success or failure, so a backlog of permanently failing KBs cannot
+// overrun the caller's budget by retrying past it within one call.
+// refreshFn is injected (rather than calling r.RefreshKB directly) so this
+// loop is unit-testable without a live DB. Returns the number of attempts
+// made (successful or not).
+func runBM25Sweep(ctx context.Context, targets []bm25SweepTarget, limit int, refreshFn func(ctx context.Context, kbID uuid.UUID, dim int) error) (attempted int) {
+	for _, target := range targets {
+		if limit > 0 && attempted >= limit {
+			break
+		}
+		attempted++
+		if err := refreshFn(ctx, target.kbID, target.dim); err != nil {
+			slog.Error("bm25.stats.sweep_refresh_failed", "kb_id", target.kbID.String(), "dim", target.dim, "error", err)
+		}
+	}
+	return attempted
 }
 
 // DeleteBM25StatsForKB removes every BM25 stats row (both tables, both

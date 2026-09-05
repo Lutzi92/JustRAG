@@ -28,9 +28,10 @@ type ProductionContextAdapter struct {
 
 	// recencyLister backs the deterministic recency-listing path (Wave 2
 	// Task 8: dated CERT fixture). Optional — nil (the default) reproduces
-	// the pre-Task-8 pipeline exactly (no window-scoped retrieval, no
-	// listing addendum, no CurrentDateLine), which is what a
-	// retrieval-only ablation wants.
+	// the pre-Task-8 pipeline exactly: no window-scoped retrieval, no
+	// listing addendum. (CurrentDateLine itself is set unconditionally by
+	// buildParams regardless of this option — see WithRecencyLister.) This
+	// is what a retrieval-only ablation wants.
 	recencyLister chat.RecencyLister
 
 	// cache stores the final ChatContext per question so judge-mode can
@@ -55,13 +56,14 @@ func WithTabularRouter(r *chat.TabularRouter) ProductionAdapterOption {
 // (recencylister.New in production wiring / cmd/eval) so a
 // --production-context run exercises the same "what is new / recently
 // added" path production serves: window-scoped retrieval plus a complete
-// file-listing system-prompt addendum for recency-listing queries. Also
-// makes SearchWithQuery set CurrentDateLine, since the listing addendum's
-// window language ("since 2026-08-30") is meaningless without the model
-// knowing today's date. Without this option, a --production-context run
-// reproduces the pre-Task-8 pipeline exactly (no window scoping, no
-// listing addendum, no CurrentDateLine) — the recency-listing mechanism
-// stays entirely opt-in for eval.
+// file-listing system-prompt addendum for recency-listing queries. Without
+// this option, a --production-context run reproduces the pre-Task-8
+// pipeline exactly (no window scoping, no listing addendum) — the
+// recency-listing mechanism stays entirely opt-in for eval. CurrentDateLine
+// is unaffected by this option: buildParams sets it unconditionally (via
+// chat.SystemPromptDateLine) on every --production-context run, with or
+// without a recencyLister, mirroring chat_date_awareness_enabled's
+// default-on behaviour in production.
 func WithRecencyLister(l chat.RecencyLister) ProductionAdapterOption {
 	return func(a *ProductionContextAdapter) { a.recencyLister = l }
 }

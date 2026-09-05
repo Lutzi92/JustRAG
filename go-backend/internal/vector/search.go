@@ -493,7 +493,8 @@ func (s *SearchService) CloneWithSiteConfigReader(r SiteConfigReader) *SearchSer
 		// clone path (nil reader = boost off, fail-open).
 		feedback: s.feedback,
 		// rerankDefaultNoticeOnce, kbTableCache, siteConfigCache, siteConfigSF,
-		// kbLangCachePtr, kbLangSF: zero values — fresh, independent caches.
+		// kbLangCachePtr, kbLangSF, bm25AvailCache: zero values — fresh,
+		// independent caches.
 		// NOTE for future fields: every new dependency field must be copied
 		// here explicitly or per-KB-override KBs silently lose it.
 	}
