@@ -404,11 +404,12 @@ type SearchService struct {
 
 	feedback FeedbackReader // nil when the feedback loop is unwired/disabled
 
-	// bm25AvailCache memoises bm25StatsAvailable() verdicts for
-	// bm25StatsCacheTTL. Defined in bm25_stats.go; declared here so the
-	// struct stays the canonical "things SearchService owns" view (same
-	// convention as kbTableCache above). Consulted by Search() and the
-	// KeywordSearch MCP tool to decide the per-query bm25→ts_rank fallback.
+	// bm25AvailCache memoises bm25ArmAvailability() verdicts (both arms)
+	// for bm25StatsCacheTTL. Defined in bm25_stats.go; declared here so
+	// the struct stays the canonical "things SearchService owns" view
+	// (same convention as kbTableCache above). Consulted by Search() and
+	// the KeywordSearch MCP tool, via bm25ModeDecision, to decide the
+	// per-query bm25→ts_rank fallback.
 	bm25AvailCache sync.Map
 }
 
@@ -795,30 +796,14 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	}
 	timer.Mark("embed")
 
-	// The keyword-arm decision is made exactly once per search and reused
-	// by every BM25 fan-out below (primary, multi-query, step-back,
-	// sub-queries) so the request can never run a mixed set of arms.
+	// The keyword-arm decision (simple arm + BM25 scoring mode, including
+	// its stats-availability fallback) is made exactly once per search
+	// and reused by every BM25 fan-out below (primary, multi-query,
+	// step-back, sub-queries) so the request can never run a mixed set
+	// of arms or scoring modes. Extracted to resolveKeywordArm to keep
+	// Search's own statement count down (funlen).
 	simpleArm := effectiveSimpleArm(ctx, siteCfg.BM25SimpleArmEnabled, opts.ForceBM25SimpleArm)
-
-	// Same "resolved exactly once" discipline for the BM25 scoring mode:
-	// a KB/dimension without usable stats yet falls back to ts_rank for
-	// this whole request rather than per keyword-arm fan-out, so a
-	// request never mixes ts_rank and bm25 scoring across its primary /
-	// multi-query / step-back / sub-query keyword searches.
-	keywordMode := siteCfg.BM25ScoringMode
-	if keywordMode == KeywordScoringBM25 && !s.bm25StatsAvailable(ctx, kbID, dimensions) {
-		keywordMode = KeywordScoringTsRank
-		observability.RecordBM25ModeFallback("no_stats")
-	}
-	observability.RecordKeywordArmMode(string(keywordMode))
-	keywordArm := keywordArmSettings{
-		SimpleArm:   simpleArm,
-		TieredBoost: siteCfg.BM25TieredBoost,
-		Mode:        keywordMode,
-		Dim:         dimensions,
-		K1:          siteCfg.BM25K1,
-		B:           siteCfg.BM25B,
-	}
+	keywordArm := s.resolveKeywordArm(ctx, siteCfg, kbID, dimensions, simpleArm)
 
 	// ------------------------------------------------------------------
 	// 5 & 6. Vector + keyword search
@@ -875,7 +860,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		"vector_docs", len(vectorResults), "vector_files", countFilesRaw(vectorResults),
 		"keyword_docs", len(keywordResults), "keyword_files", countFilesRaw(keywordResults),
 		"top_n_route", routeLabelFor(opts.QueryType),
-		"keyword_mode", string(keywordMode),
+		"keyword_mode", string(keywordArm.Mode),
 	)
 
 	// ------------------------------------------------------------------
@@ -1453,6 +1438,34 @@ func effectiveSimpleArm(ctx context.Context, cfg, force bool) bool {
 		logctx.From(ctx).Info("bm25 simple arm forced on for a KB with tabular data")
 	}
 	return cfg || force
+}
+
+// resolveKeywordArm resolves the BM25 scoring mode (including its
+// stats-availability fallback, per bm25ModeDecision) exactly once per
+// search and bundles it with the already-resolved simpleArm/tiered-boost/
+// k1/b settings into the keywordArmSettings every downstream keyword-arm
+// fan-out (runPrimarySearches, runMultiQueryBM25Searches) reuses unchanged.
+// Records both keyword-arm-mode metrics. Extracted out of Search itself
+// purely to keep that function's statement count under the funlen limit.
+func (s *SearchService) resolveKeywordArm(ctx context.Context, siteCfg KBVectorConfig, kbID string, dimensions int, simpleArm bool) keywordArmSettings {
+	keywordMode := siteCfg.BM25ScoringMode
+	if keywordMode == KeywordScoringBM25 {
+		langAvailable, simpleAvailable := s.bm25ArmAvailability(ctx, kbID, dimensions)
+		var fallbackReason string
+		keywordMode, fallbackReason = bm25ModeDecision(keywordMode, simpleArm, langAvailable, simpleAvailable)
+		if fallbackReason != "" {
+			observability.RecordBM25ModeFallback(fallbackReason)
+		}
+	}
+	observability.RecordKeywordArmMode(string(keywordMode))
+	return keywordArmSettings{
+		SimpleArm:   simpleArm,
+		TieredBoost: siteCfg.BM25TieredBoost,
+		Mode:        keywordMode,
+		Dim:         dimensions,
+		K1:          siteCfg.BM25K1,
+		B:           siteCfg.BM25B,
+	}
 }
 
 // ---------------------------------------------------------------------------

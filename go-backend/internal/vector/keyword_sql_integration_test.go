@@ -35,6 +35,15 @@ func TestBuildKeywordSQL_BM25RanksByIDF(t *testing.T) {
 	mainPool, vectorPool := openBM25TestPools(t)
 	ctx := context.Background()
 
+	// Self-contained: don't rely on bm25_stats_integration_test.go's
+	// TestBM25StatsRefreshAndStaleness having run first (and having left
+	// the tables behind) to create these tables — EnsureBM25StatsTables
+	// is idempotent, so calling it here makes this test runnable alone
+	// (e.g. -run TestBuildKeywordSQL_BM25RanksByIDF) against a fresh DB.
+	if err := EnsureBM25StatsTables(ctx, PgxpoolExec{Pool: vectorPool}, 768); err != nil {
+		t.Fatalf("EnsureBM25StatsTables(768): %v", err)
+	}
+
 	kbID := uuid.New()
 	t.Cleanup(func() {
 		cctx := context.Background()

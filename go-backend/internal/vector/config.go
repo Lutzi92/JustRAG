@@ -309,7 +309,7 @@ type KBVectorConfig struct {
 	// from the per-KB bm25_kb_stats_<dim>/bm25_term_stats_<dim> tables
 	// Task 5's refresher maintains). A KB/dimension without usable stats
 	// yet falls back to "ts_rank" for that query (fail-soft; see
-	// SearchService.bm25StatsAvailable). Tunable via
+	// SearchService.bm25ArmAvailability + bm25ModeDecision). Tunable via
 	// "bm25_scoring_mode". Bump query_cache_schema_version after
 	// flipping this in production — it is a deployment-wide value and is
 	// deliberately NOT hashed into the query-cache shape.
@@ -326,6 +326,14 @@ type KBVectorConfig struct {
 	// 1 = full). Range [0, 1], default 0.75 (the standard operating
 	// point). Only consumed when BM25ScoringMode is "bm25". Tunable via
 	// "bm25_b".
+	//
+	// Note on BM25K1/BM25B's "standard operating point" framing: the
+	// literature's 1.2/0.75 defaults were tuned against `dl`=token count.
+	// Here `dl` is `length(vector_index)` — the DISTINCT-lexeme count
+	// (W2-R4), consistent with `avg_len` (kb_stats), not the raw token
+	// count the literature assumes. Kept as the starting default anyway
+	// (still a reasonable operating point for chunk-sized documents);
+	// operators should re-tune against the golden set if this matters.
 	BM25B float64
 
 	// RerankBlendAlphaEntity overrides RerankBlendAlpha when the query

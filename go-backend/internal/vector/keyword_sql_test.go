@@ -179,6 +179,60 @@ func TestBuildKeywordSQL_BM25_SingleArmShape(t *testing.T) {
 	}
 }
 
+// TestBuildKeywordSQL_BM25_CandCTEIsSlim is the fix-round-1 regression
+// guard: `cand` (the CTE tf[/tf_simple] reads, and the CTE the final SELECT
+// ultimately ranks over) must carry ONLY the columns scoring needs — id and
+// the two tsvector columns — never the payload columns (content, metadata,
+// contextual_prefix, file_id, parent_chunk_id, node_kind, tree_level).
+// Before the fix, `cand` selected every payload column and was referenced
+// by tf[/tf_simple] AND the final SELECT, so Postgres materialised the full
+// row for every WHERE-matched candidate before qlex/tf ever pruned
+// anything — the payload is now read once per RETURNED row via the outer
+// join against the base table instead.
+//
+// Mutation: revert `cand`'s SELECT list to include `content, metadata` (or
+// any other payload column) and this test fails immediately.
+func TestBuildKeywordSQL_BM25_CandCTEIsSlim(t *testing.T) {
+	t.Parallel()
+	for _, in := range []keywordSQLInput{
+		bm25KeywordInput(),
+		func() keywordSQLInput { in := bm25KeywordInput(); in.SimpleArm = true; return in }(),
+	} {
+		sql, _, ok := buildKeywordSQL(in)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		start := strings.Index(sql, "cand AS (")
+		if start < 0 {
+			t.Fatal("cand CTE not found in generated SQL")
+		}
+		// Only the SELECT list (between "cand AS (" and the CTE's own
+		// FROM) is under test here — the WHERE clause legitimately
+		// references node_kind/etc. as filter predicates, not as
+		// selected payload columns, and must not trip this check.
+		fromRel := strings.Index(sql[start:], "FROM")
+		if fromRel < 0 {
+			t.Fatal("cand CTE has no FROM clause")
+		}
+		selectList := sql[start : start+fromRel]
+		for _, notWant := range []string{"content", "metadata", "contextual_prefix", "file_id", "parent_chunk_id", "node_kind", "tree_level"} {
+			if strings.Contains(selectList, notWant) {
+				t.Errorf("cand CTE select list must not include payload column %q:\n%s", notWant, selectList)
+			}
+		}
+		for _, want := range []string{"id", "vector_index", "vector_index_simple"} {
+			if !strings.Contains(selectList, want) {
+				t.Errorf("cand CTE select list missing expected column %q:\n%s", want, selectList)
+			}
+		}
+		// The payload columns must still reach the final row — via the
+		// outer join against the base table, not via `cand`.
+		if !strings.Contains(sql, "JOIN \""+in.TableName+"\" t ON t.id") {
+			t.Errorf("expected an outer join back to the base table for payload columns:\n%s", sql)
+		}
+	}
+}
+
 // TestBuildKeywordSQL_BM25_DualArmShape asserts the simple-arm CTE trio
 // (suffix "_simple") is rendered via the SAME bm25ArmCTE helper (W2-R12) —
 // not a second hand-pasted copy — by checking its distinguishing tokens:
@@ -347,6 +401,46 @@ func TestClampBM25Params(t *testing.T) {
 			gotK1, gotB := clampBM25Params(tc.k1, tc.b)
 			if gotK1 != tc.wantK1 || gotB != tc.wantB {
 				t.Errorf("clampBM25Params(%v, %v) = (%v, %v), want (%v, %v)", tc.k1, tc.b, gotK1, gotB, tc.wantK1, tc.wantB)
+			}
+		})
+	}
+}
+
+// TestBM25ModeDecision is the fix-round-1 regression guard for the two-arm
+// stats gate: bm25ModeDecision must distinguish "lang stats missing"
+// (bm25 unusable at all -> reason "no_stats") from "lang fine, simple arm
+// requested but its stats are missing/zero" (-> reason "no_simple_stats"),
+// and must not gate at all when the configured mode isn't bm25 to begin
+// with (ts_rank never needs stats).
+//
+// Mutation: drop either `if !langAvailable` or the `if simpleArm &&
+// !simpleAvailable` branch and the corresponding case below fails.
+func TestBM25ModeDecision(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name                           string
+		configured                     KeywordScoringMode
+		simpleArm                      bool
+		langAvailable, simpleAvailable bool
+		wantMode                       KeywordScoringMode
+		wantReason                     string
+	}{
+		{"ts_rank configured: no gate at all, even with no stats", KeywordScoringTsRank, true, false, false, KeywordScoringTsRank, ""},
+		{"bm25 configured, lang unavailable, simple arm off", KeywordScoringBM25, false, false, false, KeywordScoringTsRank, "no_stats"},
+		{"bm25 configured, lang unavailable, simple arm on", KeywordScoringBM25, true, false, false, KeywordScoringTsRank, "no_stats"},
+		{"bm25 configured, lang available, simple arm off: simple stats irrelevant", KeywordScoringBM25, false, true, false, KeywordScoringBM25, ""},
+		{"bm25 configured, lang available, simple arm on, simple unavailable", KeywordScoringBM25, true, true, false, KeywordScoringTsRank, "no_simple_stats"},
+		{"bm25 configured, lang available, simple arm on, simple available", KeywordScoringBM25, true, true, true, KeywordScoringBM25, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mode, reason := bm25ModeDecision(tc.configured, tc.simpleArm, tc.langAvailable, tc.simpleAvailable)
+			if mode != tc.wantMode {
+				t.Errorf("mode = %q, want %q", mode, tc.wantMode)
+			}
+			if reason != tc.wantReason {
+				t.Errorf("reason = %q, want %q", reason, tc.wantReason)
 			}
 		})
 	}

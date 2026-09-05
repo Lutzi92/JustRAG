@@ -436,9 +436,10 @@ func TestLoadSiteConfig_BM25TieredBoost(t *testing.T) {
 }
 
 // TestLoadSiteConfig_BM25ScoringMode pins the ts_rank/bm25 mode + k1/b
-// plumbing: default ts_rank/1.2/0.75, exact lower-case "bm25" switches the
-// mode, anything else (case variants, typos, empty) inherits the default,
-// and k1/b out-of-range values fall back to their defaults.
+// plumbing: default ts_rank/1.2/0.75; any casing/whitespace of "bm25"
+// (case/whitespace-insensitive comparison) switches the mode; anything else
+// (typos, "ts_rank", empty) inherits the default; and k1/b out-of-range
+// values fall back to their defaults.
 func TestLoadSiteConfig_BM25ScoringMode(t *testing.T) {
 	t.Parallel()
 

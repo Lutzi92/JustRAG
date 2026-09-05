@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/pgxutil"
@@ -148,10 +149,14 @@ func NewBM25StatsRefresher(vectorDB, mainDB *pgxpool.Pool) *BM25StatsRefresher {
 	return &BM25StatsRefresher{vectorDB: vectorDB, mainDB: mainDB}
 }
 
-// RefreshKB recomputes and persists both arms' BM25 stats for kbID/dim, one
-// transaction per (kb, arm). Fail-soft is the caller's responsibility
-// (Sweep logs and continues per KB); RefreshKB itself returns the first
-// error encountered.
+// RefreshKB recomputes and persists BOTH arms' BM25 stats for kbID/dim
+// inside ONE transaction (fix round 1: previously one transaction per arm,
+// which could leave the 'lang' row committed and fresh while a failure
+// between the two calls left 'simple' stale/missing — a partial state the
+// query-time availability check couldn't distinguish from "never
+// refreshed"). Fail-soft is the caller's responsibility (Sweep logs and
+// continues per KB); RefreshKB itself returns the first error encountered,
+// which rolls back both arms together.
 func (r *BM25StatsRefresher) RefreshKB(ctx context.Context, kbID uuid.UUID, dim int) error {
 	if r == nil || r.vectorDB == nil {
 		return fmt.Errorf("bm25 refresh: vector pool not configured")
@@ -163,9 +168,15 @@ func (r *BM25StatsRefresher) RefreshKB(ctx context.Context, kbID uuid.UUID, dim 
 		return fmt.Errorf("bm25 refresh: invalid table name for dim %d", dim)
 	}
 
+	tx, err := r.vectorDB.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("bm25 refresh kb=%s dim=%d: begin tx: %w", kbID, dim, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	for _, arm := range []string{bm25ArmLang, bm25ArmSimple} {
 		start := time.Now()
-		terms, err := r.refreshArm(ctx, kbID, dim, arm, kbTable, termTable, chunkTable)
+		terms, err := r.refreshArm(ctx, tx, kbID, dim, arm, kbTable, termTable, chunkTable)
 		if err != nil {
 			return fmt.Errorf("bm25 refresh kb=%s arm=%s dim=%d: %w", kbID, arm, dim, err)
 		}
@@ -173,19 +184,20 @@ func (r *BM25StatsRefresher) RefreshKB(ctx context.Context, kbID uuid.UUID, dim 
 			"kb_id", kbID.String(), "arm", arm, "dim", dim,
 			"terms", terms, "ms", time.Since(start).Milliseconds())
 	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("bm25 refresh kb=%s dim=%d: commit: %w", kbID, dim, err)
+	}
 	return nil
 }
 
-// refreshArm does the (kb, arm) refresh in one transaction and returns the
-// number of term_stats rows written.
-func (r *BM25StatsRefresher) refreshArm(ctx context.Context, kbID uuid.UUID, dim int, arm, kbTable, termTable, chunkTable string) (int, error) {
+// refreshArm does the (kb, arm) refresh against the caller-supplied,
+// already-open transaction (shared across both arms by RefreshKB) and
+// returns the number of term_stats rows written. Does not begin, commit, or
+// roll back tx — that is RefreshKB's job, so both arms land or fail
+// together.
+func (r *BM25StatsRefresher) refreshArm(ctx context.Context, tx pgx.Tx, kbID uuid.UUID, dim int, arm, kbTable, termTable, chunkTable string) (int, error) {
 	col := bm25ArmColumn(arm)
-
-	tx, err := r.vectorDB.Begin(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx,
 		fmt.Sprintf(`DELETE FROM "%s" WHERE kb_id = $1 AND arm = $2`, termTable),
@@ -246,9 +258,6 @@ func (r *BM25StatsRefresher) refreshArm(ctx context.Context, kbID uuid.UUID, dim
 		return 0, fmt.Errorf("upsert kb stats: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
-	}
 	return terms, nil
 }
 
@@ -404,51 +413,81 @@ func DeleteBM25StatsForKB(ctx context.Context, vectorDB *pgxpool.Pool, kbID uuid
 }
 
 // ---------------------------------------------------------------------------
-// bm25StatsAvailable — query-time cache consumed by Task 6
+// bm25ArmAvailability — query-time cache consumed by Task 6
 // ---------------------------------------------------------------------------
 
-// bm25AvailEntry is one cached bm25StatsAvailable() verdict.
+// bm25AvailEntry is one cached bm25ArmAvailability() verdict, covering BOTH
+// arms. Fix round 1: the original single-bool shape only ever reflected
+// the 'lang' arm, so a KB whose 'simple' row was missing or zero-doc (e.g.
+// backfilled via migration 0012 without a subsequent RefreshKB) silently
+// scored the simple arm against an empty/garbage corpus while the mode
+// metric kept reporting "bm25" as if fully available.
 type bm25AvailEntry struct {
-	available bool
-	checkedAt time.Time
+	langAvailable   bool
+	simpleAvailable bool
+	checkedAt       time.Time
 }
 
-// bm25StatsAvailable reports whether kbID has a usable (non-empty) BM25
-// stats row for the 'lang' arm in dim's stats table, so Task 6's scorer can
-// fall back to ts_rank when stats are missing (fail-soft, per the global
-// constraints doc) instead of erroring or scoring against an empty corpus.
-// Cached for bm25StatsCacheTTL (60s) per (kbID, dim) — the stats sweep runs
-// on a many-minutes cadence, so a short TTL avoids a DB round-trip on every
-// search while still picking up a fresh refresh promptly.
-func (s *SearchService) bm25StatsAvailable(ctx context.Context, kbID string, dim int) bool {
+// bm25ArmAvailability reports whether kbID has a usable (non-empty) BM25
+// stats row for each arm in dim's stats table, so bm25ModeDecision can
+// decide the effective mode (fail-soft, per the global constraints doc)
+// instead of erroring or scoring an arm against an empty corpus. Cached for
+// bm25StatsCacheTTL (60s) per (kbID, dim) — the stats sweep runs on a
+// many-minutes cadence, so a short TTL avoids a DB round-trip on every
+// search while still picking up a fresh refresh promptly. Cached
+// unconditionally on both facts (not keyed by whether the simple arm is
+// requested) since RefreshKB always refreshes both arms together — one
+// cache entry always answers both questions.
+func (s *SearchService) bm25ArmAvailability(ctx context.Context, kbID string, dim int) (langAvailable, simpleAvailable bool) {
 	if s == nil || s.vectorDB == nil {
-		return false
+		return false, false
 	}
 	key := kbID + ":" + strconv.Itoa(dim)
 	if v, ok := s.bm25AvailCache.Load(key); ok {
 		if entry, ok := v.(bm25AvailEntry); ok && time.Since(entry.checkedAt) < bm25StatsCacheTTL {
-			return entry.available
+			return entry.langAvailable, entry.simpleAvailable
 		}
 	}
-	available := s.checkBM25StatsAvailable(ctx, kbID, dim)
-	s.bm25AvailCache.Store(key, bm25AvailEntry{available: available, checkedAt: time.Now()})
-	return available
+	langAvailable, simpleAvailable = s.checkBM25ArmAvailability(ctx, kbID, dim)
+	s.bm25AvailCache.Store(key, bm25AvailEntry{langAvailable: langAvailable, simpleAvailable: simpleAvailable, checkedAt: time.Now()})
+	return langAvailable, simpleAvailable
 }
 
-func (s *SearchService) checkBM25StatsAvailable(ctx context.Context, kbID string, dim int) bool {
+// checkBM25ArmAvailability queries both arms' doc_count in one round trip
+// (arm IN ('lang','simple')) rather than one query per arm.
+func (s *SearchService) checkBM25ArmAvailability(ctx context.Context, kbID string, dim int) (langAvailable, simpleAvailable bool) {
 	table := GetBM25KBStatsTableName(dim)
 	if !validVectorTable.MatchString(table) {
-		return false
+		return false, false
 	}
 	query := fmt.Sprintf(
-		`SELECT EXISTS(SELECT 1 FROM "%s" WHERE kb_id = $1::uuid AND arm = '%s' AND doc_count > 0)`,
-		table, bm25ArmLang)
-	var exists bool
-	if err := s.vectorDB.QueryRow(ctx, query, kbID).Scan(&exists); err != nil {
+		`SELECT arm, doc_count > 0 FROM "%s" WHERE kb_id = $1::uuid AND arm IN ('%s', '%s')`,
+		table, bm25ArmLang, bm25ArmSimple)
+	rows, err := s.vectorDB.Query(ctx, query, kbID)
+	if err != nil {
 		if !pgxutil.IsUndefinedTable(err) {
-			slog.Warn("bm25StatsAvailable check failed", "kb_id", kbID, "dim", dim, "error", err)
+			slog.Warn("bm25ArmAvailability check failed", "kb_id", kbID, "dim", dim, "error", err)
 		}
-		return false
+		return false, false
 	}
-	return exists
+	defer rows.Close()
+	for rows.Next() {
+		var arm string
+		var available bool
+		if err := rows.Scan(&arm, &available); err != nil {
+			slog.Warn("bm25ArmAvailability scan failed", "kb_id", kbID, "dim", dim, "error", err)
+			return false, false
+		}
+		switch arm {
+		case bm25ArmLang:
+			langAvailable = available
+		case bm25ArmSimple:
+			simpleAvailable = available
+		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("bm25ArmAvailability rows error", "kb_id", kbID, "dim", dim, "error", err)
+		return false, false
+	}
+	return langAvailable, simpleAvailable
 }

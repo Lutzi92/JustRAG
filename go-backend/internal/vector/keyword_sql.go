@@ -23,9 +23,38 @@ const (
 	// statistics Task 5's refresher maintains in the dim-keyed
 	// bm25_kb_stats_<dim> / bm25_term_stats_<dim> tables. Falls back to
 	// KeywordScoringTsRank per-query when those stats aren't available
-	// yet for a KB (see SearchService.bm25StatsAvailable).
+	// yet for a KB (see SearchService.bm25ArmAvailability and
+	// bm25ModeDecision).
 	KeywordScoringBM25 KeywordScoringMode = "bm25"
 )
+
+// bm25ModeDecision resolves the effective keyword-arm scoring mode (and,
+// when it falls back, the rag_bm25_mode_fallback_total reason label) from
+// the configured mode, whether this search wants the simple arm, and the
+// two arms' stats-availability facts (SearchService.bm25ArmAvailability).
+// Pure — no I/O — so the fallback state machine is unit-tested directly
+// (TestBM25ModeDecision) without a DB.
+//
+// Fix round 1: the original gate only checked the 'lang' arm, so a KB
+// with fresh 'lang' stats but a missing/zero 'simple' row would silently
+// score the simple arm against an empty corpus while reporting mode=bm25.
+// Distinguishing "no_stats" (lang missing — bm25 unusable at all) from
+// "no_simple_stats" (lang fine, simple requested but unavailable — falls
+// back to ts_rank rather than running bm25 with one arm silently
+// contributing nothing) keeps both the metric and the actual query
+// behaviour honest.
+func bm25ModeDecision(configured KeywordScoringMode, simpleArm, langAvailable, simpleAvailable bool) (mode KeywordScoringMode, fallbackReason string) {
+	if configured != KeywordScoringBM25 {
+		return configured, ""
+	}
+	if !langAvailable {
+		return KeywordScoringTsRank, "no_stats"
+	}
+	if simpleArm && !simpleAvailable {
+		return KeywordScoringTsRank, "no_simple_stats"
+	}
+	return KeywordScoringBM25, ""
+}
 
 // bm25K1Min, bm25K1Max, bm25BMin, bm25BMax bound the BM25 free parameters.
 // k1 controls term-frequency saturation (higher = TF keeps mattering longer
@@ -393,18 +422,34 @@ func buildBM25KeywordSQL(in keywordSQLInput, cc keywordCandidateClause) (string,
 		joinExpr += " LEFT JOIN sc_simple ON sc_simple.id = c.id"
 	}
 
+	// Fix round 1: `cand` used to carry every payload column (content,
+	// metadata, ...) and was referenced by tf[/tf_simple] AND the final
+	// SELECT, so Postgres materialised the full row for every
+	// WHERE-matched chunk before qlex/tf ever pruned anything down to the
+	// lexemes that matter. `cand` now carries only what scoring needs
+	// (id + the two tsvector columns); `ranked` computes scores and
+	// applies ORDER BY/LIMIT over that slim shape, and only the LIMIT-ed
+	// winners are joined back to the base table for their payload
+	// columns — content/metadata are read once per RETURNED row, not
+	// once per candidate.
 	sqlText := fmt.Sprintf(`
 		WITH cand AS (
-			SELECT id, content, contextual_prefix, metadata, file_id, parent_chunk_id, node_kind, tree_level, vector_index, vector_index_simple
+			SELECT id, vector_index, vector_index_simple
 			FROM "%s" WHERE %s
-		)%s
-		SELECT c.id::text, c.content, COALESCE(c.contextual_prefix, ''), c.metadata::text, c.file_id::text,
-		       (%s) AS score,
-		       COALESCE(c.parent_chunk_id::text, ''), COALESCE(c.node_kind, 'leaf'), COALESCE(c.tree_level, 0)
-		FROM cand c %s
-		ORDER BY score DESC
-		LIMIT %d
-	`, in.TableName, cc.whereClause, ctes, scoreExpr, joinExpr, in.Limit)
+		)%s,
+		ranked AS (
+			SELECT c.id, (%s) AS score
+			FROM cand c %s
+			ORDER BY score DESC
+			LIMIT %d
+		)
+		SELECT t.id::text, t.content, COALESCE(t.contextual_prefix, ''), t.metadata::text, t.file_id::text,
+		       ranked.score,
+		       COALESCE(t.parent_chunk_id::text, ''), COALESCE(t.node_kind, 'leaf'), COALESCE(t.tree_level, 0)
+		FROM ranked
+		JOIN "%s" t ON t.id = ranked.id
+		ORDER BY ranked.score DESC
+	`, in.TableName, cc.whereClause, ctes, scoreExpr, joinExpr, in.Limit, in.TableName)
 
 	return sqlText, args, true
 }

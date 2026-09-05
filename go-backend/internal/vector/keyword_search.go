@@ -167,9 +167,13 @@ func (s *SearchService) KeywordSearch(ctx context.Context, kbID, query string, l
 	cfg := s.loadSiteConfigCached(ctx)
 	dim := dimFromTableName(tableName)
 	mode := cfg.BM25ScoringMode
-	if mode == KeywordScoringBM25 && !s.bm25StatsAvailable(ctx, kbID, dim) {
-		mode = KeywordScoringTsRank
-		observability.RecordBM25ModeFallback("no_stats")
+	if mode == KeywordScoringBM25 {
+		langAvailable, simpleAvailable := s.bm25ArmAvailability(ctx, kbID, dim)
+		var fallbackReason string
+		mode, fallbackReason = bm25ModeDecision(mode, cfg.BM25SimpleArmEnabled, langAvailable, simpleAvailable)
+		if fallbackReason != "" {
+			observability.RecordBM25ModeFallback(fallbackReason)
+		}
 	}
 	observability.RecordKeywordArmMode(string(mode))
 	arm := keywordArmSettings{

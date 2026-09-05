@@ -606,6 +606,20 @@ func refreshBM25StatsForGoldenSet(ctx context.Context, vectorDB, mainDB *pgxpool
 		return
 	}
 
+	// Controller-found gap: the bm25_kb_stats_<dim>/bm25_term_stats_<dim>
+	// side tables are normally created by the server/worker boot path
+	// (migrate.EnsureVectorTables), which cmd/eval never runs — so
+	// RefreshKB failed with "relation ... does not exist" against a dev
+	// DB that had never booted the main app for a given dim.
+	// EnsureBM25StatsTables is idempotent (CREATE TABLE IF NOT EXISTS
+	// under an advisory lock), so calling it once per dim here is safe
+	// even when the tables already exist.
+	for _, dim := range dims {
+		if err := vector.EnsureBM25StatsTables(ctx, vector.PgxpoolExec{Pool: vectorDB}, dim); err != nil {
+			slog.Error("--refresh-bm25-stats: ensure stats tables failed", "dim", dim, "error", err)
+		}
+	}
+
 	refresher := vector.NewBM25StatsRefresher(vectorDB, mainDB)
 	for kbIDStr := range kbIDs {
 		kbID, perr := uuid.Parse(kbIDStr)
