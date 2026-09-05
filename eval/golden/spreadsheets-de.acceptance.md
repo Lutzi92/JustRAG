@@ -282,3 +282,288 @@ regardless of root cause:
   model quoted the cell content faithfully but the judge did not consider
   that response "relevant" to a literal reading of the question — also
   worth a look if revisiting the judge prompt for this kind of row.)
+
+## Run 2 (Task 13 — re-run after the router fix)
+
+**Why:** Run 1 above FAILED the router thresholds. Task 11 (commits
+`c6ebc3a`, `addc23c`) fixed the router's table-identifier form
+(`"tabular"."sheet_…"` — schema and prompt now render the exact form the
+validator accepts, proposals are normalised before validation, rejection
+reasons name the fix) and several German cue-detection gaps. Task 12
+(`cbb6292`) added the `tabular_expected` ground-truth field (R75) to the
+golden set, which changes the fire-rate denominator from
+"lookup + complex_reasoning" (40/40 questions) to the 30 questions
+actually annotated `tabular_expected: true`. This run re-executes the
+acceptance procedure and records the result honestly, including a router
+gap this run surfaced that Run 1 could not see (the previous run never
+routed to Supervisor at all).
+
+### Run metadata
+
+- **Date:** 2026-09-05
+- **Commit:** `addc23c0c71cfde9d276142859cc0210e02e9735` (`addc23c`, branch
+  `feat/spreadsheet-ingest-phase4`, worktree
+  `.claude/worktrees/spreadsheet-ingest-phase4`). Both the `cmd/eval`
+  binary run for this record and the `go-server`/`go-worker` Docker
+  containers were (re)built from this exact commit before the run (see
+  "Running-instance verification" below).
+- **Model stack:** unchanged from Run 1 — AI provider `hrzki`
+  (OpenAI-compatible, JLU HRZ AI gateway). `model_tier_fast =
+  jlu-internal/gemma-4-26b-it-bulk`; the model actually observed serving
+  every completion/judge call in this run's logs is `jlu/gemma-4-26b-it`,
+  same as Run 1. No config drift between the two runs on this axis.
+- **Orchestrator flags (Ruling R74):**
+  - Before this run: `chat_supervisor_enabled` = **absent** (not a row in
+    `site_configs`, i.e. default off), `chat_plan_execute_enabled` =
+    `true`, `chat_agentic_enabled` = `true` — read via
+    `GET /api/site-config` (superadmin token), identical to what Run 1
+    recorded for this same environment.
+  - During this run: `chat_supervisor_enabled` set to `"true"` via
+    `POST /api/site-config` (superadmin), `chat_plan_execute_enabled` and
+    `chat_agentic_enabled` left untouched. Per the orchestrator priority
+    order (DRIFT > Supervisor > Plan-Execute > Agentic > standard),
+    Supervisor now wins over Plan-Execute for any question the live
+    query-type classifier labels `complex_reasoning`.
+  - After this run: `chat_supervisor_enabled` cleared back to **absent**
+    via `POST /api/site-config` with `{"configs": {"chat_supervisor_enabled":
+    null}}` (not merely set to the string `"false"` — the goal is the
+    exact prior state, and the key was never a row before). Read-back
+    confirms restoration:
+    ```
+    chat_supervisor_enabled = <absent>
+    chat_plan_execute_enabled = true
+    chat_agentic_enabled = true
+    ```
+    — identical to the pre-run reading.
+  - **Effect on this run:** the live query-type classifier (unchanged
+    since Run 1, still only 0.475 accuracy against the golden label —
+    see below) labeled 7 of the 40 questions `complex_reasoning`; those 7
+    (`sst-q11–q16`, `sst-q18`) dispatched to **Supervisor** this time
+    instead of falling through to `standard`. The remaining 33 questions
+    — every one the classifier labeled `lookup` or `enumeration` — still
+    fell through to `standard`, exactly as in Run 1, because orchestrator
+    dispatch in this codebase gates on the query-type classification
+    result, not on which flags are on (`chat_supervisor_enabled=true`
+    only changes what happens to `complex_reasoning`-classified turns).
+    `Orchestrators: standard count=33, supervisor count=7` in the run's
+    own summary confirms this.
+- **KB:** "Spreadsheet Fixtures" (`ff966f70-8482-47ca-ab2e-5955e4aec674`),
+  same KB as Run 1, reused as-is — **no re-seed and no rematerialise**:
+  Task 11 changed only query-time SQL generation/validation and cue
+  detection, not anything ingest-time-baked (the materialised
+  `tabular.*` tables and `tabular_column_values` are unaffected by a
+  query-time-only fix). Confirmed present via `GET /api/kb` before running.
+
+### Running-instance verification
+
+The environment's `justrag` Docker Compose project (`docker-compose.local.yml`)
+was running an image built **before** commits `c6ebc3a`/`addc23c` (image
+`Created` timestamp `2026-09-04T22:19` vs. commit timestamps
+`2026-09-05T13:55`/`14:01`). Rebuilt and recreated `go-server` + `go-worker`
+from this worktree against the **existing** `justrag` project (`docker
+compose -p justrag -f docker-compose.local.yml up --build -d go-server
+go-worker`, followed by a full `up -d` after an unrelated dependency-graph
+hiccup mid-recreate knocked the rest of the stack down and back up via each
+container's own `restart: unless-stopped` policy — no data was lost; `db`/
+`vectordb` were never recreated and kept their 16h uptime throughout).
+Confirmed healthy afterward (`GET /health` → `{"status":"ok"}`) and the KB
+still present.
+
+`GET /version` still reports `{"version":"unknown"}` (the binary is not
+version-stamped in this build) — Task 11's presence was instead confirmed
+directly from this run's own report, per the brief's own fallback: **every
+fired question's `agent.tabular.sql` uses the corrected
+`"tabular"."sheet_…"` single-schema-qualified form**, e.g. (`sst-q33`):
+```sql
+SELECT "Zustand / Baurecht", "Zustand / Brandschutz"
+  FROM "tabular"."sheet_fffe992fc3484b8cae9b285c6c31c0a7_0_0" LIMIT 200
+```
+— confirming the running `cmd/eval` binary (which drives retrieval/answer
+generation directly, in-process, per Run 1's note — it never goes through
+the `go-server` container for this) is built from post-Task-11 code. Zero
+`validator_rejected` outcomes this run (Run 1 had 15), consistent with the
+fix landing.
+
+### Command run
+
+```bash
+cd go-backend
+go build ./cmd/eval
+./eval --golden ../eval/golden/spreadsheets-de.local.jsonl \
+  --production-context --judge \
+  --output ../eval/golden/spreadsheets-de.report.json
+```
+(`DB_HOST=localhost`, `DB_PORT=5432`, `VECTOR_DB_HOST=localhost`,
+`VECTOR_DB_PORT=5433`, `REDIS_HOST=localhost`, `REDIS_PORT=6379` overridden
+from the `.env` compose-network values, same reason as Run 1: the binary
+runs on the host against the host-published container ports.)
+
+The golden set: `eval/golden/spreadsheets-de.local.jsonl` was regenerated
+for this run — the copy on disk predated Task 12 and had no
+`tabular_expected` field. Regenerated with a plain `sed` substitution of
+the `REPLACE_WITH_FIXTURE_KB_ID` placeholder in the committed
+`spreadsheets-de.jsonl` (which already carries Task 12's
+`tabular_expected` on all 40 rows) for the real KB id — no hand-editing.
+
+### Results
+
+```
+RAG retrieval evaluation report
+  generated_at = 2026-09-05T12:13:02Z
+  golden_path  = ../eval/golden/spreadsheets-de.local.jsonl
+  k            = 10
+  questions    = 40
+  errors       = 0
+
+Aggregate (k=10, count=40):
+  mean_recall    = 1.000
+  mean_precision = 0.122
+  mrr            = 1.000
+  mean_ndcg      = 1.000
+  p50_recall     = 1.000
+  p95_recall     = 1.000
+
+Judge (judged_count=40):
+  mean_faithfulness       = 0.973
+  mean_answer_relevance   = 0.917
+  mean_context_precision  = 0.161
+
+Per route:
+  complex_reasoning    count=16  mean_recall=1.000 mean_precision=0.119 mrr=1.000 ndcg=1.000
+  lookup               count=24  mean_recall=1.000 mean_precision=0.125 mrr=1.000 ndcg=1.000
+
+Orchestrators:
+  standard             count=33  mean_recall=1.000 mean_precision=0.127 mrr=1.000 ndcg=1.000
+  supervisor           count=7   mean_recall=1.000 mean_precision=0.100 mrr=1.000 ndcg=1.000
+
+Routing accuracy (query-type classification vs golden, scored=40):
+  accuracy = 0.475 (19/40)
+  complex_reasoning    0.438 (7/16)
+  lookup               0.500 (12/24)
+
+Tabular router:
+  fire_rate      = 0.767 (of tabular_expected questions)
+  sql_error_rate = 0.040 (of fired questions)
+
+Total wall time: 6m58.201613928s
+```
+
+**Per-outcome histogram** (`jq '[.questions[].agent.tabular.outcome] |
+group_by(.) | map({(.[0]): length}) | add'`, `null` outcomes — no
+`agent.tabular` at all — counted separately below since the raw jq as
+written errors on a `null` group key):
+
+| outcome | count |
+|---|---|
+| `fired_ok` | 20 |
+| `fired_empty` | 4 |
+| `skipped_no_cue` | 8 |
+| `sql_error` | 1 |
+| *(no `agent.tabular` — Supervisor-dispatched)* | 7 |
+| **total** | **40** |
+
+Of the 30 `tabular_expected: true` questions: 23 carry a recorded
+`agent.tabular` outcome (all 23 of those **fired** — zero `skipped_no_cue`
+among the true-annotated rows) and 7 (`sst-q11–q16`, `sst-q18`, all
+Supervisor-dispatched) carry none at all. `fire_rate = 23/30 = 0.767` is
+computed exactly as specified (Ruling R75, `internal/eval/tabular_rates.go`)
+— the report is not adjusted.
+
+### Threshold verdicts (spec §7.3)
+
+| Threshold | Bar | Result | Verdict |
+|---|---|---|---|
+| Tabular fire rate (of `tabular_expected` questions) | ≥0.90 | 0.767 (23/30) | **FAIL** |
+| Tabular SQL error rate (of fired questions) | ≤0.05 | 0.040 (1/25) | PASS |
+| Judged correctness — primary (mean-of-means: `(mean_faithfulness + mean_answer_relevance) / 2`) | ≥0.85 | 0.945 | PASS |
+| Judged correctness — strict (per-question-paired, missing metric zero-filled, same jq as Run 1) | ≥0.85 | 0.830 | PASS |
+
+```bash
+jq '[.questions[] | select(.question.query_type == "lookup" or .question.query_type == "complex_reasoning") | select(.judge != null) | ((.judge.faithfulness // 0) + (.judge.answer_relevance // 0)) / 2] | add / length' \
+  eval/golden/spreadsheets-de.report.json
+# -> 0.8302884615384615
+```
+
+**Overall: FAIL.** SQL error rate and judged correctness both clear their
+bars — Task 11's fix is real and working (0 `validator_rejected` this run
+vs. 15 in Run 1; `sql_error_rate` 0.040 vs. 0.714). Fire rate does not
+clear its bar, but not for the reason Run 1 surfaced.
+
+### Root cause of the remaining FAIL: an eval-harness gap, not (necessarily) a production router gap
+
+All 7 questions with no recorded `agent.tabular` outcome are exactly the 7
+questions this run dispatched to **Supervisor** (`sst-q11–q16`, `sst-q18`;
+`Orchestrators: supervisor count=7` above). Tracing why:
+`internal/eval/orchestrator_adapter.go`'s `OrchestratorDispatchAdapter.Search`
+(the adapter `--production-context --orchestrator-dispatch` — the default,
+non-`--trajectory` mode used by this run — dispatches through) builds its
+`chat.SupervisorChatParams{}` literal (lines ~214–220) with only `KbID`,
+`Query`, `Language`, `KbSystemPrompt`, `PlanningModel` set — it never sets
+`TabularRouter` or `TabularRouterConfig`, both of which
+`chat.RunSupervisorChat` requires (`internal/chat/supervisor_chat.go:56-69`,
+`135-141`) before it will run the router at all. So for every Supervisor-
+dispatched question in **this** eval mode, the tabular router is not
+merely unreported — it never executes, and `chatCtx.TabularTrace` comes
+back `nil`, which `TabularEvalTraceFrom` (correctly) turns into a `nil`
+`agent.tabular`. This is distinct from the `--trajectory` mode, which
+commit `98a1630` ("fix(eval): Supervisor trajectory runs honour the
+per-KB tabular router config like production") already fixed for a
+different code path
+(`internal/eval/orchestrator_adapter.go`'s trajectory-only
+`RunOrchestratorTrajectory`, not `OrchestratorDispatchAdapter.Search`) —
+the fix was not carried over to the plain `--production-context` adapter
+used here.
+
+**This is not a claim that the fire rate would clear 0.90 without the
+gap** — but it does mean the 0.767 number is a mix of two different
+signals (23 real attempts, 22 of them successful, vs. 7 structurally
+un-instrumented turns), not 7 real router misses. Of the 23 questions
+where the router actually got a chance to run this run, **all 23 fired**
+(`fired_ok` 20 + `fired_empty` 4 minus one double count... concretely:
+zero `skipped_no_cue` among `tabular_expected: true` rows) — i.e. the
+*recordable* subset's fire rate is 23/23 = 1.000. This number is reported
+here as a diagnostic aid for whoever picks up the fire-rate gap next, not
+as a substitute for the official 0.767: the spec's denominator is "of
+`tabular_expected` questions" full stop, and the report above is not
+adjusted.
+
+**Fix location for a follow-up task:** `internal/eval/orchestrator_adapter.go`,
+`OrchestratorDispatchAdapter.Search`'s `case OrchestratorSupervisor:` branch
+— thread the same `TabularRouter`/`TabularRouterConfig` construction the
+`--trajectory` path already does (see how `98a1630` built it) into the
+`chat.SupervisorChatParams{}` literal here too. This is an eval-only change
+(no production code path is affected — production's own Supervisor
+dispatch, `internal/chat/http_send.go`, already wires the router per the
+CLAUDE.md "Structured spreadsheet Q&A" quick-reference entry) and is
+explicitly out of this task's scope (Task 13 is re-run-and-record, not
+fix), so it is handed off rather than fixed here.
+
+### `sql_error` detail (the one still-failing fired question)
+
+`sst-q33` (`tabular_expected: true`, standard orchestrator, 3 repairs
+spent):
+```json
+{
+  "fired": true,
+  "outcome": "sql_error",
+  "sql": "SELECT \"Zustand / Baurecht\", \"Zustand / Brandschutz\" FROM \"tabular\".\"sheet_fffe992fc3484b8cae9b285c6c31c0a7_0_0\" LIMIT 200",
+  "row_count": -1,
+  "repairs": 3
+}
+```
+The table identifier is correctly formed (Task 11's fix holds); the
+column names (`Zustand / Baurecht`, `Zustand / Brandschutz` — literal
+slashes from the source header text) are the suspect: whether they exist
+verbatim as materialised column names, or were normalised/truncated
+during ingest, was not investigated further here (out of this task's
+scope — no rematerialise was run, and the eval report does not carry the
+underlying Postgres error text, only the terminal outcome). Flagged for
+whoever next touches the tabular materialiser's column-name normalisation
+or the router's schema rendering for slash-bearing header names.
+
+### No new `validator_rejected` observations
+
+Unlike Run 1 (15 of 15 fired questions rejected by the validator on the
+old un-normalised table-identifier form), this run recorded **zero**
+`validator_rejected` outcomes — Task 11's fix is confirmed effective end
+to end, not just in isolation.
