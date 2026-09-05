@@ -2476,3 +2476,92 @@ func RecordTabularRouterRows(n int) {
 func RecordTabularRouterRepairs(n int) {
 	tabularRouterRepairsTotal.Add(float64(n))
 }
+
+// --- Tabular ingest (Task 3) ------------------------------------------------
+
+var tabularIngestRows = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_tabular_ingest_rows_total",
+		Help: "Rows handled by one spreadsheet ingest.Ingester.Ingest call " +
+			"(the processor's spreadsheet branch), by kind, summed across " +
+			"every sheet in the file's ParseReport: read (SheetReport." +
+			"RowsRead), materialised (RowsMaterialised, only nonzero when " +
+			"Options.Materialize is on), embedded (RowsEmbedded), past_cap " +
+			"(RowsPastCap, rows dropped by the embed-row cap). The " +
+			"persisted ParseReport carries no derived-row-skip count (that " +
+			"lives only on the materializer's internal Result, not " +
+			"SheetReport), so there is deliberately no derived_skipped " +
+			"kind here.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"kind"},
+)
+
+var tabularIngestDuration = promauto.NewHistogram(
+	prometheus.HistogramOpts{
+		Name: "rag_tabular_ingest_duration_seconds",
+		Help: "Wall-time of one spreadsheet ingest.Ingester.Ingest call " +
+			"(profile → optional LLM assist → optional materialise → " +
+			"hybrid render), from the processor's spreadsheet branch.",
+		Buckets:     []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600},
+		ConstLabels: commonLabels,
+	},
+)
+
+var tabularIngestTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_tabular_ingest_total",
+		Help: "Per-outcome counter for one spreadsheet ingest.Ingester." +
+			"Ingest call. Outcome values: ok, error. Any other value " +
+			"normalizes to error so caller-side typos surface visibly.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"outcome"},
+)
+
+// tabularIngestKnownRowKinds are the row kinds RecordTabularIngestRows will
+// record; any other value is dropped rather than silently growing the
+// label cardinality.
+var tabularIngestKnownRowKinds = map[string]bool{
+	"read":         true,
+	"materialised": true,
+	"embedded":     true,
+	"past_cap":     true,
+}
+
+// RecordTabularIngest increments the per-outcome counter and observes the
+// duration histogram for one ingest.Ingester.Ingest call. outcome must be
+// "ok" or "error"; any other value normalizes to "error".
+func RecordTabularIngest(outcome string, d time.Duration) {
+	switch outcome {
+	case "ok", "error":
+	default:
+		outcome = "error"
+	}
+	tabularIngestTotal.WithLabelValues(outcome).Inc()
+	tabularIngestDuration.Observe(d.Seconds())
+}
+
+// RecordTabularIngestRows adds n to the named row-kind counter. kind must
+// be one of read, materialised, embedded, past_cap; any other value is
+// dropped (not recorded) rather than growing the label cardinality.
+func RecordTabularIngestRows(kind string, n int64) {
+	if !tabularIngestKnownRowKinds[kind] {
+		return
+	}
+	tabularIngestRows.WithLabelValues(kind).Add(float64(n))
+}
+
+// TabularIngestTotalForTest exposes the tabular-ingest outcome counter to
+// other test packages (internal/processor) so tests can assert per-outcome
+// deltas without a separate accounting mechanism. Mirrors
+// AgenticDecisionTotalForTest.
+func TabularIngestTotalForTest() *prometheus.CounterVec {
+	return tabularIngestTotal
+}
+
+// TabularIngestRowsForTest exposes the tabular-ingest row-kind counter to
+// other test packages. Mirrors AgenticDecisionTotalForTest.
+func TabularIngestRowsForTest() *prometheus.CounterVec {
+	return tabularIngestRows
+}

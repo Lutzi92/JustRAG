@@ -847,6 +847,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 				Model:    chat.TabularProfileModel(ctx, p.siteConfigReader),
 			}
 		}
+		ingestStart := time.Now()
 		res, err := p.ingester.WithLLM(llm).Ingest(ctx, ingest.Input{
 			FilePath: filePath,
 			FileName: fileName,
@@ -872,9 +873,26 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			},
 		})
 		if err != nil {
+			observability.RecordTabularIngest("error", time.Since(ingestStart))
 			p.markTerminalError(ctx, fileID, "parse", "The spreadsheet could not be read")
 			return fmt.Errorf("processor: spreadsheet ingest: %w", err)
 		}
+		ingestDuration := time.Since(ingestStart)
+		observability.RecordTabularIngest("ok", ingestDuration)
+		var materialisedRows int64
+		for _, sheet := range res.Report.Sheets {
+			observability.RecordTabularIngestRows("read", int64(sheet.RowsRead))
+			observability.RecordTabularIngestRows("materialised", int64(sheet.RowsMaterialised))
+			observability.RecordTabularIngestRows("embedded", int64(sheet.RowsEmbedded))
+			observability.RecordTabularIngestRows("past_cap", int64(sheet.RowsPastCap))
+			materialisedRows += int64(sheet.RowsMaterialised)
+		}
+		logctx.From(ctx).Info("tabular.ingest.done",
+			"file_id", fileID,
+			"sheets", len(res.Report.Sheets),
+			"duration_ms", ingestDuration.Milliseconds(),
+			"materialised", materialisedRows,
+		)
 		// The report can carry cell-derived text (column names, sample
 		// diagnostics) — never log it in full, only the marshal outcome.
 		if rep, mErr := json.Marshal(res.Report); mErr != nil {

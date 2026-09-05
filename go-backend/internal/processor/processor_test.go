@@ -2,15 +2,18 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/tabular/ingest"
 	"github.com/justrag/go-backend/internal/tabular/profile"
 	"github.com/justrag/go-backend/internal/vector"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -663,16 +666,25 @@ func TestToParseResult_NoPages(t *testing.T) {
 type fakeIngester struct {
 	calls []ingest.Input
 	llm   profile.LLMProfiler
+	// err, when set, makes Ingest return it instead of a result — used to
+	// exercise the error path of the ingest-metrics wiring without a real
+	// failing spreadsheet.
+	err error
 }
 
 func (f *fakeIngester) Ingest(_ context.Context, in ingest.Input) (*ingest.Result, error) {
 	f.calls = append(f.calls, in)
+	if f.err != nil {
+		return nil, f.err
+	}
 	return &ingest.Result{
 		Text:  "   ",
 		Pages: []ingest.Page{{Number: 1, Text: "   "}},
 		Report: tabular.ParseReport{
 			Version: 1,
-			Sheets:  []tabular.SheetReport{{Name: "S", Kind: "table"}},
+			Sheets: []tabular.SheetReport{
+				{Name: "S", Kind: "table", RowsRead: 10, RowsMaterialised: 8, RowsEmbedded: 6, RowsPastCap: 2},
+			},
 		},
 	}, nil
 }
@@ -689,7 +701,9 @@ func (f *fakeIngester) WithLLM(llm profile.LLMProfiler) SpreadsheetIngester {
 // kg_extraction_enabled, hype_enabled, and raptor_enabled are ALL explicitly
 // on in site_config — isSpreadsheet must force every one of them off via
 // spreadsheetStageFlags. Also asserts the ingester was called with a nil LLM
-// profiler (no AI resolver wired in this test).
+// profiler (no AI resolver wired in this test), and that a successful
+// Ingest call records the "ok" outcome metric plus the per-sheet row-kind
+// counters (Task 3).
 func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
 	store := &mockStore{}
 	p := NewProcessor(parser.DefaultFactoryWith(nil), nil, nil, store)
@@ -702,6 +716,13 @@ func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
 	}})
 	ing := &fakeIngester{}
 	p.SetIngester(ing)
+
+	beforeOK := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("ok"))
+	beforeErr := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("error"))
+	beforeRead := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("read"))
+	beforeMaterialised := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("materialised"))
+	beforeEmbedded := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("embedded"))
+	beforePastCap := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("past_cap"))
 
 	_ = p.ProcessFile(context.Background(), ProcessFileInput{
 		FileID:    "f1",
@@ -721,6 +742,24 @@ func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
 	if store.parseReports["f1"] == nil || !strings.Contains(string(store.parseReports["f1"]), `"kind":"table"`) {
 		t.Errorf("parse report not stored: %s", store.parseReports["f1"])
 	}
+	if got := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("ok")) - beforeOK; got != 1 {
+		t.Errorf("rag_tabular_ingest_total{outcome=ok} delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("error")) - beforeErr; got != 0 {
+		t.Errorf("rag_tabular_ingest_total{outcome=error} delta = %v, want 0", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("read")) - beforeRead; got != 10 {
+		t.Errorf("rows{kind=read} delta = %v, want 10", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("materialised")) - beforeMaterialised; got != 8 {
+		t.Errorf("rows{kind=materialised} delta = %v, want 8", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("embedded")) - beforeEmbedded; got != 6 {
+		t.Errorf("rows{kind=embedded} delta = %v, want 6", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("past_cap")) - beforePastCap; got != 2 {
+		t.Errorf("rows{kind=past_cap} delta = %v, want 2", got)
+	}
 	// parse + tabular + embed: buildStagePlan always includes parse and
 	// embed; tabular is added because materialise is on; enrich/kg/hype/
 	// raptor are excluded because isSpreadsheet forces them off even though
@@ -734,6 +773,42 @@ func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
 	}
 	if store.lastStageDetail["f1"] != "" {
 		t.Errorf("stage detail must be cleared at the end, got %q", store.lastStageDetail["f1"])
+	}
+}
+
+// TestProcessFile_SpreadsheetIngestFailure_RecordsErrorMetric verifies that
+// a failing ingest.Ingester.Ingest call records the "error" outcome (never
+// "ok") and no row-kind counters (there is no report to read rows from) —
+// the mutation guard for "record ok on the error path".
+func TestProcessFile_SpreadsheetIngestFailure_RecordsErrorMetric(t *testing.T) {
+	store := &mockStore{}
+	p := NewProcessor(parser.DefaultFactoryWith(nil), nil, nil, store)
+	p.SetSiteConfigReader(&fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_query_enabled": strPtr("true"),
+	}})
+	ing := &fakeIngester{err: errors.New("boom")}
+	p.SetIngester(ing)
+
+	beforeOK := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("ok"))
+	beforeErr := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("error"))
+
+	err := p.ProcessFile(context.Background(), ProcessFileInput{
+		FileID:    "f2",
+		FilePath:  "../sheetsource/testdata/ids_leading_zero.xlsx",
+		FileName:  "ids_leading_zero.xlsx",
+		MimeType:  "",
+		KBID:      "kb",
+		ChunkSize: 512,
+	})
+	if err == nil {
+		t.Fatal("expected ProcessFile to return an error when Ingest fails")
+	}
+
+	if got := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("ok")) - beforeOK; got != 0 {
+		t.Errorf("rag_tabular_ingest_total{outcome=ok} delta = %v, want 0 on ingest failure", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("error")) - beforeErr; got != 1 {
+		t.Errorf("rag_tabular_ingest_total{outcome=error} delta = %v, want 1", got)
 	}
 }
 

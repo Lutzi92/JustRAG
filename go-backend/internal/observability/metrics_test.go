@@ -499,3 +499,76 @@ func TestObserveOnlineFaithfulness_CapsKBCardinality(t *testing.T) {
 		t.Errorf("observing an already-admitted KB changed series count %d -> %d", preCapSeries, got)
 	}
 }
+
+// TestRecordTabularIngestRowsKnownKinds asserts each known row kind
+// increments its own label, and that an unknown kind is dropped rather than
+// recorded under any label (mutation guard: removing the kind allowlist
+// makes the unknown-kind assertion below fail).
+func TestRecordTabularIngestRowsKnownKinds(t *testing.T) {
+	kinds := []string{"read", "materialised", "embedded", "past_cap"}
+	before := make(map[string]float64, len(kinds))
+	for _, k := range kinds {
+		before[k] = testutil.ToFloat64(tabularIngestRows.WithLabelValues(k))
+	}
+	for _, k := range kinds {
+		RecordTabularIngestRows(k, 3)
+	}
+	for _, k := range kinds {
+		if got := testutil.ToFloat64(tabularIngestRows.WithLabelValues(k)) - before[k]; got != 3 {
+			t.Errorf("kind %q: got delta %v, want 3", k, got)
+		}
+	}
+
+	seriesBefore := testutil.CollectAndCount(tabularIngestRows, "rag_tabular_ingest_rows_total")
+	RecordTabularIngestRows("bogus_kind", 5)
+	seriesAfter := testutil.CollectAndCount(tabularIngestRows, "rag_tabular_ingest_rows_total")
+	if seriesAfter != seriesBefore {
+		t.Errorf("unknown kind must be dropped, not recorded: series count %d -> %d", seriesBefore, seriesAfter)
+	}
+}
+
+// TestRecordTabularIngest_OutcomeAndDuration asserts the ok/error outcome
+// counters increment and the duration histogram observes a sample; an
+// unrecognized outcome normalizes to "error".
+func TestRecordTabularIngest_OutcomeAndDuration(t *testing.T) {
+	beforeOK := testutil.ToFloat64(tabularIngestTotal.WithLabelValues("ok"))
+	beforeErr := testutil.ToFloat64(tabularIngestTotal.WithLabelValues("error"))
+
+	RecordTabularIngest("ok", 2*time.Second)
+	RecordTabularIngest("error", time.Second)
+	RecordTabularIngest("something_else", time.Second)
+
+	if got := testutil.ToFloat64(tabularIngestTotal.WithLabelValues("ok")) - beforeOK; got != 1 {
+		t.Errorf("ok delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(tabularIngestTotal.WithLabelValues("error")) - beforeErr; got != 2 {
+		t.Errorf("error delta = %v, want 2 (includes normalized unrecognized outcome)", got)
+	}
+	if testutil.CollectAndCount(tabularIngestDuration, "rag_tabular_ingest_duration_seconds") < 1 {
+		t.Error("expected at least one duration observation")
+	}
+}
+
+// TestRecordTabularRouterNormalisesOutcomes asserts the router-metric
+// outcome normalisation: a known "skipped_<reason>" value collapses to the
+// shared "skipped" label, a known verbatim outcome passes through
+// unchanged, and any unrecognized value normalizes to "error".
+func TestRecordTabularRouterNormalisesOutcomes(t *testing.T) {
+	beforeSkipped := testutil.ToFloat64(tabularRouterTotal.WithLabelValues("skipped"))
+	beforeFiredOK := testutil.ToFloat64(tabularRouterTotal.WithLabelValues("fired_ok"))
+	beforeError := testutil.ToFloat64(tabularRouterTotal.WithLabelValues("error"))
+
+	RecordTabularRouter("skipped_no_cue")
+	RecordTabularRouter("fired_ok")
+	RecordTabularRouter("bogus")
+
+	if got := testutil.ToFloat64(tabularRouterTotal.WithLabelValues("skipped")) - beforeSkipped; got != 1 {
+		t.Errorf("skipped delta = %v, want 1 (skipped_no_cue must collapse to skipped)", got)
+	}
+	if got := testutil.ToFloat64(tabularRouterTotal.WithLabelValues("fired_ok")) - beforeFiredOK; got != 1 {
+		t.Errorf("fired_ok delta = %v, want 1 (known outcome must pass through verbatim)", got)
+	}
+	if got := testutil.ToFloat64(tabularRouterTotal.WithLabelValues("error")) - beforeError; got != 1 {
+		t.Errorf("error delta = %v, want 1 (unrecognized outcome must normalize to error)", got)
+	}
+}
