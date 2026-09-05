@@ -140,7 +140,7 @@ func (c *kbGateCache) has(ctx context.Context, cat TabularCatalogReader, kbID st
 	return has, nil
 }
 
-// tabularFailureCap bounds a DB error message fed back to the repair prompt.
+// tabularFailureCap bounds a DB or validator error message fed back to the repair prompt and the tabular_router_sql event.
 const tabularFailureCap = 500
 
 // tabularValueLookupPerLiteral is how many stored values one question
@@ -321,7 +321,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 
 		execSQL, info, verr := sqlcheck.Validate(proposed, schema.AllowedTables, cfg.MaxRows)
 		if verr != nil {
-			failure, kind = verr.Error(), failureValidator
+			failure, kind = truncateRunes(verr.Error(), tabularFailureCap), failureValidator
 		} else {
 			out, eerr := r.exec.Execute(ctx, execSQL, sqlexec.Options{
 				Timeout: cfg.Timeout,
