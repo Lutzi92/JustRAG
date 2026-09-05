@@ -88,6 +88,11 @@ type ChatContextParams struct {
 	// mcpserver callers leave it unset, and so does any deployment
 	// without a read-only DSN. Nil-receiver safe either way.
 	TabularRouter *TabularRouter
+	// RawQuery is the verbatim user utterance for the rewrite ⊕ raw
+	// lane; empty = off. Set by the caller via rawQueryForRetrieval
+	// (gated on chat_condense_keep_raw_enabled) and forwarded verbatim
+	// into vector.SearchOptions.RawQuery.
+	RawQuery string
 }
 
 // ChatSource represents a single source document surfaced in a chat response.
@@ -901,6 +906,7 @@ func PrepareChatContext(
 		GraphChunkIDs: params.GraphSubgraphChunkIDs,
 		BridgeChunks:  params.BridgeChunks,
 		HyPESearch:    HyPESearchEnabled(ctx, siteConfig),
+		RawQuery:      params.RawQuery,
 	}
 
 	// T2-1 long-context routing: keyword-classifier-gated wide

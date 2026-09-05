@@ -156,6 +156,7 @@ var snapshotConfigKeys = []string{
 	"top_n_enumeration",
 	"top_n_complex_reasoning",
 	"step_back_enabled",
+	"chat_condense_keep_raw_enabled",
 	"adaptive_routing_enabled",
 	"chat_supervisor_enabled",
 	"chat_plan_execute_enabled",

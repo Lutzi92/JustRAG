@@ -172,6 +172,7 @@ var nodes = []NodeSpec{
 			"hybrid_dynamic_alpha_enabled",
 			"hybrid_dynamic_alpha_sensitivity",
 			"hype_search_enabled",
+			"chat_condense_keep_raw_enabled",
 		},
 		AlwaysOn: true,
 		LLMCalls: 0, LatencyMs: 400,

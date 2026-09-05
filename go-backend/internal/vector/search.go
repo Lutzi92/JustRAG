@@ -104,6 +104,17 @@ type SearchOptions struct {
 	// Each sub-query incurs one embedding call + one ANN search.
 	SubQueries []string
 
+	// RawQuery is the user's verbatim last-turn utterance when the chat
+	// layer condensed a follow-up into a standalone question (CondenseFollowUp)
+	// and chat_condense_keep_raw_enabled is on. It is searched as ONE extra
+	// list on BOTH arms (vector + BM25, regardless of rag_fusion_enabled):
+	// the rewrite resolves references, the raw turn preserves the exact
+	// surface tokens the user typed, which is what the keyword arm needs
+	// (SemEval-2026 Task 8 / MTRAG finding). Skipped when empty or when it
+	// equals the final query after trimming — a single-turn question costs
+	// nothing extra. Never set by users.
+	RawQuery string
+
 	// GraphChunkIDs is a caller-supplied list of chunk IDs the AP-C4
 	// graph router resolved from the KB's knowledge graph
 	// (kg.Store.LookupSubgraph). When non-empty, the search service
@@ -925,6 +936,25 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		}
 	}
 	timer.Mark("sub_queries")
+
+	// ------------------------------------------------------------------
+	// 7c'. Raw last-turn utterance alongside the condensed rewrite.
+	// ------------------------------------------------------------------
+	if raw := effectiveRawQuery(opts.RawQuery, finalQuery); raw != "" {
+		rawVec := s.runMultiQuerySearches(
+			ctx, tableName, []string{raw}, kbID, siteCfg.QueryInstruction,
+			opts.FileIDs, searchLimit, dimensions, useHalfvec, siteCfg.HNSWEfSearch,
+			siteCfg.MRLTwoPass,
+		)
+		extraLists = append(extraLists, rawVec...)
+		rawBM25 := s.runMultiQueryBM25Searches(
+			ctx, tableName, []string{raw}, kbID, pgConfig, opts.FileIDs, searchLimit, simpleArm, siteCfg.BM25TieredBoost,
+		)
+		keywordExtraLists = append(keywordExtraLists, rawBM25...)
+		stageLog = append(stageLog, "raw_query_lists", len(rawVec)+len(rawBM25))
+		observability.RecordRawQueryList("added")
+	}
+	timer.Mark("raw_query")
 
 	// ------------------------------------------------------------------
 	// 7d. AP-C4 graph-router chunk injection

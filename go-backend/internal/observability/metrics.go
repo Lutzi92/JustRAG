@@ -691,6 +691,30 @@ func RecordStepBackDecision(outcome string) {
 	stepBackDecisionTotal.WithLabelValues(outcome).Inc()
 }
 
+// --- Raw last-turn utterance retrieval lane (Wave 1 Task 7) ----------------
+
+var rawQueryListTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name:        "rag_raw_query_list_total",
+		Help:        "Per-outcome counter for the rewrite ⊕ raw retrieval lane (vector.SearchOptions.RawQuery). Outcome: added (the raw utterance differed from the condensed query and was folded into both RRF arms as an extra list).",
+		ConstLabels: commonLabels,
+	},
+	[]string{"outcome"},
+)
+
+// RecordRawQueryList increments the per-outcome counter for the raw-query
+// retrieval lane. Callers only invoke this when the lane actually fired,
+// so "added" is the sole outcome today; the outcome parameter (mirroring
+// RecordStepBackDecision's shape) keeps the label space open for a future
+// skip-reason breakdown without a metric rename. Empty input normalizes
+// to "added".
+func RecordRawQueryList(outcome string) {
+	if outcome == "" {
+		outcome = "added"
+	}
+	rawQueryListTotal.WithLabelValues(outcome).Inc()
+}
+
 // --- Long-context routing (T2-1) ------------------------------------------
 
 var longContextRouteTotal = promauto.NewCounterVec(

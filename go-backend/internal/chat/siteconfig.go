@@ -1687,3 +1687,26 @@ func AgentsAllowPrivilegedTools(ctx context.Context, reader SiteConfigReader) bo
 func AgentTeamRouterModel(ctx context.Context, reader SiteConfigReader) string {
 	return ResolveFastTierModel(ctx, reader, "agent_team_router_model")
 }
+
+// ChatCondenseKeepRawEnabled gates the rewrite ⊕ raw retrieval lane: when a
+// follow-up was condensed (CondenseFollowUp), the user's verbatim utterance
+// is searched as an extra RRF list on both arms (vector.SearchOptions.RawQuery).
+// Default off until the multi-turn golden set (Wave 2) scores it. Tunable via
+// "chat_condense_keep_raw_enabled".
+func ChatCondenseKeepRawEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_condense_keep_raw_enabled", false)
+}
+
+// rawQueryForRetrieval returns the raw utterance to pass as
+// SearchOptions.RawQuery, or "" when the lane is off or nothing was
+// condensed (raw == condensed after trimming).
+func rawQueryForRetrieval(enabled bool, raw, condensed string) string {
+	if !enabled {
+		return ""
+	}
+	r, c := strings.TrimSpace(raw), strings.TrimSpace(condensed)
+	if r == "" || r == c {
+		return ""
+	}
+	return r
+}
