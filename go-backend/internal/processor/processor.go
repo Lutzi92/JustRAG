@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -260,6 +261,11 @@ type Processor struct {
 	// kgCleaner clears a file's prior KG rows before re-extraction so re-ingest
 	// replaces rather than accumulates. nil → no pre-clean (back-compat).
 	kgCleaner kgDeleter
+	// largeGate bounds how many "large" spreadsheets (per
+	// chat.TabularLargeFileBytes) this process ingests concurrently. nil
+	// (the default) is a no-op — every spreadsheet ingests immediately,
+	// matching pre-gate behavior. Set via SetLargeFileGate.
+	largeGate *LargeFileGate
 }
 
 // indexedChunk pairs a chunk's text with its source page number.
@@ -398,6 +404,12 @@ func (p *Processor) SetMainDB(pool *pgxpool.Pool) {
 // wiring). nil (the default) leaves spreadsheets on the factory's registered
 // SpreadsheetParser (render-only, no materialisation, no LLM assist).
 func (p *Processor) SetIngester(g SpreadsheetIngester) { p.ingester = g }
+
+// SetLargeFileGate attaches the per-process large-spreadsheet concurrency
+// gate (worker-side wiring, constructed once at startup from
+// chat.TabularLargeFileConcurrency). nil (the default) leaves every
+// spreadsheet ingesting immediately regardless of size.
+func (p *Processor) SetLargeFileGate(g *LargeFileGate) { p.largeGate = g }
 
 // SetVectorPool attaches the vector Postgres pool used by the HyPE generation
 // stage. Without it, HyPE ingest is silently skipped even when the feature
@@ -847,6 +859,38 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 				Model:    chat.TabularProfileModel(ctx, p.siteConfigReader),
 			}
 		}
+		// Large-file gate: bound how many big spreadsheets this process
+		// materializes at once (tabular_large_file_concurrency), so a burst
+		// of multi-GB uploads doesn't blow the worker's memory budget —
+		// tabular/render holds one EmbedMaxRows-capped window of rows in
+		// memory per table region, and the threshold+gate exist precisely
+		// because that window scales with file size. The size threshold
+		// (tabular_large_file_bytes) is read fresh per file so an admin can
+		// retune it without a restart; the slot count is fixed at startup
+		// (Ruling R64). Small spreadsheets (or any file when no gate is
+		// wired) bypass this entirely and ingest immediately.
+		var releaseLargeFileSlot func()
+		if p.largeGate != nil {
+			if st, statErr := os.Stat(filePath); statErr != nil {
+				// A stat failure must never block ingest — treat the file
+				// as small and let it proceed uncontended.
+				logctx.From(ctx).Warn("processor: stat file for large-file gate failed; treating as small", "fileId", fileID, "error", statErr)
+			} else if st.Size() > int64(chat.TabularLargeFileBytes(ctx, p.siteConfigReader)) {
+				if err := p.store.UpdateFileStageDetail(ctx, fileID, stageDetailWaitingForSlot(rawLang)); err != nil {
+					logctx.From(ctx).Warn("processor: update stage detail failed", "fileId", fileID, "error", err)
+				}
+				if err := p.largeGate.Acquire(ctx); err != nil {
+					p.markTerminalError(ctx, fileID, "canceled", "Processing was interrupted")
+					return fmt.Errorf("processor: acquire large-file slot: %w", err)
+				}
+				releaseLargeFileSlot = p.largeGate.Release
+				logctx.From(ctx).Info("tabular.largefile.acquired", "file_id", fileID, "bytes", st.Size())
+			}
+		}
+		if releaseLargeFileSlot != nil {
+			defer releaseLargeFileSlot()
+		}
+		ingestStart := time.Now()
 		res, err := p.ingester.WithLLM(llm).Ingest(ctx, ingest.Input{
 			FilePath: filePath,
 			FileName: fileName,
@@ -872,9 +916,26 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			},
 		})
 		if err != nil {
+			observability.RecordTabularIngest("error", time.Since(ingestStart))
 			p.markTerminalError(ctx, fileID, "parse", "The spreadsheet could not be read")
 			return fmt.Errorf("processor: spreadsheet ingest: %w", err)
 		}
+		ingestDuration := time.Since(ingestStart)
+		observability.RecordTabularIngest("ok", ingestDuration)
+		var materialisedRows int64
+		for _, sheet := range res.Report.Sheets {
+			observability.RecordTabularIngestRows("read", int64(sheet.RowsRead))
+			observability.RecordTabularIngestRows("materialised", int64(sheet.RowsMaterialised))
+			observability.RecordTabularIngestRows("embedded", int64(sheet.RowsEmbedded))
+			observability.RecordTabularIngestRows("past_cap", int64(sheet.RowsPastCap))
+			materialisedRows += int64(sheet.RowsMaterialised)
+		}
+		logctx.From(ctx).Info("tabular.ingest.done",
+			"file_id", fileID,
+			"sheets", len(res.Report.Sheets),
+			"duration_ms", ingestDuration.Milliseconds(),
+			"materialised", materialisedRows,
+		)
 		// The report can carry cell-derived text (column names, sample
 		// diagnostics) — never log it in full, only the marshal outcome.
 		if rep, mErr := json.Marshal(res.Report); mErr != nil {

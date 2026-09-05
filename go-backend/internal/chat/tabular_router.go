@@ -108,6 +108,13 @@ type TabularTrace struct {
 	Repairs  int
 	Values   int
 	Question string
+	// Error is the last failure text on a non-success outcome (a validator
+	// rejection message, a truncated DB error, an LLM-call error, or
+	// ctx.Err() on a mid-repair cancellation) — already capped at
+	// tabularFailureCap runes. Empty on fired_ok, on a skip, and on the
+	// "model declared unanswerable" fired_empty (there is no failure text,
+	// only a declined capability).
+	Error string
 }
 
 // kbGateTTL bounds how long a HasDataForKB answer is reused. The gate runs
@@ -140,7 +147,7 @@ func (c *kbGateCache) has(ctx context.Context, cat TabularCatalogReader, kbID st
 	return has, nil
 }
 
-// tabularFailureCap bounds a DB error message fed back to the repair prompt.
+// tabularFailureCap bounds a DB or validator error message fed back to the repair prompt and the tabular_router_sql event.
 const tabularFailureCap = 500
 
 // tabularValueLookupPerLiteral is how many stored values one question
@@ -248,7 +255,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 	// will happen, so this must NOT be reported as fired and must not emit
 	// the fired/values events.
 	if ctx.Err() != nil {
-		return r.cancelled(in, res)
+		return r.cancelled(in, res, ctx.Err().Error())
 	}
 
 	// R44: "fired" means an SQL generation call is actually made, so it is
@@ -275,11 +282,12 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 	}
 
 	lastKind := failureNone
+	var lastFailure string
 	for round := 0; ; round++ {
 		// R43: a cancelled turn (client disconnect, turn budget) must not
 		// spend another LLM call or another DB round trip.
 		if ctx.Err() != nil {
-			return r.cancelled(in, res)
+			return r.cancelled(in, res, ctx.Err().Error())
 		}
 		// Each round's result count stands on its own: a repaired attempt
 		// must not inherit the previous attempt's row count.
@@ -288,6 +296,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 		prop, err := r.gen(ctx, req, in.KbID, cfg.Model)
 		if err != nil {
 			res.Trace.Outcome = "llm_error"
+			res.Trace.Error = truncateRunes(err.Error(), tabularFailureCap)
 			observability.RecordTabularRouter(res.Trace.Outcome)
 			res.Addendum = r.attemptedOnly(in.Language)
 			return res
@@ -302,7 +311,17 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 			return res
 		}
 
-		proposed := *prop.SQL
+		// Defence in depth for the Phase-4 acceptance failure: the schema
+		// heading and both prompt blocks now spell out the two-identifier
+		// relation form, but a model that writes `FROM "tabular.sheet_…"`
+		// anyway is rewritten here rather than burning the whole repair
+		// budget on a rejection it never recovered from (15 of 21 fired
+		// questions, 3 repairs each, 0 recoveries). The rewrite is
+		// token-level and never touches string literals or comments; from
+		// here on `proposed` IS the statement — what is validated, what is
+		// executed, what the trace/event reports, and what a repair round
+		// is shown as the previous attempt.
+		proposed := sqlcheck.NormalizeTabularRelations(*prop.SQL)
 		res.Trace.SQL = proposed
 
 		var failure string
@@ -310,7 +329,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 
 		execSQL, info, verr := sqlcheck.Validate(proposed, schema.AllowedTables, cfg.MaxRows)
 		if verr != nil {
-			failure, kind = verr.Error(), failureValidator
+			failure, kind = truncateRunes(verr.Error(), tabularFailureCap), failureValidator
 		} else {
 			out, eerr := r.exec.Execute(ctx, execSQL, sqlexec.Options{
 				Timeout: cfg.Timeout,
@@ -338,7 +357,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 				observability.RecordTabularRouter(res.Trace.Outcome)
 				observability.RecordTabularRouterRows(out.RowCount)
 				observability.RecordTabularRouterRepairs(res.Trace.Repairs)
-				emitTabular(in, map[string]any{"type": "tabular_router_sql", "sql": proposed})
+				emitTabularSQLOutcome(in, res.Trace, "")
 				emitTabular(in, map[string]any{
 					"type":      "tabular_router_rows",
 					"row_count": out.RowCount,
@@ -354,6 +373,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 		}
 
 		lastKind = kind
+		lastFailure = failure
 		if round >= cfg.MaxRepairs {
 			break
 		}
@@ -379,6 +399,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 	}
 	observability.RecordTabularRouter(res.Trace.Outcome)
 	observability.RecordTabularRouterRepairs(res.Trace.Repairs)
+	emitTabularSQLOutcome(in, res.Trace, lastFailure)
 	res.Addendum = r.attemptedOnly(in.Language)
 	return res
 }
@@ -408,10 +429,14 @@ func (r *TabularRouter) skip(in TabularRouterInput, res TabularRouterResult, rea
 // cancelled records an abandoned turn (R43): the client is gone or the turn
 // budget is spent, so no further LLM call and no further DB round trip is
 // made. res.Fired is left exactly as the caller had it — false before the
-// generation loop (no SQL call was made, R44), true once inside it.
-func (r *TabularRouter) cancelled(in TabularRouterInput, res TabularRouterResult) TabularRouterResult {
+// generation loop (no SQL call was made, R44), true once inside it. errText
+// is ctx.Err().Error(); it only reaches the emitted event when a prior
+// repair round already produced SQL (R67) — otherwise emitTabularSQLOutcome
+// no-ops on the empty trace.SQL.
+func (r *TabularRouter) cancelled(in TabularRouterInput, res TabularRouterResult, errText string) TabularRouterResult {
 	res.Trace.Outcome = "cancelled"
 	observability.RecordTabularRouter(res.Trace.Outcome)
+	emitTabularSQLOutcome(in, res.Trace, errText)
 	res.Addendum = r.attemptedOnly(in.Language)
 	return res
 }
@@ -426,6 +451,36 @@ func emitTabular(in TabularRouterInput, ev map[string]any) {
 	if in.Emit != nil {
 		in.Emit(ev)
 	}
+}
+
+// emitTabularSQLOutcome emits tabular_router_sql exactly once per Run call,
+// at trace finalisation, on every terminal outcome that actually produced a
+// candidate SQL statement — success (fired_ok), a validator rejection, a DB
+// error, repairs exhausted, or a mid-repair cancellation (R67). It is a
+// no-op when trace.SQL is empty: llm_error and the "model declared
+// unanswerable" fired_empty never reach a proposed statement, and a
+// cancellation before the first repair round leaves trace.SQL unset too —
+// in all of those cases there is no SQL to report.
+//
+// Only sql + outcome + error travel in the event, deliberately: never the
+// prompt or the schema. errText is "" on success. The failure text passed
+// in (a validator rejection message, a truncated DB error, ctx.Err()) is
+// already sanitized the same way the repair prompt's own failure text is
+// (tabularFailureCap truncates a raw DB error before it ever reaches here).
+// It also persists onto trace.Error so a caller with only the returned
+// TabularRouterResult (no access to the emitted event stream — e.g. eval's
+// AgentTrace.Tabular) still sees the failure text on a non-success outcome.
+func emitTabularSQLOutcome(in TabularRouterInput, trace *TabularTrace, errText string) {
+	if trace == nil || trace.SQL == "" {
+		return
+	}
+	trace.Error = errText
+	emitTabular(in, map[string]any{
+		"type":    "tabular_router_sql",
+		"sql":     trace.SQL,
+		"outcome": trace.Outcome,
+		"error":   errText,
+	})
 }
 
 // literalTexts projects the cue literals to their raw text for the value
@@ -459,13 +514,19 @@ func dropInstructionHits(hits []tabular.ValueHit) []tabular.ValueHit {
 // bare number is weak evidence — "55" is a substring of thousands of cells
 // — so only an exact match counts for it; a quoted/span/id literal was
 // deliberate enough that any match quality counts.
+//
+// A lone capitalised word ("word") is weak in the same way and is held to
+// the same exact-match bar: "die Fläche der Bibliothek" fires only because
+// a cell literally reads "Bibliothek", whereas the capitalised nouns of an
+// ordinary prose question match nothing at all, or match only as
+// substrings of some longer cell.
 func anyHitFires(hits []tabular.ValueHit, lits []TabularLiteral) bool {
 	kinds := make(map[string]string, len(lits))
 	for _, l := range lits {
 		kinds[strings.ToLower(l.Text)] = l.Kind
 	}
 	for _, h := range hits {
-		if kinds[strings.ToLower(h.Literal)] == "number" && h.Match != "exact" {
+		if kind := kinds[strings.ToLower(h.Literal)]; (kind == "number" || kind == "word") && h.Match != "exact" {
 			continue
 		}
 		return true

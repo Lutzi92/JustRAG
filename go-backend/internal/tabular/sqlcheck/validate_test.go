@@ -508,6 +508,123 @@ func TestReadOnlyShapeDollarTag(t *testing.T) {
 	}
 }
 
+// realTable is a materialized table name of the shape
+// tabular.TableNameFor actually produces (sheet_<32 hex>_<sheet>_<region>)
+// — the normaliser is deliberately anchored to that shape, so the short
+// `sheet_ab12_0_0` used by the tests above cannot exercise it.
+const realTable = "sheet_d864f30085aa494f9aed70cdd4c6fce6_0_0"
+
+var realAllow = map[string]bool{"tabular." + realTable: true}
+
+// TestNormalizeTabularRelations is the Phase-4 acceptance fix: the SQL
+// generator writes the schema heading as ONE identifier
+// (FROM "tabular.sheet_…"), which is a relation that does not exist —
+// 15 of 21 fired questions in the acceptance run were rejected this way.
+// The normaliser rewrites exactly that token shape into the two-token
+// form, and nothing else: not a string literal, not a comment, not another
+// schema's name.
+//
+// Mutation guard: replacing the tokenizer walk with a plain
+// strings.ReplaceAll over the whole statement makes the literal and both
+// comment cases red (their embedded text would be rewritten too).
+func TestNormalizeTabularRelations(t *testing.T) {
+	t.Parallel()
+	bad := `"tabular.` + realTable + `"`
+	good := `"tabular"."` + realTable + `"`
+
+	cases := []struct {
+		name, in, want string
+	}{
+		{"from", `SELECT "material" FROM ` + bad + ` WHERE "nr" = '1' LIMIT 200`,
+			`SELECT "material" FROM ` + good + ` WHERE "nr" = '1' LIMIT 200`},
+		{"join-two-occurrences", `SELECT 1 FROM ` + bad + ` a JOIN ` + bad + ` b ON a."id" = b."id"`,
+			`SELECT 1 FROM ` + good + ` a JOIN ` + good + ` b ON a."id" = b."id"`},
+		{"already-correct", `SELECT 1 FROM ` + good, `SELECT 1 FROM ` + good},
+		{"inside-string-literal", `SELECT 1 FROM ` + good + ` WHERE "n" = 'see ` + bad + ` here'`,
+			`SELECT 1 FROM ` + good + ` WHERE "n" = 'see ` + bad + ` here'`},
+		{"inside-line-comment", "SELECT 1 FROM " + good + " -- was " + bad + "\nLIMIT 1",
+			"SELECT 1 FROM " + good + " -- was " + bad + "\nLIMIT 1"},
+		{"inside-block-comment", `SELECT 1 /* ` + bad + ` */ FROM ` + good,
+			`SELECT 1 /* ` + bad + ` */ FROM ` + good},
+		{"other-schema", `SELECT 1 FROM "public.` + realTable + `"`, `SELECT 1 FROM "public.` + realTable + `"`},
+		{"unrelated-dotted-identifier", `SELECT 1 FROM "tabular.not_a_sheet"`, `SELECT 1 FROM "tabular.not_a_sheet"`},
+		{"nothing-to-do", `SELECT 1 FROM tabular."sheet_ab12_0_0"`, `SELECT 1 FROM tabular."sheet_ab12_0_0"`},
+	}
+	for _, c := range cases {
+		if got := NormalizeTabularRelations(c.in); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	// The normalised bad form must actually validate; the other-schema
+	// token must still be rejected, exactly as before.
+	if _, _, err := Validate(NormalizeTabularRelations(`SELECT "material" FROM `+bad+` LIMIT 10`), realAllow, 200); err != nil {
+		t.Errorf("normalised statement must validate: %v", err)
+	}
+	if _, _, err := Validate(NormalizeTabularRelations(`SELECT 1 FROM "public.`+realTable+`"`), realAllow, 200); err == nil {
+		t.Error("a non-tabular schema in a single quoted identifier must still be rejected")
+	}
+}
+
+// TestNormalizeTabularRelationsKeepsReadOnlyGate is the adversarial case
+// for the normaliser: a statement that carries the bad relation token in a
+// real FROM clause AND the same text inside a top-level string literal,
+// followed by real DDL outside any literal. Normalising must rewrite only
+// the FROM token, leave the literal byte-identical, and must not desync
+// the read-only gate — the trailing `; DROP TABLE` is still outside every
+// literal and must still be rejected.
+func TestNormalizeTabularRelationsKeepsReadOnlyGate(t *testing.T) {
+	t.Parallel()
+	bad := `"tabular.` + realTable + `"`
+	literal := `'a ` + bad + ` b'`
+	sql := `SELECT "x" FROM ` + bad + ` WHERE "n" = ` + literal + ` ; DROP TABLE evil`
+
+	got := NormalizeTabularRelations(sql)
+	if !strings.Contains(got, literal) {
+		t.Fatalf("the string literal must survive verbatim, got %q", got)
+	}
+	if !strings.Contains(got, `FROM "tabular"."`+realTable+`"`) {
+		t.Fatalf("the FROM token must be normalised, got %q", got)
+	}
+	if _, _, err := Validate(got, realAllow, 200); err == nil {
+		t.Fatal("DDL outside every literal must still be rejected after normalisation")
+	}
+	// And the gate must still blank the literal rather than read it as
+	// SQL: the same statement without the trailing DDL is legitimate.
+	if err := ReadOnlyShape(`SELECT "x" FROM ` + bad + ` WHERE "n" = ` + literal); err != nil {
+		t.Fatalf("a keyword-free literal must not trip the gate: %v", err)
+	}
+}
+
+// TestValidateDottedRelationMessageNamesTheFix pins the repair-loop
+// contract: the rejection the router feeds back into the FAILURE block
+// must spell out the required two-quoted-identifier form. Without it the
+// model re-emits the same statement (acceptance run: 3 repairs, 0
+// recoveries, 15 times).
+func TestValidateDottedRelationMessageNamesTheFix(t *testing.T) {
+	t.Parallel()
+	_, _, err := Validate(`SELECT 1 FROM "tabular.`+realTable+`"`, realAllow, 200)
+	if err == nil {
+		t.Fatal("a dotted single identifier must still be rejected")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		`"tabular.` + realTable + `"`,
+		`"tabular"."` + realTable + `"`,
+		"two quoted identifiers",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("rejection %q must contain %q", msg, want)
+		}
+	}
+	// A dotted identifier naming some other schema keeps the generic
+	// message — the hint is specific to the tabular mistake.
+	_, _, err = Validate(`SELECT 1 FROM "public.`+realTable+`"`, realAllow, 200)
+	if err == nil || strings.Contains(err.Error(), "two quoted identifiers") {
+		t.Errorf("non-tabular dotted identifier must keep the generic message, got %v", err)
+	}
+}
+
 func contains(xs []string, s string) bool {
 	for _, x := range xs {
 		if x == s {

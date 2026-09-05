@@ -8,6 +8,7 @@ package sqlcheck
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -220,6 +221,20 @@ func checkTable(tn *tree.TableName, cteNames, allowedTables, tables map[string]b
 		if cteNames[object] {
 			return false
 		}
+		// A single quoted identifier whose CONTENT is "tabular.<table>" is
+		// not a schema-qualified reference — it is one relation whose name
+		// happens to contain a dot, and no such relation exists. The SQL
+		// generator produces this shape often enough (it reads the schema
+		// text's table heading as one name) that the rejection has to name
+		// the required form: the router feeds this message verbatim into
+		// the repair prompt's FAILURE block, and a repair round that is
+		// only told "outside the tabular schema" reliably re-emits the
+		// same statement (Phase 4 acceptance: 15/21 fired questions were
+		// rejected this way, none recovered in 3 repairs).
+		if rest, ok := strings.CutPrefix(object, "tabular."); ok && rest != "" {
+			*verr = fmt.Errorf("sqlcheck: relation %q must be written as %q.%q (two quoted identifiers)", object, "tabular", rest)
+			return true
+		}
 		*verr = fmt.Errorf("sqlcheck: relation %q is outside the tabular schema", object)
 		return true
 	}
@@ -393,4 +408,62 @@ func limitCount(count tree.Expr) int {
 		return 0
 	}
 	return int(i)
+}
+
+// tabularRelationTokenRe matches the CONTENT of a single quoted identifier
+// that is really a two-part relation reference written as one name:
+// exactly "tabular.<materialized table name>", the shape
+// tabular.TableNameFor produces (sheet_<32 hex>_<sheet>_<region>). Anchored
+// on both ends and restricted to that exact name shape on purpose — this is
+// a repair for one specific, observed generator mistake, not a general
+// "split any dotted identifier" rewrite, which would silently rename a
+// relation whose name legitimately contains a dot.
+var tabularRelationTokenRe = regexp.MustCompile(`^tabular\.(sheet_[0-9a-f]{32}_[0-9]+_[0-9]+)$`)
+
+// NormalizeTabularRelations rewrites every quoted-identifier token whose
+// content is exactly "tabular.sheet_…" into the schema-qualified two-token
+// form "tabular"."sheet_…", and returns sql unchanged when there is nothing
+// to rewrite.
+//
+// It exists because the SQL generator keeps reading the schema text's table
+// heading as ONE identifier and emitting FROM "tabular.sheet_<hash>_0_0" —
+// a relation that does not exist and that Validate (correctly) rejects. The
+// prompt and the schema rendering both now spell out the required form;
+// this is the defence in depth for when the model writes the wrong one
+// anyway.
+//
+// The rewrite is TEXTUAL and token-level, applied BEFORE validation: it
+// never re-serialises a parsed statement (Validate's contract is that the
+// statement it returns is the text it was given, or that text wrapped for
+// LIMIT), and it uses the same tokenizer as the read-only gate, so text
+// inside a string literal, a dollar-quoted string, or a comment is left
+// exactly as written — only a real quoted identifier is rewritten. A token
+// naming any other schema ("public.sheet_…") is left alone, and is then
+// rejected by Validate exactly as before.
+func NormalizeTabularRelations(sql string) string {
+	r := []rune(sql)
+	spans, _, _ := scanLiteralSpans(r, true)
+
+	var b strings.Builder
+	prev := 0
+	for _, sp := range spans {
+		// Only a terminated quoted identifier: an unterminated one runs to
+		// the end of the input and has no closing quote to rewrite around
+		// (ReadOnlyShape rejects it moments later anyway).
+		if sp.quote != '"' || sp.end-sp.start < 2 || r[sp.end-1] != '"' {
+			continue
+		}
+		m := tabularRelationTokenRe.FindStringSubmatch(string(r[sp.start+1 : sp.end-1]))
+		if m == nil {
+			continue
+		}
+		b.WriteString(string(r[prev:sp.start]))
+		b.WriteString(`"tabular"."` + m[1] + `"`)
+		prev = sp.end
+	}
+	if prev == 0 {
+		return sql
+	}
+	b.WriteString(string(r[prev:]))
+	return b.String()
 }

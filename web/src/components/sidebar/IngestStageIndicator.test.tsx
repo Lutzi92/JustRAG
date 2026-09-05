@@ -28,4 +28,14 @@ describe('IngestStageIndicator', () => {
     render(<IngestStageIndicator stage="kg" fileName="doc.pdf" />);
     expect(screen.queryByText(/\//)).not.toBeInTheDocument();
   });
+
+  it('renders the detail line when provided', () => {
+    render(<IngestStageIndicator stage="tabular" fileName="sheet.xlsx" detail="Blatt 2/3 · 120000 Zeilen" />);
+    expect(screen.getByText('Blatt 2/3 · 120000 Zeilen')).toBeInTheDocument();
+  });
+
+  it('omits the detail line when not provided', () => {
+    const { container } = render(<IngestStageIndicator stage="tabular" fileName="sheet.xlsx" />);
+    expect(container.querySelector('.sidebar-left__file-stage-detail')).not.toBeInTheDocument();
+  });
 });

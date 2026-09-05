@@ -1,7 +1,7 @@
 import React, { memo } from 'react';
 import {
     Link, Globe, Bot, FileText, Download, Trash2,
-    Rss, RefreshCw, Pause, Play, Eye, BookOpen, GitBranch
+    Rss, RefreshCw, Pause, Play, Eye, BookOpen, GitBranch, Table as TableIcon
 } from 'lucide-react';
 import type { FileEntry, RssFeed, ConfluenceSource, GitRepoSource, SyncSchedule } from '../../types';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -30,6 +30,7 @@ interface SourcesSectionProps {
     onSyncGitRepoNow: (sourceId: string) => void;
     onRetryFile: (id: string) => void;
     onRetryAllFailed: () => void;
+    onOpenTabular: (file: FileEntry) => void;
 }
 
 // Maps files.error_stage values (backend vocabulary, see
@@ -45,13 +46,22 @@ const ERROR_STAGE_KEYS: Record<string, string> = {
     queue: 'fileErrorQueue',
 };
 
+// Extensions the spreadsheet parser handles (parser.SpreadsheetParser),
+// deliberately excluding .xlsm (macro-enabled workbooks, out of scope) — the
+// "Tabellen" file-detail button only makes sense for these.
+const SPREADSHEET_EXTENSIONS = ['.xlsx', '.xls', '.ods', '.csv', '.tsv'];
+const isSpreadsheetFile = (name: string): boolean => {
+    const lower = name.toLowerCase();
+    return SPREADSHEET_EXTENSIONS.some(ext => lower.endsWith(ext));
+};
+
 const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
     files, onPreviewSource, onToggleFileSelection, onToggleFilesSelection,
     onDownloadFile, onDeleteFile,
     rssFeeds, onUpdateRssFeed, onDeleteRssFeed, onPollFeedNow, onViewFeed,
     confluenceSources, onUpdateConfluenceSource, onDeleteConfluenceSource, onSyncConfluenceNow,
     gitRepoSources, onUpdateGitRepoSource, onDeleteGitRepoSource, onSyncGitRepoNow,
-    onRetryFile, onRetryAllFailed
+    onRetryFile, onRetryAllFailed, onOpenTabular
 }) => {
     const { t } = useTheme();
 
@@ -112,6 +122,16 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                                 <RefreshCw size={14} />
                                             </button>
                                         )}
+                                        {file.status === 'completed' && isSpreadsheetFile(file.name) && (
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); onOpenTabular(file); }}
+                                                className="settings-toggle sidebar-left__file-action sidebar-ui__item-delete"
+                                                title={t('tabularPanelOpen')}
+                                                aria-label={`${t('tabularPanelOpen')} ${file.name}`}
+                                            >
+                                                <TableIcon size={14} />
+                                            </button>
+                                        )}
                                         <button
                                             onClick={(e) => { e.stopPropagation(); onDownloadFile(file.id); }}
                                             className="settings-toggle sidebar-left__file-action sidebar-ui__item-delete"
@@ -151,6 +171,7 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                         index={file.stageIndex}
                                         total={file.stageTotal}
                                         fileName={file.name}
+                                        detail={file.stageDetail}
                                     />
                                 )}
                             </div>

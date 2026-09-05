@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/safego"
+	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -43,6 +44,16 @@ type MaintenanceConfig struct {
 	// MetricsRetention is how long to keep metrics rows before pruning.
 	// Default: 90 days.
 	MetricsRetention time.Duration
+
+	// TabularOrphanSweeper drops materialized tabular tables (and their
+	// tabular_column_values rows) whose owning `files` row is gone (R65).
+	// Nil disables the sweep loop entirely (e.g. in tests that don't wire
+	// one).
+	TabularOrphanSweeper *tabular.OrphanSweeper
+
+	// TabularOrphanInterval is how often the tabular orphan-table sweep
+	// runs. Default: 6 hours.
+	TabularOrphanInterval time.Duration
 }
 
 // StartMaintenance starts periodic background maintenance tasks (stuck file
@@ -67,6 +78,9 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 	}
 	if cfg.MetricsRetention == 0 {
 		cfg.MetricsRetention = 90 * 24 * time.Hour // 90 days
+	}
+	if cfg.TabularOrphanInterval == 0 {
+		cfg.TabularOrphanInterval = 6 * time.Hour
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -209,12 +223,41 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 		}
 	})
 
+	// Tabular orphan-table sweep (R65): drops materialized spreadsheet
+	// tables (and their tabular_column_values rows) whose owning `files`
+	// row is gone. Nil sweeper (no MainDB wired, or explicitly disabled)
+	// skips the loop entirely rather than looping on a nil-pointer panic.
+	if cfg.TabularOrphanSweeper != nil {
+		launch("tabular_orphan_cleanup", func() {
+			startupDelay := time.NewTimer(5 * time.Minute)
+			defer startupDelay.Stop()
+			select {
+			case <-ctx.Done():
+				return
+			case <-startupDelay.C:
+				sweepTabularOrphans(ctx, cfg.TabularOrphanSweeper)
+			}
+
+			ticker := time.NewTicker(cfg.TabularOrphanInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					sweepTabularOrphans(ctx, cfg.TabularOrphanSweeper)
+				}
+			}
+		})
+	}
+
 	slog.Info("maintenance tasks started",
 		"stuckCheckInterval", cfg.StuckCheckInterval,
 		"stuckFileTimeout", cfg.StuckFileTimeout,
 		"orphanCleanupInterval", cfg.OrphanCleanupInterval,
 		"metricsInterval", cfg.MetricsInterval,
 		"metricsRetention", cfg.MetricsRetention,
+		"tabularOrphanInterval", cfg.TabularOrphanInterval,
 	)
 
 	return func() {
@@ -251,6 +294,26 @@ func checkStuckFiles(ctx context.Context, mainDB *pgxpool.Pool, timeout time.Dur
 			"count", tag.RowsAffected(),
 			"timeoutMinutes", int(timeout.Minutes()),
 		)
+	}
+}
+
+// sweepTabularOrphans drops materialized tabular tables (and their
+// tabular_column_values rows) whose owning `files` row no longer exists
+// (R65). The metric this should feed (rag_tabular_orphan_tables_dropped_total)
+// is not wired here — deferred, not blocked on anything: the drop count is
+// already surfaced via the "tabular orphan sweep completed"/"tabular orphan
+// sweep failed" log lines below (the maintenance loop registers this task as
+// "tabular_orphan_cleanup") and the sweep's return value, so an operator has
+// a way to see it today. Adding the Prometheus counter is a documented
+// follow-up — see docs/runbooks/spreadsheet-ingest-ops.md §7.
+func sweepTabularOrphans(ctx context.Context, sweeper *tabular.OrphanSweeper) {
+	dropped, err := sweeper.Sweep(ctx, 100)
+	if err != nil {
+		slog.Error("tabular orphan sweep failed", "error", err)
+		return
+	}
+	if len(dropped) > 0 {
+		slog.Info("tabular orphan sweep completed", "dropped", len(dropped))
 	}
 }
 

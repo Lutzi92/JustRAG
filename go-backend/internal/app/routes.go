@@ -242,6 +242,11 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	// row (keyed on the file id) goes with the files row and the physical
 	// tables become unreachable orphans (C1/R20).
 	filesHandler.SetTableDropper(tabular.NewMaterializer(infra.db.Main))
+	// Wire the upload sizing-knob resolver so Upload can reject an oversize
+	// spreadsheet with a 413 naming the configured tabular_max_file_bytes
+	// limit. Adapter, not a direct chat.SiteConfigReader wiring, so
+	// internal/files stays free of the internal/chat import.
+	filesHandler.SetUploadLimits(tabularUploadLimits{reader: chatStore})
 	cascadeDeleter.SetQueryCacheInvalidator(searchService)
 
 	// Online feedback loop: per-chunk feedback aggregate reader (main DB).
@@ -703,6 +708,16 @@ func (a pendingInviteAdapter) ListPendingInvites(ctx context.Context, kbID strin
 	return out, nil
 }
 
+// tabularUploadLimits adapts chat.TabularMaxFileBytes to files.UploadLimits.
+// internal/files must not import internal/chat (its much larger dependency
+// graph, and the two packages' Store/Handler names would collide badly), so
+// this narrow adapter is the one place that bridges them.
+type tabularUploadLimits struct{ reader chat.SiteConfigReader }
+
+func (a tabularUploadLimits) TabularMaxFileBytes(ctx context.Context) int {
+	return chat.TabularMaxFileBytes(ctx, a.reader)
+}
+
 func registerKBRoutes(rc *routeCtx, inviteRL *middleware.RedisRateLimiter) {
 	kbHandler := kb.NewHandler(rc.kbStore)
 	kbUpdateHandler := kb.NewUpdateHandler(rc.kbStore, func(kbID string) { rc.aiResolver.Invalidate(kbID) })
@@ -764,6 +779,11 @@ func registerKBRoutes(rc *routeCtx, inviteRL *middleware.RedisRateLimiter) {
 	// middleware chain any tighter than edit would be redundant.
 	rc.mux.Handle("DELETE /api/kb/{id}", rc.kbEditChain(kbDeleteHandler.DeleteKB))
 	rc.mux.Handle("GET /api/kb/{id}/files", rc.kbViewChain(kbUpdateHandler.ListFiles))
+	// The "Tabellen" file-detail panel: the persisted spreadsheet ingest
+	// report plus the tabular_catalog projection for one file. Same
+	// kbViewChain as the list above — GetFileTabular's own fileBelongsToKB
+	// guard rejects a fileId that belongs to a different KB.
+	rc.mux.Handle("GET /api/kb/{id}/files/{fileId}/tabular", rc.kbViewChain(kbHandler.GetFileTabular))
 
 	// Member management — the four-role successor to the deprecated /share*
 	// surface, removed in Task 9 of the four-role KB permission model (see

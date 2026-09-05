@@ -1557,6 +1557,74 @@ func TestTabularCatalogReaders(t *testing.T) {
 	}
 }
 
+// TestTabularSizingReaders covers the three Phase-4 upload/ingest sizing
+// readers (tabular_max_file_bytes, tabular_large_file_bytes,
+// tabular_large_file_concurrency): defaults, in-range overrides, and the
+// out-of-range fallback-to-default behavior shared with every other
+// readInt-backed reader in this file.
+func TestTabularSizingReaders(t *testing.T) {
+	ctx := context.Background()
+
+	// Defaults (nil reader).
+	if got := TabularMaxFileBytes(ctx, nil); got != 524_288_000 {
+		t.Errorf("TabularMaxFileBytes default = %d, want 524288000", got)
+	}
+	if got := TabularLargeFileBytes(ctx, nil); got != 20_971_520 {
+		t.Errorf("TabularLargeFileBytes default = %d, want 20971520", got)
+	}
+	if got := TabularLargeFileConcurrency(ctx, nil); got != 1 {
+		t.Errorf("TabularLargeFileConcurrency default = %d, want 1", got)
+	}
+
+	// In-range overrides via a struct-backed fake reader.
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"tabular_max_file_bytes":         strPtr("104857600"), // 100 MB
+		"tabular_large_file_bytes":       strPtr("52428800"),  // 50 MB
+		"tabular_large_file_concurrency": strPtr("4"),
+	}}
+	if got := TabularMaxFileBytes(ctx, r); got != 104_857_600 {
+		t.Errorf("TabularMaxFileBytes override = %d, want 104857600", got)
+	}
+	if got := TabularLargeFileBytes(ctx, r); got != 52_428_800 {
+		t.Errorf("TabularLargeFileBytes override = %d, want 52428800", got)
+	}
+	if got := TabularLargeFileConcurrency(ctx, r); got != 4 {
+		t.Errorf("TabularLargeFileConcurrency override = %d, want 4", got)
+	}
+
+	// Out-of-range values fall back to the default rather than clamping.
+	outOfRange := &fakeSiteConfigReader{values: map[string]*string{
+		"tabular_max_file_bytes":         strPtr("1024"), // below min 1048576
+		"tabular_large_file_bytes":       strPtr("1024"), // below min 1048576
+		"tabular_large_file_concurrency": strPtr("0"),    // below min 1
+	}}
+	if got := TabularMaxFileBytes(ctx, outOfRange); got != 524_288_000 {
+		t.Errorf("TabularMaxFileBytes(below min) = %d, want default 524288000", got)
+	}
+	if got := TabularLargeFileBytes(ctx, outOfRange); got != 20_971_520 {
+		t.Errorf("TabularLargeFileBytes(below min) = %d, want default 20971520", got)
+	}
+	if got := TabularLargeFileConcurrency(ctx, outOfRange); got != 1 {
+		t.Errorf("TabularLargeFileConcurrency(below min) = %d, want default 1", got)
+	}
+
+	// Above-max also falls back to default.
+	aboveMax := &fakeSiteConfigReader{values: map[string]*string{
+		"tabular_max_file_bytes":         strPtr("2147483648"), // above max 2147483647
+		"tabular_large_file_bytes":       strPtr("1073741825"), // above max 1073741824
+		"tabular_large_file_concurrency": strPtr("9"),          // above max 8
+	}}
+	if got := TabularMaxFileBytes(ctx, aboveMax); got != 524_288_000 {
+		t.Errorf("TabularMaxFileBytes(above max) = %d, want default 524288000", got)
+	}
+	if got := TabularLargeFileBytes(ctx, aboveMax); got != 20_971_520 {
+		t.Errorf("TabularLargeFileBytes(above max) = %d, want default 20971520", got)
+	}
+	if got := TabularLargeFileConcurrency(ctx, aboveMax); got != 1 {
+		t.Errorf("TabularLargeFileConcurrency(above max) = %d, want default 1", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Recency-listing readers tests
 // ---------------------------------------------------------------------------
@@ -1703,5 +1771,39 @@ func TestTabularRouterReaders(t *testing.T) {
 	neither := &fakeSiteConfigReader{values: map[string]*string{}}
 	if got := ChatTabularRouterModel(ctx, neither); got != "" {
 		t.Errorf("neither set should yield empty, got %q", got)
+	}
+}
+
+// TestChatTabularGuidanceMaxTokens_DefaultsAndRange is the R66 carry guard:
+// the answer-prompt guidance summary's token budget must be reader-driven
+// (default 6000, matching the retired tabularSchemaSummaryMaxTokens
+// constant) with the same out-of-range-falls-back-to-default convention as
+// its sibling ChatTabularRouterSchemaMaxTokens.
+func TestChatTabularGuidanceMaxTokens_DefaultsAndRange(t *testing.T) {
+	ctx := context.Background()
+
+	if got := ChatTabularGuidanceMaxTokens(ctx, nil); got != 6000 {
+		t.Errorf("ChatTabularGuidanceMaxTokens default = %d, want 6000", got)
+	}
+
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_guidance_max_tokens": strPtr("2000"),
+	}}
+	if got := ChatTabularGuidanceMaxTokens(ctx, r); got != 2000 {
+		t.Errorf("ChatTabularGuidanceMaxTokens override = %d, want 2000", got)
+	}
+
+	outOfRange := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_guidance_max_tokens": strPtr("99999999"), // above max 30000
+	}}
+	if got := ChatTabularGuidanceMaxTokens(ctx, outOfRange); got != 6000 {
+		t.Errorf("ChatTabularGuidanceMaxTokens out-of-range = %d, want default 6000", got)
+	}
+
+	belowMin := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_guidance_max_tokens": strPtr("500"), // below min 1000
+	}}
+	if got := ChatTabularGuidanceMaxTokens(ctx, belowMin); got != 6000 {
+		t.Errorf("ChatTabularGuidanceMaxTokens below-min = %d, want default 6000", got)
 	}
 }

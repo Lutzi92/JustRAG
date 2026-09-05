@@ -266,6 +266,11 @@ func RunWorker(cfg *config.Config) error {
 	proc.SetMainDB(db.Main)
 	proc.SetVectorPool(db.Vector)
 	proc.SetIngester(processor.NewIngesterAdapter(ingest.New(tableDropper, nil)))
+	// Large-file gate: the slot count (tabular_large_file_concurrency) is
+	// read once here at startup (Ruling R64) — unlike the per-file size
+	// threshold (tabular_large_file_bytes), which ProcessFile re-reads for
+	// every spreadsheet so it can be retuned without a worker restart.
+	proc.SetLargeFileGate(processor.NewLargeFileGate(chat.TabularLargeFileConcurrency(ctx, chatStore)))
 	proc.SetKGEventPublisher(kgevents.NewPublisher(rdb.Client))
 	proc.SetKGDeleter(kg.NewPgStore(db.Main))
 	mux.HandleFunc(jobs.TypeResearchExecution, worker.Instrument(worker.NewResearchExecutionHandler(aiResolver, searchService, rdb.Client, chatStore, sharedFetcher)))
@@ -480,9 +485,10 @@ func RunWorker(cfg *config.Config) error {
 	var stopMaintenance func()
 	if cfg.WorkerMaintenance {
 		stopMaintenance = worker.StartMaintenance(ctx, worker.MaintenanceConfig{
-			MainDB:           db.Main,
-			VectorDB:         db.Vector,
-			StuckFileTimeout: cfg.StuckFileTimeout,
+			MainDB:               db.Main,
+			VectorDB:             db.Vector,
+			StuckFileTimeout:     cfg.StuckFileTimeout,
+			TabularOrphanSweeper: tabular.NewOrphanSweeper(db.Main),
 		})
 	}
 	defer func() {

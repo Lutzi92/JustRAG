@@ -176,6 +176,10 @@ func main() {
 		ContentsForQuestion(questionID string, k int) (contents []string, fileNames []string, ok bool)
 	}
 
+	// Carry 3 (Phase 4 Task 7): nil unless --production-context builds the
+	// router below — trajectory mode stays router-free otherwise, matching the
+	// adapters' "no --production-context ⇒ no router" convention.
+	var trajTabularRouter *chat.TabularRouter
 	var adapter evalAdapter
 	if *productionContext {
 		flags := eval.EvalFlags{
@@ -211,6 +215,7 @@ func main() {
 				return chat.ResolveTabularRouterConfig(ctx, chatStore)
 			},
 		)
+		trajTabularRouter = tabularRouter
 		if *teamID != "" {
 			teamStore := agentteams.NewStore(db.Main)
 			adapter = eval.NewTeamDispatchAdapter(
@@ -275,6 +280,7 @@ func main() {
 			os.Exit(2)
 		}
 		traj := runTrajectoryEval(ctx, eval.TrajectoryRunDeps{
+			TabularRouter: trajTabularRouter,
 			AIResolver:    aiResolver,
 			SearchService: searchService,
 			SiteReader:    siteReader,

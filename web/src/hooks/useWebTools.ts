@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import axios from 'axios';
-import type { KnowledgeBase } from '../types';
+import type { KnowledgeBase, FileEntry } from '../types';
 import { API_BASE_URL, authFetch } from '../api';
 import { useTheme } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
@@ -26,6 +26,8 @@ export function useWebTools({ currentKb, fetchFiles }: UseWebToolsParams) {
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [pdfPreview, setPdfPreview] = useState<{ fileId: string; fileName: string; page: number } | null>(null);
   const [showPdfPreview, setShowPdfPreview] = useState(false);
+  const [tabularFile, setTabularFile] = useState<{ fileId: string; fileName: string } | null>(null);
+  const [showTabularModal, setShowTabularModal] = useState(false);
   const [toolLoading, setToolLoading] = useState(false);
   const [showWebWorkspace, setShowWebWorkspace] = useState(false);
   const [sourcesAddedCount, setSourcesAddedCount] = useState(0);
@@ -304,6 +306,11 @@ export function useWebTools({ currentKb, fetchFiles }: UseWebToolsParams) {
     setShowPdfPreview(true);
   }, []);
 
+  const handleOpenTabular = useCallback((file: FileEntry) => {
+    setTabularFile({ fileId: file.id, fileName: file.name });
+    setShowTabularModal(true);
+  }, []);
+
   const fetchFileContent = useCallback(async (fileId: string, fileName: string) => {
     try {
       const res = await axios.get(`${API_BASE_URL}/api/files/${fileId}/download`, {
@@ -341,20 +348,22 @@ export function useWebTools({ currentKb, fetchFiles }: UseWebToolsParams) {
     crawlResults, searchResults, selectedPages, setSelectedPages, sourcesAddedCount,
     previewPage, showPreviewModal, setShowPreviewModal,
     pdfPreview, showPdfPreview, setShowPdfPreview,
+    tabularFile, showTabularModal, setShowTabularModal,
     toolLoading, showWebWorkspace, setShowWebWorkspace,
     webResearchRunning, webResearchStatus, webResearchProgress,
     handleWebResearch, handleCancelWebResearch, handleToolSubmit,
     handleAddSources, handleUpdateWebResult, handleStartEditWebResult,
-    handlePdfSourceOpen, fetchFileContent, handlePreviewSource,
+    handlePdfSourceOpen, fetchFileContent, handlePreviewSource, handleOpenTabular,
   }), [
     toolTab, toolInput, crawlMaxPages, searchResultsCount,
     crawlResults, searchResults, selectedPages, sourcesAddedCount,
     previewPage, showPreviewModal,
     pdfPreview, showPdfPreview,
+    tabularFile, showTabularModal,
     toolLoading, showWebWorkspace,
     webResearchRunning, webResearchStatus, webResearchProgress,
     handleWebResearch, handleCancelWebResearch, handleToolSubmit,
     handleAddSources, handleUpdateWebResult, handleStartEditWebResult,
-    handlePdfSourceOpen, fetchFileContent, handlePreviewSource
+    handlePdfSourceOpen, fetchFileContent, handlePreviewSource, handleOpenTabular
   ]);
 }

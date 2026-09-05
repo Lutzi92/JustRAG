@@ -2,15 +2,22 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/tabular/ingest"
 	"github.com/justrag/go-backend/internal/tabular/profile"
 	"github.com/justrag/go-backend/internal/vector"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -663,16 +670,25 @@ func TestToParseResult_NoPages(t *testing.T) {
 type fakeIngester struct {
 	calls []ingest.Input
 	llm   profile.LLMProfiler
+	// err, when set, makes Ingest return it instead of a result — used to
+	// exercise the error path of the ingest-metrics wiring without a real
+	// failing spreadsheet.
+	err error
 }
 
 func (f *fakeIngester) Ingest(_ context.Context, in ingest.Input) (*ingest.Result, error) {
 	f.calls = append(f.calls, in)
+	if f.err != nil {
+		return nil, f.err
+	}
 	return &ingest.Result{
 		Text:  "   ",
 		Pages: []ingest.Page{{Number: 1, Text: "   "}},
 		Report: tabular.ParseReport{
 			Version: 1,
-			Sheets:  []tabular.SheetReport{{Name: "S", Kind: "table"}},
+			Sheets: []tabular.SheetReport{
+				{Name: "S", Kind: "table", RowsRead: 10, RowsMaterialised: 8, RowsEmbedded: 6, RowsPastCap: 2},
+			},
 		},
 	}, nil
 }
@@ -689,7 +705,9 @@ func (f *fakeIngester) WithLLM(llm profile.LLMProfiler) SpreadsheetIngester {
 // kg_extraction_enabled, hype_enabled, and raptor_enabled are ALL explicitly
 // on in site_config — isSpreadsheet must force every one of them off via
 // spreadsheetStageFlags. Also asserts the ingester was called with a nil LLM
-// profiler (no AI resolver wired in this test).
+// profiler (no AI resolver wired in this test), and that a successful
+// Ingest call records the "ok" outcome metric plus the per-sheet row-kind
+// counters (Task 3).
 func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
 	store := &mockStore{}
 	p := NewProcessor(parser.DefaultFactoryWith(nil), nil, nil, store)
@@ -702,6 +720,13 @@ func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
 	}})
 	ing := &fakeIngester{}
 	p.SetIngester(ing)
+
+	beforeOK := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("ok"))
+	beforeErr := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("error"))
+	beforeRead := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("read"))
+	beforeMaterialised := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("materialised"))
+	beforeEmbedded := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("embedded"))
+	beforePastCap := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("past_cap"))
 
 	_ = p.ProcessFile(context.Background(), ProcessFileInput{
 		FileID:    "f1",
@@ -721,6 +746,24 @@ func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
 	if store.parseReports["f1"] == nil || !strings.Contains(string(store.parseReports["f1"]), `"kind":"table"`) {
 		t.Errorf("parse report not stored: %s", store.parseReports["f1"])
 	}
+	if got := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("ok")) - beforeOK; got != 1 {
+		t.Errorf("rag_tabular_ingest_total{outcome=ok} delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("error")) - beforeErr; got != 0 {
+		t.Errorf("rag_tabular_ingest_total{outcome=error} delta = %v, want 0", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("read")) - beforeRead; got != 10 {
+		t.Errorf("rows{kind=read} delta = %v, want 10", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("materialised")) - beforeMaterialised; got != 8 {
+		t.Errorf("rows{kind=materialised} delta = %v, want 8", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("embedded")) - beforeEmbedded; got != 6 {
+		t.Errorf("rows{kind=embedded} delta = %v, want 6", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestRowsForTest().WithLabelValues("past_cap")) - beforePastCap; got != 2 {
+		t.Errorf("rows{kind=past_cap} delta = %v, want 2", got)
+	}
 	// parse + tabular + embed: buildStagePlan always includes parse and
 	// embed; tabular is added because materialise is on; enrich/kg/hype/
 	// raptor are excluded because isSpreadsheet forces them off even though
@@ -734,6 +777,42 @@ func TestProcessFile_SpreadsheetUsesIngesterAndSkipsEnrichment(t *testing.T) {
 	}
 	if store.lastStageDetail["f1"] != "" {
 		t.Errorf("stage detail must be cleared at the end, got %q", store.lastStageDetail["f1"])
+	}
+}
+
+// TestProcessFile_SpreadsheetIngestFailure_RecordsErrorMetric verifies that
+// a failing ingest.Ingester.Ingest call records the "error" outcome (never
+// "ok") and no row-kind counters (there is no report to read rows from) —
+// the mutation guard for "record ok on the error path".
+func TestProcessFile_SpreadsheetIngestFailure_RecordsErrorMetric(t *testing.T) {
+	store := &mockStore{}
+	p := NewProcessor(parser.DefaultFactoryWith(nil), nil, nil, store)
+	p.SetSiteConfigReader(&fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_query_enabled": strPtr("true"),
+	}})
+	ing := &fakeIngester{err: errors.New("boom")}
+	p.SetIngester(ing)
+
+	beforeOK := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("ok"))
+	beforeErr := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("error"))
+
+	err := p.ProcessFile(context.Background(), ProcessFileInput{
+		FileID:    "f2",
+		FilePath:  "../sheetsource/testdata/ids_leading_zero.xlsx",
+		FileName:  "ids_leading_zero.xlsx",
+		MimeType:  "",
+		KBID:      "kb",
+		ChunkSize: 512,
+	})
+	if err == nil {
+		t.Fatal("expected ProcessFile to return an error when Ingest fails")
+	}
+
+	if got := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("ok")) - beforeOK; got != 0 {
+		t.Errorf("rag_tabular_ingest_total{outcome=ok} delta = %v, want 0 on ingest failure", got)
+	}
+	if got := testutil.ToFloat64(observability.TabularIngestTotalForTest().WithLabelValues("error")) - beforeErr; got != 1 {
+		t.Errorf("rag_tabular_ingest_total{outcome=error} delta = %v, want 1", got)
 	}
 }
 
@@ -792,5 +871,270 @@ func TestSpreadsheetStageFlags(t *testing.T) {
 					tc.wantEnrich, tc.wantKG, tc.wantHyPE, tc.wantRapt)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// LargeFileGate integration tests (ProcessFile wiring)
+// ---------------------------------------------------------------------------
+//
+// These exercise the gate through the real ProcessFile spreadsheet branch
+// (SetLargeFileGate + chat.TabularLargeFileBytes via site_config), as
+// opposed to large_file_gate_test.go's tests of *LargeFileGate in
+// isolation. tabular_large_file_bytes is clamped to a minimum of 1 MiB
+// (chat.TabularLargeFileBytes clamps to [1_048_576, 1_073_741_824] and
+// falls back to its 20 MiB default for any out-of-range value) so the
+// "large" and "small" fixture files below must straddle that 1 MiB floor,
+// not some small round number.
+
+const (
+	testLargeFileThresholdBytes = 1_048_576 // the minimum chat.TabularLargeFileBytes allows
+	testBigFileBytes            = 2 * 1024 * 1024
+	testSmallFileBytes          = 1024
+)
+
+// gateTestStore is a mutex-guarded ProcessorStore fake. The concurrency
+// tests below run multiple ProcessFile calls against one store from
+// separate goroutines; mockStore's plain slices/maps are not safe for
+// that (and would trip -race).
+type gateTestStore struct {
+	mu     sync.Mutex
+	detail map[string]string
+}
+
+func newGateTestStore() *gateTestStore {
+	return &gateTestStore{detail: make(map[string]string)}
+}
+
+func (s *gateTestStore) UpdateFileStatus(context.Context, string, string) error { return nil }
+func (s *gateTestStore) UpdateFileProgress(context.Context, string, int) error  { return nil }
+func (s *gateTestStore) MarkFileError(context.Context, string, string, string) error {
+	return nil
+}
+func (s *gateTestStore) UpdateFileStage(context.Context, string, string, int, int) error {
+	return nil
+}
+
+// ClearFileStage mirrors the real PGStore, which NULLs stage_detail along
+// with the other stage columns at true completion (files.PGStore.ClearFileStage).
+func (s *gateTestStore) ClearFileStage(_ context.Context, fileID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.detail, fileID)
+	return nil
+}
+func (s *gateTestStore) SetFileParseReport(context.Context, string, []byte) error { return nil }
+
+func (s *gateTestStore) UpdateFileStageDetail(_ context.Context, fileID, detail string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if detail == "" {
+		delete(s.detail, fileID)
+	} else {
+		s.detail[fileID] = detail
+	}
+	return nil
+}
+
+// StageDetail reads the most recently recorded detail for fileID ("" if
+// none / cleared). Safe to call concurrently with ProcessFile.
+func (s *gateTestStore) StageDetail(fileID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.detail[fileID]
+}
+
+var _ ProcessorStore = (*gateTestStore)(nil)
+
+// blockingIngester is a SpreadsheetIngester fake that records the file id
+// of every Ingest call on started as soon as Ingest is entered, then
+// blocks until a value (or a close) arrives on block. Used to prove two
+// concurrent Ingest calls are actually serialised by LargeFileGate (as
+// opposed to merely not racing on shared state).
+type blockingIngester struct {
+	started chan string
+	block   chan struct{}
+}
+
+func (b *blockingIngester) Ingest(_ context.Context, in ingest.Input) (*ingest.Result, error) {
+	b.started <- in.FileID
+	<-b.block
+	// Whitespace-only text/pages: aiResolver is nil in every test using
+	// this fake, so a non-empty rendered text would reach the real
+	// embedding call and panic on a nil *ai.ConfigResolver. Mirrors
+	// fakeIngester's own result above.
+	return &ingest.Result{
+		Text:   "   ",
+		Pages:  []ingest.Page{{Number: 1, Text: "   "}},
+		Report: tabular.ParseReport{Version: 1},
+	}, nil
+}
+
+func (b *blockingIngester) WithLLM(profile.LLMProfiler) SpreadsheetIngester { return b }
+
+// writeTempFile creates a file of exactly size bytes under t.TempDir() and
+// returns its path. The ".xlsx" name is what makes
+// (&parser.SpreadsheetParser{}).CanParse report true in ProcessFile's
+// isSpreadsheet check; the content is never actually parsed in these tests
+// (blockingIngester/fakeIngester never read the file), only os.Stat'd by
+// the gate.
+func writeTempFile(t *testing.T, size int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "sheet.xlsx")
+	if err := os.WriteFile(path, make([]byte, size), 0o600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	return path
+}
+
+// gateTestProcessor builds a Processor wired with an ingester and a
+// large-file gate, with tabular_large_file_bytes fixed at
+// testLargeFileThresholdBytes.
+func gateTestProcessor(store ProcessorStore, ing SpreadsheetIngester, gate *LargeFileGate) *Processor {
+	p := NewProcessor(parser.DefaultFactoryWith(nil), nil, nil, store)
+	p.SetSiteConfigReader(&fakeSiteConfigReader{values: map[string]*string{
+		"tabular_large_file_bytes": strPtr(fmt.Sprintf("%d", testLargeFileThresholdBytes)),
+	}})
+	p.SetIngester(ing)
+	p.SetLargeFileGate(gate)
+	return p
+}
+
+// TestLargeFileGateSerialisesLargeIngests proves the gate actually
+// excludes concurrent Ingest calls for two large spreadsheets, not merely
+// that it doesn't crash: the second Ingest must not be entered while the
+// first holds the only slot, and it must start only after the first
+// releases.
+//
+// Mutation check: moving the Acquire call to after the Ingest call (i.e.
+// gating nothing) makes this test red — both started sends land inside
+// the 200ms window and t.Fatalf fires. Verified by hand; see the task
+// report for the exact diff and failure output.
+func TestLargeFileGateSerialisesLargeIngests(t *testing.T) {
+	store := newGateTestStore()
+	started := make(chan string, 2)
+	block := make(chan struct{})
+	ing := &blockingIngester{started: started, block: block}
+	gate := NewLargeFileGate(1)
+	p := gateTestProcessor(store, ing, gate)
+
+	bigA := writeTempFile(t, testBigFileBytes)
+	bigB := writeTempFile(t, testBigFileBytes)
+
+	go func() {
+		_ = p.ProcessFile(context.Background(), ProcessFileInput{
+			FileID: "big-a", FilePath: bigA, FileName: "a.xlsx", KBID: "kb", ChunkSize: 512,
+		})
+	}()
+	go func() {
+		_ = p.ProcessFile(context.Background(), ProcessFileInput{
+			FileID: "big-b", FilePath: bigB, FileName: "b.xlsx", KBID: "kb", ChunkSize: 512,
+		})
+	}()
+
+	first := <-started
+	select {
+	case second := <-started:
+		t.Fatalf("second large ingest %q started while %q held the only slot", second, first)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	block <- struct{}{} // release the first, freeing the slot for the second
+	second := <-started
+	if second == first {
+		t.Fatalf("expected the second-starting file to differ from the first, both were %q", first)
+	}
+	close(block) // release the second
+}
+
+// TestSmallFilesBypassTheGate verifies that two files under the size
+// threshold both enter Ingest without waiting on each other — the gate
+// only ever applies to large files.
+func TestSmallFilesBypassTheGate(t *testing.T) {
+	store := newGateTestStore()
+	started := make(chan string, 2)
+	block := make(chan struct{})
+	ing := &blockingIngester{started: started, block: block}
+	gate := NewLargeFileGate(1)
+	p := gateTestProcessor(store, ing, gate)
+
+	smallA := writeTempFile(t, testSmallFileBytes)
+	smallB := writeTempFile(t, testSmallFileBytes)
+
+	go func() {
+		_ = p.ProcessFile(context.Background(), ProcessFileInput{
+			FileID: "small-a", FilePath: smallA, FileName: "a.xlsx", KBID: "kb", ChunkSize: 512,
+		})
+	}()
+	go func() {
+		_ = p.ProcessFile(context.Background(), ProcessFileInput{
+			FileID: "small-b", FilePath: smallB, FileName: "b.xlsx", KBID: "kb", ChunkSize: 512,
+		})
+	}()
+
+	seen := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		select {
+		case id := <-started:
+			seen[id] = true
+		case <-time.After(time.Second):
+			t.Fatalf("expected both small ingests to start without waiting on the gate; only saw %v", seen)
+		}
+	}
+	close(block) // release both
+}
+
+// TestWaitingIsVisibleInStageDetail verifies that while ProcessFile blocks
+// on the gate for a large file, the stage detail shows the bilingual
+// "waiting for a slot" message (English here — resolveKBLanguages falls
+// back to "en" with no mainDB wired), and that it is cleared again once
+// the file completes.
+//
+// Mutation check: deleting the UpdateFileStageDetail(waiting) call before
+// Acquire makes this test red (the poll loop below times out because the
+// detail is never set) — verified by hand; see the task report.
+func TestWaitingIsVisibleInStageDetail(t *testing.T) {
+	store := newGateTestStore()
+	started := make(chan string, 1)
+	block := make(chan struct{})
+	ing := &blockingIngester{started: started, block: block}
+	gate := NewLargeFileGate(1)
+	p := gateTestProcessor(store, ing, gate)
+
+	// Hold the gate's only slot from the test itself so the file below is
+	// forced to wait and record the "waiting" stage detail.
+	if err := gate.Acquire(context.Background()); err != nil {
+		t.Fatalf("test acquire: %v", err)
+	}
+
+	big := writeTempFile(t, testBigFileBytes)
+	done := make(chan struct{})
+	go func() {
+		_ = p.ProcessFile(context.Background(), ProcessFileInput{
+			FileID: "f1", FilePath: big, FileName: "f1.xlsx", KBID: "kb", ChunkSize: 512,
+		})
+		close(done)
+	}()
+
+	const wantWaiting = "Waiting for a large-file slot"
+	deadline := time.After(2 * time.Second)
+	for {
+		if store.StageDetail("f1") == wantWaiting {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("stage detail for f1 never became %q (last seen: %q)", wantWaiting, store.StageDetail("f1"))
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	gate.Release()      // let ProcessFile's own Acquire succeed
+	<-started           // Ingest entered
+	block <- struct{}{} // let it finish
+	<-done
+
+	if got := store.StageDetail("f1"); got != "" {
+		t.Errorf("stage detail after completion = %q, want cleared", got)
 	}
 }

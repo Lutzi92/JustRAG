@@ -232,6 +232,21 @@
   white-space: nowrap;
 }
 
+.sidebar-left__file-stage-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-left__file-stage-detail {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-left__tools-input {
   width: 100%;
   padding: 0.5rem;

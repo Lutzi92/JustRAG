@@ -11,6 +11,7 @@ package kb_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -19,6 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/kb"
+	"github.com/justrag/go-backend/internal/store"
+	"github.com/justrag/go-backend/internal/tabular"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {
@@ -391,5 +394,124 @@ func TestListKnowledgeBases_TurnStatsFromUsageLedger(t *testing.T) {
 	}
 	if found.LastActivityAt == nil {
 		t.Error("lastActivityAt must be set once the KB has usage")
+	}
+}
+
+// TestPGStore_FileTabularMethods_RoundTrip exercises GetFileByID,
+// GetFileParseReport, and ListTabularCatalogByFile — the three store
+// methods GetFileTabular (internal/kb/http_tabular.go) reads — against a
+// real DB. A mocked-store unit test cannot catch a wrong column/table
+// reference; this test calls the real PGStore.
+func TestPGStore_FileTabularMethods_RoundTrip(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	pgStore := kb.NewStore(pool)
+
+	var kbID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO knowledge_bases (name, description, visibility)
+		VALUES ('kb-file-tabular-test', 'fixture', 'public')
+		RETURNING id::text`).Scan(&kbID); err != nil {
+		t.Fatalf("insert kb: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM knowledge_bases WHERE id = $1::uuid`, kbID) //nolint:errcheck
+	})
+
+	var otherKBID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO knowledge_bases (name, description, visibility)
+		VALUES ('kb-file-tabular-other', 'fixture', 'public')
+		RETURNING id::text`).Scan(&otherKBID); err != nil {
+		t.Fatalf("insert other kb: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM knowledge_bases WHERE id = $1::uuid`, otherKBID) //nolint:errcheck
+	})
+
+	var fileID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO files (kb_id, name, type, status, storage_path)
+		VALUES ($1::uuid, 'Budget.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'completed', 'u/k/budget.xlsx')
+		RETURNING id::text`, kbID).Scan(&fileID); err != nil {
+		t.Fatalf("insert file: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM files WHERE id = $1::uuid`, fileID) //nolint:errcheck
+	})
+
+	// GetFileByID: (nil, nil) for an unknown id, populated (with the right
+	// KbID, not otherKBID) for the real one.
+	ref, err := pgStore.GetFileByID(ctx, "00000000-0000-0000-0000-000000000000")
+	if err != nil {
+		t.Fatalf("GetFileByID(unknown): %v", err)
+	}
+	if ref != nil {
+		t.Fatalf("GetFileByID(unknown) = %+v, want nil", ref)
+	}
+
+	ref, err = pgStore.GetFileByID(ctx, fileID)
+	if err != nil {
+		t.Fatalf("GetFileByID: %v", err)
+	}
+	if ref == nil || ref.KbID != kbID {
+		t.Fatalf("GetFileByID = %+v, want KbID %s", ref, kbID)
+	}
+	if ref.KbID == otherKBID {
+		t.Fatalf("GetFileByID returned the wrong KB's id")
+	}
+
+	// GetFileParseReport: NULL before SetFileParseReport, populated after,
+	// store.ErrNotFound for an unknown file id.
+	report, err := pgStore.GetFileParseReport(ctx, fileID)
+	if err != nil {
+		t.Fatalf("GetFileParseReport (NULL): %v", err)
+	}
+	if report != nil {
+		t.Fatalf("GetFileParseReport (NULL) = %s, want nil", report)
+	}
+
+	mustExec(t, pool, `UPDATE files SET parse_report = $1::jsonb WHERE id = $2::uuid`,
+		`{"version":1,"materialised":true,"sheets":[{"name":"Sheet1"}]}`, fileID)
+	report, err = pgStore.GetFileParseReport(ctx, fileID)
+	if err != nil {
+		t.Fatalf("GetFileParseReport: %v", err)
+	}
+	if len(report) == 0 {
+		t.Fatal("GetFileParseReport returned no bytes after SET")
+	}
+
+	if _, err := pgStore.GetFileParseReport(ctx, "00000000-0000-0000-0000-000000000000"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetFileParseReport(unknown) = %v, want store.ErrNotFound", err)
+	}
+
+	// ListTabularCatalogByFile: empty before any catalog row, one entry
+	// after inserting via the real tabular.Catalog.
+	entries, err := pgStore.ListTabularCatalogByFile(ctx, fileID)
+	if err != nil {
+		t.Fatalf("ListTabularCatalogByFile (empty): %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("ListTabularCatalogByFile (empty) = %+v, want none", entries)
+	}
+
+	catalog := tabular.NewCatalog(pool)
+	if err := catalog.Insert(ctx, tabular.CatalogEntry{
+		KBID: kbID, FileID: fileID, SheetName: "Sheet1", TableName: "sheet_aa_0_0",
+		Columns:  []tabular.ColumnSpec{{Original: "A", Name: "a", Type: tabular.TypeText}},
+		RowCount: 10, SheetIndex: 0, RegionIndex: 0, HeaderRow: 0,
+	}); err != nil {
+		t.Fatalf("catalog.Insert: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM tabular_catalog WHERE file_id = $1::uuid`, fileID) //nolint:errcheck
+	})
+
+	entries, err = pgStore.ListTabularCatalogByFile(ctx, fileID)
+	if err != nil {
+		t.Fatalf("ListTabularCatalogByFile: %v", err)
+	}
+	if len(entries) != 1 || entries[0].TableName != "sheet_aa_0_0" {
+		t.Fatalf("ListTabularCatalogByFile = %+v, want 1 entry sheet_aa_0_0", entries)
 	}
 }

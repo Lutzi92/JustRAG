@@ -89,3 +89,20 @@ func TestExtractPlanNodeCount_NoneWhenAbsent(t *testing.T) {
 		t.Fatalf("got %d, want 0", got)
 	}
 }
+
+// TestTabularEvalTraceFrom_CopiesError is the task-14 finding-2 regression
+// guard: Run 2's report showed "error": null on the sql_error question
+// because TabularEvalTraceFrom dropped chat.TabularTrace.Error entirely.
+//
+// Mutation guard: deleting `Error: t.Error` from TabularEvalTraceFrom's
+// literal makes this red.
+func TestTabularEvalTraceFrom_CopiesError(t *testing.T) {
+	tr := &chat.TabularTrace{Outcome: "sql_error", Error: "boom"}
+	got := TabularEvalTraceFrom(tr)
+	if got == nil {
+		t.Fatal("TabularEvalTraceFrom returned nil for a non-nil trace")
+	}
+	if got.Error != "boom" {
+		t.Fatalf("Error = %q, want %q", got.Error, "boom")
+	}
+}

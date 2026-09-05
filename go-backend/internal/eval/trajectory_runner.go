@@ -49,6 +49,30 @@ type TrajectoryRunDeps struct {
 	SiteReader     chat.SiteConfigReader
 	KbSystemPrompt func(ctx context.Context, kbID string) string // may be nil
 	PlanningModel  string                                        // empty = inherit KB default
+	// TabularRouter wires the deterministic spreadsheet path (design §5.1)
+	// into the two trajectory modes that carry a TabularRouter field on
+	// their params struct — TrajectoryModeOff (chat.ChatContextParams) and
+	// TrajectoryModeSupervisor (chat.SupervisorChatParams) — the same way
+	// production wires it (internal/app/routes.go, and
+	// WithTabularRouter for the --production-context adapters). Nil
+	// (the default) is a no-op: chat.TabularRouter.Run and the params'
+	// own nil-checks (params.TabularRouter != nil) both degrade cleanly,
+	// so every trajectory run that doesn't set this behaves exactly as
+	// before the field existed. Agentic and Plan-Execute have no
+	// TabularRouter field at all, so this is never wired for those modes.
+	//
+	// The router's CONFIG (Enabled/MaxRows/MaxRepairs/Timeout/
+	// SchemaMaxTokens) is a separate concern from wiring the router
+	// itself: TrajectoryModeOff resolves it inside chat.PrepareChatContext
+	// from SiteReader directly (no params field needed), and
+	// TrajectoryModeSupervisor resolves it explicitly below, from
+	// SiteReader, into SupervisorChatParams.TabularRouterConfig — mirroring
+	// internal/chat/http_send.go's OrchSupervisor case. Production
+	// supplies that per-KB-overlaid reader on essentially every request
+	// (SiteReader is only nil in degenerate/test wiring), so skipping this
+	// resolution here would silently ignore a per-KB override for every
+	// realistic --production-context trajectory run, not just a rare one.
+	TabularRouter *chat.TabularRouter
 }
 
 // RunTrajectory runs one question through one orchestrator mode and
@@ -101,12 +125,31 @@ func RunTrajectory(ctx context.Context, deps TrajectoryRunDeps, q Question, mode
 		}
 
 	case TrajectoryModeSupervisor:
+		// Resolved HERE, not at wiring time — mirrors
+		// internal/chat/http_send.go's OrchSupervisor case exactly:
+		// deps.SiteReader is the per-KB-overlaid reader (when the caller
+		// supplies one; cmd/eval's production-context setup does), so
+		// this must be the source of the router's config on THIS
+		// question's KB. The router's own wiring-time cfgFn only ever
+		// sees whatever reader it was constructed with (typically the
+		// global one), so leaving TabularRouterConfig unset here would
+		// silently ignore a per-KB override (e.g.
+		// chat_tabular_router_enabled=false on one KB, or a tuned
+		// _max_rows) under --trajectory --orchestrator supervisor
+		// --production-context.
+		var tabularCfg *chat.TabularRouterConfig
+		if deps.SiteReader != nil {
+			cfg := chat.ResolveTabularRouterConfig(ctx, deps.SiteReader)
+			tabularCfg = &cfg
+		}
 		params := chat.SupervisorChatParams{
-			KbID:           q.KbID,
-			Query:          q.Question,
-			Language:       q.Language,
-			KbSystemPrompt: kbSystemPrompt,
-			PlanningModel:  deps.PlanningModel,
+			KbID:                q.KbID,
+			Query:               q.Question,
+			Language:            q.Language,
+			KbSystemPrompt:      kbSystemPrompt,
+			PlanningModel:       deps.PlanningModel,
+			TabularRouter:       deps.TabularRouter,
+			TabularRouterConfig: tabularCfg,
 		}
 		if _, err := chat.RunSupervisorChat(ctx, deps.AIResolver, deps.SearchService, params, emit); err != nil {
 			events = append(events, chat.TrajectoryEvent{Stage: "answer", Decision: "orchestrator_error", Reason: err.Error()})
@@ -120,6 +163,7 @@ func RunTrajectory(ctx context.Context, deps TrajectoryRunDeps, q Question, mode
 			KbSystemPrompt: kbSystemPrompt,
 			QueryType:      q.QueryType,
 			Emit:           emit,
+			TabularRouter:  deps.TabularRouter,
 		}
 		if _, err := chat.PrepareChatContext(ctx, deps.AIResolver, deps.SearchService, deps.SiteReader, params); err != nil {
 			events = append(events, chat.TrajectoryEvent{Stage: "answer", Decision: "prepare_error", Reason: err.Error()})

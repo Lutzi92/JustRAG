@@ -38,6 +38,11 @@ type TabularEvalTrace struct {
 	SQL      string `json:"sql,omitempty"`
 	RowCount int    `json:"row_count,omitempty"`
 	Repairs  int    `json:"repairs,omitempty"`
+	// Error is the router's last failure text (validator rejection, DB
+	// error, LLM-call error, or cancellation) — empty on fired_ok and on
+	// most skips. Mirrors chat.TabularTrace.Error verbatim (already capped
+	// at 500 runes by the router).
+	Error string `json:"error,omitempty"`
 }
 
 // PlanShape summarizes a Plan-Execute orchestrator's plan. NodeCount is the
@@ -74,6 +79,7 @@ func TabularEvalTraceFrom(t *chat.TabularTrace) *TabularEvalTrace {
 		SQL:      t.SQL,
 		RowCount: t.RowCount,
 		Repairs:  t.Repairs,
+		Error:    t.Error,
 	}
 }
 

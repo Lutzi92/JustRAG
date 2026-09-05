@@ -316,6 +316,13 @@ var ignoredKeys = map[string]string{
 	"chat_tabular_router_max_repairs":       "deterministic tabular router pre-pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_recency_listing_*",
 	"chat_tabular_router_timeout_ms":        "deterministic tabular router pre-pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_recency_listing_*",
 	"chat_tabular_router_schema_max_tokens": "deterministic tabular router pre-pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_recency_listing_*",
+	"chat_tabular_guidance_max_tokens":      "R66 carry (spreadsheet rework Phase 4): token budget for the answer-prompt tabular guidance summary — same rationale as chat_tabular_router_schema_max_tokens directly above, a separate budget for a separate (non-router) prompt block",
+
+	// Upload/ingest sizing knobs (spreadsheet rework Phase 4): read by the
+	// upload handler and the table materializer, not a chat-pipeline node.
+	"tabular_max_file_bytes":         "ingest/upload sizing knob, not a chat-pipeline node",
+	"tabular_large_file_bytes":       "ingest/upload sizing knob, not a chat-pipeline node",
+	"tabular_large_file_concurrency": "ingest/upload sizing knob, not a chat-pipeline node",
 }
 
 // TestEveryPipelineFlagIsDrawnOrIgnored is the anti-drift guard (spec §4.4).

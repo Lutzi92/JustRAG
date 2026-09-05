@@ -35,6 +35,7 @@ e2e/.auth/
 # pressure. Untracked they are a dead link for anyone who clones.
 !/docs/runbooks/migration-rollback.md
 !/docs/runbooks/stuck-quick-jobs.md
+!/docs/runbooks/spreadsheet-ingest-ops.md
 .playwright-mcp
 .tmp/
 /example/
@@ -96,3 +97,10 @@ eval/golden/multi-kb.jsonl
 go-backend/eval-gen
 eval/golden/kg-community-global.jsonl
 .superpowers/sdd/
+
+# Spreadsheet-fixture golden set (Task 9, spreadsheet-ingest Phase 4): the
+# seeding script (eval/fixtures/seed-spreadsheets.sh) writes a KB-id-resolved
+# copy here — the committed spreadsheets-de.jsonl keeps the
+# REPLACE_WITH_FIXTURE_KB_ID placeholder so it stays instance-independent.
+eval/golden/*.local.jsonl
+eval/golden/spreadsheets-de.report.json

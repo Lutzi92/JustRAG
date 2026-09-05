@@ -33,6 +33,7 @@ Quelle der Wahrheit ist immer der Go-Code:
 13. [Observability + Sampling](#13-observability--sampling)
 14. [Modell-Tier (`model_tier_fast`)](#14-modell-tier-model_tier_fast)
 15. [Schnellrezepte: Phase-Aktivierung](#15-schnellrezepte-phase-aktivierung)
+16. [Tabellen / Spreadsheets (`tabular_*`, `chat_tabular_*`)](#16-tabellen-spreadsheets-tabular_-chat_tabular_)
 
 ---
 
@@ -98,4 +99,36 @@ Aktiv nur, wenn der Chat-Request `?route=auto` mitschickt. Sub-KB-Routing pickt 
 | `chat_kb_router_enabled` | bool | **false** | — | **On**: KB-Router läuft bei `?route=auto`, KB-Beschreibungen (`kb.description`) müssen gepflegt sein. **Off**: bestehende kb_id wird respektiert. |
 | `chat_kb_router_min_confidence` | float | **0.6** | 0.0–1.0 | Schwelle für Top-1-Pick. **Hoch (0.8+)**: Router fällt häufiger auf `fallback_all` zurück (alle KBs durchsuchen), weniger Fehlrouting. **Niedrig (0.3)**: aggressiveres Routing, mehr Fehler-Risiko. |
 | `chat_kb_router_model` | string | **""** | — | Fast-Tier-Override für Router-Klassifikator. |
+
+---
+
+## 16. Tabellen / Spreadsheets (`tabular_*`, `chat_tabular_*`)
+
+Structured-Spreadsheet-Q&A: Streaming-Reader → Profiler → typisierte SQL-Tabellen + Key:Value-Hybridtext → deterministischer Tabular-Router → `table_query`-Tool. Mechanismus in `docs/retrieval.md`'s "Spreadsheets"-Abschnitt, volle Enablement-Reihenfolge inkl. Grant-SQL in `docs/feature-recipes.md`, Betrieb (Sizing, 413-Fallstrick, Orphan-Sweep, Alerting, Acceptance-Lauf) in `docs/runbooks/spreadsheet-ingest-ops.md`.
+
+**Hinweis:** `chat_tabular_query_enabled` (Master-Gate) und `chat_tabular_charts_enabled` sind über `site_config` lesbar (Default jeweils **false**), aber (Stand dieser Phase) noch nicht in `internal/siteconfig/registry.go` registriert — sie erscheinen also noch nicht als Zeile im Admin-UI und müssen direkt über die Site-Config-API/DB gesetzt werden. Alle übrigen Knobs unten sind Admin-UI-Zeilen (`Group: "Tabular"`).
+
+| Knob | Typ | Default | Bereich | Re-Ingest? | Wirkung |
+|---|---|---|---|---|---|
+| `chat_tabular_query_enabled` | bool | **false** | — | — | Master-Gate: schaltet Streaming-Materialisierung + `table_query`-Tool + Router-Voraussetzung frei. Ohne `JUSTRAG_DB_URL_READONLY` bleibt der Router trotzdem inaktiv (Startup-Warnung). |
+| `chat_tabular_charts_enabled` | bool | **false** | — | — | Phase 3: Chart-Prompt-Guidance (Recharts-JSON-Block). Kein neues Tool, keine Migration. |
+| `chat_tabular_router_enabled` | bool | **true** | — | — | Kill-Switch für den deterministischen Router; wirkt nur zusammen mit `chat_tabular_query_enabled`. **Off**: Fragen laufen nur über normale Retrieval + `table_query`. |
+| `chat_tabular_router_model` | string | **""** | — | — | Fast-Tier-Override für SQL-Generierung/Reparatur. Leer → `model_tier_fast`. |
+| `chat_tabular_router_max_rows` | int | **200** | 10–1000 | — | Zeilen-Cap auf das Ergebnis der Router-SQL. **Hoch**: mehr Kontext pro Treffer, größere Prompt-Payload. **Niedrig**: knapperer Antwort-Kontext. |
+| `chat_tabular_router_max_repairs` | int | **3** | 0–5 | — | Reparatur-Runden bei DB-Fehler/leerem Ergebnis/All-NULL-Aggregat. **0**: kein Retry, schneller Fail. **Hoch**: robuster gegen erste Fehlversuche, mehr LLM-Kosten pro Turn. |
+| `chat_tabular_router_timeout_ms` | int | **5000** | 500–30000 | — | Wall-Clock-Budget für SQL-Generierung + Ausführung. **Niedrig**: härterer Fallback auf Retrieval bei langsamen Modellen/Queries. **Hoch**: mehr Geduld, riskiert lange Turns. |
+| `chat_tabular_router_schema_max_tokens` | int | **12000** | 1000–60000 | — | Token-Budget für die Schema-Zusammenfassung im SQL-Generierungs-Prompt. **Niedrig**: kleinere Prompts, riskiert fehlende Tabellen bei vielen Sheets. **Hoch**: vollständigeres Schema, mehr Prompt-Kosten. |
+| `chat_tabular_guidance_max_tokens` | int | **6000** | 1000–30000 | — | Phase 4: separates Token-Budget für die Katalog-Zusammenfassung, die in den ANTWORT-Prompt gefaltet wird (`maybeTabularGuidance`) — unabhängig vom Router-Schema-Budget oben. Ersetzt die zuvor hartkodierte 6000-Token-Konstante. |
+| `tabular_profile_llm_enabled` | bool | **true** | — | **ja** | Ein Fast-Tier-Call pro Tabellenregion beim Ingest: liefert Spalten-Beschreibungen, kann eine unsichere Heuristik-Einschätzung (Header/Kind/Rolle) überschreiben. **Off**: rein heuristisches Profiling, kein LLM-Call, schnellerer/günstigerer Ingest. |
+| `tabular_profile_llm_threshold` | float | **0.7** | 0–1 | **ja** | Heuristik-Konfidenz, unterhalb derer der LLM-Vorschlag gewinnt. **Hoch**: LLM überschreibt öfter. **Niedrig**: Heuristik gewinnt fast immer, LLM-Aufruf wird faktisch nutzlos. |
+| `tabular_profile_model` | string | **""** | — | **ja** | Fast-Tier-Override für den Profiler-Call. Leer → `model_tier_fast`. |
+| `tabular_profile_sample_rows` | int | **200** | 20–2000 | **ja** | Sample-Zeilen pro Sheet für Struktur-Erkennung. **Hoch**: robustere Header-/Regionserkennung bei unregelmäßigen Sheets, langsamerer Ingest. **Niedrig**: schnellerer Ingest, riskiert Fehlklassifikation bei versteckten Mehrfach-Headern weiter unten im Sheet. |
+| `tabular_max_rows` | int | **2 000 000** | 1000–5 000 000 | **ja** | Zeilen pro Tabellenregion, danach werden Zeilen aus der SQL-Tabelle fallen gelassen (und gezählt, nicht stillschweigend verworfen). **Niedrig**: schützt vor Monster-Sheets, kappt aber echte Daten. |
+| `tabular_embed_max_rows` | int | **50 000** | **1**–100 000 | **ja** | Zeilen pro Tabellenregion, die noch in den Hybridtext eingebettet (und damit über normale Retrieval durchsuchbar) werden; darüber SQL-only. **0 ist ungültig** (würde still auf den Default zurückfallen, nicht "nur Karten"). Obergrenze 100 000 ist hart (Ruling R23): der Renderer hält ein Fenster dieser Größe pro Region im Speicher — höher wartet auf den inkrementellen Renderer. |
+| `tabular_column_values_max_distinct` | int | **10 000** | 100–100 000 | **ja** | Oberhalb dieser Distinct-Wert-Zahl pro Spalte wird keine `tabular_column_values`-Zeile geschrieben (Fuzzy-Lookup fällt auf BM25/ILIKE zurück). **Niedrig**: kleinerer Index, weniger exakte Fuzzy-Treffer auf hochkardinalen Spalten. |
+| `tabular_max_file_bytes` | int | **524 288 000** (500 MiB) | 1 048 576–2 147 483 647 | nein | Upload-Zeit-Gate: ein erkanntes Spreadsheet über diesem Wert wird mit HTTP 413 abgelehnt. **Achtung:** der transportweite `MaxBytesReader`-Cap ist hartkodiert bei 500 MiB (`internal/files/http.go`, kein Site-Config-Knob) — ein Hochsetzen dieses Knobs über 500 MiB wirkt erst, wenn diese Konstante ebenfalls angehoben und neu deployed wird. Siehe `docs/runbooks/spreadsheet-ingest-ops.md` §2. |
+| `tabular_large_file_bytes` | int | **20 971 520** (20 MiB) | 1 048 576–1 073 741 824 | nein | Schwelle, ab der ein Spreadsheet beim Ingest als "groß" gilt und ein Concurrency-Slot braucht. Wird pro Datei frisch gelesen (live änderbar ohne Neustart). **Niedrig**: mehr Dateien laufen durchs Gate, mehr Serialisierung. **Hoch**: mehr parallele große Ingests, höheres Worker-RSS-Risiko. |
+| `tabular_large_file_concurrency` | int | **1** | 1–8 | nein | Wie viele "große" Spreadsheets ein Worker-Prozess gleichzeitig materialisiert. **Wird nur einmal beim Worker-Start gelesen** — eine Änderung braucht einen Worker-Neustart, kein Re-Ingest. **Hoch**: mehr Durchsatz bei großen Dateien, mehr Speicherbedarf (siehe `docs/runbooks/spreadsheet-ingest-ops.md` §1 für die Größenarithmetik). |
+
+**Re-Ingest-Hinweis:** jede mit "ja" markierte Zeile wirkt erst nach erneutem Ingest der betroffenen Datei(en) — entweder Re-Upload oder `POST /api/kb/{id}/tabular/rematerialize` (kbAdmin, re-ingestiert alle Spreadsheet-Dateien der KB). Die drei Size-/Concurrency-Knobs unten (kein Re-Ingest nötig) steuern Upload-Ablehnung und Ingest-Scheduling, keine in der Tabelle gespeicherten Werte.
 
