@@ -218,6 +218,16 @@ question's `condensed_query` shows what the condenser produced for that
 follow-up. See `eval/golden/multi-turn-de.acceptance.md` for the recorded
 keep-raw on/off/noise run and the flag-default decision it produced.
 
+**Final decision (Wave 2, Task 9):** `chat_condense_keep_raw_enabled`
+stays **off**. On `pronoun_ref` (n=12, the kind it should help), keep-raw
+ON scored *worse* than OFF on both recall (0.833 → 0.806, a −2.8 pp delta
+against a 2.8 pp same-flag noise band) and MRR (0.833 → 0.767, −6.7 pp,
+well outside the 0.0 pp noise band on that metric) — the MTRAG
+"rewrite ⊕ raw" gain did not replicate on this fixture. See
+`docs/feature-recipes.md`'s "Rewrite ⊕ raw last turn" recipe and
+`docs/retrieval.md`'s "Raw-query lane" section for the full numbers and
+caveats.
+
 ## Sampling methodology
 
 `production-ppm-2026-08.jsonl` is the active golden set (see §Production sets; it superseded `production.jsonl`). It is drawn from real production chat logs following a reproducible, stratified process:
@@ -644,3 +654,19 @@ See `eval/golden/cert-recency-de.acceptance.md` for both tables
 questions' window-file `FinalChunks` coverage, the per-pair UPDATE-vs-NEU
 ranking outcome, and a log line proving the recency listing fired under
 `cmd/eval` (`grep recency` in the run's JSON log output).
+
+**Final decision (Wave 2, Task 9):** `recency_boost_enabled` stays **off**
+by default. The standard-path-forced table (the trustworthy isolated
+estimate, dispatch confound removed) shows overall recall 0.651 → 0.696
+with the boost on, against a 4.0 pp same-flag noise band, and the
+UPDATE-outranks-NEU win rate on the 8 NEU/UPDATE pairs rising from 3/8 to
+5/8 — a marginal but directionally positive, noise-exceeding effect on
+n=25 questions. Recommended for RSS/CERT-style time-sensitive KBs
+specifically, not as a new global default. `chat_recency_listing_enabled`
+and `chat_date_awareness_enabled` were both already default-on and are
+unaffected by this decision; the fixture additionally confirms the
+listing mechanism fires correctly whenever a question reaches the
+standard path (it does not fire when orchestrator dispatch routes the
+same question elsewhere — a pre-existing production interaction, not a
+fixture defect). See `docs/retrieval.md`'s "Recency prior" section and
+`docs/feature-recipes.md`'s "Recency prior" / "Date-aware chat" recipes.
