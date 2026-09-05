@@ -36,6 +36,7 @@ const SECTION_CONFIGS = [
     { id: 'tabular', titleKey: 'agentSectionTabular', i18nKeys: ['chatTabularQueryEnabled', 'chatTabularChartsEnabled', 'chatTabularRouterEnabled', 'chatTabularRouterModel', 'chatTabularRouterMaxRows', 'chatTabularRouterMaxRepairs', 'chatTabularRouterTimeoutMs', 'chatTabularRouterSchemaMaxTokens', 'chatTabularGuidanceMaxTokens'], settingKeys: ['chat_tabular_query_enabled', 'chat_tabular_charts_enabled', 'chat_tabular_router_enabled', 'chat_tabular_router_model', 'chat_tabular_router_max_rows', 'chat_tabular_router_max_repairs', 'chat_tabular_router_timeout_ms', 'chat_tabular_router_schema_max_tokens', 'chat_tabular_guidance_max_tokens'] },
     { id: 'dateAware', titleKey: 'agentSectionDateAware', i18nKeys: ['chatDateAwarenessEnabled', 'chatDateTimezone', 'chatDateToolsEnabled', 'chatDateToolsMaxResults', 'chatRecencyListingEnabled', 'chatRecencyListingNameMatchEnabled', 'chatRecencyListingWindowDays', 'chatRecencyListingMaxResults'], settingKeys: ['chat_date_awareness_enabled', 'chat_date_timezone', 'chat_date_tools_enabled', 'chat_date_tools_max_results', 'chat_recency_listing_enabled', 'chat_recency_listing_name_match_enabled', 'chat_recency_listing_window_days', 'chat_recency_listing_max_results'] },
     { id: 'syncWindow', titleKey: 'agentSectionSyncWindow', i18nKeys: ['syncWindowStartHour', 'syncWindowEndHour', 'syncWindowTimezone'], settingKeys: ['sync_window_start_hour', 'sync_window_end_hour', 'sync_window_timezone'] },
+    { id: 'evalSchedule', titleKey: 'agentSectionEvalSchedule', i18nKeys: ['evalRegressionRecallPP', 'evalRegressionMrrPP'], settingKeys: ['eval_regression_recall_pp', 'eval_regression_mrr_pp'] },
 ] as const;
 type SectionId = typeof SECTION_CONFIGS[number]['id'];
 
@@ -2495,6 +2496,36 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
                         />
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('syncWindowHelp')}</p>
+                    </div>
+                </Section>
+
+                <Section title={t('agentSectionEvalSchedule')} {...sectionState('evalSchedule')}>
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="eval-regression-recall-pp">{t('evalRegressionRecallPP')}</label>
+                        <input
+                            id="eval-regression-recall-pp"
+                            type="number"
+                            min={0.1}
+                            max={100}
+                            step={0.5}
+                            value={siteConfigs.eval_regression_recall_pp || '2'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, eval_regression_recall_pp: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="eval-regression-mrr-pp">{t('evalRegressionMrrPP')}</label>
+                        <input
+                            id="eval-regression-mrr-pp"
+                            type="number"
+                            min={0.1}
+                            max={100}
+                            step={0.5}
+                            value={siteConfigs.eval_regression_mrr_pp || '3'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, eval_regression_mrr_pp: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
                     </div>
                 </Section>
 

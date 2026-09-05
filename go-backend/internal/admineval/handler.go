@@ -70,6 +70,7 @@ type goldenSetStore interface {
 	List(ctx context.Context) ([]eval.GoldenSet, error)
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 	ListByKB(ctx context.Context, kbID uuid.UUID) ([]eval.GoldenSet, error)
+	SetSchedule(ctx context.Context, id uuid.UUID, schedule string) (bool, error)
 }
 
 // kbOverrideLister loads a KB's per-KB site_config overrides so a KB-scoped run
@@ -145,6 +146,7 @@ var snapshotConfigKeys = []string{
 	// T2-1 long-context (System 2) routing.
 	"chat_longcontext_enabled",
 	"chat_longcontext_max_tokens",
+	"chat_longcontext_top_k",
 	// Plan-1 per-KB registry keys (cross-checked by snapshot_registry_test.go).
 	// These keys are per-KB-overridable via the registry in internal/siteconfig;
 	// without them here an eval run would silently not exercise a KB's override.
@@ -154,7 +156,12 @@ var snapshotConfigKeys = []string{
 	"top_n_lookup",
 	"top_n_enumeration",
 	"top_n_complex_reasoning",
+	"rerank_candidate_depth",
+	"rerank_candidate_depth_lookup",
+	"rerank_candidate_depth_enumeration",
+	"rerank_candidate_depth_complex_reasoning",
 	"step_back_enabled",
+	"chat_condense_keep_raw_enabled",
 	"adaptive_routing_enabled",
 	"chat_supervisor_enabled",
 	"chat_plan_execute_enabled",
@@ -974,4 +981,52 @@ func (h *Handler) DeleteGoldenSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// UpdateGoldenSetRequest is the PATCH body. Only schedule is mutable.
+type UpdateGoldenSetRequest struct {
+	Schedule string `json:"schedule"`
+}
+
+// UpdateGoldenSet — PATCH /api/admin/eval/golden-sets/{id}. Changing the
+// schedule clears the stamped slot; the sweeper re-slots the set inside the
+// next night window (never a daytime run).
+func (h *Handler) UpdateGoldenSet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid golden set id")
+		return
+	}
+	h.applyScheduleUpdate(ctx, w, r, id)
+}
+
+// applyScheduleUpdate decodes the PATCH body and calls SetSchedule for id,
+// shared by the admin-scoped and KB-scoped update handlers.
+func (h *Handler) applyScheduleUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+	var req UpdateGoldenSetRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	ok, err := h.goldenSetStore.SetSchedule(ctx, id, req.Schedule)
+	if err != nil {
+		if errors.Is(err, eval.ErrInvalidSchedule) {
+			httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "schedule must be manual, daily or weekly")
+			return
+		}
+		httputil.WriteInternalErrorCtx(ctx, w, err)
+		return
+	}
+	if !ok {
+		httputil.WriteErrorCtx(ctx, w, http.StatusNotFound, "golden set not found")
+		return
+	}
+	gs, err := h.goldenSetStore.Get(ctx, id)
+	if err != nil {
+		httputil.WriteInternalErrorCtx(ctx, w, err)
+		return
+	}
+	gs.Content = nil
+	httputil.WriteJSONCtx(ctx, w, http.StatusOK, map[string]any{"golden_set": gs})
 }

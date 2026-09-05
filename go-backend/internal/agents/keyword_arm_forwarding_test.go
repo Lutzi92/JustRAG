@@ -62,3 +62,49 @@ func TestSpecialistsForwardForceBM25SimpleArm(t *testing.T) {
 		}
 	})
 }
+
+// TestSpecialistsForwardRawQuery guards the rewrite ⊕ raw retrieval lane
+// (Wave 1 Task 7): without the forwarding, a Supervisor turn silently
+// loses the raw last-turn utterance the chat layer resolved (the standard
+// PrepareChatContext path would still have it — the two paths would
+// diverge). Mutation: drop the field from one specialist's SearchOptions
+// literal — that specialist's subtest must fail.
+func TestSpecialistsForwardRawQuery(t *testing.T) {
+	t.Parallel()
+
+	t.Run("retriever", func(t *testing.T) {
+		t.Parallel()
+		rec := &optsRecorder{}
+		a := NewRetrieverAgent(rec, "")
+		if _, err := a.Execute(context.Background(), Input{KbID: "kb", Query: "q", RawQuery: "und wann?"}); err != nil {
+			t.Fatalf("execute: %v", err)
+		}
+		if rec.got.RawQuery != "und wann?" {
+			t.Fatalf("RetrieverAgent dropped Input.RawQuery, got %q", rec.got.RawQuery)
+		}
+	})
+
+	t.Run("enumerator", func(t *testing.T) {
+		t.Parallel()
+		rec := &optsRecorder{}
+		a := NewEnumeratorAgent(rec, "", func(_, _ string) bool { return true })
+		if _, err := a.Execute(context.Background(), Input{KbID: "kb", Query: "q", RawQuery: "und wann?"}); err != nil {
+			t.Fatalf("execute: %v", err)
+		}
+		if rec.got.RawQuery != "und wann?" {
+			t.Fatalf("EnumeratorAgent dropped Input.RawQuery, got %q", rec.got.RawQuery)
+		}
+	})
+
+	t.Run("default stays empty", func(t *testing.T) {
+		t.Parallel()
+		rec := &optsRecorder{}
+		a := NewRetrieverAgent(rec, "")
+		if _, err := a.Execute(context.Background(), Input{KbID: "kb", Query: "q"}); err != nil {
+			t.Fatalf("execute: %v", err)
+		}
+		if rec.got.RawQuery != "" {
+			t.Fatalf("RawQuery must default to empty, got %q", rec.got.RawQuery)
+		}
+	})
+}

@@ -61,10 +61,10 @@ type dedupResult struct {
 // batch. Returns the indices of chunks that should actually be embedded.
 //
 // chunkSvc may be nil — the function then performs only in-batch dedup.
-// dimensions is passed to chunkSvc.GetExistingChunkHashes (the dedup column
-// currently exists only on the default 1536-dim chunk table; non-default
-// dimensions silently skip cross-file dedup until operators apply migration
-// 0007 to their dimension-specific tables).
+// dimensions is passed to chunkSvc.GetExistingChunkHashes and must be the
+// KB's real embedding dimension (see dedupDimensions): every dim-keyed chunk
+// table carries content_hash via the schema.go backfill, so the lookup must
+// target the table the KB's embeddings actually land in.
 //
 // On a cross-file lookup error, the returned dedupResult still contains the
 // in-batch-dedup survivors and their hashes alongside the error. Callers
@@ -142,6 +142,27 @@ func dedupBatch(ctx context.Context, chunkSvc HashLookup, kbID string, dimension
 		res.hashes[i] = hashes[idx]
 	}
 	return res, nil
+}
+
+// legacyDedupDim is the dimension the cross-file hash lookup used before the
+// KB's real embedding dimension was resolved. Kept only as the fallback for
+// models that declare no output size (ai.Config.EmbeddingDimensions == 0).
+const legacyDedupDim = 1536
+
+// dedupDimensions returns the dim-keyed chunk table the cross-file dedup
+// lookup must query for kbID. Every dim-keyed table carries content_hash +
+// kb_content_hash_idx via the schema.go backfill, so the lookup must target
+// the table the KB's embeddings actually land in — the model's declared
+// dimension. Falls back to legacyDedupDim when the model declares none.
+func (p *Processor) dedupDimensions(ctx context.Context, kbID string) int {
+	if p.aiResolver == nil {
+		return legacyDedupDim
+	}
+	cfg, err := p.aiResolver.Resolve(ctx, kbID)
+	if err != nil || cfg == nil || cfg.EmbeddingDimensions <= 0 {
+		return legacyDedupDim
+	}
+	return cfg.EmbeddingDimensions
 }
 
 // ProcessorStore defines the persistence operations required by Processor.
@@ -1863,17 +1884,12 @@ func (p *Processor) embedAndStore(
 	// Pre-embed deduplication. Hash on `originals` (the stored content), not on
 	// the prefix-augmented embedding input (which varies per ingestion run
 	// because the LLM-generated prefix is non-deterministic).
-	//
-	// Use 1536 as the dedup-table dimension regardless of the actual embedding
-	// dimension. The migration only created the content_hash column on the
-	// default document_chunks table; non-default-dim setups silently skip
-	// cross-file dedup until operators apply the migration to their tables.
-	const dedupTableDim = 1536
+	dedupDim := p.dedupDimensions(ctx, kbID)
 	var hashLookup HashLookup
 	if p.chunkSvc != nil {
 		hashLookup = p.chunkSvc
 	}
-	dedup, dedupErr := dedupBatch(ctx, hashLookup, kbID, dedupTableDim, originals)
+	dedup, dedupErr := dedupBatch(ctx, hashLookup, kbID, dedupDim, originals)
 	if dedupErr != nil {
 		logctx.From(ctx).Warn("processor: dedup query failed; embedding entire batch",
 			"fileId", fileID,
@@ -2082,12 +2098,12 @@ func (p *Processor) runLateChunkedIngest(
 	// the original document order; non-survivors are still embedded so the
 	// late-chunking window sees a contiguous document, but their rows are
 	// discarded before insert.
-	const dedupTableDim = 1536
+	dedupDim := p.dedupDimensions(ctx, kbID)
 	var hashLookup HashLookup
 	if p.chunkSvc != nil {
 		hashLookup = p.chunkSvc
 	}
-	dedup, dedupErr := dedupBatch(ctx, hashLookup, kbID, dedupTableDim, chunks)
+	dedup, dedupErr := dedupBatch(ctx, hashLookup, kbID, dedupDim, chunks)
 	if dedupErr != nil {
 		logctx.From(ctx).Warn("processor: dedup query failed; embedding entire document",
 			"fileId", fileID,

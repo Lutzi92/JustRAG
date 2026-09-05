@@ -43,7 +43,10 @@ func (f *fakeRunStore) HasActiveRun(_ context.Context, _ uuid.UUID) (bool, error
 	return f.active, nil
 }
 
-type fakeGSStore struct{ get *eval.GoldenSet }
+type fakeGSStore struct {
+	get            *eval.GoldenSet
+	setScheduleErr error
+}
 
 func (f *fakeGSStore) Create(context.Context, eval.GoldenSet) (uuid.UUID, time.Time, error) {
 	return uuid.New(), time.Time{}, nil
@@ -54,6 +57,17 @@ func (f *fakeGSStore) ListByKB(_ context.Context, kbID uuid.UUID) ([]eval.Golden
 	return []eval.GoldenSet{{KBID: kbID}}, nil
 }
 func (f *fakeGSStore) Delete(context.Context, uuid.UUID) (bool, error) { return true, nil }
+
+func (f *fakeGSStore) SetSchedule(_ context.Context, _ uuid.UUID, schedule string) (bool, error) {
+	if f.setScheduleErr != nil {
+		return false, f.setScheduleErr
+	}
+	if f.get == nil {
+		return false, nil
+	}
+	f.get.Schedule = schedule
+	return true, nil
+}
 
 type fakeKB struct{}
 
@@ -132,5 +146,28 @@ func TestListGoldenSetsForKB(t *testing.T) {
 	h.ListGoldenSetsForKB(w, req(http.MethodGet, "/api/kb/"+kb.String()+"/eval/golden-sets", kb.String(), ""))
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
+	}
+}
+
+// UpdateGoldenSetForKB rejects a golden set belonging to a different KB via
+// getOwnedGoldenSet, without ever reaching SetSchedule.
+func TestUpdateGoldenSetForKB_RejectsForeignSet(t *testing.T) {
+	kb := uuid.New()
+	otherKB := uuid.New()
+	gs := uuid.New()
+	gsStore := &fakeGSStore{get: &eval.GoldenSet{ID: gs, KBID: otherKB}}
+	h := NewHandler(&fakeRunStore{}, fakeKB{}, fakeCfg{}, nil, gsStore, nil, nil)
+
+	r := httptest.NewRequest(http.MethodPatch, "/api/kb/"+kb.String()+"/eval/golden-sets/"+gs.String(), strings.NewReader(`{"schedule":"daily"}`))
+	r.SetPathValue("id", kb.String())
+	r.SetPathValue("gsId", gs.String())
+	w := httptest.NewRecorder()
+	h.UpdateGoldenSetForKB(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for a golden set owned by another KB, got %d: %s", w.Code, w.Body.String())
+	}
+	if gsStore.get.Schedule != "" {
+		t.Fatal("must not call SetSchedule for a cross-KB golden set")
 	}
 }

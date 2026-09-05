@@ -67,6 +67,10 @@ type SupervisorChatParams struct {
 	// pre-resolved. Nil falls back to the router's wiring-time cfgFn,
 	// which reads the global reader only.
 	TabularRouterConfig *TabularRouterConfig
+	// RawQuery is the verbatim user utterance for the rewrite ⊕ raw
+	// lane; empty = off. Forwarded into agents.Input.RawQuery, which
+	// both specialists fold into their SearchOptions.
+	RawQuery string
 }
 
 // RunSupervisorChat is the production entry point. It routes the query
@@ -129,6 +133,7 @@ func runSupervisorChatTestable(
 		GraphChunkIDs: params.GraphChunkIDs,
 		BridgeChunks:  params.BridgeChunks,
 		HyPESearch:    params.HyPESearch,
+		RawQuery:      params.RawQuery,
 	}
 	var tabularAddendum string
 	var tabularTrace *TabularTrace

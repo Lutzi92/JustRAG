@@ -411,6 +411,59 @@ Always on — no master flag, and no migration beyond **0068**. Every RSS feed, 
 
 Both `cmd/server` and `cmd/worker` blank-import `_ "time/tzdata"` so `sync_window_timezone` (and any other configured IANA timezone, `chat_date_timezone` included) resolves correctly on the alpine runtime image, which ships no zoneinfo database — before this, an unresolvable timezone name silently fell back to UTC in production. Packages: `internal/syncwindow` (pure slot math), `internal/syncsched` (the sweeper), store methods on `internal/rss`, `internal/confluence`, `internal/gitrepo`. Admin panel: Agent tab → "Night sync window".
 
+## Scheduled eval + regression gate
+
+**Prerequisites:** a golden set stored for the KB via the admin Eval tab ("Generate from corpus" or a manual upload), and `sync_window_*` configured (this feature reuses the same sweeper — see "Night-window source syncing" above).
+
+```
+# per golden set, in the admin Eval tab's schedule dropdown (or PATCH below):
+schedule = daily                        # manual (default) | daily | weekly
+
+# global, admin Agent panel → "Geplante Evaluationen" section:
+eval_regression_recall_pp = 2.0         # max tolerated mean-recall drop, in pp; unset/≤0/>100 falls back to this default
+eval_regression_mrr_pp    = 3.0         # max tolerated MRR drop, in pp; same fallback rule
+```
+
+Migration **0070** (`eval_golden_sets.schedule`/`next_run_at`, `eval_runs.scheduled`). Setting `schedule` via `PATCH /api/admin/eval/golden-sets/{id}` (system admin) or `PATCH /api/kb/{id}/eval/golden-sets/{gsId}` (KB advanced chain) with `{"schedule":"daily"}` — 400 on an invalid value, 404 on an unknown/foreign id. `internal/syncsched`'s existing leader-side sweeper picks up due golden sets exactly like RSS/Confluence/git-repo sources: `next_run_at IS NULL` means "not yet stamped" (a freshly-scheduled set gets its first slot stamped, not enqueued, so turning scheduling on never fires a daytime run). A due set enqueues `TypeEvalScheduled`, whose handler (`admineval.ScheduledWorker.HandleScheduled`) creates a normal `eval_runs` row — judge off, top-k 10, label `scheduled`, `scheduled=true`, config snapshot merged with the KB's per-KB overrides exactly like the KB-scoped `CreateRun` handler — and hands it to the same `TypeEvalRun` executor every other run uses (advisory-lock slots, per-KB lock, 2h timeout unchanged). Silent skips (Info/Warn log, no retry — the sweeper stamps the next slot regardless): the golden set was deleted, its schedule was switched back to `manual` in the meantime, it has no KB, or the KB already has an active run.
+
+On completion, `Worker.checkScheduledRegression` loads `Store.LatestCompletedScheduled` — the temporal predecessor by `finished_at` for the same golden set, **manual runs excluded** — and runs `eval.CheckRegression` with the two threshold keys above. It publishes `rag_eval_scheduled_metric{kb,golden_set,route,metric}` (metric ∈ recall|precision|mrr|ndcg; route = `overall` or a query type) unconditionally, and `rag_eval_scheduled_regression{kb,golden_set,route}` (1/0) only when a baseline existed — **the first scheduled run for a golden set has no predecessor, so the regression gauge is left unset rather than defaulted to 0.** A regression also logs a WARN `eval.scheduled.regression`. Errors anywhere in this path never fail the run.
+
+```yaml
+- alert: RAGRetrievalRegression
+  expr: max by (kb, golden_set, route) (rag_eval_scheduled_regression) == 1
+  for: 1h
+  labels: { severity: warning }
+  annotations: { summary: "Scheduled eval regressed on {{ $labels.route }} ({{ $labels.golden_set }})" }
+```
+
+`internal/admineval/{scheduled,regression,worker}.go`, `internal/eval/store_pg.go` (`LatestCompletedScheduled`), `internal/observability/metrics.go`.
+
+### Local A/B against a golden set (`cmd/eval --baseline`)
+
+The same comparison, run by hand instead of by the sweeper — use it to grid a knob before committing a site_config change. Any prior `cmd/eval` JSON report works as `--baseline` (normalized fields don't matter; the comparison reads `Report.Aggregate`/`RouteAggregates`, not the raw bytes):
+
+```bash
+cd go-backend
+./cmd/eval/eval --golden ../eval/golden/production-ppm-2026-08.jsonl --top-k 10 --output /tmp/base.json
+# change one knob in site_configs (e.g. rerank_candidate_depth_complex_reasoning=120), then:
+./cmd/eval/eval --golden ../eval/golden/production-ppm-2026-08.jsonl --top-k 10 --output /tmp/cand.json --baseline /tmp/base.json
+echo "exit=$?"   # 0 ok, 1 question errors, 2 usage/unreadable baseline, 3 regression
+```
+
+`--regress-recall-pp` / `--regress-mrr-pp` override the defaults (2.0 / 3.0 pp) per invocation. A regression prints a per-route delta table (`eval.WriteDeltaTable`) to stdout before exiting 3. See `eval/golden/snapshots/README.md` for the operator convention on keeping a local baseline file.
+
+## Rewrite ⊕ raw last turn
+
+```
+chat_condense_keep_raw_enabled = true    # gate; default off, per-KB overridable (group Retrieval)
+```
+
+No migration, no new LLM call. When a multi-turn follow-up gets condensed (rewritten against conversation history) and this flag is on, the chat layer additionally forwards the user's **verbatim** last-turn utterance into `vector.SearchOptions.RawQuery`. `Search()`'s `effectiveRawQuery` guard skips it when it's empty or equal (after trimming) to the already-condensed final query — so a single-turn question, which has nothing to condense, pays nothing. When it fires, the raw utterance runs as one extra list on **both** arms (vector + BM25 — independent of `rag_fusion_enabled`) and folds into RRF alongside the condensed query's own lists; `rag_raw_query_list_total{outcome}` counts it, and `raw_query_lists` appears in the `rag.search.stages` log event. `RawQuery` presence is part of the query-cache shape hash, so a raw-lane hit and a condensed-only hit never collide.
+
+Threaded on the standard `PrepareChatContext` path and the Supervisor path (both `RetrieverAgent` and `EnumeratorAgent`). **Not** wired into public API / OpenAI-compat / MCP server / agent teams / plan-execute / agentic / DRIFT / `RunDeepChat` (the legacy 2-step default orchestrator for `complex_reasoning` when no orchestrator flag is on) — those paths don't carry a condensed-vs-raw distinction today. **Cost:** one extra embedding call + one extra BM25 query per condensed follow-up turn; zero on the first turn of a conversation or on any turn that isn't condensed.
+
+**When to flip it on:** the mechanism exists because query condensation can drop a named entity or literal phrase the condensed rewrite paraphrases away (classic multi-turn lookup failure mode) — the raw lane gives BM25/vector a second, unparaphrased shot at it. It is off by default because it is **unmeasured**: flip it on once `eval/golden/multi-turn-de.jsonl` (Wave 2) exists and scores it against a same-KB run with the flag off, using the local A/B procedure above.
+
 ## KB permission model — rights matrix (Phase 1)
 
 No flag; live since migration **0064**. Four roles, strictly ordered `view < edit < admin < owner`, resolved by `kbaccess.EffectiveRole` and enforced by `kbaccess.RequireKBRole(min)` — see the Quick reference block in `CLAUDE.md` for the five-rule resolution ladder. Reproduced here (from `docs/superpowers/specs/2026-08-12-kb-rollen-und-sichtbarkeit-design.md`) so operators and developers don't have to open the spec for the matrix itself:

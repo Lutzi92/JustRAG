@@ -32,6 +32,7 @@ const (
 	TypeEntityCanonicalizeKB      = "entity-canonicalize-kb"
 	TypeKGCommunitiesBuild        = "kg-communities-build"
 	TypeGitRepoSync               = "git-repo-sync"
+	TypeEvalScheduled             = "eval-scheduled"
 )
 
 // taskTimeouts maps each task type to a generous per-task asynq.Timeout.
@@ -58,6 +59,7 @@ var taskTimeouts = map[string]time.Duration{
 	TypeEntityCanonicalizeKB:      1 * time.Hour,
 	TypeKGCommunitiesBuild:        1 * time.Hour,
 	TypeGitRepoSync:               1 * time.Hour,
+	TypeEvalScheduled:             10 * time.Minute, // creates a run row + enqueues TypeEvalRun; the run itself has its own 2 h timeout
 }
 
 // TimeoutFor returns the asynq.Timeout duration for taskType. Unknown task

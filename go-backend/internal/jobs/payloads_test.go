@@ -60,6 +60,12 @@ func TestConfluenceSyncPayload_RoundTrip(t *testing.T) {
 	assertWireKeys(t, p, []string{"sourceId"})
 }
 
+func TestEvalScheduledPayload_RoundTrip(t *testing.T) {
+	p := EvalScheduledPayload{GoldenSetID: "gs-1"}
+	assertRoundTrip(t, p, &EvalScheduledPayload{})
+	assertWireKeys(t, p, []string{"golden_set_id"})
+}
+
 func TestQueueAndTaskTypeConstants(t *testing.T) {
 	// Pin the literal values: changing them breaks any Asynq queue or task
 	// type already enqueued before a deploy. The test exists so a rename
@@ -79,6 +85,7 @@ func TestQueueAndTaskTypeConstants(t *testing.T) {
 		{TypeConfluenceSync, "confluence-sync"},
 		{TypeCrawl, "crawl"},
 		{TypeEvalRun, "eval-run"},
+		{TypeEvalScheduled, "eval-scheduled"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {

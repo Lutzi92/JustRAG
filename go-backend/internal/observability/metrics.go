@@ -234,6 +234,32 @@ var (
 			ConstLabels: commonLabels,
 		},
 	)
+
+	// EvalScheduledMetric carries the latest scheduled eval run's retrieval
+	// metrics so retrieval quality lands on the same dashboard as the rag_*
+	// runtime metrics. route is "overall" or a query type; metric is
+	// recall | precision | mrr | ndcg. Set once per completed scheduled run.
+	EvalScheduledMetric = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name:        "rag_eval_scheduled_metric",
+			Help:        "Latest scheduled eval run's aggregate retrieval metric, by KB, golden set, route and metric name.",
+			ConstLabels: commonLabels,
+		},
+		[]string{"kb", "golden_set", "route", "metric"},
+	)
+
+	// EvalScheduledRegression is 1 while the latest scheduled run regressed
+	// beyond eval_regression_recall_pp / eval_regression_mrr_pp against the
+	// previous scheduled run on that route, 0 otherwise. Alert with
+	// max(rag_eval_scheduled_regression) == 1 for 1h.
+	EvalScheduledRegression = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name:        "rag_eval_scheduled_regression",
+			Help:        "1 when the latest scheduled eval run regressed beyond threshold on this route, else 0.",
+			ConstLabels: commonLabels,
+		},
+		[]string{"kb", "golden_set", "route"},
+	)
 )
 
 // RecordCRAGDecision increments the CRAG decision counter for one branch
@@ -663,6 +689,30 @@ func RecordStepBackDecision(outcome string) {
 		outcome = "llm_error"
 	}
 	stepBackDecisionTotal.WithLabelValues(outcome).Inc()
+}
+
+// --- Raw last-turn utterance retrieval lane (Wave 1 Task 7) ----------------
+
+var rawQueryListTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name:        "rag_raw_query_list_total",
+		Help:        "Per-outcome counter for the rewrite ⊕ raw retrieval lane (vector.SearchOptions.RawQuery). Outcome: added (the raw utterance differed from the condensed query and was folded into both RRF arms as an extra list).",
+		ConstLabels: commonLabels,
+	},
+	[]string{"outcome"},
+)
+
+// RecordRawQueryList increments the per-outcome counter for the raw-query
+// retrieval lane. Callers only invoke this when the lane actually fired,
+// so "added" is the sole outcome today; the outcome parameter (mirroring
+// RecordStepBackDecision's shape) keeps the label space open for a future
+// skip-reason breakdown without a metric rename. Empty input normalizes
+// to "added".
+func RecordRawQueryList(outcome string) {
+	if outcome == "" {
+		outcome = "added"
+	}
+	rawQueryListTotal.WithLabelValues(outcome).Inc()
 }
 
 // --- Long-context routing (T2-1) ------------------------------------------

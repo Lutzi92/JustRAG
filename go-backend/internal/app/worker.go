@@ -43,6 +43,7 @@ import (
 	"github.com/justrag/go-backend/internal/redisclient"
 	"github.com/justrag/go-backend/internal/rss"
 	"github.com/justrag/go-backend/internal/safego"
+	"github.com/justrag/go-backend/internal/siteconfig"
 	"github.com/justrag/go-backend/internal/storage"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/tabular/ingest"
@@ -386,8 +387,20 @@ func RunWorker(cfg *config.Config) error {
 	}
 	evalWorker := admineval.NewWorker(db.Main, evalStore, func(ctx context.Context, r eval.Run) (json.RawMessage, error) {
 		return eval.RunInProcessFromRecord(ctx, r, evalDeps)
-	})
+	}, admineval.WithRegressionCheck(evalStore, siteconfig.NewStore(db.Main)))
 	mux.HandleFunc(jobs.TypeEvalRun, worker.Instrument(evalWorker.HandleRun))
+
+	// Scheduled eval runs: the night-window sweeper enqueues one
+	// TypeEvalScheduled per due golden set; this handler creates the run row
+	// and hands off to TypeEvalRun above.
+	scheduledEval := admineval.NewScheduledWorker(
+		evalStore,
+		eval.NewGoldenSetStore(db.Main),
+		siteconfig.NewStore(db.Main),
+		kbconfig.NewStore(db.Main),
+		rssClient,
+	)
+	mux.HandleFunc(jobs.TypeEvalScheduled, worker.Instrument(scheduledEval.HandleScheduled))
 
 	// Corpus-based golden-set generation.
 	genJobStore := eval.NewGenJobStore(db.Main)

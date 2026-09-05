@@ -3,7 +3,7 @@
 //
 // Usage:
 //
-//	eval --golden ../eval/golden/example.jsonl [--top-k 10] [--output eval-report.json] [--concurrency 1] [--question-id <id>]
+//	eval --golden ../eval/golden/example.jsonl [--top-k 10] [--output eval-report.json] [--concurrency 1] [--question-id <id>] [--baseline prev.json]
 package main
 
 import (
@@ -60,7 +60,26 @@ func main() {
 	depthBucketsMinChunks := flag.Int("depth-buckets-min-chunks", 4, `Min totalChunks required for a chunk to count toward the depth-bucket aggregate. Suppresses noise from short files where bucketing has no useful signal. Pass 1 to disable filtering. Only effective with --depth-buckets.`)
 	orchestratorDispatch := flag.Bool("orchestrator-dispatch", true, `With --production-context: route each question through the same orchestrator predicate production uses (Supervisor / Plan-Execute / Plan-Execute-DAG / Agentic / standard fallback) and record per-question 'agent' + per-orchestrator aggregates in the report. Default true. Set to false to reproduce pre-2026-05 retrieval-only behaviour for byte-stable diffs against historical eval runs. Ignored when --production-context is unset.`)
 	teamID := flag.String("team-id", "", "Dispatch every question through this user-created agent team (requires --production-context; team must be attached + enabled on the golden set's KB)")
+	baselinePath := flag.String("baseline", "", "Path to a previous eval-report.json. When set, prints a per-route delta table and exits 3 if recall or MRR dropped beyond --regress-recall-pp / --regress-mrr-pp (overall or on any route present in both reports). Runs with question errors exit 1 before the delta is computed.")
+	regressRecallPP := flag.Float64("regress-recall-pp", eval.DefaultRegressionThresholds.RecallPP, "Max tolerated mean-recall drop vs --baseline, in percentage points.")
+	regressMRRPP := flag.Float64("regress-mrr-pp", eval.DefaultRegressionThresholds.MRRPP, "Max tolerated MRR drop vs --baseline, in percentage points.")
 	flag.Parse()
+
+	var baseline *eval.Report
+	if *baselinePath != "" {
+		bf, err := os.Open(*baselinePath)
+		if err != nil {
+			slog.Error("--baseline path is not readable", "path", *baselinePath, "error", err)
+			os.Exit(2)
+		}
+		rep, err := eval.ReadJSONReport(bf)
+		_ = bf.Close()
+		if err != nil {
+			slog.Error("--baseline is not a cmd/eval JSON report", "path", *baselinePath, "error", err)
+			os.Exit(2)
+		}
+		baseline = &rep
+	}
 
 	if *teamID != "" && !*productionContext {
 		slog.Error("--team-id requires --production-context")
@@ -438,6 +457,18 @@ func main() {
 
 	if rep.Errors > 0 {
 		os.Exit(1)
+	}
+	if baseline != nil {
+		th := eval.RegressionThresholds{RecallPP: *regressRecallPP, MRRPP: *regressMRRPP}
+		regs := eval.CheckRegression(*baseline, rep, th)
+		fmt.Fprintln(os.Stdout)
+		_ = eval.WriteDeltaTable(os.Stdout, *baseline, rep, regs)
+		if len(regs) > 0 {
+			for _, r := range regs {
+				slog.Error("eval.regression", "route", r.Route, "metric", r.Metric, "baseline", r.Baseline, "candidate", r.Candidate, "delta_pp", r.DeltaPP)
+			}
+			os.Exit(3)
+		}
 	}
 }
 

@@ -43,6 +43,8 @@ const queryCacheSchemaVersion byte = 2
 //   - SubQueries count (uint16 big-endian): length-only — see inline comment
 //   - GraphChunkIDs count (uint16 big-endian): length-only, same compromise
 //     as SubQueries — KG re-ingest changes the count → invalidates entry
+//   - RawQuery presence (1-byte flag): whether the raw last-turn lane fired
+//     — see inline comment for why presence, not content, is hashed
 func shapeHash(opts SearchOptions, topN int, embeddingModel string) []byte {
 	h := sha256.New()
 	h.Write([]byte{queryCacheSchemaVersion})
@@ -112,6 +114,23 @@ func shapeHash(opts SearchOptions, topN int, embeddingModel string) []byte {
 	var graphChunksBuf [2]byte
 	binary.BigEndian.PutUint16(graphChunksBuf[:], uint16(len(opts.GraphChunkIDs)))
 	h.Write(graphChunksBuf[:])
+
+	// RawQuery: rewrite ⊕ raw retrieval lane (Wave 1 Task 7). We hash
+	// PRESENCE only (a 1-byte flag), not the raw text itself — the raw
+	// string is part of the cache key's query-embedding side (each
+	// distinct raw utterance already routes to a different cache row via
+	// the query embedding), not the request "shape". What the shape must
+	// capture is that the lane fired at all: a cached result produced
+	// with the condensed query alone (RawQuery empty/identical, see
+	// effectiveRawQuery) must not be served for a request where the raw
+	// lane added extra RRF lists, and vice versa. Distinct buffer
+	// position (its own byte, after GraphChunkIDs) so this bit can never
+	// be confused with any other field's encoding.
+	rawQueryFlag := byte(0)
+	if opts.RawQuery != "" {
+		rawQueryFlag = 1
+	}
+	h.Write([]byte{rawQueryFlag})
 
 	return h.Sum(nil)
 }

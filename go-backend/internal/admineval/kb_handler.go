@@ -184,6 +184,24 @@ func (h *Handler) DeleteGoldenSetForKB(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// UpdateGoldenSetForKB → PATCH /api/kb/{id}/eval/golden-sets/{gsId}
+func (h *Handler) UpdateGoldenSetForKB(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	kbID, ok := pathKB(w, r)
+	if !ok {
+		return
+	}
+	gsID, err := uuid.Parse(r.PathValue("gsId"))
+	if err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, "invalid golden set id")
+		return
+	}
+	if h.getOwnedGoldenSet(w, r, kbID, gsID) == nil {
+		return
+	}
+	h.applyScheduleUpdate(ctx, w, r, gsID)
+}
+
 // --- Runs ---
 
 // kbCreateRunRequest is the KB-scoped run body (no kb_id — it comes from path).

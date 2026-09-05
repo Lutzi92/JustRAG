@@ -116,6 +116,23 @@ func TestWriteJSONReport_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestReadJSONReport_RejectsEmptyObject is the mutation-proof for F4:
+// a baseline file that decodes cleanly but carries zero questions (the
+// degenerate `{}` case — a truncated file, a different JSON shape entirely,
+// or simply the wrong path) must error rather than silently hand back a
+// zero-valued Report. Without the len(rep.Questions) == 0 guard,
+// `cmd/eval --baseline wrong.json` would exit 0 against a zero-valued gate
+// instead of failing loudly with exit 2.
+func TestReadJSONReport_RejectsEmptyObject(t *testing.T) {
+	_, err := ReadJSONReport(strings.NewReader(`{}`))
+	if err == nil {
+		t.Fatal("expected an error for a report with no questions, got nil")
+	}
+	if !strings.Contains(err.Error(), "report has no questions") {
+		t.Fatalf("error message: got %q, want it to contain %q", err.Error(), "report has no questions")
+	}
+}
+
 func TestWriteHumanSummary_IncludesJudgeMetricsWhenPresent(t *testing.T) {
 	f, r, p := 0.82, 0.71, 0.9
 	rep := Report{

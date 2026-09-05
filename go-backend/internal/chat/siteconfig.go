@@ -632,6 +632,14 @@ func ChatLongContextMaxTokens(ctx context.Context, reader SiteConfigReader) int 
 	return readInt(ctx, reader, "chat_longcontext_max_tokens", 100_000, 10_000, 500_000)
 }
 
+// ChatLongContextTopK is the chunk-pool size Search() returns on the
+// long-context route. Default 200 (the historical constant), range [50, 500].
+// Wave-3's map-reduce consumer tunes this against the token budget. Tunable
+// via "chat_longcontext_top_k".
+func ChatLongContextTopK(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_longcontext_top_k", 200, 50, 500)
+}
+
 // ChatCommunitySearchEnabled gates community-primed global search: inject KG
 // community summaries into the answer pool for global-synthesis queries. Default off.
 func ChatCommunitySearchEnabled(ctx context.Context, reader SiteConfigReader) bool {
@@ -1686,4 +1694,27 @@ func AgentsAllowPrivilegedTools(ctx context.Context, reader SiteConfigReader) bo
 // (per-task key → model_tier_fast → KB chat model).
 func AgentTeamRouterModel(ctx context.Context, reader SiteConfigReader) string {
 	return ResolveFastTierModel(ctx, reader, "agent_team_router_model")
+}
+
+// ChatCondenseKeepRawEnabled gates the rewrite ⊕ raw retrieval lane: when a
+// follow-up was condensed (CondenseFollowUp), the user's verbatim utterance
+// is searched as an extra RRF list on both arms (vector.SearchOptions.RawQuery).
+// Default off until the multi-turn golden set (Wave 2) scores it. Tunable via
+// "chat_condense_keep_raw_enabled".
+func ChatCondenseKeepRawEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_condense_keep_raw_enabled", false)
+}
+
+// rawQueryForRetrieval returns the raw utterance to pass as
+// SearchOptions.RawQuery, or "" when the lane is off or nothing was
+// condensed (raw == condensed after trimming).
+func rawQueryForRetrieval(enabled bool, raw, condensed string) string {
+	if !enabled {
+		return ""
+	}
+	r, c := strings.TrimSpace(raw), strings.TrimSpace(condensed)
+	if r == "" || r == c {
+		return ""
+	}
+	return r
 }

@@ -106,6 +106,27 @@ var siteConfigParsers = map[string]siteConfigSetter{
 			cfg.TopNComplexReasoning = n
 		}
 	},
+	"rerank_candidate_depth": func(cfg *KBVectorConfig, v string) {
+		// Sentinel 0 = legacy max(4×k,50). Range [10, MaxRerankCandidateDepth].
+		if n, err := strconv.Atoi(v); err == nil && n >= 10 && n <= MaxRerankCandidateDepth {
+			cfg.RerankCandidateDepth = n
+		}
+	},
+	"rerank_candidate_depth_lookup": func(cfg *KBVectorConfig, v string) {
+		if n, err := strconv.Atoi(v); err == nil && n >= 10 && n <= MaxRerankCandidateDepth {
+			cfg.RerankCandidateDepthLookup = n
+		}
+	},
+	"rerank_candidate_depth_enumeration": func(cfg *KBVectorConfig, v string) {
+		if n, err := strconv.Atoi(v); err == nil && n >= 10 && n <= MaxRerankCandidateDepth {
+			cfg.RerankCandidateDepthEnumeration = n
+		}
+	},
+	"rerank_candidate_depth_complex_reasoning": func(cfg *KBVectorConfig, v string) {
+		if n, err := strconv.Atoi(v); err == nil && n >= 10 && n <= MaxRerankCandidateDepth {
+			cfg.RerankCandidateDepthComplexReasoning = n
+		}
+	},
 	"rrf_weight_vector": func(cfg *KBVectorConfig, v string) {
 		// Allow 0 (disable vector leg) up to 10 (heavily favored). Above
 		// 10 is almost certainly a typo — RRF magnitudes are 1/(60+rank+1)

@@ -126,6 +126,30 @@ type KBVectorConfig struct {
 	// wider pre-rerank pool because relevant chunks span multiple sources.
 	TopNComplexReasoning int
 
+	// RerankCandidateDepth overrides the pre-rerank candidate pool; 0 =
+	// legacy formula (max(4×limit, 50) with a reranker, max(2×limit, 30)
+	// without). Per-route variants below inherit it when unset. Tunable
+	// via site_configs key "rerank_candidate_depth". See
+	// EffectiveRerankDepth.
+	RerankCandidateDepth int
+
+	// RerankCandidateDepthLookup overrides RerankCandidateDepth when the
+	// query is classified as QueryTypeLookup. Sentinel 0 = inherit.
+	// Tunable via site_configs key "rerank_candidate_depth_lookup".
+	RerankCandidateDepthLookup int
+
+	// RerankCandidateDepthEnumeration overrides RerankCandidateDepth when
+	// the query is classified as QueryTypeEnumeration. Sentinel 0 =
+	// inherit. Tunable via site_configs key
+	// "rerank_candidate_depth_enumeration".
+	RerankCandidateDepthEnumeration int
+
+	// RerankCandidateDepthComplexReasoning overrides RerankCandidateDepth
+	// when the query is classified as QueryTypeComplexReasoning. Sentinel
+	// 0 = inherit. Tunable via site_configs key
+	// "rerank_candidate_depth_complex_reasoning".
+	RerankCandidateDepthComplexReasoning int
+
 	AutoSpellCorrect bool
 
 	// QueryInstruction is the natural-language task description fed to
@@ -350,21 +374,25 @@ func DefaultConfig() KBVectorConfig {
 		// RerankScoreDropEnabled defaults false (inert). The threshold is
 		// pre-seeded at the documented midpoint so the first enable already
 		// trims a tail; operators tune it against a golden set from there.
-		RerankScoreDropThreshold:         0.5,
-		DefaultTopK:                      15,
-		ContextWindowSize:                3,
-		MMRLambda:                        0.7,
-		RerankBlendAlpha:                 0.8,
-		RerankBlendAlphaLookup:           -1, // sentinel: inherit
-		RerankBlendAlphaEnumeration:      -1,
-		RerankBlendAlphaComplexReasoning: -1,
-		RerankBlendAlphaEntity:           -1,
-		TopNLookup:                       0,
-		TopNEnumeration:                  0,
-		TopNComplexReasoning:             0,
-		HNSWEfSearch:                     150,
-		RRFWeightVector:                  1.0,
-		RRFWeightBM25:                    1.0,
+		RerankScoreDropThreshold:             0.5,
+		DefaultTopK:                          15,
+		ContextWindowSize:                    3,
+		MMRLambda:                            0.7,
+		RerankBlendAlpha:                     0.8,
+		RerankBlendAlphaLookup:               -1, // sentinel: inherit
+		RerankBlendAlphaEnumeration:          -1,
+		RerankBlendAlphaComplexReasoning:     -1,
+		RerankBlendAlphaEntity:               -1,
+		TopNLookup:                           0,
+		TopNEnumeration:                      0,
+		TopNComplexReasoning:                 0,
+		RerankCandidateDepth:                 0,
+		RerankCandidateDepthLookup:           0,
+		RerankCandidateDepthEnumeration:      0,
+		RerankCandidateDepthComplexReasoning: 0,
+		HNSWEfSearch:                         150,
+		RRFWeightVector:                      1.0,
+		RRFWeightBM25:                        1.0,
 		// T2-4 dynamic alpha: default 0.3 sensitivity is "feature
 		// designed but inert" — the heuristic only fires when the
 		// operator flips HybridDynamicAlphaEnabled to true. Setting

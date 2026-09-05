@@ -297,6 +297,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	if anchor.Regenerate == nil || anchor.Regenerate.HistoryParentID != nil {
 		searchQuery, _ = CondenseFollowUp(ctx, h.aiResolver, h.store, chatID, parentMsgID, body.Message, kbID, lang)
 	}
+	rawQuery := rawQueryForRetrieval(ChatCondenseKeepRawEnabled(ctx, h.siteConfigReader), body.Message, searchQuery)
 
 	cls := h.classifyQuery(ctx, searchQuery, body.Enhance, kbID, lang)
 
@@ -351,7 +352,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// the comparison orchestrator) regardless of complexity classification.
 	isComplex := cls.UseHyDE && cls.UseMultiQuery
 	if (isComplex || runCompare || teamSel != nil) && streamMode {
-		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, dateLine, searchQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, anchor, graphDec, graphChunkIDs, bridgeChunks, answerHistory, teamSel, teamSelReason); handled {
+		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, dateLine, searchQuery, rawQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, anchor, graphDec, graphChunkIDs, bridgeChunks, answerHistory, teamSel, teamSelReason); handled {
 			return
 		}
 		// Deep chat failed — fall through to standard path.
@@ -385,6 +386,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		BridgeChunks:          bridgeChunks,
 		RecencyLister:         h.recencyLister,
 		TabularRouter:         h.tabularRouter,
+		RawQuery:              rawQuery,
 	}
 
 	// AP-C4 trajectory event (standard path): the decision was computed
@@ -464,7 +466,7 @@ func (h *Handler) tryDeepChat(
 	ctx context.Context,
 	w http.ResponseWriter,
 	r *http.Request,
-	chatID, kbID, lang, dateLine, searchQuery, queryType, kbSystemPrompt, reasoningLevel string,
+	chatID, kbID, lang, dateLine, searchQuery, rawQuery, queryType, kbSystemPrompt, reasoningLevel string,
 	body sendMessageRequest,
 	anchor turnAnchor,
 	graphDec GraphTraversalDecision,
@@ -818,6 +820,7 @@ func (h *Handler) tryDeepChat(
 			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
 			MultiSpecialist: ChatSupervisorMultiSpecialist(ctx, h.siteConfigReader),
 			TabularRouter:   h.tabularRouter,
+			RawQuery:        rawQuery,
 
 			TabularRouterConfig:      tabularCfg,
 			SufficientContextEnabled: ChatSufficientContextEnabled(ctx, h.siteConfigReader),

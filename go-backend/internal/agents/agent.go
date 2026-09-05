@@ -48,6 +48,13 @@ type Input struct {
 	// are exactly the regime the simple arm exists for. False (default)
 	// leaves the site_config in charge.
 	ForceBM25SimpleArm bool
+	// RawQuery forwards the user's verbatim last-turn utterance into the
+	// agent's SearchOptions.RawQuery (the rewrite ⊕ raw retrieval lane).
+	// The Supervisor sets it from chat.SupervisorChatParams.RawQuery,
+	// which is itself gated on chat_condense_keep_raw_enabled and only
+	// non-empty when it differs from the condensed Query. Empty
+	// (default) preserves legacy behaviour.
+	RawQuery string
 }
 
 // Output captures everything one specialist produced for one Input.

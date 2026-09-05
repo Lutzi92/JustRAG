@@ -3,14 +3,16 @@
 // End-to-end ingestion-path test: parse → split → embed → store, plus the
 // cross-file dedup and re-ingest idempotency behaviors that unit tests can't
 // exercise because they span processor + vector + ai. The embedder is a fake
-// OpenAI-compatible HTTP server returning deterministic 1536-dim vectors, so
-// the test needs only the vector Postgres (TEST_VECTOR_DSN, same contract as
-// the internal/vector integration tests) — no main DB, no Redis, no real LLM.
+// OpenAI-compatible HTTP server returning deterministic embedDim-dim vectors,
+// so the test needs only the vector Postgres (TEST_VECTOR_DSN, same contract
+// as the internal/vector integration tests) — no main DB, no Redis, no real
+// LLM.
 package processor_test
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"hash/fnv"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +32,11 @@ import (
 	"github.com/justrag/go-backend/internal/vector"
 )
 
-const embedDim = 1536 // matches the processor's dedup-table dimension, so cross-file dedup is active
+// embedDim is deliberately NOT the 1536 default: cross-file dedup must work on
+// every dim-keyed table (production runs 4096). A hardcoded dedup-table
+// dimension made dedup a silent no-op everywhere but 1536 — this fixture is
+// the regression test for that.
+const embedDim = 768
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -97,7 +103,7 @@ func (f *fakeConfigStore) GetAIProviderByID(ctx context.Context, id string) (*ai
 func (f *fakeConfigStore) GetAIModelsByProvider(ctx context.Context, providerID string) ([]ai.AIModelInfo, error) {
 	return []ai.AIModelInfo{
 		{Name: "fake-chat"},
-		{Name: "fake-embed", IsEmbedding: true},
+		{Name: "fake-embed", IsEmbedding: true, Dimensions: embedDim},
 	}, nil
 }
 
@@ -284,10 +290,13 @@ func TestProcessFile_IngestEndToEnd(t *testing.T) {
 
 	// Stored rows must carry a content hash and an embedding — both feed
 	// retrieval (dedup + ANN) and neither is visible through FileChunkRow.
+	// Chunks land in the dim-keyed table for embedDim (not the legacy
+	// 1536-dim "document_chunks"), so the check must target that table.
 	var hashedAndEmbedded int
 	err = pool.QueryRow(ctx,
-		`SELECT count(*) FROM document_chunks
+		fmt.Sprintf(`SELECT count(*) FROM %s
 		  WHERE file_id = $1::uuid AND content_hash <> '' AND embedding IS NOT NULL`,
+			vector.GetVectorTableName(embedDim)),
 		fileA).Scan(&hashedAndEmbedded)
 	if err != nil {
 		t.Fatalf("count hashed+embedded rows: %v", err)
