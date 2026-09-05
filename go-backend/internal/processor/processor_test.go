@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/tabular"
@@ -1136,5 +1137,49 @@ func TestWaitingIsVisibleInStageDetail(t *testing.T) {
 
 	if got := store.StageDetail("f1"); got != "" {
 		t.Errorf("stage detail after completion = %q, want cleared", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// dedupDimensions
+// ---------------------------------------------------------------------------
+
+// fakeDedupConfigStore is a minimal ai.ConfigStore that declares a single
+// embedding model with a caller-chosen Dimensions value, for exercising
+// dedupDimensions' resolver-backed path without a real AI provider.
+type fakeDedupConfigStore struct {
+	dims int
+}
+
+func (f *fakeDedupConfigStore) GetActiveAIProvider(ctx context.Context) (*ai.AIProviderInfo, error) {
+	return &ai.AIProviderInfo{ID: "test-provider", Name: "test", APIKey: "test-key", BaseURL: "http://example.invalid"}, nil
+}
+
+func (f *fakeDedupConfigStore) GetAIProviderByID(ctx context.Context, id string) (*ai.AIProviderInfo, error) {
+	return f.GetActiveAIProvider(ctx)
+}
+
+func (f *fakeDedupConfigStore) GetAIModelsByProvider(ctx context.Context, providerID string) ([]ai.AIModelInfo, error) {
+	return []ai.AIModelInfo{
+		{Name: "fake-embed", IsEmbedding: true, Dimensions: f.dims},
+	}, nil
+}
+
+func (f *fakeDedupConfigStore) GetKBModelOverrides(ctx context.Context, kbID string) (*ai.KBModelOverrides, error) {
+	return nil, nil
+}
+
+func TestDedupDimensions_FallsBackToLegacyWithoutResolver(t *testing.T) {
+	p := &Processor{}
+	if got := p.dedupDimensions(context.Background(), "kb"); got != legacyDedupDim {
+		t.Fatalf("nil resolver: want %d, got %d", legacyDedupDim, got)
+	}
+}
+
+func TestDedupDimensions_UsesDeclaredEmbeddingDimension(t *testing.T) {
+	resolver := ai.NewConfigResolver(&fakeDedupConfigStore{dims: 4096})
+	p := NewProcessor(nil, resolver, nil, &mockStore{})
+	if got := p.dedupDimensions(context.Background(), "kb"); got != 4096 {
+		t.Fatalf("declared 4096: want 4096, got %d", got)
 	}
 }
