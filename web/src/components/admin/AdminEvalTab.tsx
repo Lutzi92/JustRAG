@@ -8,6 +8,8 @@ import { useToast } from '../../contexts/ToastContext';
 import { useReducedMotion, getMotionProps } from '../../hooks/useReducedMotion';
 import { getApiErrorMessage } from '../../utils/apiError';
 import { fetchKbAgents, type KbAgentOption } from '../agents/api';
+import { SyncScheduleSelect } from '../sidebar/SyncScheduleSelect';
+import type { SyncSchedule } from '../../types';
 
 // Types mirror the backend DTOs (internal/admineval/types.go).
 interface AggregateSummary {
@@ -43,6 +45,8 @@ interface GoldenSet {
     content_hash: string;
     question_count: number;
     created_at: string;
+    schedule?: SyncSchedule;
+    next_run_at?: string;
 }
 
 interface ListGoldenSetsResponse {
@@ -264,6 +268,15 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
         }
     };
 
+    const handleScheduleChange = async (id: string, schedule: SyncSchedule) => {
+        try {
+            await axios.patch(`${API_BASE_URL}${basePath}/golden-sets/${id}`, { schedule });
+            fetchGoldenSets();
+        } catch (err) {
+            toast.error(getApiErrorMessage(err, t('evalScheduleUpdateFailed')));
+        }
+    };
+
     const handleDeleteGoldenSet = async (id: string, name: string) => {
         if (!window.confirm(`${t('evalGoldenSetConfirmDelete')} "${name}"?`)) return;
         try {
@@ -387,6 +400,7 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
                                 <th style={{ textAlign: 'right', padding: '0.3rem 0.5rem', fontSize: '0.85rem' }}>{t('evalQuestionCount')}</th>
                                 <th style={{ textAlign: 'left', padding: '0.3rem 0.5rem', fontSize: '0.85rem' }}>{t('evalStarted')}</th>
                                 <th style={{ textAlign: 'left', padding: '0.3rem 0.5rem', fontSize: '0.85rem' }}>{t('evalGoldenSetHash')}</th>
+                                <th style={{ textAlign: 'left', padding: '0.3rem 0.5rem', fontSize: '0.85rem' }}>{t('evalSchedule')}</th>
                                 <th style={{ textAlign: 'right', padding: '0.3rem 0.5rem', fontSize: '0.85rem' }}>{t('evalActions')}</th>
                             </tr>
                         </thead>
@@ -405,6 +419,12 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
                                     <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>{gs.question_count}</td>
                                     <td style={{ padding: '0.3rem 0.5rem', fontSize: '0.85rem' }}>{new Date(gs.created_at).toLocaleString()}</td>
                                     <td style={{ padding: '0.3rem 0.5rem', fontFamily: 'monospace', fontSize: '0.75rem', opacity: 0.7 }}>{gs.content_hash.slice(0, 12)}</td>
+                                    <td style={{ padding: '0.3rem 0.5rem' }}>
+                                        <SyncScheduleSelect id={`gs-schedule-${gs.id}`} value={gs.schedule ?? 'manual'} onChange={s => handleScheduleChange(gs.id, s)} label={t('evalSchedule')} />
+                                        {gs.next_run_at && gs.schedule !== 'manual' && (
+                                            <div style={{ fontSize: '0.7rem', opacity: 0.6 }}>{t('evalNextRun')}: {new Date(gs.next_run_at).toLocaleString()}</div>
+                                        )}
+                                    </td>
                                     <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>
                                         <button type="button" onClick={() => handleDownloadGoldenSet(gs.id, gs.name)} title={t('evalDownload')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0.2rem', color: 'var(--text-primary)' }}>
                                             <Download size={14} />

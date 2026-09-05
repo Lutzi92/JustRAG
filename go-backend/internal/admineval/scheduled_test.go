@@ -116,6 +116,16 @@ func (s *schedGoldenSetStore) ListByKB(_ context.Context, _ uuid.UUID) ([]eval.G
 	return nil, nil
 }
 
+func (s *schedGoldenSetStore) SetSchedule(_ context.Context, id uuid.UUID, schedule string) (bool, error) {
+	gs, ok := s.sets[id]
+	if !ok {
+		return false, nil
+	}
+	gs.Schedule = schedule
+	s.sets[id] = gs
+	return true, nil
+}
+
 // fakeEnqueuer records every task passed to EnqueueContext, so tests can
 // assert on task type and payload rather than just a call count.
 type fakeEnqueuer struct {

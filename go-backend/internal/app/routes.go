@@ -667,6 +667,7 @@ func registerAdminEvalRoutes(rc *routeCtx) {
 	rc.mux.Handle("POST /api/admin/eval/golden-sets", rc.adminChain(h.CreateGoldenSet))
 	rc.mux.Handle("GET /api/admin/eval/golden-sets", rc.adminChain(h.ListGoldenSets))
 	rc.mux.Handle("DELETE /api/admin/eval/golden-sets/{id}", rc.adminChain(h.DeleteGoldenSet))
+	rc.mux.Handle("PATCH /api/admin/eval/golden-sets/{id}", rc.adminChain(h.UpdateGoldenSet))
 
 	rc.mux.Handle("POST /api/admin/eval/golden-sets/generate", rc.adminChain(h.GenerateGoldenSet))
 	rc.mux.Handle("GET /api/admin/eval/golden-sets/jobs", rc.adminChain(h.ListGenJobs))
@@ -681,6 +682,7 @@ func registerAdminEvalRoutes(rc *routeCtx) {
 	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/jobs", rc.kbAdvancedChain(h.ListGenJobsForKB))
 	rc.mux.Handle("GET /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbAdvancedChain(h.GetGoldenSetForKB))
 	rc.mux.Handle("DELETE /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbAdvancedChain(h.DeleteGoldenSetForKB))
+	rc.mux.Handle("PATCH /api/kb/{id}/eval/golden-sets/{gsId}", rc.kbAdvancedChain(h.UpdateGoldenSetForKB))
 	rc.mux.Handle("POST /api/kb/{id}/eval/runs", rc.kbAdvancedChain(h.CreateRunForKB))
 	rc.mux.Handle("GET /api/kb/{id}/eval/runs", rc.kbAdvancedChain(h.ListRunsForKB))
 	rc.mux.Handle("GET /api/kb/{id}/eval/runs/{runId}", rc.kbAdvancedChain(h.GetRunForKB))

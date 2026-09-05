@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -164,6 +165,13 @@ type mockGoldenSetStore struct {
 	// Delete
 	deleteDeleted bool
 	deleteErr     error
+
+	// SetSchedule
+	setScheduleID     uuid.UUID
+	setScheduleValue  string
+	setScheduleOK     bool
+	setScheduleErr    error
+	setScheduleCalled bool
 }
 
 func (m *mockGoldenSetStore) Create(_ context.Context, _ eval.GoldenSet) (uuid.UUID, time.Time, error) {
@@ -184,6 +192,13 @@ func (m *mockGoldenSetStore) Delete(_ context.Context, _ uuid.UUID) (bool, error
 
 func (m *mockGoldenSetStore) ListByKB(_ context.Context, _ uuid.UUID) ([]eval.GoldenSet, error) {
 	return m.listSets, m.listErr
+}
+
+func (m *mockGoldenSetStore) SetSchedule(_ context.Context, id uuid.UUID, schedule string) (bool, error) {
+	m.setScheduleCalled = true
+	m.setScheduleID = id
+	m.setScheduleValue = schedule
+	return m.setScheduleOK, m.setScheduleErr
 }
 
 // ---------------------------------------------------------------------------
@@ -1302,5 +1317,66 @@ func TestDeleteGoldenSet_InvalidUUID(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// newUpdateGoldenSetRequest builds a PATCH request for /api/admin/eval/golden-sets/{id}.
+func newUpdateGoldenSetRequest(id string, body string) *http.Request {
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/eval/golden-sets/"+id, strings.NewReader(body))
+	req.SetPathValue("id", id)
+	return req
+}
+
+// TestUpdateGoldenSet_SetsSchedule verifies a valid schedule PATCH returns
+// 200 and the store records the requested schedule.
+func TestUpdateGoldenSet_SetsSchedule(t *testing.T) {
+	gsStore := &mockGoldenSetStore{setScheduleOK: true, getGoldenSet: defaultGoldenSet()}
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil, nil)
+
+	req := newUpdateGoldenSetRequest(testGoldenSetID.String(), `{"schedule":"daily"}`)
+	rec := httptest.NewRecorder()
+	h.UpdateGoldenSet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !gsStore.setScheduleCalled {
+		t.Fatal("expected SetSchedule to be called")
+	}
+	if gsStore.setScheduleID != testGoldenSetID {
+		t.Fatalf("expected SetSchedule id %s, got %s", testGoldenSetID, gsStore.setScheduleID)
+	}
+	if gsStore.setScheduleValue != "daily" {
+		t.Fatalf("expected schedule %q, got %q", "daily", gsStore.setScheduleValue)
+	}
+}
+
+// TestUpdateGoldenSet_RejectsInvalidSchedule verifies an invalid schedule
+// value yields 400.
+func TestUpdateGoldenSet_RejectsInvalidSchedule(t *testing.T) {
+	gsStore := &mockGoldenSetStore{setScheduleErr: fmt.Errorf("%w: %q", eval.ErrInvalidSchedule, "hourly")}
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil, nil)
+
+	req := newUpdateGoldenSetRequest(testGoldenSetID.String(), `{"schedule":"hourly"}`)
+	rec := httptest.NewRecorder()
+	h.UpdateGoldenSet(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUpdateGoldenSet_UnknownIDIs404 verifies (false, nil) from SetSchedule
+// yields 404.
+func TestUpdateGoldenSet_UnknownIDIs404(t *testing.T) {
+	gsStore := &mockGoldenSetStore{setScheduleOK: false}
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil, nil)
+
+	req := newUpdateGoldenSetRequest(testGoldenSetID.String(), `{"schedule":"daily"}`)
+	rec := httptest.NewRecorder()
+	h.UpdateGoldenSet(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
