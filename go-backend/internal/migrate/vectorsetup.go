@@ -85,6 +85,9 @@ func EnsureVectorTables(ctx context.Context, mainCfg, vectorCfg config.DBConfig)
 	if err := vector.EnsureHyPETable(ctx, exec, 1536); err != nil {
 		return fmt.Errorf("create required default HyPE table: %w", err)
 	}
+	if err := vector.EnsureBM25StatsTables(ctx, exec, 1536); err != nil {
+		return fmt.Errorf("create required default BM25 stats tables: %w", err)
+	}
 	delete(dimSet, 1536)
 
 	// Create remaining tables — log errors but continue.
@@ -94,6 +97,9 @@ func EnsureVectorTables(ctx context.Context, mainCfg, vectorCfg config.DBConfig)
 		}
 		if err := vector.EnsureHyPETable(ctx, exec, d); err != nil {
 			slog.Error("failed to create HyPE table", "dimensions", d, "error", err)
+		}
+		if err := vector.EnsureBM25StatsTables(ctx, exec, d); err != nil {
+			slog.Error("failed to create BM25 stats tables", "dimensions", d, "error", err)
 		}
 	}
 

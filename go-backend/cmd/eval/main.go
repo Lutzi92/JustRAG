@@ -19,6 +19,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/chat"
@@ -65,6 +68,7 @@ func main() {
 	baselinePath := flag.String("baseline", "", "Path to a previous eval-report.json. When set, prints a per-route delta table and exits 3 if recall or MRR dropped beyond --regress-recall-pp / --regress-mrr-pp (overall or on any route present in both reports). Runs with question errors exit 1 before the delta is computed.")
 	regressRecallPP := flag.Float64("regress-recall-pp", eval.DefaultRegressionThresholds.RecallPP, "Max tolerated mean-recall drop vs --baseline, in percentage points.")
 	regressMRRPP := flag.Float64("regress-mrr-pp", eval.DefaultRegressionThresholds.MRRPP, "Max tolerated MRR drop vs --baseline, in percentage points.")
+	refreshBM25Stats := flag.Bool("refresh-bm25-stats", false, "Before running, recompute BM25 statistics (vector.BM25StatsRefresher.RefreshKB) for every KB referenced by the golden set, across every dim table that has rows for that KB, so an A/B never runs against missing/stale stats.")
 	flag.Parse()
 
 	var baseline *eval.Report
@@ -213,6 +217,10 @@ func main() {
 	defer db.Main.Close()
 	if db.Vector != db.Main {
 		defer db.Vector.Close()
+	}
+
+	if *refreshBM25Stats {
+		refreshBM25StatsForGoldenSet(ctx, db.Vector, db.Main, questions)
 	}
 
 	aiResolver := ai.NewConfigResolver(ai.NewStore(db.Main))
@@ -545,6 +553,61 @@ func main() {
 				slog.Error("eval.regression", "route", r.Route, "metric", r.Metric, "baseline", r.Baseline, "candidate", r.Candidate, "delta_pp", r.DeltaPP)
 			}
 			os.Exit(3)
+		}
+	}
+}
+
+// refreshBM25StatsForGoldenSet recomputes BM25 statistics (per-KB doc
+// count/avg length, per-term document frequency) for every KB referenced by
+// the golden set, across every dim table that actually has rows for that
+// KB — the intersection of vector.ListChunkTableDimensions and "has rows
+// for this KB", per the --refresh-bm25-stats flag's contract. Runs before
+// RunEval so an A/B never measures against missing or stale stats (per-KB
+// staleness detection, W2-R5, is otherwise only driven by the worker's
+// maintenance sweep). Best-effort: a bad KB id or a refresh failure is
+// logged and skipped rather than aborting the whole eval run.
+func refreshBM25StatsForGoldenSet(ctx context.Context, vectorDB, mainDB *pgxpool.Pool, questions []eval.Question) {
+	kbIDs := map[string]struct{}{}
+	for _, q := range questions {
+		if q.KbID != "" {
+			kbIDs[q.KbID] = struct{}{}
+		}
+	}
+	if len(kbIDs) == 0 {
+		return
+	}
+
+	dims, err := vector.NewChunkService(vectorDB).ListChunkTableDimensions(ctx)
+	if err != nil {
+		slog.Error("--refresh-bm25-stats: list chunk table dimensions failed", "error", err)
+		return
+	}
+
+	refresher := vector.NewBM25StatsRefresher(vectorDB, mainDB)
+	for kbIDStr := range kbIDs {
+		kbID, perr := uuid.Parse(kbIDStr)
+		if perr != nil {
+			slog.Warn("--refresh-bm25-stats: skipping golden-set kb id (not a UUID)", "kb_id", kbIDStr, "error", perr)
+			continue
+		}
+		for _, dim := range dims {
+			table := vector.GetVectorTableName(dim)
+			if !vector.IsValidVectorTableName(table) {
+				continue
+			}
+			var hasRows bool
+			checkErr := vectorDB.QueryRow(ctx,
+				fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM "%s" WHERE kb_id = $1)`, table),
+				kbID,
+			).Scan(&hasRows)
+			if checkErr != nil || !hasRows {
+				continue
+			}
+			if err := refresher.RefreshKB(ctx, kbID, dim); err != nil {
+				slog.Error("--refresh-bm25-stats: refresh failed", "kb_id", kbIDStr, "dim", dim, "error", err)
+				continue
+			}
+			slog.Info("--refresh-bm25-stats: refreshed", "kb_id", kbIDStr, "dim", dim)
 		}
 	}
 }

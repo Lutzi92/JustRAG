@@ -403,6 +403,14 @@ type SearchService struct {
 	kbLangSF       singleflight.Group
 
 	feedback FeedbackReader // nil when the feedback loop is unwired/disabled
+
+	// bm25AvailCache memoises bm25StatsAvailable() verdicts for
+	// bm25StatsCacheTTL. Defined in bm25_stats.go; declared here so the
+	// struct stays the canonical "things SearchService owns" view (same
+	// convention as kbTableCache above). Consumed by Task 6's query-time
+	// scorer; not wired in yet.
+	//nolint:unused // see comment above
+	bm25AvailCache sync.Map
 }
 
 const (

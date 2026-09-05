@@ -502,6 +502,7 @@ func RunWorker(cfg *config.Config) error {
 			VectorDB:             db.Vector,
 			StuckFileTimeout:     cfg.StuckFileTimeout,
 			TabularOrphanSweeper: tabular.NewOrphanSweeper(db.Main),
+			BM25StatsRefresher:   vector.NewBM25StatsRefresher(db.Vector, db.Main),
 		})
 	}
 	defer func() {

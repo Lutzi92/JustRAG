@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -34,6 +35,7 @@ type QueryCacheInvalidator interface {
 // Deleter encapsulates the dependencies needed for cascade deletion.
 type Deleter struct {
 	mainDB       *pgxpool.Pool
+	vectorDB     *pgxpool.Pool
 	chunkService *vector.ChunkService
 	hype         *vector.HyPEStore
 	storage      storage.Storage
@@ -44,6 +46,7 @@ type Deleter struct {
 func New(mainDB *pgxpool.Pool, vectorDB *pgxpool.Pool, stor storage.Storage) *Deleter {
 	return &Deleter{
 		mainDB:       mainDB,
+		vectorDB:     vectorDB,
 		chunkService: vector.NewChunkService(vectorDB),
 		hype:         vector.NewHyPEStore(vectorDB),
 		storage:      stor,
@@ -89,6 +92,7 @@ func (d *Deleter) DeleteKB(ctx context.Context, kbID string) error {
 	d.deleteVectorChunksForFiles(ctx, files)
 	d.dropTabularTablesForFiles(ctx, files)
 	d.deleteStorageForFiles(ctx, files)
+	d.deleteBM25StatsForKB(ctx, kbID)
 
 	if err := d.deleteKBTransaction(ctx, kbID); err != nil {
 		return err
@@ -127,6 +131,7 @@ func (d *Deleter) DeleteUser(ctx context.Context, userID string) error {
 		d.deleteVectorChunksForFiles(ctx, files)
 		d.dropTabularTablesForFiles(ctx, files)
 		d.deleteStorageForFiles(ctx, files)
+		d.deleteBM25StatsForKB(ctx, kbID)
 	}
 
 	if err := d.deleteUserTransaction(ctx, userID, kbIDs); err != nil {
@@ -158,6 +163,7 @@ func (d *Deleter) DeleteGlobalKB(ctx context.Context, kbID string) error {
 	d.deleteVectorChunksForFiles(ctx, files)
 	d.dropTabularTablesForFiles(ctx, files)
 	d.deleteStorageForFiles(ctx, files)
+	d.deleteBM25StatsForKB(ctx, kbID)
 
 	if err := d.deleteGlobalKBTransaction(ctx, kbID); err != nil {
 		return err
@@ -233,6 +239,33 @@ func (d *Deleter) deleteVectorChunksForFiles(ctx context.Context, files []fileRe
 			slog.WarnContext(ctx, "cascade: delete hype rows (best-effort) — orphan rows possible",
 				"file_count", len(ids), "error", err)
 		}
+	}
+}
+
+// deleteBM25StatsForKB removes the BM25 stats rows (both tables, both arms,
+// every dim) for a KB that is being deleted outright. Best-effort like
+// deleteVectorChunksForFiles's HyPE cleanup: a bad kbID or a listing/delete
+// failure is logged, not fatal — orphaned stats rows are harmless (they key
+// on kb_id but carry no FK back to knowledge_bases) and the next stale-KB
+// maintenance sweep would just refresh them again if the id were reused,
+// which cannot happen since kbID is a UUID.
+func (d *Deleter) deleteBM25StatsForKB(ctx context.Context, kbID string) {
+	if d.vectorDB == nil {
+		return
+	}
+	id, err := uuid.Parse(kbID)
+	if err != nil {
+		slog.WarnContext(ctx, "cascade: skip bm25 stats cleanup (invalid kb id)", "kb_id", kbID, "error", err)
+		return
+	}
+	dims, err := d.chunkService.ListChunkTableDimensions(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "cascade: list dims for bm25 stats cleanup failed (best-effort)", "error", err)
+		return
+	}
+	if err := vector.DeleteBM25StatsForKB(ctx, d.vectorDB, id, dims); err != nil {
+		slog.WarnContext(ctx, "cascade: delete bm25 stats rows (best-effort) — orphan rows possible",
+			"kb_id", kbID, "error", err)
 	}
 }
 

@@ -54,6 +54,22 @@ type MaintenanceConfig struct {
 	// TabularOrphanInterval is how often the tabular orphan-table sweep
 	// runs. Default: 6 hours.
 	TabularOrphanInterval time.Duration
+
+	// BM25StatsRefresher recomputes per-KB/per-term BM25 statistics (W2-R5
+	// staleness) from ts_stat(). Nil disables the sweep loop entirely (e.g.
+	// tests that don't wire one, or a deployment that hasn't run the
+	// dim-keyed table DDL yet).
+	BM25StatsRefresher *vector.BM25StatsRefresher
+
+	// BM25StatsInterval is how often the BM25 stats sweep runs.
+	// Default: 15 minutes.
+	BM25StatsInterval time.Duration
+
+	// BM25StatsMaxAge is the staleness threshold (W2-R5) applied to the
+	// sweep's StaleKBs call — a KB whose stats are older than this is
+	// refreshed even if no new chunk has landed since (catches deletions,
+	// which don't move max(created_at)). Default: 24 hours.
+	BM25StatsMaxAge time.Duration
 }
 
 // StartMaintenance starts periodic background maintenance tasks (stuck file
@@ -81,6 +97,15 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 	}
 	if cfg.TabularOrphanInterval == 0 {
 		cfg.TabularOrphanInterval = 6 * time.Hour
+	}
+	if cfg.BM25StatsInterval == 0 {
+		cfg.BM25StatsInterval = 15 * time.Minute
+	}
+	if cfg.BM25StatsMaxAge == 0 {
+		cfg.BM25StatsMaxAge = 24 * time.Hour
+	}
+	if cfg.BM25StatsRefresher != nil {
+		cfg.BM25StatsRefresher.StaleMaxAge = cfg.BM25StatsMaxAge
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -251,6 +276,34 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 		})
 	}
 
+	// BM25 stats sweep (W2-R5): recomputes per-KB/per-term BM25 statistics
+	// for KBs whose stats are missing or stale. Nil refresher (no VectorDB
+	// wired, or explicitly disabled) skips the loop entirely rather than
+	// looping on a nil-pointer panic.
+	if cfg.BM25StatsRefresher != nil {
+		launch("bm25_stats_refresh", func() {
+			startupDelay := time.NewTimer(3 * time.Minute)
+			defer startupDelay.Stop()
+			select {
+			case <-ctx.Done():
+				return
+			case <-startupDelay.C:
+				refreshBM25Stats(ctx, cfg.BM25StatsRefresher)
+			}
+
+			ticker := time.NewTicker(cfg.BM25StatsInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					refreshBM25Stats(ctx, cfg.BM25StatsRefresher)
+				}
+			}
+		})
+	}
+
 	slog.Info("maintenance tasks started",
 		"stuckCheckInterval", cfg.StuckCheckInterval,
 		"stuckFileTimeout", cfg.StuckFileTimeout,
@@ -258,6 +311,8 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 		"metricsInterval", cfg.MetricsInterval,
 		"metricsRetention", cfg.MetricsRetention,
 		"tabularOrphanInterval", cfg.TabularOrphanInterval,
+		"bm25StatsInterval", cfg.BM25StatsInterval,
+		"bm25StatsMaxAge", cfg.BM25StatsMaxAge,
 	)
 
 	return func() {
@@ -314,6 +369,20 @@ func sweepTabularOrphans(ctx context.Context, sweeper *tabular.OrphanSweeper) {
 	}
 	if len(dropped) > 0 {
 		slog.Info("tabular orphan sweep completed", "dropped", len(dropped))
+	}
+}
+
+// refreshBM25Stats runs one BM25 stats sweep (W2-R5), capped at 20 KBs per
+// tick so a large stale backlog spreads across several ticks instead of
+// holding the maintenance goroutine for one long run.
+func refreshBM25Stats(ctx context.Context, r *vector.BM25StatsRefresher) {
+	refreshed, err := r.Sweep(ctx, 20)
+	if err != nil {
+		slog.Error("bm25 stats sweep failed", "error", err)
+		return
+	}
+	if refreshed > 0 {
+		slog.Info("bm25 stats sweep completed", "refreshed", refreshed)
 	}
 }
 
