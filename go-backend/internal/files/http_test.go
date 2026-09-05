@@ -601,3 +601,103 @@ func TestUpload_Unauthenticated(t *testing.T) {
 		t.Fatalf("expected 401, got %d", rr.Code)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Upload size-limit tests (spreadsheet rework Phase 4, task 0)
+// ---------------------------------------------------------------------------
+
+// fixedLimits is a fake files.UploadLimits that always answers maxFileBytes,
+// standing in for the production adapter (internal/app/routes.go) that
+// resolves tabular_max_file_bytes off the real site_config store.
+type fixedLimits struct{ maxFileBytes int }
+
+func (f fixedLimits) TabularMaxFileBytes(_ context.Context) int { return f.maxFileBytes }
+
+var (
+	_ files.UploadLimits = fixedLimits{}
+)
+
+// newTestHandlerReadyToUpload builds a Handler + request context (owner
+// user, edit access on kb-1) identical to the other Upload tests above, so
+// the size-limit tests below only need to vary the uploaded file and the
+// injected UploadLimits.
+func newTestHandlerReadyToUpload(t *testing.T, limits files.UploadLimits) *files.Handler {
+	t.Helper()
+	store := &mockStore{}
+	stor := &mockStorage{}
+	h := files.NewHandler(store, stor, noopChunks())
+	if limits != nil {
+		h.SetUploadLimits(limits)
+	}
+	return h
+}
+
+func doTestUpload(t *testing.T, h *files.Handler, filename string, content []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	ownerID := "user-1"
+	kb := &kbaccess.KnowledgeBase{ID: "kb-1", UserID: &ownerID, IsGlobal: false}
+
+	req := buildMultipartRequest(t, filename, content)
+	req = withUser(req, ownerUser())
+	req = withKBAccess(req, kb)
+
+	rr := httptest.NewRecorder()
+	h.Upload(rr, req)
+	return rr
+}
+
+func TestUploadRejectsOversizeSpreadsheetWith413(t *testing.T) {
+	h := newTestHandlerReadyToUpload(t, fixedLimits{maxFileBytes: 1024})
+
+	rr := doTestUpload(t, h, "big.xlsx", bytes.Repeat([]byte("x"), 2048))
+
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "1024") && !strings.Contains(body, "1 KB") {
+		t.Fatalf("message must name the limit: %s", body)
+	}
+}
+
+func TestUploadOversizeSpreadsheetAtExactLimitIsAccepted(t *testing.T) {
+	// Boundary case: header.Size == limit must be accepted (the check is
+	// strictly ">" the limit, not ">="). Mutating ">" to ">=" turns this red.
+	h := newTestHandlerReadyToUpload(t, fixedLimits{maxFileBytes: 1024})
+
+	rr := doTestUpload(t, h, "exact.xlsx", bytes.Repeat([]byte("x"), 1024))
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (size == limit must be accepted): %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestUploadOversizePDFIsNotSpreadsheetLimited(t *testing.T) {
+	// The spreadsheet size limit must not apply to non-spreadsheet types.
+	// tabular_max_file_bytes governs spreadsheets only; PDFs stay governed
+	// by maxUploadSize / maxTotalSizePerKB alone.
+	h := newTestHandlerReadyToUpload(t, fixedLimits{maxFileBytes: 1024})
+
+	rr := doTestUpload(t, h, "big.pdf", bytes.Repeat([]byte("x"), 2048))
+
+	if rr.Code == http.StatusRequestEntityTooLarge {
+		t.Fatalf("the spreadsheet limit must not apply to PDFs: %s", rr.Body.String())
+	}
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestUploadMaxBytesErrorIs413(t *testing.T) {
+	// Ruling R70: the transport-wide http.MaxBytesReader cap answers 413 for
+	// EVERY upload (previously a 400, regardless of file type or content).
+	restore := files.SetMaxUploadSizeForTest(4096)
+	t.Cleanup(restore)
+
+	h := newTestHandlerReadyToUpload(t, nil)
+	rr := doTestUpload(t, h, "a.txt", bytes.Repeat([]byte("x"), 8192))
+
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 (was 400 before)", rr.Code)
+	}
+}

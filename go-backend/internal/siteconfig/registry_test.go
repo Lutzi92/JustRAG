@@ -147,6 +147,9 @@ func TestTabularRouterKeysAreRegistered(t *testing.T) {
 		{"chat_tabular_router_max_repairs", 0, 5},
 		{"chat_tabular_router_timeout_ms", 500, 30_000},
 		{"chat_tabular_router_schema_max_tokens", 1000, 60_000},
+		{"tabular_max_file_bytes", 1_048_576, 2_147_483_647},
+		{"tabular_large_file_bytes", 1_048_576, 1_073_741_824},
+		{"tabular_large_file_concurrency", 1, 8},
 	}
 	for _, c := range intCases {
 		fld, ok := Field(c.key)

@@ -4,12 +4,14 @@ package files
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -120,7 +122,27 @@ type Handler struct {
 	queryCache   QueryCacheInvalidator
 	kgEvents     kgFileEventer
 	tableDropper TableDropper
+	uploadLimits UploadLimits
 }
+
+// UploadLimits resolves ingest/upload sizing knobs for the upload handler.
+// Narrow by design: internal/files must not import internal/chat (the
+// SiteConfigReader's home package) merely to read one int, so production
+// code wires a tiny adapter in internal/app/routes.go that closes over the
+// shared chat.SiteConfigReader and calls chat.TabularMaxFileBytes. Optional
+// — when nil (or when TabularMaxFileBytes returns <= 0), Upload skips the
+// spreadsheet-specific size check entirely; the transport-wide
+// http.MaxBytesReader cap (maxUploadSize) still applies to every file.
+type UploadLimits interface {
+	// TabularMaxFileBytes returns the configured maximum size, in bytes, for
+	// an uploaded spreadsheet.
+	TabularMaxFileBytes(ctx context.Context) int
+}
+
+// SetUploadLimits injects the upload/ingest sizing-knob resolver so Upload
+// can reject an oversize spreadsheet with a 413 naming the configured
+// limit. Optional — see UploadLimits.
+func (h *Handler) SetUploadLimits(l UploadLimits) { h.uploadLimits = l }
 
 // SetFetcher injects the shared Fetcher used by FetchURL to retrieve web
 // pages with browser fallback and readability extraction. Optional — when
@@ -233,7 +255,46 @@ func NewHandlerWithEnqueuer(store Store, stor storage.Storage, chunkSvc ChunkDel
 // Upload helpers
 // ---------------------------------------------------------------------------
 
-const maxUploadSize = 500 << 20 // 500 MB
+// maxUploadSize is the hard transport cap http.MaxBytesReader enforces
+// against every upload, regardless of file type — a package var (not a
+// const) so a test can shrink it via SetMaxUploadSizeForTest without a
+// 500 MB request body. Production code never mutates it; it keeps its
+// 500 MB default for the life of the process.
+var maxUploadSize int64 = 500 << 20 // 500 MB
+
+// SetMaxUploadSizeForTest overrides the transport cap for the duration of a
+// test and returns a function that restores the previous value. Test-only.
+func SetMaxUploadSizeForTest(n int64) (restore func()) {
+	old := maxUploadSize
+	maxUploadSize = n
+	return func() { maxUploadSize = old }
+}
+
+// humanBytes renders n as a human-readable KB/MB/GB size with one decimal
+// place, trimming a trailing ".0" (500.0 MB -> "500 MB") so exact values
+// read cleanly. Values under 1 KB render as whole bytes.
+func humanBytes(n int64) string {
+	const (
+		kb = 1 << 10
+		mb = 1 << 20
+		gb = 1 << 30
+	)
+	var unit string
+	var div float64
+	switch {
+	case n >= gb:
+		unit, div = "GB", gb
+	case n >= mb:
+		unit, div = "MB", mb
+	case n >= kb:
+		unit, div = "KB", kb
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+	s := strconv.FormatFloat(float64(n)/div, 'f', 1, 64)
+	s = strings.TrimSuffix(s, ".0")
+	return s + " " + unit
+}
 
 // maxFileNameBytes bounds the user-supplied file name / text-source title.
 // Matches the files.name varchar(255) column so over-long values are rejected
@@ -499,7 +560,17 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(32 << 20); err != nil { // 32 MB in-memory threshold
 		logctx.From(r.Context()).Warn("upload: parse multipart form failed", "error", err)
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "File too large or invalid multipart form")
+		// Ruling R70: the transport-wide body cap is a 413 for EVERY upload,
+		// not a 400 — the previous "File too large or invalid multipart
+		// form" message conflated the two and always answered 400, even
+		// when the body was rejected purely for size by MaxBytesReader.
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("File too large: the upload limit is %s", humanBytes(mbe.Limit)))
+			return
+		}
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "Invalid multipart form")
 		return
 	}
 
@@ -541,6 +612,20 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	if len(header.Filename) > maxFileNameBytes {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, fmt.Sprintf("Filename must not exceed %d bytes", maxFileNameBytes))
 		return
+	}
+
+	// 3d. Reject oversize spreadsheets against the tabular_max_file_bytes
+	// knob. Spreadsheet-specific: the materializer, not the generic
+	// chunk/embed ingest path, is what an oversize spreadsheet would blow up
+	// (memory-buffered parsing), so this does NOT apply to other file
+	// types — those stay governed only by maxUploadSize / maxTotalSizePerKB.
+	if h.uploadLimits != nil && (&parser.SpreadsheetParser{}).CanParse("", header.Filename) {
+		if limit := h.uploadLimits.TabularMaxFileBytes(r.Context()); limit > 0 && header.Size > int64(limit) {
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("Spreadsheet too large (%s): the limit is %s (tabular_max_file_bytes)",
+					humanBytes(header.Size), humanBytes(int64(limit))))
+			return
+		}
 	}
 
 	// 4. Get KB ID from kbaccess context.

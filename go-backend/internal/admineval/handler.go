@@ -235,6 +235,13 @@ var snapshotConfigKeys = []string{
 	"chat_tabular_router_max_repairs",
 	"chat_tabular_router_timeout_ms",
 	"chat_tabular_router_schema_max_tokens",
+	// Upload/ingest sizing knobs (spreadsheet rework Phase 4) registry keys;
+	// same rationale as the profiler/materializer keys above — read at
+	// upload/ingest time, not a chat-pipeline node, but still
+	// per-KB-overridable, so the snapshot must capture them.
+	"tabular_max_file_bytes",
+	"tabular_large_file_bytes",
+	"tabular_large_file_concurrency",
 }
 
 // ---------------------------------------------------------------------------

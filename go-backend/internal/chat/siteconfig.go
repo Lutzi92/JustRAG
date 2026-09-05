@@ -1564,6 +1564,32 @@ func TabularColumnValuesMaxDistinct(ctx context.Context, reader SiteConfigReader
 	return readInt(ctx, reader, "tabular_column_values_max_distinct", 10_000, 100, 100_000)
 }
 
+// TabularMaxFileBytes caps the size of an uploaded spreadsheet the upload
+// handler will accept. Default 500 MB (524,288,000 bytes); clamped to
+// [1,048,576 .. 2,147,483,647] (1 MB .. just under 2^31). Tunable via
+// "tabular_max_file_bytes". Not a chat-pipeline knob — read at upload time,
+// not ingest or answer time (internal/pipeline's coverage guard ignores it
+// accordingly).
+func TabularMaxFileBytes(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "tabular_max_file_bytes", 524_288_000, 1_048_576, 2_147_483_647)
+}
+
+// TabularLargeFileBytes is the size threshold above which an ingested
+// spreadsheet is treated as "large" for concurrency purposes (see
+// TabularLargeFileConcurrency). Default 20 MB (20,971,520 bytes); clamped to
+// [1,048,576 .. 1,073,741,824] (1 MB .. 1 GB). Tunable via
+// "tabular_large_file_bytes".
+func TabularLargeFileBytes(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "tabular_large_file_bytes", 20_971_520, 1_048_576, 1_073_741_824)
+}
+
+// TabularLargeFileConcurrency caps how many "large" spreadsheets (per
+// TabularLargeFileBytes) may be materialized concurrently. Default 1;
+// clamped to [1 .. 8]. Tunable via "tabular_large_file_concurrency".
+func TabularLargeFileConcurrency(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "tabular_large_file_concurrency", 1, 1, 8)
+}
+
 // ---------------------------------------------------------------------------
 // Date-aware chat (chat_date_*)
 // ---------------------------------------------------------------------------
