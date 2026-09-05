@@ -22,8 +22,8 @@ type RouteDelta struct {
 
 // ComputeRouteDeltas returns one RouteDelta per route that exists in BOTH
 // reports. Routes present in only one side are omitted. Shared by the in-app
-// eval runner's markdown export (internal/eval/markdown_export.go) and the
-// standalone cmd/eval_delta tool (Plan 2).
+// eval runner's markdown export (internal/eval/markdown_export.go) and
+// CheckRegression / cmd/eval --baseline (regression.go).
 func ComputeRouteDeltas(baseline, candidate Report) map[string]RouteDelta {
 	out := make(map[string]RouteDelta, len(baseline.RouteAggregates))
 	for route, b := range baseline.RouteAggregates {

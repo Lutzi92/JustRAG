@@ -15,6 +15,16 @@ func WriteJSONReport(w io.Writer, rep Report) error {
 	return enc.Encode(rep)
 }
 
+// ReadJSONReport is the inverse of WriteJSONReport. Used by `cmd/eval
+// --baseline` to load a previously written report for comparison.
+func ReadJSONReport(r io.Reader) (Report, error) {
+	var rep Report
+	if err := json.NewDecoder(r).Decode(&rep); err != nil {
+		return Report{}, fmt.Errorf("read json report: %w", err)
+	}
+	return rep, nil
+}
+
 // WriteHumanSummary writes a one-screen summary of rep to w. Stable format
 // suitable for CI log scraping as well as human eyeballing.
 func WriteHumanSummary(w io.Writer, rep Report) error {
