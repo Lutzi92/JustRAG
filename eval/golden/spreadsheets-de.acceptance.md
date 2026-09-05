@@ -150,9 +150,15 @@ outcome and SQL per question) is in `eval/golden/spreadsheets-de.report.json`
 
 | Metric | Threshold | Result | Pass/Fail |
 |---|---|---|---|
-| Tabular router fire rate (lookup + complex_reasoning subset) | ≥ 0.90 | **0.525** (21/40 fired) | **FAIL** |
+| Tabular router fire rate (`tabular_expected: true` subset, Ruling R75) | ≥ 0.90 | **0.525** (21/40 fired) | **FAIL** |
 | Tabular SQL error rate (of fired questions) | ≤ 0.05 | **0.714** (15/21 fired: `sql_error`+`validator_rejected`) | **FAIL** |
 | Judged correctness, lookup + complex_reasoning subset | ≥ 0.85 | **0.958** (primary) / 0.861 (strict variant — see proxy note) | **PASS** |
+
+This run predates the `tabular_expected` annotation and was scored under
+the older `lookup`/`complex_reasoning`-subset rule (identical denominator
+for this all-`lookup`/`complex_reasoning` set at the time); the numbers
+above were not recomputed against the narrower `tabular_expected: true`
+subset introduced afterward.
 
 **Overall: FAIL.** Judged correctness clears the bar comfortably, but the
 tabular router's fire rate and its SQL error rate both miss theirs by a

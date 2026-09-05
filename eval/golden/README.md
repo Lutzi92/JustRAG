@@ -317,6 +317,15 @@ exact expected value read straight off the fixture with
 sheet's rows via `sheetsource.Open` + `ReadSheet` so the golden set is
 authored from real parsed values, never guessed).
 
+Every question also carries `tabular_expected` (Ruling R75): `true` marks a
+question that targets a materialised SQL table region the deterministic
+tabular router should engage on, `false` marks one that deliberately
+shouldn't (a form-field/dropdown-list region rendered as text, or an
+unanswerable negative). `TabularRouterRates` uses this flag as the
+fire-rate denominator whenever any question in the report set carries it
+(exactly the case here), falling back to the legacy `query_type`-based
+rule only for report sets where no question is annotated.
+
 `kb_id` in the committed file is the placeholder
 `REPLACE_WITH_FIXTURE_KB_ID` — it is not a real KB and must not be run
 as-is (see "Ground truth by name, not by UUID" above for why the set is
@@ -375,9 +384,14 @@ runs.
 
 | Metric | Threshold | Subset |
 |---|---|---|
-| Tabular router fire rate (`tabular_router_fire_rate`) | ≥ 0.90 | `lookup` + `complex_reasoning` questions (the eligible set per `TabularRouterRates`) |
+| Tabular router fire rate (`tabular_router_fire_rate`) | ≥ 0.90 | questions with `tabular_expected: true` (the eligible set per `TabularRouterRates`, Ruling R75 — see above) |
 | Tabular SQL error rate (`tabular_sql_error_rate`) | ≤ 0.05 | of fired questions |
 | Judged correctness | ≥ 0.85 | `lookup` + `complex_reasoning` questions |
+
+The fire-rate numbers recorded in `eval/golden/spreadsheets-de.acceptance.md`
+predate the `tabular_expected` annotation and were computed under the older
+`lookup`/`complex_reasoning`-subset rule; they were not recomputed against
+the new, narrower `tabular_expected: true` subset.
 
 **Judged-correctness proxy.** The harness has no single "correctness" field
 — `internal/eval/judge.go` exposes `faithfulness`, `answer_relevance`, and

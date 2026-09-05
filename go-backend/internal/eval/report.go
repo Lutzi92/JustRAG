@@ -123,7 +123,11 @@ Aggregate (k=%d, count=%d):
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Tabular router:")
 		if rep.TabularRouterFireRate != nil {
-			fmt.Fprintf(w, "  fire_rate      = %.3f (of lookup/complex_reasoning questions)\n", *rep.TabularRouterFireRate)
+			eligibilityDesc := "of lookup/complex_reasoning questions"
+			if tabularEligibilityIsExplicit(rep.Questions) {
+				eligibilityDesc = "of tabular_expected questions"
+			}
+			fmt.Fprintf(w, "  fire_rate      = %.3f (%s)\n", *rep.TabularRouterFireRate, eligibilityDesc)
 		}
 		if rep.TabularSQLErrorRate != nil {
 			fmt.Fprintf(w, "  sql_error_rate = %.3f (of fired questions)\n", *rep.TabularSQLErrorRate)

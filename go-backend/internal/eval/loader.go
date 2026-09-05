@@ -120,5 +120,7 @@ func validateQuestion(q Question) error {
 			return fmt.Errorf("expected_kb_ids[%d] is empty", i)
 		}
 	}
+	// R75 TabularExpected: optional *bool, nothing to validate — absent,
+	// true, and false are all accepted values.
 	return nil
 }

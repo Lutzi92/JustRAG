@@ -266,12 +266,25 @@ func TestParseGoldenSetContent_ExpectedKBIDsRejectsEmpty(t *testing.T) {
 //     under internal/sheetsource/testdata — this is what catches a stale
 //     fixture reference (e.g. a rename) turning into a silent recall-0
 //     regression instead of a loud test failure;
-//  4. every query_type is one of the values the eval runner understands.
+//  4. every query_type is one of the values the eval runner understands;
+//  5. (Ruling R75) every question carries a non-nil tabular_expected —
+//     the annotation is meant to be exhaustive, not partial, since
+//     TabularRouterRates switches its whole eligibility rule the moment
+//     ANY question in a report carries the field;
+//  6. (Ruling R75) exactly 10 questions are tabular_expected=false — the
+//     seven form-field/dropdown-list questions the router is right to
+//     skip, plus the two "unanswerable" negatives, plus... (see the
+//     literal id list in the task brief / project notes). A count check
+//     rather than an id-by-id list so the test doesn't need updating
+//     every time a question is added elsewhere in the set.
 //
 // Mutation check: renaming any must_cite_file_names entry so it no longer
 // matches a file under internal/sheetsource/testdata (e.g. typo-ing
 // "header_row14_metadata.xlsx" to "header_row14_metadata_typo.xlsx") turns
-// this test red — see the Task 9 report for the transcript.
+// this test red — see the Task 9 report for the transcript. For the R75
+// assertions: setting any one question's tabular_expected to nil (drop the
+// field) turns assertion 5 red; flipping one more question's flag to false
+// turns assertion 6 red (11 != 10). See the Task 12 report for transcripts.
 func TestSpreadsheetGoldenSetParses(t *testing.T) {
 	const goldenPath = "../../../eval/golden/spreadsheets-de.jsonl"
 	const testdataDir = "../sheetsource/testdata"
@@ -291,6 +304,7 @@ func TestSpreadsheetGoldenSetParses(t *testing.T) {
 		"global_synthesis":  true,
 		"complex_reasoning": true,
 	}
+	falseCount := 0
 	for _, question := range qs {
 		if seenIDs[question.ID] {
 			t.Errorf("duplicate id %q", question.ID)
@@ -314,5 +328,16 @@ func TestSpreadsheetGoldenSetParses(t *testing.T) {
 		if !allowedQueryTypes[question.QueryType] {
 			t.Errorf("question %s: query_type %q is not one of lookup|enumeration|global_synthesis|complex_reasoning", question.ID, question.QueryType)
 		}
+
+		if question.TabularExpected == nil {
+			t.Errorf("question %s: tabular_expected is absent, want a non-nil bool (R75 annotation must be exhaustive)", question.ID)
+			continue
+		}
+		if !*question.TabularExpected {
+			falseCount++
+		}
+	}
+	if falseCount != 10 {
+		t.Errorf("tabular_expected=false count = %d, want 10", falseCount)
 	}
 }

@@ -47,6 +47,18 @@ type Question struct {
 	// top-1 in this list" plus "Jaccard overlap with the full list" for
 	// fan-out scoring.
 	ExpectedKBIDs []string `json:"expected_kb_ids,omitempty"`
+	// TabularExpected is the optional Ruling R75 ground-truth flag for
+	// TabularRouterRates: true means this question targets a spreadsheet
+	// region the deterministic tabular SQL router is expected to engage
+	// on (a materialised table region); false means it deliberately does
+	// not (a form-field or dropdown-list region rendered as text, or a
+	// negative case) and must be excluded from both the fire-rate
+	// numerator and denominator even if the router happens to fire on it
+	// anyway. A *bool (not bool) so "absent" is distinguishable from
+	// "false" — TabularRouterRates only switches from the legacy
+	// query_type-based eligibility rule to this flag when at least one
+	// question in the run carries it.
+	TabularExpected *bool `json:"tabular_expected,omitempty"`
 }
 
 // RetrievedChunk is the minimal view the evaluator needs of a search hit.
