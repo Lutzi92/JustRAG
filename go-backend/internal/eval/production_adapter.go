@@ -81,10 +81,23 @@ func NewProductionContextAdapter(
 
 // Search runs chat.PrepareChatContext for the question and caches the
 // resulting ChatContext so judge-mode can reuse it via ChatContextForQuestion.
+// Equivalent to SearchWithQuery(ctx, q, k, q.Question, "") — no query
+// condensation, no rewrite⊕raw lane.
 func (a *ProductionContextAdapter) Search(ctx context.Context, q Question, k int) ([]RetrievedChunk, error) {
+	return a.SearchWithQuery(ctx, q, k, q.Question, "")
+}
+
+// SearchWithQuery is Search with the retrieval query and the optional raw
+// (rewrite⊕raw lane) query supplied by the caller instead of derived from
+// q.Question. MultiTurnAdapter (Wave 2 Task 3) is the caller that needs
+// this: a follow-up turn's SEARCH query is the condensed standalone
+// question, not the verbatim golden-set turn text, and RawQuery carries the
+// verbatim utterance alongside it when chat_condense_keep_raw_enabled is on.
+func (a *ProductionContextAdapter) SearchWithQuery(ctx context.Context, q Question, k int, searchQuery, rawQuery string) ([]RetrievedChunk, error) {
 	params := chat.ChatContextParams{
 		KbID:                    q.KbID,
-		SearchQuery:             q.Question,
+		SearchQuery:             searchQuery,
+		RawQuery:                rawQuery,
 		Language:                q.Language,
 		Enhance:                 a.flags.Enhance,
 		HyDE:                    a.flags.HyDE,

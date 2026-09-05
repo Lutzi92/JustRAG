@@ -156,6 +156,36 @@ func AggregateByRoute(reports []QuestionReport, k int) map[string]AggregateMetri
 	return out
 }
 
+// AggregateByTurnKind buckets non-errored QuestionReports by
+// r.Question.TurnKind (populated by eval.ExpandTurns on a multi-turn
+// conversation's per-turn Questions) and computes the standard
+// AggregateMetrics per bucket. Mirrors AggregateByOrchestrator.
+//
+// Reports with an empty TurnKind are skipped so a run mixing single-turn
+// and multi-turn golden rows doesn't produce a misleading empty-keyed
+// bucket. Returns nil when no buckets exist so the field stays omitempty
+// in JSON output.
+func AggregateByTurnKind(reports []QuestionReport, k int) map[string]AggregateMetrics {
+	buckets := make(map[string][]QuestionReport)
+	for _, r := range reports {
+		if r.Question.TurnKind == "" {
+			continue
+		}
+		if r.Error != "" {
+			continue
+		}
+		buckets[r.Question.TurnKind] = append(buckets[r.Question.TurnKind], r)
+	}
+	if len(buckets) == 0 {
+		return nil
+	}
+	out := make(map[string]AggregateMetrics, len(buckets))
+	for kind, bucket := range buckets {
+		out[kind] = Aggregate(bucket, k)
+	}
+	return out
+}
+
 func mean(xs []float64) float64 {
 	if len(xs) == 0 {
 		return 0

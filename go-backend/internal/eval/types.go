@@ -164,6 +164,13 @@ type QuestionReport struct {
 	// dataset shape, then it's discarded with the Report at process
 	// exit.
 	Contents []string `json:"-"`
+	// CondensedQuery is the standalone query a multi-turn adapter
+	// (MultiTurnAdapter) condensed this turn's Question into before
+	// retrieval, so a report reviewer can see what was actually searched
+	// for. Empty when the searcher doesn't condense (single-turn
+	// questions, legacy/production adapters without history) — existing
+	// on-disk report shapes stay byte-stable.
+	CondensedQuery string `json:"condensed_query,omitempty"`
 }
 
 // AggregateMetrics summarizes metric values across all non-errored questions at a fixed k.
@@ -219,4 +226,10 @@ type Report struct {
 	// of the turns the router actually attempted, how often it ended in
 	// an unusable statement. Nil when no question fired.
 	TabularSQLErrorRate *float64 `json:"tabular_sql_error_rate,omitempty"`
+	// TurnKindAggregates buckets retrieval metrics by the golden set's
+	// per-turn TurnKind label (Wave 2 Task 3 multi-turn replay). Nil when
+	// no question in the run carries a TurnKind (i.e. no golden row used
+	// `turns`), so legacy report shapes stay byte-stable. Mirrors
+	// RouteAggregates/OrchestratorAggregates in shape.
+	TurnKindAggregates map[string]AggregateMetrics `json:"turn_kind_aggregates,omitempty"`
 }

@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -60,6 +61,7 @@ func main() {
 	depthBucketsMinChunks := flag.Int("depth-buckets-min-chunks", 4, `Min totalChunks required for a chunk to count toward the depth-bucket aggregate. Suppresses noise from short files where bucketing has no useful signal. Pass 1 to disable filtering. Only effective with --depth-buckets.`)
 	orchestratorDispatch := flag.Bool("orchestrator-dispatch", true, `With --production-context: route each question through the same orchestrator predicate production uses (Supervisor / Plan-Execute / Plan-Execute-DAG / Agentic / standard fallback) and record per-question 'agent' + per-orchestrator aggregates in the report. Default true. Set to false to reproduce pre-2026-05 retrieval-only behaviour for byte-stable diffs against historical eval runs. Ignored when --production-context is unset.`)
 	teamID := flag.String("team-id", "", "Dispatch every question through this user-created agent team (requires --production-context; team must be attached + enabled on the golden set's KB)")
+	keepRawFlag := flag.String("keep-raw", "", `Multi-turn replay override for the rewrite⊕raw retrieval lane (ruling W2-R10): "on" forces chat_condense_keep_raw_enabled on for this run, "off" forces it off, "" (default) reads the live site_config — same three-way shape as --crag. Only effective on a golden set with turns (a multi-turn replay); ignored otherwise.`)
 	baselinePath := flag.String("baseline", "", "Path to a previous eval-report.json. When set, prints a per-route delta table and exits 3 if recall or MRR dropped beyond --regress-recall-pp / --regress-mrr-pp (overall or on any route present in both reports). Runs with question errors exit 1 before the delta is computed.")
 	regressRecallPP := flag.Float64("regress-recall-pp", eval.DefaultRegressionThresholds.RecallPP, "Max tolerated mean-recall drop vs --baseline, in percentage points.")
 	regressMRRPP := flag.Float64("regress-mrr-pp", eval.DefaultRegressionThresholds.MRRPP, "Max tolerated MRR drop vs --baseline, in percentage points.")
@@ -110,6 +112,21 @@ func main() {
 		os.Exit(2)
 	}
 
+	var keepRaw *bool
+	switch *keepRawFlag {
+	case "on":
+		b := true
+		keepRaw = &b
+	case "off":
+		b := false
+		keepRaw = &b
+	case "":
+		// nil = read chat_condense_keep_raw_enabled from site_configs
+	default:
+		slog.Error("invalid --keep-raw value", "value", *keepRawFlag)
+		os.Exit(2)
+	}
+
 	if *goldenPath == "" {
 		slog.Error("--golden is required")
 		os.Exit(2)
@@ -125,9 +142,20 @@ func main() {
 		os.Exit(1)
 	}
 	if *singleID != "" {
+		// A per-turn id ("MT01#t2") names a conversation row's expanded
+		// turn, which doesn't exist yet at this pre-expand stage — match
+		// the conversation prefix (before "#") so the whole conversation
+		// survives filtering and ExpandTurns can still build that turn's
+		// History from its predecessors. A plain id ("MT01" or a
+		// single-turn question's own id) matches exactly, since it has no
+		// "#" to strip.
+		conversationID := *singleID
+		if i := strings.IndexByte(*singleID, '#'); i >= 0 {
+			conversationID = (*singleID)[:i]
+		}
 		filtered := questions[:0]
 		for _, q := range questions {
-			if q.ID == *singleID {
+			if q.ID == conversationID {
 				filtered = append(filtered, q)
 			}
 		}
@@ -136,6 +164,36 @@ func main() {
 			slog.Error("no question with that id", "id", *singleID)
 			os.Exit(1)
 		}
+	}
+
+	loaded := questions
+	questions = eval.ExpandTurns(questions)
+	hasTurns := len(questions) != len(loaded)
+
+	if *singleID != "" && strings.Contains(*singleID, "#") {
+		// Narrow down from "the whole conversation" (kept above so
+		// ExpandTurns had the full turn sequence) to just the requested
+		// turn.
+		filtered := questions[:0]
+		for _, q := range questions {
+			if q.ID == *singleID {
+				filtered = append(filtered, q)
+			}
+		}
+		questions = filtered
+		if len(questions) == 0 {
+			slog.Error("no turn with that id", "id", *singleID)
+			os.Exit(1)
+		}
+	}
+
+	if hasTurns && !*productionContext {
+		slog.Error("golden set has turns; --multi-turn replay requires --production-context")
+		os.Exit(2)
+	}
+	if hasTurns && *teamID != "" {
+		slog.Error("--team-id is not supported with a golden set that has turns (multi-turn replay always runs the standard PrepareChatContext path)")
+		os.Exit(2)
 	}
 
 	cfg, err := config.Load()
@@ -235,7 +293,25 @@ func main() {
 			},
 		)
 		trajTabularRouter = tabularRouter
-		if *teamID != "" {
+		if hasTurns {
+			// Turn rows bypass orchestrator dispatch and teams entirely
+			// (validated above: --team-id is already rejected when
+			// hasTurns) and always run the standard PrepareChatContext
+			// path — the same one production's condense→retrieve follow-up
+			// handling uses. MultiTurnAdapter sits in front of a plain
+			// ProductionContextAdapter, condensing each turn's query (or
+			// carrying over the previous turn's sources for an answer_ref
+			// reformat) before delegating.
+			prod := eval.NewProductionContextAdapter(
+				aiResolver,
+				searchService,
+				siteReader,
+				flags,
+				eval.WithTabularRouter(tabularRouter),
+			)
+			adapter = eval.NewMultiTurnAdapter(prod, aiResolver, siteReader, keepRaw)
+			slog.Info("eval: multi-turn replay mode on (golden set has turns; standard PrepareChatContext path, no orchestrator dispatch, no team)")
+		} else if *teamID != "" {
 			teamStore := agentteams.NewStore(db.Main)
 			adapter = eval.NewTeamDispatchAdapter(
 				aiResolver,
@@ -398,6 +474,7 @@ func main() {
 		rep.Aggregate = eval.Aggregate(rep.Questions, *topK)
 		rep.RouteAggregates = eval.AggregateByRoute(rep.Questions, *topK)
 		rep.OrchestratorAggregates = eval.AggregateByOrchestrator(rep.Questions, *topK)
+		rep.TurnKindAggregates = eval.AggregateByTurnKind(rep.Questions, *topK)
 	}
 
 	// P9: position-aware retrieval analysis. Off by default — when

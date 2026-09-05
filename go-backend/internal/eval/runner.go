@@ -49,6 +49,9 @@ func RunEval(ctx context.Context, searcher Searcher, questions []Question, k int
 		if tracer != nil {
 			qr.Agent = tracer.AgentTraceForQuestion(q.ID)
 		}
+		if cqt, ok := searcher.(condensedQueryTracer); ok {
+			qr.CondensedQuery = cqt.CondensedQueryForQuestion(q.ID)
+		}
 		if qr.Error != "" {
 			rep.Errors++
 		}
@@ -59,6 +62,7 @@ func RunEval(ctx context.Context, searcher Searcher, questions []Question, k int
 	rep.OrchestratorAggregates = AggregateByOrchestrator(rep.Questions, k)
 	rep.RoutingAccuracy = RoutingAccuracy(rep.Questions)
 	rep.TabularRouterFireRate, rep.TabularSQLErrorRate = TabularRouterRates(rep.Questions)
+	rep.TurnKindAggregates = AggregateByTurnKind(rep.Questions, k)
 	return rep, nil
 }
 
@@ -221,6 +225,9 @@ func RunEvalWithJudge(ctx context.Context, searcher Searcher, questions []Questi
 		if tracer != nil {
 			qr.Agent = tracer.AgentTraceForQuestion(q.ID)
 		}
+		if cqt, ok := searcher.(condensedQueryTracer); ok {
+			qr.CondensedQuery = cqt.CondensedQueryForQuestion(q.ID)
+		}
 
 		if qr.Error == "" && cfg.Enabled {
 			contents, fileNames, err := cfg.ContentLoader(ctx, qr.Retrieved)
@@ -249,5 +256,6 @@ func RunEvalWithJudge(ctx context.Context, searcher Searcher, questions []Questi
 	rep.OrchestratorAggregates = AggregateByOrchestrator(rep.Questions, k)
 	rep.RoutingAccuracy = RoutingAccuracy(rep.Questions)
 	rep.TabularRouterFireRate, rep.TabularSQLErrorRate = TabularRouterRates(rep.Questions)
+	rep.TurnKindAggregates = AggregateByTurnKind(rep.Questions, k)
 	return rep, nil
 }
