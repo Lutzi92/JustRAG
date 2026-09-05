@@ -21,6 +21,9 @@ Fields:
 | `expected_kb_ids`    | string[] | (optional, AP-A4) KBs the sub-KB router should pick. Empty defaults to `[kb_id]` (single-KB). Multi-element rows test cross-KB fan-out. |
 | `expected_tools`     | string[] | (optional, Phase 2 §2.2) MCP tool names the agent should invoke. |
 | `notes`              | string   | (optional) Human context; ignored by the runner.          |
+| `turns`              | Turn[]   | (optional) Marks this row as a multi-turn conversation instead of a single question — see "Multi-turn set" below. When present, the top-level `question`/`must_cite_*` fields are not required; ground truth lives per turn. Each `Turn` is `{question, kind, query_type?, must_cite_file_names?, answer?, answer_sources?, notes?}` — `kind` is one of `corpus`, `pronoun_ref`, `topic_shift`, `answer_ref`, `post_abstain`; `must_cite_file_names` is required for every kind except `answer_ref`, where it defaults to the previous turn's `answer_sources`. |
+| `history`            | HistoryEntry[] | Populated by `ExpandTurns` on the per-turn `Question`s it produces from `turns` (one prior `{role, content, sources?}` entry per earlier turn); never authored directly — the field exists so a report round-trips it. |
+| `turn_kind`          | string   | Populated by `ExpandTurns` (copied from the originating `Turn.kind`); never authored directly — labels each expanded per-turn question for `turn_kind_aggregates`. |
 
 ## Ground truth by name, not by UUID
 
@@ -149,6 +152,70 @@ with placeholder UUIDs (search for `TODO-A5`); the target shape is:
 When extending the file: append, never rewrite. The fixture is already
 loaded by a regression test (`TestLoadGoldenSet_MultiKB`) that fails if
 the cross-KB section disappears.
+
+## Multi-turn set
+
+`multi-turn-de.jsonl` (Wave 2, Task 4) exercises follow-up condensation
+(`chat.CondenseFromHistory`) against KB `PPM-Eval`
+(`83262307-3a1b-49bc-bd08-3b925a868a92`), the same KB as
+`production-ppm-2026-08.jsonl`. It is **derived from the JLU-internal
+production set** — every opening turn and every `topic_shift`/`post_abstain`
+follow-up reuses a question and `must_cite_file_names` from
+`production-ppm-2026-08.jsonl` — so it carries the same privacy status and
+is **gitignored** (`/eval/golden/multi-turn-de.jsonl` in `.gitignore`),
+never committed.
+
+**Composition:** 18 conversations (`MT01`..`MT18`), 45 turns total. Every
+conversation opens with a `corpus` turn copied verbatim from an existing
+`production-ppm-2026-08.jsonl` question (same `query_type`, same
+`must_cite_file_names`). Follow-up turns:
+
+- **12 `pronoun_ref`** — a pronoun/ellipsis follow-up on the opener's
+  subject ("und wer ist dafür verantwortlich?", "seit wann läuft es?",
+  "welche Version ist das?", "wer vertritt sie?"). Ground truth is
+  authored directly (usually the same file(s) as the opener, since the
+  pronoun refers to the same project page) rather than copied from another
+  golden question.
+- **6 `topic_shift`** — a second, unrelated existing question dropped in
+  after the opener; ground truth is that second question's own
+  `must_cite_file_names`. Condensation must not drag the first subject into
+  the rewritten query.
+- **6 `answer_ref`** — a retrieval-free reformat of the prior turn's answer
+  ("das als Tabelle", "fass das kürzer zusammen", "als Stichpunkte bitte",
+  "kannst du das übersetzen?"). No `must_cite_file_names` is authored; per
+  `Turn.MustCiteFileNames`'s doc comment, `ExpandTurns` defaults it to the
+  previous turn's `answer_sources`.
+- **3 `post_abstain` conversations** (2 turns each, not counted in the
+  12/6/6 above): turn 1 is a `corpus` question the corpus cannot answer (a
+  budget/date figure the target project page does not contain),
+  `must_cite_file_names` = the page that *should* have been consulted,
+  `answer` = `"Dazu enthält die Wissensbasis keine Angaben."`,
+  `answer_sources` = that same page (`notes` says why it's unanswerable);
+  turn 2 (`kind: post_abstain`) is a normal, answerable question on a
+  related subject, reusing another existing question's ground truth.
+
+Every turn with a following turn carries an authored `answer` (1–2 German
+sentences paraphrasing the question) and `answer_sources` — **not verified
+facts**, just plausible history text to steer the condensation LLM the way
+a real prior turn would (each turn's `notes` says so explicitly).
+
+**How to run** (dev stack; builds `cmd/eval` fresh):
+
+```bash
+bash .superpowers/sdd/2026-09-05-rag-sota-wave2/run-eval.sh \
+  --golden eval/golden/multi-turn-de.jsonl --production-context \
+  --keep-raw off --output <out>.json
+```
+
+`--production-context` is required — the multi-turn replay adapter only
+wires up under the standard `PrepareChatContext` path (no orchestrator
+dispatch, no team). `--keep-raw on|off` forces
+`chat_condense_keep_raw_enabled` for the run regardless of the live
+site_config, so an A/B needs no DB mutation. The report's
+`turn_kind_aggregates` gives recall/MRR/nDCG per `turn_kind`; each
+question's `condensed_query` shows what the condenser produced for that
+follow-up. See `eval/golden/multi-turn-de.acceptance.md` for the recorded
+keep-raw on/off/noise run and the flag-default decision it produced.
 
 ## Sampling methodology
 
