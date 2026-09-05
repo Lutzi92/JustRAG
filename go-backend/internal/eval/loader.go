@@ -84,6 +84,17 @@ func validateQuestion(q Question) error {
 	if q.ID == "" {
 		return fmt.Errorf("missing id")
 	}
+	if len(q.Turns) > 0 {
+		// Conversation row: ground truth lives per turn, so the
+		// top-level question/must_cite fields are not required here.
+		if q.KbID == "" {
+			return fmt.Errorf("missing kb_id")
+		}
+		if q.Language != "de" && q.Language != "en" {
+			return fmt.Errorf("language must be 'de' or 'en', got %q", q.Language)
+		}
+		return validateTurns(q)
+	}
 	if q.Question == "" {
 		return fmt.Errorf("missing question")
 	}
@@ -106,11 +117,8 @@ func validateQuestion(q Question) error {
 			return fmt.Errorf("must_cite_file_names[%d] is empty", i)
 		}
 	}
-	switch q.QueryType {
-	case "", "lookup", "enumeration", "global_synthesis", "complex_reasoning":
-		// accepted
-	default:
-		return fmt.Errorf("query_type must be one of lookup|enumeration|global_synthesis|complex_reasoning, got %q", q.QueryType)
+	if err := validateQueryType(q.QueryType); err != nil {
+		return err
 	}
 	// AP-A4 ExpectedKBIDs: optional. When present every entry must be
 	// non-empty; KbID need not appear in the list (a multi-KB question
@@ -123,4 +131,15 @@ func validateQuestion(q Question) error {
 	// R75 TabularExpected: optional *bool, nothing to validate — absent,
 	// true, and false are all accepted values.
 	return nil
+}
+
+// validateQueryType checks the shared query_type enum used both at the
+// top-level Question and per Turn.
+func validateQueryType(qt string) error {
+	switch qt {
+	case "", "lookup", "enumeration", "global_synthesis", "complex_reasoning":
+		return nil
+	default:
+		return fmt.Errorf("query_type must be one of lookup|enumeration|global_synthesis|complex_reasoning, got %q", qt)
+	}
 }
