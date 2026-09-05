@@ -239,9 +239,9 @@ func manyColumnsEntry(tableName string, rowCount int64, n int) tabular.CatalogEn
 // has a far higher RowCount than "dropit", so CompactSchema's row-count
 // ranking (schema_summary.go's scoreOf) always tries "keep" first —
 // deterministic regardless of budget. At the 6000-token default both
-// tables' combined ~2-3k-token rendering fits, so both names appear; at
+// tables' combined ~4-5k-token rendering fits, so both names appear; at
 // the overridden 1000-token minimum only "keep" (a two-column block) fits
-// and "dropit" (200 verbose columns) is pruned out entirely.
+// and "dropit" (150 verbose columns) is pruned out entirely.
 //
 // Mutation guard: reverting maybeTabularGuidance's CompactSchema call to
 // the retired tabularSchemaSummaryMaxTokens constant makes the override
@@ -251,7 +251,7 @@ func TestMaybeTabularGuidance_RespectsGuidanceMaxTokensOverride(t *testing.T) {
 	ctx := context.Background()
 	entries := []tabular.CatalogEntry{
 		manyColumnsEntry("keep", 1_000_000, 2),
-		manyColumnsEntry("dropit", 1, 200),
+		manyColumnsEntry("dropit", 1, 150),
 	}
 
 	defReader := &fakeSiteConfigReader{values: map[string]*string{
@@ -275,7 +275,7 @@ func TestMaybeTabularGuidance_RespectsGuidanceMaxTokensOverride(t *testing.T) {
 		t.Fatalf("the higher-ranked table must still fit at a 1000-token budget, got %q", gTiny)
 	}
 	if strings.Contains(gTiny, `"dropit"`) {
-		t.Fatalf("a 1000-token budget must prune the 200-column table, got %q", gTiny)
+		t.Fatalf("a 1000-token budget must prune the 150-column table, got %q", gTiny)
 	}
 }
 

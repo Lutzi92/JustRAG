@@ -211,12 +211,26 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 	var err error
 	switch orchestrator {
 	case OrchestratorSupervisor:
+		// Resolved HERE, not at wiring time — mirrors
+		// internal/chat/http_send.go's OrchSupervisor case and
+		// trajectory_runner.go's TrajectoryModeSupervisor case: a.siteCfg
+		// is the per-KB-overlaid reader (when the caller supplies one),
+		// so this must be the source of the router's config on THIS
+		// question's KB rather than whatever reader a.prod.tabularRouter
+		// was constructed with.
+		var tabularCfg *chat.TabularRouterConfig
+		if a.siteCfg != nil {
+			cfg := chat.ResolveTabularRouterConfig(ctx, a.siteCfg)
+			tabularCfg = &cfg
+		}
 		chatCtx, err = chat.RunSupervisorChat(ctx, a.aiResolver, a.searchService, chat.SupervisorChatParams{
-			KbID:           q.KbID,
-			Query:          q.Question,
-			Language:       q.Language,
-			KbSystemPrompt: kbSystemPrompt,
-			PlanningModel:  a.planningModel,
+			KbID:                q.KbID,
+			Query:               q.Question,
+			Language:            q.Language,
+			KbSystemPrompt:      kbSystemPrompt,
+			PlanningModel:       a.planningModel,
+			TabularRouter:       a.prod.tabularRouter,
+			TabularRouterConfig: tabularCfg,
 		}, emit)
 	case OrchestratorPlanExecute, OrchestratorPlanExecuteDAG:
 		dag := orchestrator == OrchestratorPlanExecuteDAG

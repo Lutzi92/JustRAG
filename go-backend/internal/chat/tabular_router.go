@@ -108,6 +108,13 @@ type TabularTrace struct {
 	Repairs  int
 	Values   int
 	Question string
+	// Error is the last failure text on a non-success outcome (a validator
+	// rejection message, a truncated DB error, an LLM-call error, or
+	// ctx.Err() on a mid-repair cancellation) — already capped at
+	// tabularFailureCap runes. Empty on fired_ok, on a skip, and on the
+	// "model declared unanswerable" fired_empty (there is no failure text,
+	// only a declined capability).
+	Error string
 }
 
 // kbGateTTL bounds how long a HasDataForKB answer is reused. The gate runs
@@ -289,6 +296,7 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 		prop, err := r.gen(ctx, req, in.KbID, cfg.Model)
 		if err != nil {
 			res.Trace.Outcome = "llm_error"
+			res.Trace.Error = truncateRunes(err.Error(), tabularFailureCap)
 			observability.RecordTabularRouter(res.Trace.Outcome)
 			res.Addendum = r.attemptedOnly(in.Language)
 			return res
@@ -459,10 +467,14 @@ func emitTabular(in TabularRouterInput, ev map[string]any) {
 // in (a validator rejection message, a truncated DB error, ctx.Err()) is
 // already sanitized the same way the repair prompt's own failure text is
 // (tabularFailureCap truncates a raw DB error before it ever reaches here).
+// It also persists onto trace.Error so a caller with only the returned
+// TabularRouterResult (no access to the emitted event stream — e.g. eval's
+// AgentTrace.Tabular) still sees the failure text on a non-success outcome.
 func emitTabularSQLOutcome(in TabularRouterInput, trace *TabularTrace, errText string) {
 	if trace == nil || trace.SQL == "" {
 		return
 	}
+	trace.Error = errText
 	emitTabular(in, map[string]any{
 		"type":    "tabular_router_sql",
 		"sql":     trace.SQL,

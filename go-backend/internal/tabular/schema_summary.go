@@ -81,8 +81,15 @@ func renderColumnLine(col ColumnSpec, stat *ColumnStat) string {
 	head.WriteString(strings.Join(typeParts, ", "))
 	head.WriteString(")")
 
+	// Rendered as "(label: ...)", never quoted like an identifier: a
+	// quoted form (`"Zustand / Baurecht"`) reads exactly like a Postgres
+	// double-quoted identifier, and the SQL generator copied it verbatim
+	// into SELECT/FROM clauses instead of the sql_name that precedes it —
+	// the Phase-4 acceptance sql_error (3 repairs, 0 recoveries). The
+	// label is documentation only; TabularSQLSystemPrompt spells out that
+	// the first token of the line is the actual identifier.
 	if original := filterCatalogString(col.Original); original != "" {
-		fmt.Fprintf(&head, " %q", original)
+		fmt.Fprintf(&head, " (label: %s)", original)
 	}
 
 	var parts []string

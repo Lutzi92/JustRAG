@@ -23,6 +23,21 @@ func TestTabularSQLSystemPrompt_EN(t *testing.T) {
 	}
 }
 
+// TestTabularSQLSystemPrompt_LabelIsNotAnIdentifier is the Phase-4
+// acceptance fix (task-14, finding 3): schema_summary.go now renders a
+// column's original label as "(label: ...)" instead of a quoted
+// pseudo-identifier; both language blocks must spell out that the first
+// token of a column line is the real identifier and the parenthesised
+// label is documentation only.
+func TestTabularSQLSystemPrompt_LabelIsNotAnIdentifier(t *testing.T) {
+	for _, lang := range []string{"de", "en"} {
+		got := TabularSQLSystemPrompt(lang, "2026-09-04")
+		if !strings.Contains(got, "(label:") {
+			t.Errorf("%s system prompt missing the label-is-not-an-identifier rule:\n%s", lang, got)
+		}
+	}
+}
+
 // TestTabularSQLSystemPrompt_TableReferenceForm is the Phase-4 acceptance
 // fix: 15 of 21 fired questions were rejected because the generator wrote
 // FROM "tabular.sheet_…" — one quoted identifier with a dot inside, not a

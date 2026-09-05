@@ -629,6 +629,12 @@ func TestRouterExhaustedRepairsIsAttemptedOnly(t *testing.T) {
 	if res.Trace.Repairs != 2 {
 		t.Fatalf("Repairs = %d, want 2", res.Trace.Repairs)
 	}
+	// task-14 finding 2: the last failure text must land on the returned
+	// trace, not just the emitted event — eval's AgentTrace.Tabular has no
+	// access to the event stream.
+	if !strings.Contains(res.Trace.Error, "boom 3") {
+		t.Fatalf("Trace.Error = %q, want it to carry the last failure (boom 3)", res.Trace.Error)
+	}
 	if res.Addendum == "" || strings.Contains(res.Addendum, "```sql") {
 		t.Fatalf("addendum must be attempted-only:\n%s", res.Addendum)
 	}
@@ -1068,6 +1074,9 @@ func TestRouterLLMErrorIsAttemptedOnly(t *testing.T) {
 	}
 	if res.Trace.RowCount != -1 {
 		t.Fatalf("RowCount = %d, want -1 (unknown)", res.Trace.RowCount)
+	}
+	if !strings.Contains(res.Trace.Error, "503 backend unavailable") {
+		t.Fatalf("Trace.Error = %q, want it to carry the LLM-call error", res.Trace.Error)
 	}
 }
 

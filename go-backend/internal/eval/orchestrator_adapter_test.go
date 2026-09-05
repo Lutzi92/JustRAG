@@ -2,8 +2,12 @@ package eval
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/chat"
 	"github.com/justrag/go-backend/internal/vector"
 )
@@ -164,5 +168,151 @@ func TestBuildAgentTrace_Standard(t *testing.T) {
 	}
 	if got.Plan != nil || got.Hops != 0 || got.Specialist != "" {
 		t.Fatalf("standard trace must not populate orchestrator-specific fields; got %+v", got)
+	}
+}
+
+// fakeClassifierAIConfigStore is a minimal ai.ConfigStore backing a real
+// *ai.ConfigResolver that talks to an httptest server — needed because
+// OrchestratorDispatchAdapter.Search classifies the query type (and thus
+// picks the orchestrator) through the real ai.ClassifyQueryComplexity call,
+// not through Question.QueryType.
+type fakeClassifierAIConfigStore struct {
+	baseURL string
+	model   string
+}
+
+func (f fakeClassifierAIConfigStore) GetActiveAIProvider(context.Context) (*ai.AIProviderInfo, error) {
+	return &ai.AIProviderInfo{ID: "prov-test", Name: "Test", APIKey: "test-key", BaseURL: f.baseURL}, nil
+}
+
+func (f fakeClassifierAIConfigStore) GetAIProviderByID(context.Context, string) (*ai.AIProviderInfo, error) {
+	return nil, nil
+}
+
+func (f fakeClassifierAIConfigStore) GetAIModelsByProvider(context.Context, string) ([]ai.AIModelInfo, error) {
+	return []ai.AIModelInfo{{Name: f.model}}, nil
+}
+
+func (f fakeClassifierAIConfigStore) GetKBModelOverrides(context.Context, string) (*ai.KBModelOverrides, error) {
+	return nil, nil
+}
+
+// fakeOneChunkSearcher is a minimal vector.Searcher stand-in that returns
+// one chunk. RunSupervisorChat hard-fails ("no chunks from specialist ...")
+// on an empty result, which would push the test below through the
+// standard-path fallback (a.prod.Search) — itself also carrying the
+// tabular router via WithTabularRouter — and double-count the router
+// invocation, masking a mutation that removes the Supervisor branch's own
+// wiring. Returning one chunk here keeps the assertions isolated to the
+// Supervisor branch.
+type fakeOneChunkSearcher struct{}
+
+func (fakeOneChunkSearcher) Search(context.Context, string, string, int, vector.SearchOptions) (*vector.SearchResult, error) {
+	return &vector.SearchResult{Chunks: []vector.SearchChunk{
+		{ID: "c1", Content: "content", FileID: "f1", FileName: "f.txt", Score: 1},
+	}}, nil
+}
+
+func (fakeOneChunkSearcher) ExpandNeighbors(_ context.Context, chunks []vector.SearchChunk, _ int, _, _ string) []vector.SearchChunk {
+	return chunks
+}
+
+// alwaysComplexServer starts an httptest server whose /chat/completions
+// handler always answers as if the query classifier judged the query
+// complex — good enough for every LLM call this test's dispatch path makes
+// (query-complexity classification, and whatever the Supervisor's own
+// specialist/answer path calls afterward; none of those responses are
+// asserted on here).
+func alwaysComplexServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": `{"isComplex":true}`}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestOrchestratorDispatchAdapter_SupervisorFiresTabularRouterWithPerKBConfig
+// is the task-14 finding-1 regression guard: OrchestratorDispatchAdapter's
+// Supervisor branch built chat.SupervisorChatParams without TabularRouter /
+// TabularRouterConfig at all, so a --production-context --orchestrator-
+// dispatch=true run (the eval's default supervisor-in-prod mode) silently
+// never exercised the tabular router — measured fire rate 0.767 in Run 2
+// even though the router itself works (0 validator rejections once fired).
+//
+// Also proves the per-KB chat_tabular_router_max_rows override reaches the
+// router (RowCap), mirroring
+// TestRunTrajectory_SupervisorHonoursPerKBTabularRouterConfig in
+// tabular_router_option_test.go: the router's own wiring-time cfgFn reports
+// a "wrong" global MaxRows of 200, and only a.siteCfg's override (777) must
+// win.
+//
+// Mutation guard: deleting `TabularRouter: a.prod.tabularRouter` and/or the
+// `TabularRouterConfig: tabularCfg` field (and its resolution) from the
+// OrchestratorSupervisor case in orchestrator_adapter.go's Search method
+// makes this red — genCalls stays 0 and/or RowCap reads 200.
+func TestOrchestratorDispatchAdapter_SupervisorFiresTabularRouterWithPerKBConfig(t *testing.T) {
+	srv := alwaysComplexServer(t)
+	aiResolver := ai.NewConfigResolver(fakeClassifierAIConfigStore{baseURL: srv.URL, model: "test-model"})
+
+	var genCalls int
+	exec := &evalFakeTabularExec{}
+	router := chat.NewTabularRouter(
+		evalFakeTabularCat{entry: evalTabularCatalogEntry()},
+		exec,
+		newEvalFakeTabularGen(&genCalls),
+		// The router's own wiring-time cfgFn: the "wrong" global config a
+		// per-KB siteCfg override must beat.
+		func(context.Context) chat.TabularRouterConfig {
+			cfg := evalFiringTabularRouterConfig()
+			cfg.MaxRows = 200
+			return cfg
+		},
+	)
+
+	siteCfg := &stubSiteCfg{values: map[string]string{
+		"chat_supervisor_enabled":      "true",
+		"chat_tabular_query_enabled":   "true",
+		"chat_tabular_router_enabled":  "true",
+		"chat_tabular_router_max_rows": "777",
+	}}
+
+	a := NewOrchestratorDispatchAdapter(
+		aiResolver,
+		fakeOneChunkSearcher{},
+		siteCfg,
+		nil,
+		EvalFlags{},
+		WithTabularRouter(router),
+	)
+
+	q := Question{
+		ID: "q1", KbID: "kb1", Language: "de",
+		// "Vergleiche" trips the heuristic complexity marker (forcing the
+		// LLM classification call rather than a heuristic short-circuit),
+		// "wie viele" is the router's own aggregation cue (same query
+		// shape TestRunTrajectory_SupervisorWiresTabularRouter uses).
+		Question: "Vergleiche: wie viele Gebäude gibt es insgesamt?",
+	}
+
+	if _, err := a.Search(context.Background(), q, 5); err != nil {
+		t.Fatalf("a.Search: %v (want the Supervisor branch to succeed with fakeOneChunkSearcher, not fall back to the standard path)", err)
+	}
+
+	if genCalls != 1 {
+		t.Fatalf("tabular SQL generator calls = %d, want 1 — the Supervisor dispatch never wired the tabular router", genCalls)
+	}
+	if exec.calls != 1 {
+		t.Fatalf("tabular executor calls = %d, want 1", exec.calls)
+	}
+	if exec.lastOpts.RowCap != 777 {
+		t.Fatalf("executor RowCap = %d, want 777 (a.siteCfg's per-KB override) — "+
+			"the adapter fell back to the router's own wiring-time cfgFn (RowCap 200) instead",
+			exec.lastOpts.RowCap)
 	}
 }
