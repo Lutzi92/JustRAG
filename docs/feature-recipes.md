@@ -194,28 +194,44 @@ Migration **0046**. Mutually exclusive with `parent_child_enabled` (skipped at i
 
 ## Structured spreadsheet Q&A (table_query)
 
+What ships: a streaming, typed reader (`sheetsource`, xlsx/xls/ods/csv/tsv — deliberately excludes `.xlsm`) → a sheet profiler (`tabular/profile`: regions, header blocks, column roles, sheet kind) → `tabular/ingest`, which drives both a native-typed Postgres materialiser (`internal/tabular`, one table per table region, plus a `tabular_column_values` distinct-value index for fuzzy lookup) and a key:value hybrid text render (`tabular/render`) that folds a profile card per region into the normal chunk/embed pipeline → the Phase-3 deterministic **tabular router** (`chat.NewTabularRouter`), which turns a lookup/aggregation question into one validated, executed read-only SQL statement ahead of retrieval → the `table_query` MCP tool as a manual fallback. Spreadsheets skip enrichment/KG/HyPE/RAPTOR entirely (row records, not prose).
+
+Enablement block, in dependency order:
+
 ```
-chat_tabular_query_enabled          = true       # master gate: streaming materialiser + table_query tool
-tabular_profile_llm_enabled         = true       # per-region LLM column descriptions / low-confidence overrides
-tabular_profile_llm_threshold       = 0.7        # heuristic confidence below which the LLM proposal wins
-tabular_profile_model               = <small>    # falls through to model_tier_fast
-tabular_profile_sample_rows         = 200        # rows sampled per sheet for structure detection [20,2000]
-tabular_max_rows                    = 2000000    # per table region: rows past this dropped from the SQL table (and counted)
-tabular_embed_max_rows              = 50000      # per table region: rows past this are SQL-only, not embedded in the hybrid text page; MIN 1 (0 is rejected, it would mean the default), MAX 100000 (see note below)
-tabular_column_values_max_distinct  = 10000      # per column: above this no tabular_column_values row is written (fuzzy lookup falls back to BM25/ILIKE)
-chat_tabular_charts_enabled         = true       # Phase 3: chart prompt-guidance (no new tool/migration)
+chat_tabular_query_enabled          = true       # master gate: streaming materialiser + table_query tool; default false
+# JUSTRAG_DB_URL_READONLY must be set to a SELECT-only role before this does anything useful —
+# see the OPERATOR PREREQUISITE grants below; the router logs a startup warning and disables
+# itself otherwise (internal/app/routes.go).
+
+tabular_profile_llm_enabled         = true       # per-region LLM column descriptions / low-confidence overrides; RequiresReingest
+tabular_profile_llm_threshold       = 0.7        # [0,1] heuristic confidence below which the LLM proposal wins; RequiresReingest
+tabular_profile_model               = <small>    # falls through to model_tier_fast; RequiresReingest
+tabular_profile_sample_rows         = 200        # [20,2000] rows sampled per sheet for structure detection; RequiresReingest
+tabular_max_rows                    = 2000000    # [1000,5000000] per table region: rows past this dropped from the SQL table (and counted); RequiresReingest
+tabular_embed_max_rows              = 50000      # [1,100000] per table region: rows past this are SQL-only, not embedded in the hybrid text page; 0 is rejected (would silently mean the default); RequiresReingest
+tabular_column_values_max_distinct  = 10000      # [100,100000] per column: above this no tabular_column_values row is written (fuzzy lookup falls back to BM25/ILIKE); RequiresReingest
+chat_tabular_charts_enabled         = true       # Phase 3: chart prompt-guidance (no new tool/migration); default false
 
 chat_tabular_router_enabled           = true     # Phase 3 kill switch (default ON); pre-pass that turns a lookup/aggregation question into one validated read-only SQL statement before falling back to normal retrieval; effective only together with chat_tabular_query_enabled
 chat_tabular_router_model             = <small>  # falls through to model_tier_fast
 chat_tabular_router_max_rows          = 200      # [10,1000] row cap on the router-generated query's result set
 chat_tabular_router_max_repairs       = 3        # [0,5] LLM repair attempts on a DB error / empty result / all-NULL aggregate
 chat_tabular_router_timeout_ms        = 5000     # [500,30000] wall-clock budget for SQL generation + execution
-chat_tabular_router_schema_max_tokens = 12000    # [1000,60000] token budget for the schema text in the SQL-generation prompt
+chat_tabular_router_schema_max_tokens = 12000    # [1000,60000] token budget for the schema text in the router's SQL-generation prompt
+
+# Phase 4 (ops hardening — no new migration):
+chat_tabular_guidance_max_tokens      = 6000     # [1000,30000] token budget for the per-KB catalog summary folded into the ANSWER prompt (maybeTabularGuidance); a separate budget from the router's own schema prompt above — replaces the former hardcoded 6000-token constant
+tabular_max_file_bytes                = 524288000     # [1048576,2147483647] bytes (default 500 MiB); an uploaded spreadsheet over this answers HTTP 413; NOT RequiresReingest (read at upload time only) — see the runbook's caveat about the separate, hardcoded 500 MiB transport cap
+tabular_large_file_bytes              = 20971520      # [1048576,1073741824] bytes (default 20 MiB); ingested spreadsheets above this are "large" for concurrency purposes; NOT RequiresReingest, read fresh per file
+tabular_large_file_concurrency        = 1             # [1,8]; how many "large" spreadsheets one worker process materialises at once; NOT RequiresReingest, but read ONCE at worker startup into a semaphore — changing it needs a worker restart, not just a re-ingest
 ```
 
-Migrations **0048** (`tabular` schema + `tabular_catalog`) and **0069** (catalog v2 columns, `tabular_column_values`, `tabular_query_log`, `files.parse_report`/`stage_detail`). The 2026-09-04 spreadsheet-ingest rework's Phase 2 replaced the Phase-1 buffered-memory materializer with a streaming reader (`sheetsource`) → profiler (`tabular/profile`) → typed Postgres tables (`internal/tabular`; a majority-numeric TEXT column or a `RoleMeasure` column additionally gets a `_num` shadow column, primary stays text) + a key:value hybrid text render (`tabular/render`, one profile card per table region) for the standard chunk/embed pipeline — see the `chat_tabular_*`/`tabular_*` entry in CLAUDE.md's Quick reference for the current mechanism (this recipe's full rewrite is tracked for Phase 4). The three `chat_tabular_semantic_columns_enabled`/`tabular_semantic_min_avg_len`/`tabular_semantic_min_distinct_ratio` free-text-column-embedding keys from the earlier Phase-2 draft are **REMOVED** (superseded by the hybrid render + `tabular_column_values` value index). `table_query` runs read-only SELECTs through `JUSTRAG_DB_URL_READONLY` with the per-KB catalog allowlist. **Any `tabular_*`/`tabular_profile_*` key change needs a re-ingest to take effect** (values are baked in at ingest time) — re-upload the file, or use the per-KB rematerialise endpoint `POST /api/kb/{id}/tabular/rematerialize` (kbAdmin), which re-ingests every spreadsheet file in the KB via `TypeReEmbedding`.
+Migrations **0048** (`tabular` schema + `tabular_catalog`) and **0069** (catalog v2 columns, `tabular_column_values`, `tabular_query_log`, `files.parse_report`/`stage_detail`). No migration in Phase 4. The 2026-09-04 spreadsheet-ingest rework's Phase 2 replaced the Phase-1 buffered-memory materializer with a streaming reader (`sheetsource`) → profiler (`tabular/profile`) → typed Postgres tables (`internal/tabular`; a majority-numeric TEXT column or a `RoleMeasure` column additionally gets a `_num` shadow column, primary stays text) + a key:value hybrid text render (`tabular/render`, one profile card per table region) for the standard chunk/embed pipeline. The three `chat_tabular_semantic_columns_enabled`/`tabular_semantic_min_avg_len`/`tabular_semantic_min_distinct_ratio` free-text-column-embedding keys from the earlier Phase-2 draft are **REMOVED** (superseded by the hybrid render + `tabular_column_values` value index). `table_query` runs read-only SELECTs through `JUSTRAG_DB_URL_READONLY` with the per-KB catalog allowlist. **Any `tabular_*`/`tabular_profile_*` key change needs a re-ingest to take effect** (values are baked in at ingest time) — re-upload the file, or use the per-KB rematerialise endpoint `POST /api/kb/{id}/tabular/rematerialize` (kbAdmin), which re-ingests every spreadsheet file in the KB via `TypeReEmbedding`. The three Phase 4 size/concurrency keys are the exception: none is `RequiresReingest` (confirmed in `internal/siteconfig/registry.go`) — they govern upload-time rejection and ingest-time scheduling, not the values baked into a materialised table.
 
-`tabular_embed_max_rows` is capped at **100 000** (Ruling R23). The renderer buffers one window of that many rows per table region in memory before it writes a line — `render.RenderSheet` collects the region's rows into a map, then formats them — so the knob bounds worker RSS, not just page length; a million-row window is an OOM, not a slow ingest. A larger window waits for the incremental renderer planned for Phase 4. Rows past the cap stay reachable through `table_query` (the profile card says so), and only say so when the region actually has a materialised table.
+`tabular_embed_max_rows` is capped at **100 000** (Ruling R23). The renderer buffers one window of that many rows per table region in memory before it writes a line — `render.RenderSheet` collects the region's rows into a map, then formats them — so the knob bounds worker RSS, not just page length; a million-row window is an OOM, not a slow ingest. A larger window waits for the incremental renderer planned for a future phase. Rows past the cap stay reachable through `table_query` (the profile card says so), and only say so when the region actually has a materialised table.
+
+**Ops sequence** (per file, after the feature is enabled): upload the spreadsheet (`POST /api/kb/{id}/files`) → watch its ingest progress in the sidebar ("Quellen"/sources panel), which now surfaces `files.stage_detail` live, including the large-file gate's wait message → once `completed`, open the "Tabellen" panel from the file's row (`GET /api/kb/{id}/files/{fileId}/tabular`, view role) to inspect the parsed regions, column roles, and any dropped/uncoerced rows → after changing any `tabular_*`/`tabular_profile_*` knob, run `POST /api/kb/{id}/tabular/rematerialize` (kbAdmin) rather than waiting for the next unrelated re-ingest, since the old values stay baked into the existing tables until then. See `docs/runbooks/spreadsheet-ingest-ops.md` for the full operator runbook (sizing, the large-file gate, the orphan sweep, alerting, and the acceptance procedure).
 
 **OPERATOR PREREQUISITE** — run once as DB owner/superuser after migration 0048 (and `tabular_column_values` again after 0069):
 
@@ -234,7 +250,15 @@ ALTER DEFAULT PRIVILEGES FOR ROLE <db_user> IN SCHEMA tabular
 
 `internal/tabular/sqlcheck` depends on `github.com/cockroachdb/cockroachdb-parser@v0.25.2` for real Postgres-dialect AST parsing (rather than hand-rolled regex/tokenizing) — measured cost to a static `cmd/server` build: **+13.9 MiB (+17%)**, from 82.0 MiB to 95.97 MiB, plus +304 transitively pulled modules (Task 0's before/after build). No new operator action follows from this; it is purely a deployed-artifact-size note.
 
-**SECURITY:** the read-only role's `search_path` must **NOT** include `tabular`. Per-KB isolation depends on schema-qualified `tabular.<name>` references — unqualified table names must fail to resolve so a prompt-injected bare name cannot bypass the catalog allowlist. The pool additionally sets `default_transaction_read_only=on` per session (writes fail even if the role's grants are ever fat-fingered); an explicit `default_transaction_read_only` in the `JUSTRAG_DB_URL_READONLY` DSN overrides it, same as `statement_timeout`.
+**SECURITY:** the read-only role's `search_path` must **NOT** include `tabular`. Per-KB isolation depends on schema-qualified `tabular.<name>` references — unqualified table names must fail to resolve so a prompt-injected bare name cannot bypass the catalog allowlist. The pool additionally sets `default_transaction_read_only=on` per session (writes fail even if the role's grants are ever fat-fingered); an explicit `default_transaction_read_only` in the `JUSTRAG_DB_URL_READONLY` DSN overrides it, same as `statement_timeout`. In operator terms (design spec §6.6): the `table_query` allowlist plus the read-only role are the **only** KB isolation boundary for this feature — there is no per-cell or per-row ACL. Spreadsheet cell contents are attacker-controlled data, not instructions: a cell that reads like one (`ignore previous instructions`, `system:`, `assistant:`, a bare URL in a non-URL column) is dropped from column descriptions, samples, and value sets before it can reach an LLM prompt or the "Tabellen" panel response — it still lives in the row data itself and in `table_query`/router SQL results, which is by design (a row's literal cell value is data, never re-interpreted as an instruction by the SQL layer).
+
+**Known limits:**
+- A numeric-looking string with an annotation (`"2007; Anbau 2018"`) stays TEXT in the primary column — the Q&A layer never guesses at the "real" number; only a materialised `_num` shadow column (majority-numeric TEXT columns and `RoleMeasure` columns) is typed, and the primary text column is what a citation quotes.
+- The tabular router only runs on the standard `PrepareChatContext` path and the Supervisor orchestrator — Plan-Execute, Agentic, and DRIFT do not consult it (they still see the hybrid rendered text through normal retrieval, just not the deterministic SQL fast-path).
+- `.xlsm` (macro-enabled workbooks) is deliberately unsupported — out of scope, not a bug.
+- Numeric router results always render as canonical Postgres decimal-string text, not a typed number — correct for citation display, not for further arithmetic downstream.
+
+See `docs/runbooks/spreadsheet-ingest-ops.md` for sizing, the large-file gate, the orphan sweep, alerting, and the acceptance procedure.
 
 **Phase 3:** prompt-guidance only — Recharts JSON in a ` ```chart ` block rendered by the frontend ChartRenderer; non-SQL reshapes use code_exec (gated by `chat_code_exec_enabled`). Specs in `docs/superpowers/specs/2026-05-28-tabular-data-qa-design.md` (Phase 1) and `docs/superpowers/specs/2026-09-04-spreadsheet-ingest-rework-design.md` (Phase 2, current mechanism).
 
