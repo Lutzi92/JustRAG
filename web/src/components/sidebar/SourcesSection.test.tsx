@@ -65,6 +65,7 @@ const baseProps = {
   onSyncGitRepoNow: vi.fn(),
   onRetryFile: vi.fn(),
   onRetryAllFailed: vi.fn(),
+  onOpenTabular: vi.fn(),
 };
 
 describe('SourcesSection error display + retry', () => {
@@ -223,5 +224,54 @@ describe('SourcesSection per-row schedule control', () => {
     expect(selects).toHaveLength(2);
     expect(selects[0].id).not.toBe(selects[1].id);
     expect(new Set(selects.map(s => s.id)).size).toBe(2);
+  });
+});
+
+// Phase 4: the "Tabellen" file-detail button — only for completed
+// spreadsheet files, calling onOpenTabular(file) when clicked.
+describe('SourcesSection tabular detail button', () => {
+  it('shows the button for a completed spreadsheet file and calls onOpenTabular with it', async () => {
+    const onOpenTabular = vi.fn();
+    const file = makeFile({ name: 'a.xlsx', status: 'completed' });
+    render(<SourcesSection {...baseProps} files={[file]} onOpenTabular={onOpenTabular} />);
+
+    const btn = screen.getByRole('button', { name: 'tabularPanelOpen a.xlsx' });
+    await userEvent.click(btn);
+    expect(onOpenTabular).toHaveBeenCalledWith(file);
+  });
+
+  it('hides the button for a non-spreadsheet completed file', () => {
+    const file = makeFile({ name: 'a.pdf', status: 'completed' });
+    render(<SourcesSection {...baseProps} files={[file]} />);
+    expect(screen.queryByRole('button', { name: /tabularPanelOpen/ })).not.toBeInTheDocument();
+  });
+
+  it('hides the button for a spreadsheet file that is still processing', () => {
+    const file = makeFile({ name: 'a.xlsx', status: 'processing' });
+    render(<SourcesSection {...baseProps} files={[file]} />);
+    expect(screen.queryByRole('button', { name: /tabularPanelOpen/ })).not.toBeInTheDocument();
+  });
+
+  it('shows the button for every other supported spreadsheet extension, case-insensitively', () => {
+    const files = ['b.XLS', 'c.ods', 'd.csv', 'e.tsv'].map((name, i) =>
+      makeFile({ id: `f-ext-${i}`, name, status: 'completed' }));
+    render(<SourcesSection {...baseProps} files={files} />);
+    expect(screen.getAllByRole('button', { name: /tabularPanelOpen/ })).toHaveLength(files.length);
+  });
+
+  it('hides the button for a completed .xlsm file (macro workbooks are out of scope)', () => {
+    const file = makeFile({ name: 'a.xlsm', status: 'completed' });
+    render(<SourcesSection {...baseProps} files={[file]} />);
+    expect(screen.queryByRole('button', { name: /tabularPanelOpen/ })).not.toBeInTheDocument();
+  });
+});
+
+// Phase 4: files.stage_detail (live per-stage progress text) rendered by
+// IngestStageIndicator when currentStage is set.
+describe('SourcesSection stage detail pass-through', () => {
+  it('renders stageDetail when currentStage is set', () => {
+    const file = makeFile({ currentStage: 'tabular', stageDetail: 'Blatt 2/3 · 120000 Zeilen' });
+    render(<SourcesSection {...baseProps} files={[file]} />);
+    expect(screen.getByText('Blatt 2/3 · 120000 Zeilen')).toBeInTheDocument();
   });
 });

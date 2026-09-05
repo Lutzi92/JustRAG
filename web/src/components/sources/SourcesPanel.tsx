@@ -56,7 +56,7 @@ const SourcesPanelComp: React.FC = () => {
         setToolTab, toolInput, setToolInput,
         crawlMaxPages, setCrawlMaxPages,
         toolLoading, handleToolSubmit, crawlResults, searchResults,
-        handlePreviewSource,
+        handlePreviewSource, handleOpenTabular,
         webResearchRunning, webResearchStatus, webResearchProgress, handleCancelWebResearch,
         setShowWebWorkspace, sourcesAddedCount,
     } = webTools;
@@ -195,6 +195,7 @@ const SourcesPanelComp: React.FC = () => {
                     onSyncConfluenceNow={syncConfluenceNow}
                     onRetryFile={retryFile}
                     onRetryAllFailed={retryAllFailed}
+                    onOpenTabular={handleOpenTabular}
                     gitRepoSources={gitRepoSources}
                     onUpdateGitRepoSource={updateGitRepoSource}
                     onDeleteGitRepoSource={deleteGitRepoSource}

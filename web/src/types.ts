@@ -317,6 +317,70 @@ export interface FileEntry {
     currentStage?: string;
     stageIndex?: number;
     stageTotal?: number;
+    stageDetail?: string;
+}
+
+// Tabular file detail (Phase 4) — mirrors tabular.FileTabularDTO / TableDTO /
+// ColumnDTO (go-backend/internal/tabular/report_dto.go) as served by
+// GET /api/kb/{id}/files/{fileId}/tabular. Field names are snake_case
+// verbatim from the Go JSON tags — do not camelCase them. Optionality
+// mirrors each Go field's `omitempty` tag exactly (go-backend/internal/tabular/types.go).
+export interface TabularColumn {
+    original: string;
+    name: string;
+    type: string;
+    role?: string;
+    description?: string;
+    shadow_of?: string;
+    shadow_column?: string;
+    null_count: number;
+    distinct_count: number;
+    coercion_failed: number;
+    samples?: string[];
+    value_set?: string[];
+}
+
+export interface TabularTable {
+    sheet_index: number;
+    region_index: number;
+    sheet_name: string;
+    table_name: string;
+    sheet_kind: string;
+    hidden: boolean;
+    header_row: number; // -1 = none
+    row_count: number;
+    columns: TabularColumn[];
+}
+
+// TabularSheetReport mirrors tabular.SheetReport. Note: dropped_columns is an
+// INT COUNT, not a list (Ruling R71) — the Go field is `DroppedColumns int`.
+export interface TabularSheetReport {
+    name: string;
+    kind: string;
+    hidden: boolean;
+    header_row: number;
+    columns: number;
+    rows_read: number;
+    rows_materialised: number;
+    rows_embedded: number;
+    rows_past_cap: number;
+    formula_cells_empty: number;
+    coercion_failures: number;
+    used_llm: boolean;
+    dropped_columns: number;
+    notes?: string[];
+    tables?: string[];
+}
+
+export interface TabularParseReport {
+    version: number;
+    materialised: boolean;
+    sheets: TabularSheetReport[];
+}
+
+export interface TabularFileDetail {
+    report: TabularParseReport | null;
+    tables: TabularTable[];
 }
 
 export interface ChatEntry {

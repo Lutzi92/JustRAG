@@ -10,6 +10,7 @@ const ChartModal = lazy(() => import('./ChartModal').then(module => ({ default: 
 const AbstractGenerationModal = lazy(() => import('./AbstractGenerationModal').then(module => ({ default: module.AbstractGenerationModal })));
 const PreviewModal = lazy(() => import('./PreviewModal').then(module => ({ default: module.PreviewModal })));
 const PdfPreviewModal = lazy(() => import('./PdfPreviewModal').then(module => ({ default: module.PdfPreviewModal })));
+const TabularDetailModal = lazy(() => import('./TabularDetailModal').then(module => ({ default: module.TabularDetailModal })));
 const WebWorkspace = lazy(() => import('./WebWorkspace').then(module => ({ default: module.WebWorkspace })));
 
 export function KbWorkspaceModals() {
@@ -117,6 +118,16 @@ export function KbWorkspaceModals() {
           fileId={webTools.pdfPreview?.fileId || ''}
           fileName={webTools.pdfPreview?.fileName || ''}
           page={webTools.pdfPreview?.page || 1}
+        />}
+      </Suspense>
+
+      <Suspense fallback={null}>
+        {webTools.showTabularModal && currentKb && <TabularDetailModal
+          show={webTools.showTabularModal}
+          onClose={() => webTools.setShowTabularModal(false)}
+          kbId={currentKb.id}
+          fileId={webTools.tabularFile?.fileId || ''}
+          fileName={webTools.tabularFile?.fileName || ''}
         />}
       </Suspense>
     </>
