@@ -28,6 +28,7 @@ import (
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/database"
 	"github.com/justrag/go-backend/internal/eval"
+	"github.com/justrag/go-backend/internal/recencylister"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/tabular/sqlexec"
 	"github.com/justrag/go-backend/internal/vector"
@@ -71,6 +72,7 @@ func main() {
 	refreshBM25Stats := flag.Bool("refresh-bm25-stats", false, "Before running, recompute BM25 statistics (vector.BM25StatsRefresher.RefreshKB) for every KB referenced by the golden set, across every dim table that has rows for that KB, so an A/B never runs against missing/stale stats.")
 	bm25ModeOverride := flag.String("bm25-mode", "", `Wave-2 Task 6 / ruling W2-R10: per-run override for bm25_scoring_mode ("ts_rank" | "bm25"). Empty = read the live site_config. Applied the same way as --rerank-blend-alpha (wraps the vector-layer site-config reader; no site_configs mutation) — combine with --refresh-bm25-stats when testing "bm25" against a golden set whose KBs haven't had a stats refresh yet.`)
 	bm25TieredBoostOverride := flag.String("bm25-tiered-boost", "", `Per-run override for bm25_tiered_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-mode.`)
+	recencyBoostOverride := flag.String("recency-boost", "", `Wave 2 Task 8: per-run override for recency_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-tiered-boost (a vector-layer key, applied via the searchReader overlay, not the chat-level siteReader). Lets the CERT recency fixture A/B the recency prior without a site_configs mutation.`)
 	flag.Parse()
 
 	var baseline *eval.Report
@@ -124,6 +126,10 @@ func main() {
 	}
 	if *bm25TieredBoostOverride != "" && *bm25TieredBoostOverride != "on" && *bm25TieredBoostOverride != "off" {
 		slog.Error("invalid --bm25-tiered-boost value", "value", *bm25TieredBoostOverride)
+		os.Exit(2)
+	}
+	if *recencyBoostOverride != "" && *recencyBoostOverride != "on" && *recencyBoostOverride != "off" {
+		slog.Error("invalid --recency-boost value", "value", *recencyBoostOverride)
 		os.Exit(2)
 	}
 
@@ -263,6 +269,9 @@ func main() {
 	if *bm25TieredBoostOverride != "" {
 		overlays["bm25_tiered_boost_enabled"] = strconv.FormatBool(*bm25TieredBoostOverride == "on")
 	}
+	if *recencyBoostOverride != "" {
+		overlays["recency_boost_enabled"] = strconv.FormatBool(*recencyBoostOverride == "on")
+	}
 
 	var searchReader vector.SiteConfigReader = chatStore
 	if len(overlays) > 0 {
@@ -324,6 +333,15 @@ func main() {
 			},
 		)
 		trajTabularRouter = tabularRouter
+		// Wave 2 Task 8 (W2-R9): the deterministic recency-listing path
+		// ("Welche neuen Meldungen gibt es?") needs a RecencyLister to
+		// fire under cmd/eval at all — without it, PrepareChatContext
+		// silently skips window scoping and the listing addendum
+		// (applyRecencyListing no-ops on a nil lister), and the CERT
+		// fixture's headline mechanism never exercises. Built once, like
+		// tabularRouter above, and wired into every --production-context
+		// branch that runs the standard PrepareChatContext path.
+		recencyLister := recencylister.New(db.Main)
 		if hasTurns {
 			// Turn rows bypass orchestrator dispatch and teams entirely
 			// (validated above: --team-id is already rejected when
@@ -339,6 +357,7 @@ func main() {
 				siteReader,
 				flags,
 				eval.WithTabularRouter(tabularRouter),
+				eval.WithRecencyLister(recencyLister),
 			)
 			adapter = eval.NewMultiTurnAdapter(prod, aiResolver, siteReader, keepRaw)
 			slog.Info("eval: multi-turn replay mode on (golden set has turns; standard PrepareChatContext path, no orchestrator dispatch, no team)")
@@ -361,11 +380,12 @@ func main() {
 				getKbSystemPrompt,
 				flags,
 				eval.WithTabularRouter(tabularRouter),
+				eval.WithRecencyLister(recencyLister),
 			)
 			slog.Info("eval: orchestrator-dispatch mode on (production-parity routing)")
 		} else {
-			// Router-free by design: this is the byte-stable
-			// retrieval-only comparison branch.
+			// Router-free and lister-free by design: this is the
+			// byte-stable retrieval-only comparison branch.
 			adapter = eval.NewProductionContextAdapter(
 				aiResolver,
 				searchService,

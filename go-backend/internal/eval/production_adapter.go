@@ -26,6 +26,13 @@ type ProductionContextAdapter struct {
 	// is what a retrieval-only ablation wants.
 	tabularRouter *chat.TabularRouter
 
+	// recencyLister backs the deterministic recency-listing path (Wave 2
+	// Task 8: dated CERT fixture). Optional — nil (the default) reproduces
+	// the pre-Task-8 pipeline exactly (no window-scoped retrieval, no
+	// listing addendum, no CurrentDateLine), which is what a
+	// retrieval-only ablation wants.
+	recencyLister chat.RecencyLister
+
 	// cache stores the final ChatContext per question so judge-mode can
 	// reuse the assembled system prompt and context text without a second
 	// retrieval pass.
@@ -42,6 +49,21 @@ type ProductionAdapterOption func(*ProductionContextAdapter)
 // serves (quoted id phrases, forced simple BM25 arm, SQL-result addendum).
 func WithTabularRouter(r *chat.TabularRouter) ProductionAdapterOption {
 	return func(a *ProductionContextAdapter) { a.tabularRouter = r }
+}
+
+// WithRecencyLister attaches the deterministic recency-listing lookup
+// (recencylister.New in production wiring / cmd/eval) so a
+// --production-context run exercises the same "what is new / recently
+// added" path production serves: window-scoped retrieval plus a complete
+// file-listing system-prompt addendum for recency-listing queries. Also
+// makes SearchWithQuery set CurrentDateLine, since the listing addendum's
+// window language ("since 2026-08-30") is meaningless without the model
+// knowing today's date. Without this option, a --production-context run
+// reproduces the pre-Task-8 pipeline exactly (no window scoping, no
+// listing addendum, no CurrentDateLine) — the recency-listing mechanism
+// stays entirely opt-in for eval.
+func WithRecencyLister(l chat.RecencyLister) ProductionAdapterOption {
+	return func(a *ProductionContextAdapter) { a.recencyLister = l }
 }
 
 // EvalFlags carries the flag values through the adapter without a global.
@@ -87,14 +109,15 @@ func (a *ProductionContextAdapter) Search(ctx context.Context, q Question, k int
 	return a.SearchWithQuery(ctx, q, k, q.Question, "")
 }
 
-// SearchWithQuery is Search with the retrieval query and the optional raw
-// (rewrite⊕raw lane) query supplied by the caller instead of derived from
-// q.Question. MultiTurnAdapter (Wave 2 Task 3) is the caller that needs
-// this: a follow-up turn's SEARCH query is the condensed standalone
-// question, not the verbatim golden-set turn text, and RawQuery carries the
-// verbatim utterance alongside it when chat_condense_keep_raw_enabled is on.
-func (a *ProductionContextAdapter) SearchWithQuery(ctx context.Context, q Question, k int, searchQuery, rawQuery string) ([]RetrievedChunk, error) {
-	params := chat.ChatContextParams{
+// buildParams assembles the chat.ChatContextParams for one question. Split
+// out from SearchWithQuery as a seam so a unit test can assert the
+// RecencyLister / CurrentDateLine wiring without running retrieval (Wave 2
+// Task 8): dropping either assignment here is a silent eval/production
+// divergence — the recency-listing fixture's headline mechanism (window
+// scoping + the file-listing addendum) never fires under cmd/eval, but the
+// question doesn't error, so nothing else in the pipeline notices.
+func (a *ProductionContextAdapter) buildParams(ctx context.Context, q Question, searchQuery, rawQuery string) chat.ChatContextParams {
+	return chat.ChatContextParams{
 		KbID:                    q.KbID,
 		SearchQuery:             searchQuery,
 		RawQuery:                rawQuery,
@@ -105,7 +128,19 @@ func (a *ProductionContextAdapter) SearchWithQuery(ctx context.Context, q Questi
 		StepBack:                a.flags.StepBack,
 		ForceEnumerationPrepass: a.flags.ForceEnumerationPrepass,
 		TabularRouter:           a.tabularRouter,
+		RecencyLister:           a.recencyLister,
+		CurrentDateLine:         chat.SystemPromptDateLine(ctx, a.siteConfigReader, q.Language),
 	}
+}
+
+// SearchWithQuery is Search with the retrieval query and the optional raw
+// (rewrite⊕raw lane) query supplied by the caller instead of derived from
+// q.Question. MultiTurnAdapter (Wave 2 Task 3) is the caller that needs
+// this: a follow-up turn's SEARCH query is the condensed standalone
+// question, not the verbatim golden-set turn text, and RawQuery carries the
+// verbatim utterance alongside it when chat_condense_keep_raw_enabled is on.
+func (a *ProductionContextAdapter) SearchWithQuery(ctx context.Context, q Question, k int, searchQuery, rawQuery string) ([]RetrievedChunk, error) {
+	params := a.buildParams(ctx, q, searchQuery, rawQuery)
 	chatCtx, err := chat.PrepareChatContext(ctx, a.aiResolver, a.searchService, a.siteConfigReader, params)
 	if err != nil {
 		return nil, err

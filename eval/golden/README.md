@@ -503,3 +503,125 @@ credential is available in the environment, the acceptance record documents
 "not run" with the specific blocking reason instead of fabricating numbers.
 That is not a failure of this task — see
 `eval/golden/spreadsheets-de.acceptance.md`.
+
+## CERT recency set (Wave 2 Task 8)
+
+`cert-recency-de.jsonl` is a fully synthetic, fictional German CERT-advisory
+corpus (`eval/fixtures/cert-advisories/*.md`, 40 files + `manifest.tsv`)
+purpose-built to exercise the date-aware chat mechanisms that a static
+corpus cannot: `chat_recency_listing_enabled` (the deterministic
+"Welche neuen Meldungen gibt es?" listing path,
+`internal/chat/recency_listing.go`) and `recency_boost_enabled` (the
+exponential-decay freshness prior post-rerank,
+`internal/vector/recency_boost.go`). 12 fictional products (OpenSSL, Citrix
+NetScaler, Cisco IOS XE, Microsoft Exchange, Atlassian Confluence, Fortinet
+FortiOS, Ivanti Connect Secure, VMware ESXi, Apache Tomcat, GitLab, Moodle,
+TYPO3), 26 fictional `WID-SEC-2026-NNNN` advisories (14 issued as an
+initial `NEU` advisory later followed by an `UPDATE` on the same WID id,
+each UPDATE dated younger than its NEU; 12 issued once and never updated),
+ages spread 1–120 days, 9 files inside the default 7-day recency-listing
+window (5 of them NEU). All CVE numbers are fictional
+(`CVE-2026-1xxxx`) and no real vendor text is used anywhere in the corpus.
+
+File names follow the CERT-Bund feed convention the name-marker arm keys
+on: `NEU WID-SEC-2026-0101 OpenSSL - Schwachstelle ermoeglicht Denial of
+Service.md` / `UPDATE WID-SEC-2026-0101 OpenSSL - ....md`. Titles
+deliberately avoid umlauts/ß (`ermoeglicht`, not `ermöglicht`) for
+readability — the corpus's `.md` filename stem doubles as the exact
+`title` sent to `POST /api/kb/{id}/text`, and the resulting `files.name`
+is `req.Title` **verbatim**: `AddTextSource`
+(`internal/files/http_ingest.go`) only runs the title through
+`sanitizeTitle`/`SafeNameSegment` to build the on-disk *storage path*; the
+`files.name` DB column it writes is the raw title, no extension appended
+(confirmed against a live-seeded row — an earlier draft of this doc
+assumed a `.txt` suffix that does not exist in practice). So
+`must_cite_file_names` in the golden set are the titles as-is, matching
+the corpus's `.md` filenames minus the extension.
+
+25 questions in 5 groups: 6 recency-listing (`query_type: lookup`; `notes`
+on each spells out which window/marker arm should fire and why, since
+"Welche neuen Meldungen gibt es?"-style questions land on **every**
+NEU-labeled file once the name-marker arm fires — see
+`internal/chat/recency_listing.go`'s two-arm design — while a
+window-only phrasing like "Welche Meldungen wurden in den letzten 6 Tagen
+veröffentlicht?" is scoped to just that window's NEU files), 8 NEU/UPDATE
+product lookups (`must_cite` is the UPDATE file only — tests whether the
+recency boost/prior promotes the newer, more complete advisory over its
+near-duplicate NEU predecessor), 6 CVE/WID-id lookups (lexical/BM25
+exercise; two target a CVE that exists only in an UPDATE, not its NEU
+predecessor), 3 cross-advisory enumerations (`query_type: enumeration`),
+and 2 "newest for product" lookups (recency boost ranking a single file,
+deliberately phrased to avoid tripping the recency-listing classifier).
+
+`kb_id` in the committed file is the placeholder
+`REPLACE_WITH_FIXTURE_KB_ID` (see "Ground truth by name, not by UUID"
+above); one question (`cert-r06`) carries a `{TODAY-14}` placeholder in its
+question text that the seed script rewrites to an ISO date.
+
+### Seeding
+
+```bash
+JUSTRAG_URL=http://localhost:3000 \
+JUSTRAG_ADMIN_USER=admin \
+JUSTRAG_ADMIN_PASSWORD=<the ADMIN_PASSWORD the instance was started with> \
+  ./eval/fixtures/seed-cert.sh
+```
+
+Logs in as the admin user, creates or reuses a KB named "CERT Fixtures",
+ingests every corpus file via `POST /api/kb/{id}/text` (skipping any title
+already present, so reruns are cheap), polls until ingestion finishes,
+**verifies** every manifest row landed under its expected name (fails
+loudly otherwise — a mismatch here would make the backdating UPDATE below
+a silent 0-row no-op), then backdates each file's
+`files.created_at` per `manifest.tsv`'s `days_ago` column via
+`UPDATE files SET created_at = now() - make_interval(days => N) WHERE
+kb_id = ... AND name = ...`, run through
+`${PSQL_CMD:-docker compose -p justrag exec -T db psql -U postgres -d rag_db}`.
+Only `files.created_at` needs backdating — both the date-window filter
+(`SearchService.fileIDsInDateRange`) and the recency boost
+(`fileCreatedTimes`) read `files.created_at` on the **main** DB; there is
+no `document_chunks_<dim>` row to touch (verified against
+`internal/vector/recency_boost.go`). Every run (fresh seed or `--restamp`)
+re-runs the backdating UPDATEs relative to `now()`, so a previously seeded
+KB stays inside the 7-day recency-listing window no matter how much
+wall-clock time has passed since it was first seeded. Writes
+`eval/golden/cert-recency-de.local.jsonl` — the committed set with `kb_id`
+rewritten to the real KB id and `{TODAY-N}` rewritten to an ISO date. That
+file is gitignored (`eval/golden/*.local.jsonl`); never edit
+`cert-recency-de.jsonl` itself to point at a real KB.
+
+`--restamp --kb-id <uuid>` skips ingestion entirely and only re-runs the
+backdating UPDATEs (plus regenerating the `.local.jsonl`) against an
+already-seeded KB — useful for refreshing the window without waiting for a
+full re-ingest.
+
+### Running the A/B
+
+`cmd/eval` has no site_config to flip for `recency_boost_enabled` short of
+the same overlay mechanism the other ablation flags use (`--bm25-tiered-boost`
+etc.): pass `--recency-boost on|off` (a vector-layer key, applied via the
+searchReader overlay — see `docs/retrieval.md`'s Recency prior section for
+the underlying mechanism). `chat_recency_listing_enabled` and
+`chat_date_awareness_enabled` both default **on** in production and need no
+override for this set.
+
+```bash
+cd go-backend
+go build ./cmd/eval
+./eval --golden ../eval/golden/cert-recency-de.local.jsonl \
+  --production-context --recency-boost off \
+  --output ../eval/golden/cert-recency-de.report-off.json
+./eval --golden ../eval/golden/cert-recency-de.local.jsonl \
+  --production-context --recency-boost on \
+  --output ../eval/golden/cert-recency-de.report-on.json
+# Noise band: repeat the first (off) run and diff against report-off.json.
+./eval --golden ../eval/golden/cert-recency-de.local.jsonl \
+  --production-context --recency-boost off \
+  --output ../eval/golden/cert-recency-de.report-off2.json
+```
+
+See `eval/golden/cert-recency-de.acceptance.md` for the recorded per-route
+table, the 6 listing questions' window-file `FinalChunks` coverage, the
+per-pair UPDATE-vs-NEU ranking outcome, and a log line proving the recency
+listing fired under `cmd/eval` (`grep recency` in the run's JSON log
+output).
