@@ -6,6 +6,10 @@ This directory holds snapshots of `cmd/eval` output on the production golden set
 
 ## Files
 
+### `ab-*.json` naming convention (local A/B grids, gitignored)
+
+A one-off multi-cell A/B grid (e.g. the 2026-09 `bm25_scoring_mode` ts_rank-vs-BM25 grid — see "Keyword arm scoring: ts_rank vs BM25 (2026-09)" in `docs/retrieval.md`) is captured as `ab-<cell>.json` per cell (`ab-A.json`, `ab-B.json`, …), each with a matching `ab-<cell>.log` for the raw `cmd/eval` output (stage logs, regression-gate lines, aggregate/per-route summary). This is distinct from the durable `baseline.json`/`baseline_unrouted.json` files above, which persist as *the* regression gate for a given flag across time — an `ab-*` grid is a single investigation's working files, kept only long enough to write up the numbers in the relevant `docs/retrieval.md` subsection, and is not itself re-used as a future `--baseline` target. Same gitignore scope as every other snapshot file (`/eval/golden/snapshots/*.json`) — never committed.
+
 ### `baseline_unrouted.json` (gitignored; regenerate locally)
 
 Output of `cmd/eval --golden production-ppm-2026-08.jsonl --top-k 10 --production-context` captured on 2026-04-23 with today's site-config defaults and **no routing** (pre-Phase-3 baseline). Per `docs/superpowers/specs/2026-04-22-consolidated-retrieval-plan-design.md`, this was the regression gate for Plan 4 (Route-Aware Routing): with `routing_enabled=false`, a fresh snapshot produced on the same golden set was compared against the locally-held `baseline_unrouted.json` (originally byte-for-byte via `diff`; see "Comparing against a baseline" below for the current `--baseline`-flag mechanism).
