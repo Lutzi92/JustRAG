@@ -601,6 +601,10 @@ func buildDoclingClient(ctx context.Context, scr siteConfigReaderForDocling, res
 		}
 	}
 	client := docling.NewClient(*urlRaw, timeout)
+	// Task endpoints: the sync endpoint is capped by the sidecar's
+	// DOCLING_SERVE_MAX_SYNC_WAIT (upstream default 120 s) regardless of the
+	// timeout above; polling has no such cap.
+	client.Async = true
 	// Startup snapshot (used for the parser-registration decision below) plus
 	// a per-request resolver, so an admin-panel edit of any docling_* key
 	// reaches the next conversion rather than the next worker restart.
@@ -635,8 +639,15 @@ func probeDoclingCaptioning(client *docling.Client) {
 // when docling_picture_description_prompt is unset. It replaces docling's
 // "Describe this image in a few sentences.": the corpus is mostly German,
 // and the values printed in a chart are the part worth retrieving.
+//
+// The chart clause is the "external chart extraction": docling's own chart
+// stage runs only its bundled local model, but gemma-4 reads a bar/line/pie
+// chart into a value table just as well — verified live on
+// testdata/figure-2p.pdf, where every bar came back with its month.
 const DefaultDoclingPicturePrompt = "Beschreibe diese Abbildung in der Sprache des Dokuments (sonst auf Deutsch). " +
 	"Nenne zuerst den Typ (z. B. Balkendiagramm, Tabelle, Screenshot, Schema, Foto), dann was sie zeigt. " +
+	"Wenn es ein Diagramm ist, gib alle Datenreihen als Markdown-Tabelle mit den abgelesenen Werten aus " +
+	"(Kategorie | Wert, bei mehreren Reihen eine Spalte je Reihe), danach eine Zeile mit Achsenbeschriftungen und Legende. " +
 	"Übertrage alle lesbaren Zahlen, Achsenbeschriftungen, Legendeneinträge und Beschriftungen wörtlich. " +
 	"Keine Einleitung, keine Wertung."
 

@@ -89,6 +89,11 @@ func TestReadDoclingOptions_DefaultsForAGermanCorpus(t *testing.T) {
 	if !strings.Contains(o.PicturePrompt, "Sprache des Dokuments") || !strings.Contains(o.PicturePrompt, "Zahlen") {
 		t.Errorf("default prompt must ask for the document's language and the figure's numbers, got %q", o.PicturePrompt)
 	}
+	// Charts come back as a markdown table of the read-off values — verified
+	// live on testdata/figure-2p.pdf, where gemma-4 returned every bar.
+	if !strings.Contains(o.PicturePrompt, "Markdown-Tabelle") {
+		t.Errorf("default prompt must ask for chart data as a markdown table, got %q", o.PicturePrompt)
+	}
 }
 
 func TestReadDoclingOptions_ReadsTheNewKeys(t *testing.T) {
@@ -128,5 +133,18 @@ func TestBuildDoclingClient_ResolvesOptionsPerRequest(t *testing.T) {
 	scr.vals["docling_table_mode"] = "accurate"
 	if got := c.OptionsFunc(context.Background()).TableMode; got != "accurate" {
 		t.Errorf("table mode after site-config change = %q, want accurate", got)
+	}
+}
+
+func TestBuildDoclingClient_UsesTheAsyncEndpoints(t *testing.T) {
+	// The sync endpoint is capped by DOCLING_SERVE_MAX_SYNC_WAIT on the
+	// sidecar; the worker must not depend on that setting being raised.
+	scr := fakeDoclingSCR{vals: map[string]string{
+		"docling_enabled":  "true",
+		"docling_base_url": "http://docling:5001",
+	}}
+	c := buildDoclingClient(context.Background(), scr, nil)
+	if c == nil || !c.Async {
+		t.Fatal("worker client must use the async convert endpoints")
 	}
 }

@@ -82,8 +82,14 @@ In the admin Agent panel:
 - `docling_picture_description_prompt` — what the vision model is asked per
   figure. The default asks, in German, for the document's language, the
   figure type, what it shows, and **every readable number, axis label, legend
-  entry and caption verbatim**. Docling's own default ("Describe this image in
-  a few sentences.") produced English one-liners without values.
+  entry and caption verbatim** — and, for a chart, **the data series as a
+  markdown table** of the read-off values. That table is the "external chart
+  extraction": docling's own chart stage can only run its bundled local model
+  (see below), while gemma-4 reads a bar chart into `| Jan | 12 |` rows just as
+  well (verified on `testdata/figure-2p.pdf`, every bar with its month). The
+  table lands in the figure's chunk, so the values are retrievable and quotable.
+  Docling's own default ("Describe this image in a few sentences.") produced
+  English one-liners without values.
 - `docling_picture_description_timeout_seconds` = `120` (default). Docling's
   default is 20 s per image, and a timed-out image simply has no description —
   no error, no log — which made caption coverage look random under GPU load.
@@ -119,13 +125,32 @@ Docling layer: **cap Docling replicas + its own request concurrency** (see the
 fixed `replicas` and the rationale comment in `k8s/docling.yml`). Only raise the
 replica count once you give ingestion its own gemma-4 instance.
 
-Captioning also extends per-document convert latency. Two timeouts apply, and
-the smaller one wins: the Go client's `DOCLING_TIMEOUT_SECONDS` (default 300)
-and the **sidecar's** `DOCLING_SERVE_MAX_SYNC_WAIT` (docling-serve default
-**120**), after which the sync endpoint answers 504 regardless of what the
-client is willing to wait. Both manifests set it to 600; a deployment that
-raises the Go side must raise the sidecar side too, or long reports fall back
-to pdftotext.
+Captioning also extends per-document convert latency. The worker converts
+through docling-serve's **task endpoints** (`POST /v1/convert/file/async` →
+`GET /v1/status/poll/{id}` every 2 s → `GET /v1/result/{id}`), bounded only by
+`DOCLING_TIMEOUT_SECONDS` (default 300) for the whole exchange. The
+synchronous `/v1/convert/file` is used only when the sidecar has no task
+endpoints (404 on submit — a pre-1.0 image), and that path is additionally
+capped by the sidecar's `DOCLING_SERVE_MAX_SYNC_WAIT` (upstream default
+**120**), after which it answers 504 regardless of the client. The manifests
+set it to 600 for the benefit of curl and the tests' fallback.
+
+### Why the deprecated `picture_description_api` field is still sent
+
+docling-serve 1.21 deprecated `picture_description_api` in favour of
+`picture_description_preset` / `picture_description_custom_config`. On the
+pinned 1.32.0 the custom config was tried live: it validates only as the
+nested VLM-engine shape (`engine_options.engine_type: "api"`, a `model_spec`
+with `prompt` + `response_format`, `api_overrides.api.params`), and any
+endpoint URL or header placed in it is **silently ignored** — the sidecar
+logs "Initializing PictureDescriptionVlmEngineModel … engine=api", calls
+nothing, and the picture comes back with `description: null`. In the new
+system the endpoint and its headers are meant to live **server-side**, in a
+named preset (`DOCLING_SERVE_CUSTOM_PICTURE_DESCRIPTION_PRESETS`), which puts
+the model-API key on the sidecar. The per-request legacy field still works
+on 1.32.0 and keeps the key out of the sidecar, so that is what is sent. When
+an upgrade removes it, the migration is: define the preset on the sidecar
+from a Secret and send `picture_description_preset` instead.
 
 ## Behaviour & fallback
 
@@ -240,6 +265,25 @@ DOCLING_TEST_VLM_MODEL=jlu/gemma-4-26b-it \
 DOCLING_TEST_VLM_KEY=<key> \
 go test ./internal/parser/docling -run Integration -v
 ```
+
+## What was tried and not adopted (2026-09-05)
+
+- **Chart extraction** (`do_chart_extraction`): on the pinned image the
+  granite-vision-4.1-4b model is not bundled; the sidecar tries to download
+  it at request time and fails to instantiate it, and the whole conversion
+  fails. Even with pre-baked artifacts (`DOCLING_SERVE_ARTIFACTS_PATH`) a 4B
+  vision model per chart is GPU-only in practice. The text docling finds
+  *inside* a vector chart (see above) plus the value-extracting caption prompt
+  cover the same need without it.
+- **Docling's own chunker** (`POST /v1/chunk/hybrid/file`, form fields
+  prefixed `chunking_` / `convert_`): works on 1.32.0 and returns chunks with
+  `headings[]`, `doc_items[]` refs and `page_numbers[]`, so heading context and
+  page-exact citations would survive. Not adopted: it would be a second
+  chunking pipeline next to `internal/splitter`, and its tokenizer has to
+  match the embedder. Worth an eval on one KB if the per-page rebuild keeps
+  needing patches.
+- **Formula enrichment**: no equation-bearing fixture in this corpus; the
+  upstream memory-growth issue (docling #1886) is still open. Left off.
 
 **Page metadata is written at ingest time**, so any deployment that ran Docling
 before this fix must **re-ingest its PDFs**. Note that chunk dedup is

@@ -315,8 +315,7 @@ Sidecar prerequisites (both shipped manifests set them; a hand-rolled deployment
 ```
 DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true                 # REQUIRED for captioning — without it docling refuses the
                                                           # captioning pipeline and EVERY conversion falls back to pdftotext
-DOCLING_SERVE_ALLOW_CUSTOM_PICTURE_DESCRIPTION_CONFIG=true # for the non-deprecated per-request config (Phase 2)
-DOCLING_SERVE_MAX_SYNC_WAIT=600                           # sync endpoint 504s after this regardless of the Go timeout (upstream default 120)
+DOCLING_SERVE_MAX_SYNC_WAIT=600                           # only for sync /v1/convert/file callers (curl); the worker uses the task endpoints
 image: quay.io/docling-project/docling-serve:v1.32.0     # pinned; bump deliberately, then re-run the live integration tests
 ```
 
@@ -338,7 +337,7 @@ No migration. Captioning rides the Docling convert call, so `docling_enabled` mu
 
 `docling_enabled` / `docling_base_url` are read at worker start; every other key above is re-read per conversion, so admin-panel edits apply to the next file. When on, standalone image uploads (`.png`/`.jpg`/…) also route through Docling (caption + OCR) with Tesseract as the fallback. Existing files are **not** retroactively captioned — re-ingest a KB to benefit (captions, in-figure text, table captions and heading levels are all baked into chunk text at ingest).
 
-**Throttle / GPU contention:** Docling's calls to gemma-4 bypass `AI_MAX_CONCURRENT_REQUESTS`, so cap Docling replicas + per-pod `DOCLING_SERVE_ENG_LOC_NUM_WORKERS` (the `k8s/docling.yml` fixed replica count is the throttle; vision calls run one at a time per document). Raising `DOCLING_TIMEOUT_SECONDS` on the Go side needs a matching `DOCLING_SERVE_MAX_SYNC_WAIT` on the sidecar. Fast-follows available on the same request and not yet wired: `do_chart_extraction` (granite-vision chart→table on the sidecar, GPU-only in practice), `do_formula_enrichment` (open upstream memory-growth issue).
+**Throttle / GPU contention:** Docling's calls to gemma-4 bypass `AI_MAX_CONCURRENT_REQUESTS`, so cap Docling replicas + per-pod `DOCLING_SERVE_ENG_LOC_NUM_WORKERS` (the `k8s/docling.yml` fixed replica count is the throttle; vision calls run one at a time per document). The worker converts through the task endpoints (submit → poll → result, bounded only by `DOCLING_TIMEOUT_SECONDS`), so `DOCLING_SERVE_MAX_SYNC_WAIT` matters only for sync callers. Fast-follows available on the same request and not yet wired: `do_chart_extraction` (granite-vision chart→table on the sidecar, GPU-only in practice), `do_formula_enrichment` (open upstream memory-growth issue).
 
 ## Git repository source
 

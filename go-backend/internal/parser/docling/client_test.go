@@ -897,3 +897,147 @@ func TestClient_Probe_ConvertsWithTheLiveOptions(t *testing.T) {
 		t.Errorf("probe did not send picture_description_api")
 	}
 }
+
+// --- async conversion ----------------------------------------------------
+//
+// The sync endpoint gives up after DOCLING_SERVE_MAX_SYNC_WAIT seconds
+// (upstream default 120) with a 504 no matter how long the client is willing
+// to wait. The async endpoints (submit → poll → result) have no such cap and
+// survive a dropped connection. Shapes below are the live 1.32.0 ones.
+
+// asyncStub serves the three async endpoints. polls counts status calls;
+// statuses is consumed one per poll, the last one repeating.
+func asyncStub(t *testing.T, statuses []string, result string) (*httptest.Server, *int, *[]string) {
+	t.Helper()
+	polls := 0
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v1/convert/file/async"):
+			_, _ = io.Copy(io.Discard, r.Body)
+			_, _ = w.Write([]byte(`{"task_id":"t-1","task_type":"convert","task_status":"pending","task_position":1}`))
+		case strings.HasPrefix(r.URL.Path, "/v1/status/poll/t-1"):
+			i := polls
+			if i >= len(statuses) {
+				i = len(statuses) - 1
+			}
+			polls++
+			st := statuses[i]
+			msg := ""
+			if st == "failure" {
+				msg = `,"error_message":"pipeline exploded"`
+			}
+			_, _ = w.Write([]byte(`{"task_id":"t-1","task_type":"convert","task_status":"` + st + `"` + msg + `}`))
+		case r.URL.Path == "/v1/result/t-1":
+			_, _ = w.Write([]byte(result))
+		default:
+			http.Error(w, "unexpected "+r.URL.Path, http.StatusTeapot)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &polls, &paths
+}
+
+func TestClient_Convert_AsyncSubmitsPollsAndFetchesTheResult(t *testing.T) {
+	srv, polls, paths := asyncStub(t, []string{"pending", "started", "success"},
+		`{"document":{"md_content":"# Async"},"status":"success","confidence":{"mean_grade":"good"}}`)
+	c := NewClient(srv.URL, 10*time.Second)
+	c.Async = true
+	c.PollInterval = time.Millisecond
+
+	res, err := c.Convert(context.Background(), "x.pdf", strings.NewReader("x"))
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if res.Markdown != "# Async" || res.Confidence == nil || res.Confidence.MeanGrade != "good" {
+		t.Errorf("result not taken from /v1/result: %+v", res)
+	}
+	if *polls != 3 {
+		t.Errorf("polled %d times, want 3 (pending, started, success)", *polls)
+	}
+	for _, p := range *paths {
+		if p == "POST /v1/convert/file" {
+			t.Errorf("sync endpoint must not be called in async mode: %v", *paths)
+		}
+	}
+}
+
+func TestClient_Convert_AsyncFailureStatusIsAnError(t *testing.T) {
+	srv, _, paths := asyncStub(t, []string{"started", "failure"}, `{}`)
+	c := NewClient(srv.URL, 10*time.Second)
+	c.Async = true
+	c.PollInterval = time.Millisecond
+
+	_, err := c.Convert(context.Background(), "x.pdf", strings.NewReader("x"))
+	if err == nil || !strings.Contains(err.Error(), "pipeline exploded") {
+		t.Fatalf("expected the sidecar's error message, got %v", err)
+	}
+	for _, p := range *paths {
+		if strings.HasPrefix(p, "GET /v1/result/") {
+			t.Errorf("result must not be fetched after a failure: %v", *paths)
+		}
+	}
+}
+
+func TestClient_Convert_AsyncFallsBackToSyncOnOlderSidecar(t *testing.T) {
+	// A sidecar without the async endpoints answers 404 to the submit; the
+	// conversion must still go through, over the sync endpoint.
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		if strings.HasSuffix(r.URL.Path, "/async") {
+			http.Error(w, `{"detail":"Not Found"}`, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"document":{"md_content":"# Sync"}}`))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, 10*time.Second)
+	c.Async = true
+
+	res, err := c.Convert(context.Background(), "x.pdf", strings.NewReader("x"))
+	if err != nil || res.Markdown != "# Sync" {
+		t.Fatalf("expected sync fallback result, got %+v / %v", res, err)
+	}
+	if len(paths) != 2 || paths[1] != "POST /v1/convert/file" {
+		t.Errorf("expected async then sync, got %v", paths)
+	}
+}
+
+func TestClient_Convert_AsyncPollingHonoursContextCancel(t *testing.T) {
+	srv, _, _ := asyncStub(t, []string{"started"}, `{}`)
+	c := NewClient(srv.URL, 10*time.Second)
+	c.Async = true
+	c.PollInterval = 20 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := c.Convert(ctx, "x.pdf", strings.NewReader("x"))
+	if err == nil || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("expected a deadline error, got %v", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("polling did not stop promptly on cancel")
+	}
+}
+
+func TestClient_Convert_AsyncSubmitErrorIsReported(t *testing.T) {
+	// Anything but a task or a 404 on submit is a real error (422 = a field
+	// the sidecar does not know), never a silent sync retry.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		http.Error(w, `{"detail":"unknown field"}`, http.StatusUnprocessableEntity)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, 10*time.Second)
+	c.Async = true
+	_, err := c.Convert(context.Background(), "x.pdf", strings.NewReader("x"))
+	if err == nil || !strings.Contains(err.Error(), "422") {
+		t.Fatalf("expected a 422 error, got %v", err)
+	}
+}

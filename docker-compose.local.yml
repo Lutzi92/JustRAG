@@ -9,12 +9,16 @@
 #   docling_base_url = http://docling:5001        # in-compose service hostname
 #   docling_picture_description_enabled = true     # optional: gemma-4 image captioning
 #   docling_picture_area_threshold      = 0.05
-#   docling_table_mode                  = accurate
+#   docling_picture_description_prompt  = …        # optional; default asks for the
+#                                                  # document's language + all numbers
 # Captioning is performed by the docling sidecar calling your model API, but the
 # endpoint + API key + vision model (describe_image_model) are injected by the Go
-# backend from the admin AI provider config — nothing to set on the sidecar. Make
-# sure that model URL is reachable from the docling container (extra_hosts below
-# covers a gemma-4 running on the host).
+# backend from the admin AI provider config — nothing model-related to set on the
+# sidecar. What the sidecar DOES need is DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true
+# (set below): without it docling refuses to build the captioning pipeline and
+# every conversion fails over to the built-in parsers; the Go worker probes for
+# this at startup and logs an error. Make sure the model URL is reachable from
+# the docling container (extra_hosts below covers a gemma-4 running on the host).
 
 services:
   # One-shot: runs goose migrations, vector table setup, and admin seed.
@@ -214,7 +218,12 @@ services:
     # "starting" (health) until that finishes. The Go services don't block on
     # it (they fall back to built-in parsers when Docling isn't reachable), so
     # the rest of the stack comes up independently.
-    image: quay.io/docling-project/docling-serve:latest
+    #
+    # Pinned: the picture_description_api field the Go client sends is deprecated
+    # upstream (since 1.21) and a silent removal lands as "every PDF falls back to
+    # pdftotext". Bump deliberately, then re-run the live integration tests
+    # (docs/observability/docling.md).
+    image: quay.io/docling-project/docling-serve:v1.32.0
     restart: unless-stopped
     # Published only so you can curl http://localhost:5001/health locally; the
     # app reaches Docling over the compose network at http://docling:5001.
@@ -229,6 +238,13 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       DOCLING_SERVE_ENABLE_UI: "false"
+      # Required for image captioning (see header comment). Harmless when off.
+      DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "true"
+      # The Go worker converts through the task endpoints (submit → poll →
+      # result), which have no wall-clock cap. This only matters for callers of
+      # the synchronous /v1/convert/file (curl, the integration tests' sync
+      # fallback), which 504s after this many seconds (upstream default 120).
+      DOCLING_SERVE_MAX_SYNC_WAIT: "600"
     healthcheck:
       # Probe with Python stdlib rather than curl — the docling-serve image is
       # Python-based and may not ship curl, which would falsely report unhealthy.

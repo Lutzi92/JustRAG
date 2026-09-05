@@ -74,13 +74,10 @@ spec:
             # is off.
             - name: DOCLING_SERVE_ENABLE_REMOTE_SERVICES
               value: "true"
-            # Lets the Go backend send picture_description_custom_config (the
-            # non-deprecated successor of picture_description_api) per request.
-            - name: DOCLING_SERVE_ALLOW_CUSTOM_PICTURE_DESCRIPTION_CONFIG
-              value: "true"
-            # The sync convert endpoint answers 504 after this many seconds
-            # regardless of the client's timeout (default 120). Keep it >= the
-            # worker's DOCLING_TIMEOUT_SECONDS (default 300).
+            # The Go worker converts through the task endpoints (submit →
+            # poll → result), which have no wall-clock cap. This only matters
+            # for callers of the synchronous /v1/convert/file, which 504s after
+            # this many seconds (upstream default 120).
             - name: DOCLING_SERVE_MAX_SYNC_WAIT
               value: "600"
             # Two conversion threads per pod (the default) × replicas is the

@@ -12,6 +12,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -67,6 +68,17 @@ var pictureClassificationDeny = []string{
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	timeout    time.Duration
+	// Async routes conversions through the task endpoints (submit → poll →
+	// result) instead of the synchronous /v1/convert/file. The sync endpoint
+	// gives up after the sidecar's DOCLING_SERVE_MAX_SYNC_WAIT (upstream
+	// default 120 s) with a 504 no matter how long the client would wait; the
+	// task endpoints have no such cap. A sidecar without them (404 on submit)
+	// is served synchronously.
+	Async bool
+	// PollInterval is the wait between status polls in Async mode
+	// (default 2 s).
+	PollInterval time.Duration
 	// Options is applied to every Convert call when OptionsFunc is nil.
 	// Zero value = legacy request.
 	Options ConvertOptions
@@ -106,6 +118,7 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 	return &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{Timeout: timeout},
+		timeout:    timeout,
 	}
 }
 
@@ -201,28 +214,44 @@ type ConfidenceScores struct {
 // and returns the parsed result. fileName drives Docling's format auto-detection.
 func (c *Client) Convert(ctx context.Context, fileName string, r io.Reader) (*ConvertResult, error) {
 	opts := c.options(ctx)
+	form, contentType, err := buildConvertForm(opts, fileName, r)
+	if err != nil {
+		return nil, err
+	}
+	if c.Async {
+		res, err := c.convertAsync(ctx, form, contentType)
+		if !errors.Is(err, errAsyncUnavailable) {
+			return res, err
+		}
+	}
+	return c.convertSync(ctx, form, contentType)
+}
+
+// buildConvertForm renders the multipart request body shared by the sync
+// and async convert endpoints.
+func buildConvertForm(opts ConvertOptions, fileName string, r io.Reader) ([]byte, string, error) {
 	body := &bytes.Buffer{}
 	mw := multipart.NewWriter(body)
 	fw, err := mw.CreateFormFile("files", fileName)
 	if err != nil {
-		return nil, fmt.Errorf("docling: create form file: %w", err)
+		return nil, "", fmt.Errorf("docling: create form file: %w", err)
 	}
 	if _, err := io.Copy(fw, r); err != nil {
-		return nil, fmt.Errorf("docling: copy file body: %w", err)
+		return nil, "", fmt.Errorf("docling: copy file body: %w", err)
 	}
 	// md carries the content we chunk; json carries the DoclingDocument whose
 	// prov[].page_no is the only place docling-serve reports page numbers.
 	// to_formats is a repeated field, not a comma list.
 	for _, f := range []string{"md", "json"} {
 		if err := mw.WriteField("to_formats", f); err != nil {
-			return nil, fmt.Errorf("docling: write form field to_formats: %w", err)
+			return nil, "", fmt.Errorf("docling: write form field to_formats: %w", err)
 		}
 	}
 	// Repeated fields: one multipart value per language.
 	for _, lang := range opts.OCRLanguages {
 		if lang = strings.TrimSpace(lang); lang != "" {
 			if err := mw.WriteField("ocr_lang", lang); err != nil {
-				return nil, fmt.Errorf("docling: write form field ocr_lang: %w", err)
+				return nil, "", fmt.Errorf("docling: write form field ocr_lang: %w", err)
 			}
 		}
 	}
@@ -282,31 +311,165 @@ func (c *Client) Convert(ctx context.Context, fileName string, r io.Reader) (*Co
 	}
 	for k, v := range fields {
 		if err := mw.WriteField(k, v); err != nil {
-			return nil, fmt.Errorf("docling: write form field %s: %w", k, err)
+			return nil, "", fmt.Errorf("docling: write form field %s: %w", k, err)
 		}
 	}
 	if err := mw.Close(); err != nil {
-		return nil, fmt.Errorf("docling: close multipart: %w", err)
+		return nil, "", fmt.Errorf("docling: close multipart: %w", err)
 	}
 
-	url := c.baseURL + "/v1/convert/file"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	return body.Bytes(), mw.FormDataContentType(), nil
+}
+
+// convertSync posts to /v1/convert/file and decodes the response.
+func (c *Client) convertSync(ctx context.Context, form []byte, contentType string) (*ConvertResult, error) {
+	resp, err := c.post(ctx, "/v1/convert/file", form, contentType)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, statusError(resp)
+	}
+	return parseDoclingResponse(resp.Body)
+}
+
+// errAsyncUnavailable signals that the sidecar has no task endpoints.
+var errAsyncUnavailable = errors.New("docling: async endpoints unavailable")
+
+// convertAsync submits the document as a task, polls its status and fetches
+// the result. The whole exchange is bounded by the client timeout, the same
+// budget the sync path had per request. A 404 on submit means an older
+// sidecar; anything else that is not a task is an error, never a silent
+// sync retry — a 422 there is a field the sidecar does not know.
+func (c *Client) convertAsync(ctx context.Context, form []byte, contentType string) (*ConvertResult, error) {
+	if c.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+	}
+	resp, err := c.post(ctx, "/v1/convert/file/async", form, contentType)
+	if err != nil {
+		return nil, err
+	}
+	var task taskStatus
+	func() {
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound {
+			err = errAsyncUnavailable
+			return
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			err = statusError(resp)
+			return
+		}
+		err = json.NewDecoder(resp.Body).Decode(&task)
+	}()
+	if err != nil {
+		if errors.Is(err, errAsyncUnavailable) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("docling: submit task: %w", err)
+	}
+	if task.TaskID == "" {
+		return nil, fmt.Errorf("docling: submit task: response carried no task_id")
+	}
+
+	interval := c.PollInterval
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	for {
+		st, err := c.pollTask(ctx, task.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		switch st.TaskStatus {
+		case "success":
+			return c.fetchResult(ctx, task.TaskID)
+		case "failure":
+			msg := st.ErrorMessage
+			if msg == "" && st.Failure != nil {
+				msg = st.Failure.Message
+			}
+			if msg == "" {
+				msg = "task failed"
+			}
+			return nil, fmt.Errorf("docling: task %s failed: %s", task.TaskID, msg)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("docling: waiting for task %s: %w", task.TaskID, ctx.Err())
+		case <-time.After(interval):
+		}
+	}
+}
+
+// taskStatus is the subset of docling-serve's TaskStatusResponse we read.
+type taskStatus struct {
+	TaskID       string `json:"task_id"`
+	TaskStatus   string `json:"task_status"` // pending | started | success | failure
+	ErrorMessage string `json:"error_message"`
+	Failure      *struct {
+		Message string `json:"message"`
+	} `json:"failure"`
+}
+
+func (c *Client) pollTask(ctx context.Context, id string) (*taskStatus, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/status/poll/"+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("docling: build poll request: %w", err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("docling: poll task %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, statusError(resp)
+	}
+	var st taskStatus
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		return nil, fmt.Errorf("docling: decode task status: %w", err)
+	}
+	return &st, nil
+}
+
+func (c *Client) fetchResult(ctx context.Context, id string) (*ConvertResult, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/result/"+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("docling: build result request: %w", err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("docling: fetch result %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, statusError(resp)
+	}
+	return parseDoclingResponse(resp.Body)
+}
+
+// post sends a multipart body to path.
+func (c *Client) post(ctx context.Context, path string, form []byte, contentType string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(form))
 	if err != nil {
 		return nil, fmt.Errorf("docling: build request: %w", err)
 	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-
+	req.Header.Set("Content-Type", contentType)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("docling: do request: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("docling: status %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
-	}
+	return resp, nil
+}
 
-	return parseDoclingResponse(resp.Body)
+// statusError renders a non-2xx response as an error carrying the status
+// and a snippet of the body.
+func statusError(resp *http.Response) error {
+	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	return fmt.Errorf("docling: status %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 }
 
 // doclingJSONDoc is the subset of the DoclingDocument (json_content) we read:

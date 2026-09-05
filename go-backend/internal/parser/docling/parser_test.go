@@ -369,3 +369,37 @@ func TestDoclingPDFParser_Parse_LogsConfidence(t *testing.T) {
 		}
 	}
 }
+
+func TestDoclingPDFParser_Parse_LogsConfidenceAsNumbersUnderTextHandler(t *testing.T) {
+	// The production logger is slog's text handler; a *float64 attr prints
+	// as a pointer address there ("parse_score=0x33edec524460"), which is
+	// what shipped the first time. Scores must be logged as values, and an
+	// absent score as nil.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"document":{"md_content":"# T"},
+		  "confidence":{"parse_score":1.0,"layout_score":0.41,"table_score":null,"mean_grade":"good","low_grade":"fair"}}`))
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	logctx.SetBase(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { logctx.SetBase(nil) })
+
+	p := &DoclingPDFParser{Client: NewClient(srv.URL, 10*time.Second)}
+	if _, err := p.Parse(context.Background(), parser.ParseContext{
+		FilePath: stubPDF(t), FileName: "scan.pdf", MimeType: "application/pdf",
+	}); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"layout_score=0.41", "parse_score=1", "table_score=<nil>"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log missing %s; got %s", want, out)
+		}
+	}
+	if strings.Contains(out, "0x") {
+		t.Errorf("a score was logged as a pointer: %s", out)
+	}
+}

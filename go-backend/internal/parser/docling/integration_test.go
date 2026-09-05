@@ -33,7 +33,9 @@ func TestIntegration_RealSidecar_RecoversPageNumbers(t *testing.T) {
 		t.Skip("set DOCLING_TEST_URL to run against a live docling-serve")
 	}
 
-	p := &DoclingPDFParser{Client: NewClient(baseURL, 180*time.Second)}
+	c := NewClient(baseURL, 180*time.Second)
+	c.Async = true // what the worker uses
+	p := &DoclingPDFParser{Client: c}
 	res, err := p.Parse(context.Background(), parser.ParseContext{
 		FilePath: "testdata/report10.pdf",
 		FileName: "report10.pdf",
@@ -88,7 +90,9 @@ func TestIntegration_RealSidecar_KeepsTables(t *testing.T) {
 		t.Skip("set DOCLING_TEST_URL to run against a live docling-serve")
 	}
 
-	p := &DoclingPDFParser{Client: NewClient(baseURL, 180*time.Second)}
+	c := NewClient(baseURL, 180*time.Second)
+	c.Async = true // what the worker uses
+	p := &DoclingPDFParser{Client: c}
 	res, err := p.Parse(context.Background(), parser.ParseContext{
 		FilePath: "testdata/table.pdf",
 		FileName: "table.pdf",
@@ -141,6 +145,7 @@ func TestIntegration_RealSidecar_KeepsFigureCaptions(t *testing.T) {
 	}
 
 	c := NewClient(baseURL, 300*time.Second)
+	c.Async = true // what the worker uses
 	vlmURL := os.Getenv("DOCLING_TEST_VLM_URL")
 	if vlmURL != "" {
 		c.Options = ConvertOptions{
@@ -211,6 +216,7 @@ func TestIntegration_RealSidecar_AcceptsTheDefaultRequest(t *testing.T) {
 		t.Skip("set DOCLING_TEST_URL to run against a live docling-serve")
 	}
 	c := NewClient(baseURL, 120*time.Second)
+	c.Async = true // what the worker uses
 	c.Options = ConvertOptions{
 		TableMode:              "accurate",
 		OCRLanguages:           []string{"de", "en"},
