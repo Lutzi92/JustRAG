@@ -31,7 +31,11 @@ func TestCompactSchemaRendersShadowsValuesAndFilters(t *testing.T) {
 	t.Parallel()
 	s := CompactSchema(twoTables(), nil, "", 12000)
 	for _, want := range []string{
-		`### tabular.sheet_aa_0_0 — "Gebäudeliste.xlsx" › Gebäudeliste (1 234 rows)`,
+		// The heading shows the EXACT executable relation reference: two
+		// quoted identifiers. Rendering it as `tabular.sheet_aa_0_0` made
+		// the SQL generator copy it into FROM "tabular.sheet_aa_0_0" — one
+		// identifier with an embedded dot, which sqlcheck rejects.
+		`### "tabular"."sheet_aa_0_0" — "Gebäudeliste.xlsx" › Gebäudeliste (1 234 rows)`,
 		`- gebaeude (text, id) "Gebäude": Gebäudekennung; e.g. 1440, 1441, 1442`,
 		`numeric shadow: baujahr_num`,
 		`- baujahr_num (numeric, shadow of baujahr)`,
@@ -48,6 +52,13 @@ func TestCompactSchemaRendersShadowsValuesAndFilters(t *testing.T) {
 	if !strings.Contains(s.Text, "01.1440.055_.10") {
 		t.Error("benign sample dropped")
 	}
+	// Mutation guard for the rendering fix: no heading may show the
+	// dot-inside-one-identifier form the generator used to copy.
+	if strings.Contains(s.Text, `"tabular.sheet_`) || strings.Contains(s.Text, "### tabular.") {
+		t.Errorf("schema text still names a table as one dotted identifier:\n%s", s.Text)
+	}
+	// …while the validator's contract — AllowedTables keyed "tabular.<name>"
+	// — is unchanged by the rendering.
 	if !s.AllowedTables["tabular.sheet_aa_0_0"] || !s.AllowedTables["tabular.sheet_bb_0_0"] || s.Pruned {
 		t.Errorf("allowed=%v pruned=%v", s.AllowedTables, s.Pruned)
 	}

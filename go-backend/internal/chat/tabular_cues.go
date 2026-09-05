@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/justrag/go-backend/internal/tabular/profile"
 )
@@ -25,7 +26,11 @@ import (
 // stored-value lookup against ingested spreadsheet cells.
 type TabularLiteral struct {
 	Text string
-	Kind string // "quoted" | "id" | "span" | "number"
+	// Kind is "quoted" | "id" | "span" | "word" | "number", in descending
+	// order of how deliberate the user was about it. Only "id" fires on its
+	// own (Fired below); "word" and "number" are the weak kinds and need an
+	// EXACT stored-value match to fire the router (anyHitFires).
+	Kind string
 }
 
 // TabularCues summarizes the deterministic signals DetectTabularCues found
@@ -65,6 +70,28 @@ var (
 			`größte|kleinste|höchste|niedrigste|maximal|minimal|pro|je|gruppiert|verteilung|` +
 			`how many|count|sum|total|average|mean|largest|smallest|highest|lowest|per|grouped|distribution`))
 
+	// tabularAggCompoundRe covers German CLOSED COMPOUNDS that
+	// tabularAggRe structurally cannot see: boundary() demands a
+	// non-letter on both sides, so "gesamt" inside "Gesamtbetrag" and
+	// "summe" inside "Jahressumme" never match, even though each word
+	// names an aggregation. This is why the acceptance run skipped
+	// sst-q17 ("Wie hoch ist der Gesamtbetrag … aller Gebäude?") with
+	// skipped_no_cue. Two deliberately narrow shapes:
+	//
+	//   - an aggregating MODIFIER as the FIRST element, followed by a head
+	//     noun of >= 3 letters: Gesamtbetrag, Gesamtfläche, Gesamtkosten,
+	//     Durchschnittsmiete. The >= 3 keeps the inflected adjective
+	//     ("gesamte", "gesamten" — "der gesamten Anlage") out.
+	//   - an aggregation HEAD NOUN as the LAST element: Jahressumme,
+	//     Gesamtanzahl, Flächendurchschnitt, Monatsmittelwert.
+	//
+	// Bare "…zahl" is deliberately NOT a head noun: it would make every
+	// "Postleitzahl"/"Hausnummer"-style pure lookup an aggregation.
+	tabularAggCompoundRe = regexp.MustCompile(`(?i)(^|[^\p{L}\p{N}])(` +
+		`(?:gesamt|durchschnitts)\p{L}{3,}|` +
+		`\p{L}{2,}(?:summe|anzahl|durchschnitt|mittelwert)` +
+		`)([^\p{L}\p{N}]|$)`)
+
 	tabularFilterRe = regexp.MustCompile(boundary(
 		`über|unter|mehr als|weniger als|zwischen|mindestens|höchstens|alle .{1,40}? mit|` +
 			`ab \d+|bis \d+|seit \d+|vor \d+|` +
@@ -84,6 +111,18 @@ var (
 	// tabularIDShapeRe matches uppercase-letter-prefixed identifier tokens
 	// like "4711-A" or "HRZ-0815". Deliberately case-sensitive.
 	tabularIDShapeRe = regexp.MustCompile(`^[A-Z]{1,4}-?\d{2,}[A-Za-z0-9._\-/]*$`)
+)
+
+const (
+	// tabularMinWordLiteralRunes is the shortest lone capitalised word
+	// taken as a "word" literal. Short capitalised tokens are mostly
+	// abbreviations and articles at a clause start, and every literal
+	// costs one stored-value lookup.
+	tabularMinWordLiteralRunes = 4
+	// tabularMaxWordLiterals bounds how many lone capitalised words one
+	// question contributes — German questions are full of capitalised
+	// nouns, and each one is a separate tabular_column_values query.
+	tabularMaxWordLiterals = 4
 )
 
 // tabularSpanStopWords are capitalised words that must not start a span
@@ -122,7 +161,7 @@ type candidate struct {
 // the order they first appear in the query.
 func DetectTabularCues(query string) TabularCues {
 	cues := TabularCues{
-		Aggregation: tabularAggRe.MatchString(query),
+		Aggregation: tabularAggRe.MatchString(query) || tabularAggCompoundRe.MatchString(query),
 		Filter:      tabularFilterRe.MatchString(query),
 	}
 
@@ -253,6 +292,7 @@ func tokenizeWithOffsets(query string) []tabularToken {
 // or on the stop-word list.
 func detectSpans(tokens []tabularToken, claimed []runeSpan) []candidate {
 	var out []candidate
+	words := 0
 	isCapWord := func(t tabularToken) (string, bool) {
 		trimmed := strings.Trim(t.text, `"'„“.,;:?!()`)
 		rs := []rune(trimmed)
@@ -314,9 +354,25 @@ func detectSpans(tokens []tabularToken, claimed []runeSpan) []candidate {
 			}
 		}
 		// A lone capitalised word (e.g. any German noun) is far too common
-		// to treat as an identifying span on its own — require either a
-		// second capitalised word or a trailing number to qualify.
+		// to treat as an identifying SPAN on its own — a span fires the
+		// router on any match quality, so it needs either a second
+		// capitalised word or a trailing number to qualify.
+		//
+		// It is still worth LOOKING UP, though, as the weaker "word" kind:
+		// "Wie groß ist die Fläche der Bibliothek?" names a row by its
+		// label, and before this the question produced no literal at all,
+		// so the stored-value gate had nothing to look up and the router
+		// skipped with skipped_no_cue (acceptance run: sst-q36, sst-q37).
+		// A "word" literal never fires TabularCues.Fired() by itself and
+		// only fires via anyHitFires on an EXACT stored-value match, so a
+		// noun that happens to be a cell value fires and an ordinary prose
+		// noun does not. Capped per query because each literal costs one
+		// tabular_column_values lookup.
 		if wordCount < 2 && !hasTrailingNumber {
+			if words < tabularMaxWordLiterals && utf8.RuneCountInString(word) >= tabularMinWordLiteralRunes {
+				out = append(out, candidate{span: tokens[i].span, lit: TabularLiteral{Text: word, Kind: "word"}})
+				words++
+			}
 			i++
 			continue
 		}

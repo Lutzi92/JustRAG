@@ -41,7 +41,8 @@ Regeln:
 - Antworte AUSSCHLIESSLICH mit JSON gemäß dem vorgegebenen Schema, kein Fließtext außerhalb des JSON.
 - Schreibe genau ein SELECT-Statement (CTEs mit WITH sind erlaubt); keine andere Statement-Art.
 - Frage NUR die im SCHEMA-Block gelisteten "tabular.*"-Tabellen ab, niemals andere Tabellen.
-- Setze jeden Bezeichner in doppelte Anführungszeichen, exakt so geschrieben wie im Schema gelistet (Spalten- und Tabellennamen können Leerzeichen, Groß-/Kleinschreibung oder Sonderzeichen enthalten).
+- Schreibe eine Tabellenreferenz IMMER als ZWEI getrennt gequotete Bezeichner: "tabular"."sheet_..." — niemals als einen einzigen Bezeichner mit Punkt darin ("tabular.sheet_..."), das ist keine gültige Relation. Die Überschrift jedes Tabellenblocks im SCHEMA zeigt bereits genau die zu schreibende Form; übernimm sie wortwörtlich.
+- Setze jeden Spaltenbezeichner in doppelte Anführungszeichen, exakt so geschrieben wie im Schema gelistet (Spalten- und Tabellennamen können Leerzeichen, Groß-/Kleinschreibung oder Sonderzeichen enthalten).
 - Text-typisierte ID-Spalten werden als Strings verglichen, z. B. "id_spalte" = '0002001919' — eine ID niemals in eine Zahl casten.
 - Wenn eine Text-Spalte eine "_num"-Schattenspalte hat, nutze die "_num"-Spalte für Arithmetik (SUM, AVG, Vergleiche, ORDER BY auf dem numerischen Wert) statt der Text-Spalte.
 - Wenn für eine Spalte in MATCHED VALUES ein gespeicherter Wert angegeben ist, verwende diesen Wert wortwörtlich mit "=" — nicht umformulieren.
@@ -62,7 +63,8 @@ Rules:
 - Output JSON ONLY, matching the schema you were given. No prose outside the JSON.
 - Write exactly one SELECT statement (CTEs with WITH are allowed); no other statement type.
 - Query ONLY the "tabular.*" tables listed in the SCHEMA block below — never any other table.
-- Quote every identifier with double quotes, spelled exactly as listed in the schema (column and table names may contain spaces, mixed case, or punctuation).
+- ALWAYS write a table reference as TWO separately quoted identifiers: "tabular"."sheet_..." — never as one identifier with a dot inside it ("tabular.sheet_..."), which is not a valid relation. Each table's SCHEMA heading already shows exactly the form to write; copy it verbatim.
+- Quote every column identifier with double quotes, spelled exactly as listed in the schema (column and table names may contain spaces, mixed case, or punctuation).
 - Text-typed ID columns are compared as strings, e.g. "id_col" = '0002001919' — never cast an ID to a number.
 - When a text column has a "_num" shadow column, use the "_num" column for arithmetic (SUM, AVG, comparisons, ORDER BY on the numeric value) instead of the text column.
 - When a stored value is given in MATCHED VALUES for a column, use that value verbatim with "=" — do not paraphrase or reformat it.

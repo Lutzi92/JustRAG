@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -801,8 +802,13 @@ func TestRouterNoCueAppliesRetrievalHints(t *testing.T) {
 			t.Fatalf("res = %+v, want fired with the simple arm forced", res)
 		}
 		// The lookup runs on the literal text, not on the quoted rewrite.
-		if len(cat.lookLits) != 1 || cat.lookLits[0] != "HRZ-0815" {
-			t.Fatalf("lookup literals = %v, want [HRZ-0815]", cat.lookLits)
+		// ("Objekt" rides along as a weak "word" literal; only the id is
+		// promoted into the search query.)
+		if !slices.Contains(cat.lookLits, "HRZ-0815") {
+			t.Fatalf("lookup literals = %v, want HRZ-0815 among them", cat.lookLits)
+		}
+		if slices.Contains(cat.lookLits, `"HRZ-0815"`) {
+			t.Fatalf("lookup must use the raw literal, not the quoted rewrite: %v", cat.lookLits)
 		}
 	})
 
@@ -1116,4 +1122,117 @@ func TestRouterRowCountResetsBetweenRounds(t *testing.T) {
 	if res.Trace.RowCount != -1 {
 		t.Fatalf("RowCount = %d, want -1 — the failing round has no row count of its own", res.Trace.RowCount)
 	}
+}
+
+// TestRouterNormalisesDottedRelation is the Phase-4 acceptance fix at the
+// router seam: the generator writes the schema heading as ONE quoted
+// identifier (FROM "tabular.sheet_…"), which sqlcheck rejects as a relation
+// outside the tabular schema — 15 of 21 fired questions in the live run,
+// each burning all 3 repairs without recovering. The router normalises the
+// proposal before validating it, so the very first round succeeds, and the
+// NORMALISED statement is what is executed, traced and emitted.
+//
+// Mutation guard: removing the sqlcheck.NormalizeTabularRelations call
+// makes this red with outcome validator_rejected and 3 repairs.
+func TestRouterNormalisesDottedRelation(t *testing.T) {
+	const table = "sheet_d864f30085aa494f9aed70cdd4c6fce6_0_0"
+	entry := testTabularEntry()
+	entry.TableName = table
+
+	cat := &fakeCat{has: true, entries: []tabular.CatalogEntry{entry}}
+	gen := &fakeGen{steps: []genStep{
+		{prop: sqlProp(`SELECT "liegenschaft" FROM "tabular.` + table + `" WHERE "baujahr" = 1970 LIMIT 5`)},
+	}}
+	ex := &fakeExec{results: []execStep{{res: &sqlexec.Result{
+		Columns: []string{"liegenschaft"}, Rows: []map[string]any{{"liegenschaft": "Haus A"}}, RowCount: 1,
+	}}}}
+	var evs []map[string]any
+	r := newTestRouter(cat, ex, gen.fn, testTabularCfg(), nil)
+
+	res := r.Run(context.Background(), TabularRouterInput{
+		KbID: "kb1", Query: "Wie viele Gebäude von 1970 gibt es?", Language: "de",
+		Emit: collectEvents(&evs),
+	})
+
+	if res.Trace.Outcome != "fired_ok" || res.Trace.Repairs != 0 {
+		t.Fatalf("trace = %+v, want fired_ok with 0 repairs", res.Trace)
+	}
+	want := `FROM "tabular"."` + table + `"`
+	if !strings.Contains(res.Trace.SQL, want) {
+		t.Errorf("trace SQL must be the normalised statement (%s):\n%s", want, res.Trace.SQL)
+	}
+	if strings.Contains(res.Trace.SQL, `"tabular.`+table) {
+		t.Errorf("trace SQL still carries the dotted single identifier:\n%s", res.Trace.SQL)
+	}
+	if len(ex.calls) != 1 || !strings.Contains(ex.calls[0], want) {
+		t.Errorf("executor got %v, want the normalised statement", ex.calls)
+	}
+	for _, e := range evs {
+		if e["type"] == "tabular_router_sql" {
+			if s, _ := e["sql"].(string); !strings.Contains(s, want) {
+				t.Errorf("emitted sql must be the normalised statement, got %q", s)
+			}
+		}
+	}
+}
+
+// TestRouterWordLiteralNeedsExactMatch covers the sst-q36/q37 class: a row
+// named by a lone capitalised noun ("die Fläche der Bibliothek"). No
+// aggregation, filter or id cue fires on that text, so before the "word"
+// literal existed the question produced no literal at all, the stored-value
+// lookup had nothing to look up, and the router skipped with
+// skipped_no_cue. The word must reach the lookup — and, being weak
+// evidence, must fire only on an EXACT stored-value match.
+func TestRouterWordLiteralNeedsExactMatch(t *testing.T) {
+	const query = "Wie groß ist die Fläche der Bibliothek laut decimal_comma.csv?"
+	if DetectTabularCues(query).Fired() {
+		t.Fatalf("precondition: %q must not fire on cues alone", query)
+	}
+
+	hit := func(match string) tabular.ValueHit {
+		return tabular.ValueHit{
+			Literal: "Bibliothek", TableName: "gebaeude", SheetName: "Gebäudeliste",
+			FileName: "decimal_comma.csv", ColumnName: "liegenschaft",
+			Value: "Bibliothek", RowCount: 1, Match: match,
+		}
+	}
+
+	t.Run("the noun reaches the value lookup", func(t *testing.T) {
+		cat := &fakeCat{has: true, entries: []tabular.CatalogEntry{testTabularEntry()}}
+		r := newTestRouter(cat, &fakeExec{}, (&fakeGen{}).fn, testTabularCfg(), nil)
+		r.Run(context.Background(), TabularRouterInput{KbID: "kb1", Query: query, Language: "de"})
+		if !slices.Contains(cat.lookLits, "Bibliothek") {
+			t.Fatalf("looked-up literals = %v, want Bibliothek among them", cat.lookLits)
+		}
+	})
+
+	t.Run("substring match is too weak", func(t *testing.T) {
+		cat := &fakeCat{has: true, entries: []tabular.CatalogEntry{testTabularEntry()}, hits: []tabular.ValueHit{hit("substring")}}
+		gen := &fakeGen{}
+		r := newTestRouter(cat, &fakeExec{}, gen.fn, testTabularCfg(), nil)
+
+		res := r.Run(context.Background(), TabularRouterInput{KbID: "kb1", Query: query, Language: "de"})
+
+		if res.Trace.Outcome != "skipped_no_cue" {
+			t.Fatalf("outcome = %q, want skipped_no_cue", res.Trace.Outcome)
+		}
+		if len(gen.reqs) != 0 {
+			t.Fatalf("gen must not be called, got %d calls", len(gen.reqs))
+		}
+	})
+
+	t.Run("exact match fires", func(t *testing.T) {
+		cat := &fakeCat{has: true, entries: []tabular.CatalogEntry{testTabularEntry()}, hits: []tabular.ValueHit{hit("exact")}}
+		gen := &fakeGen{steps: []genStep{{prop: sqlProp(`SELECT "flaeche" FROM tabular.gebaeude LIMIT 5`)}}}
+		ex := &fakeExec{results: []execStep{{res: &sqlexec.Result{
+			Columns: []string{"flaeche"}, Rows: []map[string]any{{"flaeche": "1.234,75"}}, RowCount: 1,
+		}}}}
+		r := newTestRouter(cat, ex, gen.fn, testTabularCfg(), nil)
+
+		res := r.Run(context.Background(), TabularRouterInput{KbID: "kb1", Query: query, Language: "de"})
+
+		if !res.Fired || res.Trace.Outcome != "fired_ok" {
+			t.Fatalf("trace = %+v, want fired_ok", res.Trace)
+		}
+	})
 }

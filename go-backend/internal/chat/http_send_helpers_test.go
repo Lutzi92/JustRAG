@@ -259,7 +259,9 @@ func TestMaybeTabularGuidance_RespectsGuidanceMaxTokensOverride(t *testing.T) {
 	}}
 	catDefault := &fakeCatalogChecker{has: true, entries: entries}
 	gDefault := maybeTabularGuidance(ctx, defReader, catDefault, "kb", "en")
-	if !strings.Contains(gDefault, "tabular.keep") || !strings.Contains(gDefault, "tabular.dropit") {
+	// The heading form is `"tabular"."<name>"` (the exact reference the SQL
+	// generator must write); only the table NAME is asserted here.
+	if !strings.Contains(gDefault, `"keep"`) || !strings.Contains(gDefault, `"dropit"`) {
 		t.Fatalf("default 6000-token budget should fit both tables, got %q", gDefault)
 	}
 
@@ -269,10 +271,10 @@ func TestMaybeTabularGuidance_RespectsGuidanceMaxTokensOverride(t *testing.T) {
 	}}
 	catTiny := &fakeCatalogChecker{has: true, entries: entries}
 	gTiny := maybeTabularGuidance(ctx, tinyReader, catTiny, "kb", "en")
-	if !strings.Contains(gTiny, "tabular.keep") {
+	if !strings.Contains(gTiny, `"keep"`) {
 		t.Fatalf("the higher-ranked table must still fit at a 1000-token budget, got %q", gTiny)
 	}
-	if strings.Contains(gTiny, "tabular.dropit") {
+	if strings.Contains(gTiny, `"dropit"`) {
 		t.Fatalf("a 1000-token budget must prune the 200-column table, got %q", gTiny)
 	}
 }

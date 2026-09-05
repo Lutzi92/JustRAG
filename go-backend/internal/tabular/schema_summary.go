@@ -141,6 +141,21 @@ func renderColumnLine(col ColumnSpec, stat *ColumnStat) string {
 	return head.String()
 }
 
+// renderTableRef renders a table name the way the SQL generator must write
+// it: TWO quoted identifiers, schema and object. The heading used to read
+// `### tabular.<name>`, and the generator copied that verbatim into
+// `FROM "tabular.<name>"` — one quoted identifier with an embedded dot,
+// i.e. a relation that does not exist and that sqlcheck rejects (Phase 4
+// acceptance run: 15 of 21 fired questions, none recovered by repair).
+// Showing the exact executable form is the primary fix; the prompt rule and
+// sqlcheck.NormalizeTabularRelations back it up.
+//
+// This is the RENDERED text only — SchemaSummary.AllowedTables keys stay
+// `tabular.<name>`, which is the validator's contract.
+func renderTableRef(tableName string) string {
+	return `"tabular"."` + tableName + `"`
+}
+
 // renderTableBlock renders one table's full schema block: heading + one
 // line per column, in catalog column order.
 func renderTableBlock(e CatalogEntry) string {
@@ -154,7 +169,7 @@ func renderTableBlock(e CatalogEntry) string {
 	sheetName := filterCatalogString(e.SheetName)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "### tabular.%s — %q › %s (%s rows)", e.TableName, fileName, sheetName, formatRowCount(e.RowCount))
+	fmt.Fprintf(&b, "### %s — %q › %s (%s rows)", renderTableRef(e.TableName), fileName, sheetName, formatRowCount(e.RowCount))
 	for _, col := range e.Columns {
 		b.WriteString("\n")
 		b.WriteString(renderColumnLine(col, statsByName[col.Name]))

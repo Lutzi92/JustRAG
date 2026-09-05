@@ -127,6 +127,42 @@ func stripLiterals(q string) (stripped string, foundDollarQuote, terminated bool
 	r := []rune(q)
 	out := make([]rune, len(r))
 	copy(out, r)
+
+	var spans []literalSpan
+	spans, foundDollarQuote, terminated = scanLiteralSpans(r, false)
+	for _, sp := range spans {
+		for k := sp.start; k < sp.end && k < len(out); k++ {
+			out[k] = ' '
+		}
+	}
+	return string(out), foundDollarQuote, terminated
+}
+
+// literalSpan is one lexical span scanLiteralSpans recognized, as a
+// half-open [start, end) range of rune offsets covering the WHOLE span
+// including its opening and closing delimiters. quote is the opening
+// delimiter rune: a single quote for every string form, a double quote for
+// a quoted identifier, '$' for a dollar-quoted string — and 0 for a comment.
+type literalSpan struct {
+	start, end int
+	quote      rune
+}
+
+// scanLiteralSpans is the single left-to-right tokenizer behind both
+// ReadOnlyShape's stripLiterals (which blanks the spans) and
+// NormalizeTabularRelations (which rewrites the quoted-identifier ones).
+// Splitting it out is what keeps those two from drifting apart: a
+// normaliser with its own, looser idea of where a literal starts and ends
+// would rewrite text inside a string the read-only gate treats as opaque.
+// The recognized forms and the boundary-direction safety property are
+// documented on stripLiterals above.
+//
+// recognizeComments additionally emits `-- …` line comments and `/* … */`
+// block comments (nested, as Postgres nests them) as spans with quote 0.
+// ReadOnlyShape passes false on purpose: it detects comments by looking for
+// "--" and "/*" in the STRIPPED text, so a scanner that consumed them here
+// would blank the very markers that check exists to find.
+func scanLiteralSpans(r []rune, recognizeComments bool) (spans []literalSpan, foundDollarQuote, terminated bool) {
 	terminated = true
 
 	isWord := func(i int) bool {
@@ -136,17 +172,37 @@ func stripLiterals(q string) (stripped string, foundDollarQuote, terminated bool
 		c := r[i]
 		return c == '_' || unicode.IsLetter(c) || unicode.IsDigit(c)
 	}
-	blank := func(from, to int) {
-		for k := from; k < to && k < len(out); k++ {
-			out[k] = ' '
-		}
-	}
 
 	i := 0
 	for i < len(r) {
 		c := r[i]
 
 		switch {
+		case recognizeComments && c == '-' && i+1 < len(r) && r[i+1] == '-':
+			j := i + 2
+			for j < len(r) && r[j] != '\n' {
+				j++
+			}
+			spans = append(spans, literalSpan{start: i, end: j})
+			i = j
+
+		case recognizeComments && c == '/' && i+1 < len(r) && r[i+1] == '*':
+			depth, j := 1, i+2
+			for j < len(r) && depth > 0 {
+				switch {
+				case j+1 < len(r) && r[j] == '/' && r[j+1] == '*':
+					depth++
+					j += 2
+				case j+1 < len(r) && r[j] == '*' && r[j+1] == '/':
+					depth--
+					j += 2
+				default:
+					j++
+				}
+			}
+			spans = append(spans, literalSpan{start: i, end: j})
+			i = j
+
 		case c == '$':
 			j := i + 1
 			for j < len(r) && (r[j] == '_' || unicode.IsLetter(r[j]) || unicode.IsDigit(r[j])) {
@@ -163,11 +219,8 @@ func stripLiterals(q string) (stripped string, foundDollarQuote, terminated bool
 				end, ok := indexDelim(r, j+1, delim)
 				if !ok {
 					terminated = false
-					blank(i, len(r))
-					i = len(r)
-					continue
 				}
-				blank(i, end)
+				spans = append(spans, literalSpan{start: i, end: end, quote: '$'})
 				i = end
 				continue
 			}
@@ -178,7 +231,7 @@ func stripLiterals(q string) (stripped string, foundDollarQuote, terminated bool
 			if !ok {
 				terminated = false
 			}
-			blank(i, end)
+			spans = append(spans, literalSpan{start: i, end: end, quote: '\''})
 			i = end
 
 		case (c == 'U' || c == 'u') && i+2 < len(r) && r[i+1] == '&' && r[i+2] == '\'' && !isWord(i-1):
@@ -189,7 +242,7 @@ func stripLiterals(q string) (stripped string, foundDollarQuote, terminated bool
 			if !ok {
 				terminated = false
 			}
-			blank(i, end)
+			spans = append(spans, literalSpan{start: i, end: end, quote: '\''})
 			i = end
 
 		case c == '\'':
@@ -197,7 +250,7 @@ func stripLiterals(q string) (stripped string, foundDollarQuote, terminated bool
 			if !ok {
 				terminated = false
 			}
-			blank(i, end)
+			spans = append(spans, literalSpan{start: i, end: end, quote: '\''})
 			i = end
 
 		case c == '"':
@@ -205,14 +258,14 @@ func stripLiterals(q string) (stripped string, foundDollarQuote, terminated bool
 			if !ok {
 				terminated = false
 			}
-			blank(i, end)
+			spans = append(spans, literalSpan{start: i, end: end, quote: '"'})
 			i = end
 
 		default:
 			i++
 		}
 	}
-	return string(out), foundDollarQuote, terminated
+	return spans, foundDollarQuote, terminated
 }
 
 // scanQuoted scans forward from start (the rune right after an opening

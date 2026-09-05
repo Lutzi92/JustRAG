@@ -303,7 +303,17 @@ func (r *TabularRouter) Run(ctx context.Context, in TabularRouterInput) TabularR
 			return res
 		}
 
-		proposed := *prop.SQL
+		// Defence in depth for the Phase-4 acceptance failure: the schema
+		// heading and both prompt blocks now spell out the two-identifier
+		// relation form, but a model that writes `FROM "tabular.sheet_…"`
+		// anyway is rewritten here rather than burning the whole repair
+		// budget on a rejection it never recovered from (15 of 21 fired
+		// questions, 3 repairs each, 0 recoveries). The rewrite is
+		// token-level and never touches string literals or comments; from
+		// here on `proposed` IS the statement — what is validated, what is
+		// executed, what the trace/event reports, and what a repair round
+		// is shown as the previous attempt.
+		proposed := sqlcheck.NormalizeTabularRelations(*prop.SQL)
 		res.Trace.SQL = proposed
 
 		var failure string
@@ -492,13 +502,19 @@ func dropInstructionHits(hits []tabular.ValueHit) []tabular.ValueHit {
 // bare number is weak evidence — "55" is a substring of thousands of cells
 // — so only an exact match counts for it; a quoted/span/id literal was
 // deliberate enough that any match quality counts.
+//
+// A lone capitalised word ("word") is weak in the same way and is held to
+// the same exact-match bar: "die Fläche der Bibliothek" fires only because
+// a cell literally reads "Bibliothek", whereas the capitalised nouns of an
+// ordinary prose question match nothing at all, or match only as
+// substrings of some longer cell.
 func anyHitFires(hits []tabular.ValueHit, lits []TabularLiteral) bool {
 	kinds := make(map[string]string, len(lits))
 	for _, l := range lits {
 		kinds[strings.ToLower(l.Text)] = l.Kind
 	}
 	for _, h := range hits {
-		if kinds[strings.ToLower(h.Literal)] == "number" && h.Match != "exact" {
+		if kind := kinds[strings.ToLower(h.Literal)]; (kind == "number" || kind == "word") && h.Match != "exact" {
 			continue
 		}
 		return true
