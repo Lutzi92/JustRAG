@@ -7,19 +7,14 @@ package files_test
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"os"
-	"reflect"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/files"
-	"github.com/justrag/go-backend/internal/store"
-	"github.com/justrag/go-backend/internal/tabular"
 )
 
 func openMainPool(t *testing.T) *pgxpool.Pool {
@@ -257,50 +252,6 @@ func TestListErrorFiles(t *testing.T) {
 	}
 	if got[0].StoragePath == nil || *got[0].StoragePath == "" || got[0].KbID != kbID {
 		t.Fatalf("FileInfo incomplete: %+v", got[0])
-	}
-}
-
-// TestGetFileParseReport pins its three-way contract: NULL parse_report
-// (a non-spreadsheet file, or one not yet materialised) reads back as
-// (nil, nil) — not an error — a populated report round-trips byte-for-byte,
-// and an unknown file id is store.ErrNotFound, distinct from the NULL case.
-func TestGetFileParseReport(t *testing.T) {
-	pool := openMainPool(t)
-	fstore := files.NewStore(pool)
-	ctx := context.Background()
-	_, fileID := seedErrorFile(t, pool, "completed")
-
-	report, err := fstore.GetFileParseReport(ctx, fileID)
-	if err != nil {
-		t.Fatalf("GetFileParseReport (NULL): %v", err)
-	}
-	if report != nil {
-		t.Fatalf("expected nil report for an un-set column, got %s", report)
-	}
-
-	want := `{"version":1,"materialised":true,"sheets":[{"name":"Sheet1"}]}`
-	if err := fstore.SetFileParseReport(ctx, fileID, []byte(want)); err != nil {
-		t.Fatalf("SetFileParseReport: %v", err)
-	}
-	report, err = fstore.GetFileParseReport(ctx, fileID)
-	if err != nil {
-		t.Fatalf("GetFileParseReport (set): %v", err)
-	}
-	// Compare semantically, not byte-for-byte: Postgres' jsonb re-serializes
-	// (key order, whitespace) rather than storing the literal input bytes.
-	var gotReport, wantReport tabular.ParseReport
-	if err := json.Unmarshal(report, &gotReport); err != nil {
-		t.Fatalf("decode got report: %v", err)
-	}
-	if err := json.Unmarshal([]byte(want), &wantReport); err != nil {
-		t.Fatalf("decode want report: %v", err)
-	}
-	if !reflect.DeepEqual(gotReport, wantReport) {
-		t.Fatalf("got %+v, want %+v", gotReport, wantReport)
-	}
-
-	if _, err := fstore.GetFileParseReport(ctx, "00000000-0000-0000-0000-000000000000"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("expected store.ErrNotFound for an unknown file id, got %v", err)
 	}
 }
 

@@ -2,17 +2,13 @@ package files
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/pgxutil"
-	"github.com/justrag/go-backend/internal/store"
 )
 
 // PGStore is a PostgreSQL-backed implementation of files.Store and
@@ -275,22 +271,6 @@ func (s *PGStore) SetFileParseReport(ctx context.Context, fileID string, report 
 		return fmt.Errorf("SetFileParseReport: %w", err)
 	}
 	return nil
-}
-
-// GetFileParseReport returns the per-file spreadsheet ingest report set by
-// SetFileParseReport, nil when the column is NULL (a non-spreadsheet file,
-// or a spreadsheet file not yet materialised), or store.ErrNotFound when no
-// file with that id exists.
-func (s *PGStore) GetFileParseReport(ctx context.Context, fileID string) (json.RawMessage, error) {
-	var report json.RawMessage
-	err := s.pool.QueryRow(ctx, `SELECT parse_report FROM files WHERE id = $1`, fileID).Scan(&report)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("GetFileParseReport: %w", store.ErrNotFound)
-		}
-		return nil, fmt.Errorf("GetFileParseReport: %w", err)
-	}
-	return report, nil
 }
 
 // UpdateFileStageDetail records a human-readable progress detail for the
