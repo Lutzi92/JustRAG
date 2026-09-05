@@ -146,6 +146,7 @@ var snapshotConfigKeys = []string{
 	// T2-1 long-context (System 2) routing.
 	"chat_longcontext_enabled",
 	"chat_longcontext_max_tokens",
+	"chat_longcontext_top_k",
 	// Plan-1 per-KB registry keys (cross-checked by snapshot_registry_test.go).
 	// These keys are per-KB-overridable via the registry in internal/siteconfig;
 	// without them here an eval run would silently not exercise a KB's override.
@@ -155,6 +156,10 @@ var snapshotConfigKeys = []string{
 	"top_n_lookup",
 	"top_n_enumeration",
 	"top_n_complex_reasoning",
+	"rerank_candidate_depth",
+	"rerank_candidate_depth_lookup",
+	"rerank_candidate_depth_enumeration",
+	"rerank_candidate_depth_complex_reasoning",
 	"step_back_enabled",
 	"chat_condense_keep_raw_enabled",
 	"adaptive_routing_enabled",

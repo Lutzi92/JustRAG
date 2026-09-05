@@ -243,6 +243,7 @@ var ignoredKeys = map[string]string{
 
 	"chat_longcontext_enabled":    "System-2 long-context routing for global-synthesis queries, unrepresented in the phase-0/1 node vocabulary",
 	"chat_longcontext_max_tokens": "tuning knob for the out-of-scope long-context routing subsystem",
+	"chat_longcontext_top_k":      "tuning knob for the out-of-scope long-context routing subsystem; belongs to the longcontext node, not per-KB",
 
 	"chat_community_search_enabled": "community-primed global search variant, unrepresented in the phase-0/1 node vocabulary",
 	"chat_community_search_top_k":   "tuning knob for the out-of-scope community-search variant",

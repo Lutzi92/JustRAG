@@ -922,6 +922,7 @@ func PrepareChatContext(
 	longContextRoute := ShouldRouteLongContext(ctx, siteConfig, params.QueryType, params.SearchQuery)
 	if longContextRoute {
 		opts.LongContextMode = true
+		opts.LongContextTopK = ChatLongContextTopK(ctx, siteConfig)
 		// Replace the token budget with the long-context budget.
 		// The two are kept separate (constant vs. site_config) so
 		// operators can raise the long-context window independently
@@ -931,12 +932,14 @@ func PrepareChatContext(
 		logctx.From(ctx).Info("rag.longcontext.fired",
 			"query", params.SearchQuery,
 			"max_tokens", maxTokens,
+			"top_k", opts.LongContextTopK,
 		)
 		if params.Emit != nil {
 			params.Emit(map[string]any{
 				"type":       "longcontext_route",
 				"query":      params.SearchQuery,
 				"max_tokens": maxTokens,
+				"top_k":      opts.LongContextTopK,
 			})
 		}
 	}

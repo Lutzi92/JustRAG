@@ -57,6 +57,23 @@ const (
 // without raising the budget just wastes the wider DB query.
 const LongContextTopK = 200
 
+// longContextLimit resolves the top-k cap Search() applies when
+// LongContextMode is on: override (from SearchOptions.LongContextTopK, set
+// by the chat layer from chat_longcontext_top_k) when positive, else the
+// LongContextTopK constant — and never below the caller's own limit (a
+// smaller override than what the caller already asked for is a no-op, not
+// a narrowing). Pure function, unit-tested directly.
+func longContextLimit(limit, override int) int {
+	wide := LongContextTopK
+	if override > 0 {
+		wide = override
+	}
+	if wide > limit {
+		return wide
+	}
+	return limit
+}
+
 type SearchOptions struct {
 	Enhance    string            // "rewrite", "expand", "spell", or ""
 	Filters    map[string]string // metadata filters (currently reserved for future use)
@@ -157,8 +174,9 @@ type SearchOptions struct {
 	NodeKindFilter string
 
 	// LongContextMode is the T2-1 System-2 routing signal. When
-	// true, Search() raises top-k to LongContextTopK (or the
-	// admin-configured `chat_longcontext_top_k`), skips MMR, skips
+	// true, Search() raises top-k to LongContextTopK (or
+	// SearchOptions.LongContextTopK when set from
+	// `chat_longcontext_top_k`), skips MMR, skips
 	// score-drop filtering, and skips parent-child swap — every
 	// operation whose purpose is to narrow the candidate pool. The
 	// resulting wide chunk pool is what enables a long-context
@@ -170,6 +188,11 @@ type SearchOptions struct {
 	// from normal-mode is NOT poisoned by long-context shape and
 	// vice-versa (the shape hash differs).
 	LongContextMode bool
+
+	// LongContextTopK overrides the LongContextTopK constant (200) when
+	// LongContextMode is on. 0 = the constant. Set by the chat layer from
+	// chat_longcontext_top_k.
+	LongContextTopK int
 
 	// ForceBM25SimpleArm forces the prototype-A "simple" keyword arm on for
 	// this request even when the deployment-wide `bm25_simple_arm_enabled`
@@ -643,30 +666,21 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	if limit <= 0 {
 		limit = EffectiveTopN(siteCfg, opts.QueryType)
 	}
-	// T2-1: Long-context mode raises the cap to LongContextTopK so
-	// the wide pool reaches the chat-layer's token-budget cut. The
-	// chat layer is responsible for the token budget (not the
-	// chunk-count cap) — this number just guarantees Search hands
-	// it enough chunks to fill that budget.
-	if opts.LongContextMode && LongContextTopK > limit {
-		limit = LongContextTopK
+	// T2-1: Long-context mode raises the cap to LongContextTopK (or the
+	// caller-supplied SearchOptions.LongContextTopK override, resolved by
+	// the chat layer from chat_longcontext_top_k) so the wide pool reaches
+	// the chat-layer's token-budget cut. The chat layer is responsible for
+	// the token budget (not the chunk-count cap) — this number just
+	// guarantees Search hands it enough chunks to fill that budget.
+	if opts.LongContextMode {
+		limit = longContextLimit(limit, opts.LongContextTopK)
 	}
 
 	// searchLimit fetches more candidates than the caller wants so that RRF,
 	// reranking, dedup, and filtering have enough material to work with.
-	// When a reranker is active, fetch more (4x, min 50) to give it better material.
-	var searchLimit int
-	if cfg.RerankModel != "" {
-		searchLimit = limit * 4
-		if searchLimit < 50 {
-			searchLimit = 50
-		}
-	} else {
-		searchLimit = limit * 2
-		if searchLimit < 30 {
-			searchLimit = 30
-		}
-	}
+	// Pre-rerank candidate depth: knob (rerank_candidate_depth*) or the
+	// legacy max(4×k,50) / max(2×k,30). See EffectiveRerankDepth.
+	searchLimit := EffectiveRerankDepth(siteCfg, opts.QueryType, limit, cfg.RerankModel != "")
 
 	// ------------------------------------------------------------------
 	// 0. Semantic query cache lookup (Feature 3 — see query_cache.go)
@@ -1272,7 +1286,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	stageLog = append(stageLog,
 		"final_docs", len(fused), "final_files", countFilesRanked(fused),
 		"final_with_prefix", prefixCount,
-		"limit", limit, "search_limit", searchLimit,
+		"limit", limit, "search_limit", searchLimit, "rerank_depth", searchLimit,
 		"mmr_lambda", siteCfg.MMRLambda, "rerank_used", useReranker,
 		"rerank_blend_alpha_global", siteCfg.RerankBlendAlpha,
 		"min_sim_threshold", siteCfg.MinSimilarityThreshold,

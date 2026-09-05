@@ -632,6 +632,14 @@ func ChatLongContextMaxTokens(ctx context.Context, reader SiteConfigReader) int 
 	return readInt(ctx, reader, "chat_longcontext_max_tokens", 100_000, 10_000, 500_000)
 }
 
+// ChatLongContextTopK is the chunk-pool size Search() returns on the
+// long-context route. Default 200 (the historical constant), range [50, 500].
+// Wave-3's map-reduce consumer tunes this against the token budget. Tunable
+// via "chat_longcontext_top_k".
+func ChatLongContextTopK(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_longcontext_top_k", 200, 50, 500)
+}
+
 // ChatCommunitySearchEnabled gates community-primed global search: inject KG
 // community summaries into the answer pool for global-synthesis queries. Default off.
 func ChatCommunitySearchEnabled(ctx context.Context, reader SiteConfigReader) bool {
