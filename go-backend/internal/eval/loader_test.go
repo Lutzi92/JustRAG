@@ -250,3 +250,69 @@ func TestParseGoldenSetContent_ExpectedKBIDsRejectsEmpty(t *testing.T) {
 		t.Errorf("expected empty-entry error, got %v", err)
 	}
 }
+
+// TestSpreadsheetGoldenSetParses is the Phase 4 spreadsheet-ingest release
+// acceptance golden set (spec .superpowers/sdd/2026-09-05-spreadsheet-ingest-phase4,
+// Task 9; see eval/golden/README.md "Spreadsheet set" section and
+// eval/golden/spreadsheets-de.acceptance.md for the run procedure and
+// thresholds). It loads the committed file — kb_id is still the
+// "REPLACE_WITH_FIXTURE_KB_ID" placeholder, a non-empty string, so
+// LoadGoldenSet's shape validation passes without a live KB — and asserts:
+//
+//  1. at least 38 questions (~40 target, a couple may be pruned later);
+//  2. every id is unique (LoadGoldenSet already enforces this, asserted
+//     again here as a property of *this* file rather than of the loader);
+//  3. every must_cite_file_names entry names a file that actually exists
+//     under internal/sheetsource/testdata — this is what catches a stale
+//     fixture reference (e.g. a rename) turning into a silent recall-0
+//     regression instead of a loud test failure;
+//  4. every query_type is one of the values the eval runner understands.
+//
+// Mutation check: renaming any must_cite_file_names entry so it no longer
+// matches a file under internal/sheetsource/testdata (e.g. typo-ing
+// "header_row14_metadata.xlsx" to "header_row14_metadata_typo.xlsx") turns
+// this test red — see the Task 9 report for the transcript.
+func TestSpreadsheetGoldenSetParses(t *testing.T) {
+	const goldenPath = "../../../eval/golden/spreadsheets-de.jsonl"
+	const testdataDir = "../sheetsource/testdata"
+
+	qs, err := LoadGoldenSet(goldenPath)
+	if err != nil {
+		t.Fatalf("LoadGoldenSet(%s): %v", goldenPath, err)
+	}
+	if len(qs) < 38 {
+		t.Fatalf("expected >= 38 questions, got %d", len(qs))
+	}
+
+	seenIDs := make(map[string]bool, len(qs))
+	allowedQueryTypes := map[string]bool{
+		"lookup":            true,
+		"enumeration":       true,
+		"global_synthesis":  true,
+		"complex_reasoning": true,
+	}
+	for _, question := range qs {
+		if seenIDs[question.ID] {
+			t.Errorf("duplicate id %q", question.ID)
+		}
+		seenIDs[question.ID] = true
+
+		if question.KbID == "" {
+			t.Errorf("question %s: empty kb_id", question.ID)
+		}
+
+		if len(question.MustCiteFileNames) == 0 {
+			t.Errorf("question %s: must_cite_file_names is empty (this golden set is authored by name, not UUID)", question.ID)
+		}
+		for _, name := range question.MustCiteFileNames {
+			path := filepath.Join(testdataDir, name)
+			if _, statErr := os.Stat(path); statErr != nil {
+				t.Errorf("question %s: must_cite_file_names %q does not exist under %s (%v)", question.ID, name, testdataDir, statErr)
+			}
+		}
+
+		if !allowedQueryTypes[question.QueryType] {
+			t.Errorf("question %s: query_type %q is not one of lookup|enumeration|global_synthesis|complex_reasoning", question.ID, question.QueryType)
+		}
+	}
+}

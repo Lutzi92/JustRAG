@@ -298,3 +298,126 @@ modification.
 **Phase 2 fuzzy free-text-cell search** adds a second eval need: a fixture containing a spreadsheet with a free-text column (long, high-cardinality) plus a set of expected `_rowid` values that fuzzy kb_search should surface for a given query. This also requires a dedicated exact-answer harness (not the retrieval golden), since the assertion is on matched row IDs and the downstream `table_query` aggregation result, not on retrieved chunk recall.
 
 **Phase 3 charts/pivots** need a dedicated rubric (e.g. "did the answer emit a valid `chart` block with the right series for the asked aggregation"), not the retrieval golden.
+
+## Spreadsheet set (Phase 4 release acceptance)
+
+`spreadsheets-de.jsonl` is the release-acceptance golden set for the
+2026-09-04 spreadsheet-ingest rework (spec
+`.superpowers/sdd/2026-09-05-spreadsheet-ingest-phase4`, §7.3). It is the
+retrieval-golden answer to the Tabular-Q&A follow-up above, scoped to what
+the *existing* harness can already score: 40 German questions over the
+`internal/sheetsource/testdata` fixtures (lookup by ID/name, aggregation and
+filter, fuzzy free text, cross-sheet/multi-region disambiguation, format
+quirks, and two deliberately unanswerable negatives), evaluated through
+`--production-context --judge` rather than through a dedicated
+`table_query`/SQL-exact-match harness. `notes` on every row spells out the
+exact expected value read straight off the fixture with
+`go run ./cmd/fixture-dump/main.go internal/sheetsource/testdata/<file>`
+(`go-backend/cmd/fixture-dump/main.go`, `//go:build ignore` — prints every
+sheet's rows via `sheetsource.Open` + `ReadSheet` so the golden set is
+authored from real parsed values, never guessed).
+
+`kb_id` in the committed file is the placeholder
+`REPLACE_WITH_FIXTURE_KB_ID` — it is not a real KB and must not be run
+as-is (see "Ground truth by name, not by UUID" above for why the set is
+authored with `must_cite_file_names`, not `must_cite_file_ids`, despite
+using a placeholder id rather than a real one: this is a fixture set meant
+to be re-seeded fresh in any environment, not tied to one KB's lifetime).
+
+### Seeding
+
+```bash
+JUSTRAG_URL=http://localhost:3000 \
+JUSTRAG_ADMIN_USER=admin \
+JUSTRAG_ADMIN_PASSWORD=<the ADMIN_PASSWORD the instance was started with> \
+  ./eval/fixtures/seed-spreadsheets.sh
+```
+
+Logs in as the admin user (whose password is whatever `ADMIN_PASSWORD` the
+target instance was started with — `go-backend/internal/migrate/seed.go`
+always seeds the superadmin as username `admin`), creates or reuses a KB
+named "Spreadsheet Fixtures", uploads every fixture under
+`go-backend/internal/sheetsource/testdata/*.{xlsx,xls,ods,csv}` (skipping
+any `*large_synthetic*` fixture and any file already present in the KB, so
+reruns are cheap), polls `GET /api/kb/{id}/files` every 5s until nothing is
+`pending`/`processing` (failing loudly, with the file name and
+`errorMessage`, on any `error`), prints the KB id, and writes
+`eval/golden/spreadsheets-de.local.jsonl` — the committed set with `kb_id`
+rewritten to the real KB id. That file is gitignored
+(`eval/golden/*.local.jsonl`); never edit `spreadsheets-de.jsonl` itself to
+point at a real KB.
+
+Ingestion needs no LLM call as long as `tabular_profile_llm_enabled` is off
+(the default) — the seeding step alone can run against an instance with no
+model configured, per Ruling R68 below.
+
+### Running the acceptance eval
+
+```bash
+cd go-backend
+go build ./cmd/eval
+./eval --golden ../eval/golden/spreadsheets-de.local.jsonl \
+  --production-context --judge \
+  --output ../eval/golden/spreadsheets-de.report.json
+jq '{fire: .tabular_router_fire_rate, sqlerr: .tabular_sql_error_rate, faith: .aggregate.mean_faithfulness, relevance: .aggregate.mean_answer_relevance}' \
+  ../eval/golden/spreadsheets-de.report.json
+```
+
+Note the binary is `./eval`, not `./cmd/eval/eval`: `go build ./cmd/eval`
+(a single import path, no `-o`) writes the executable named after the
+package into the **current** directory — `go-backend/eval` when run from
+`go-backend/` — not into `cmd/eval/`. If a stale binary is sitting directly
+under `cmd/eval/` from an earlier `-o`-qualified build, ignore or delete it;
+the freshly built `./eval` in `go-backend/` is the one the command above
+runs.
+
+### Thresholds (spec §7.3)
+
+| Metric | Threshold | Subset |
+|---|---|---|
+| Tabular router fire rate (`tabular_router_fire_rate`) | ≥ 0.90 | `lookup` + `complex_reasoning` questions (the eligible set per `TabularRouterRates`) |
+| Tabular SQL error rate (`tabular_sql_error_rate`) | ≤ 0.05 | of fired questions |
+| Judged correctness | ≥ 0.85 | `lookup` + `complex_reasoning` questions |
+
+**Judged-correctness proxy.** The harness has no single "correctness" field
+— `internal/eval/judge.go` exposes `faithfulness`, `answer_relevance`, and
+`context_precision` per question. Per the spec, "correctness" here is the
+mean of `faithfulness` and `answer_relevance` (not `context_precision`,
+which measures retrieval precision rather than answer quality), computed
+over the `lookup`/`complex_reasoning` subset. Each report entry under
+`.questions[]` nests the golden question under a `question` key (siblings:
+`retrieved`, `metrics`, `judge`, `agent`), so the query-type filter is
+`.question.query_type`, not `.query_type`:
+
+```bash
+# Primary: mean of the two per-metric means (matches how
+# internal/eval/metrics.go's Aggregate itself treats a missing judge
+# metric — excluded from that metric's mean, not zero-filled). Only exact
+# when every row in the report is lookup/complex_reasoning, as in
+# spreadsheets-de.jsonl; otherwise filter .questions[] by
+# .question.query_type first and recompute both means from the filtered
+# set instead of reading .aggregate.* directly.
+jq '(.aggregate.mean_faithfulness + .aggregate.mean_answer_relevance) / 2' \
+  eval/golden/spreadsheets-de.report.json
+
+# Stricter, per-question-paired variant: combine faithfulness and
+# answer_relevance within each question before averaging, treating a
+# missing metric (that question's own judge call failed, e.g. non-JSON
+# judge output) as a hard 0 instead of excluding it. Filters explicitly by
+# query_type so it works even when the set mixes in other types.
+jq '[.questions[] | select(.question.query_type == "lookup" or .question.query_type == "complex_reasoning") | select(.judge != null) | ((.judge.faithfulness // 0) + (.judge.answer_relevance // 0)) / 2] | add / length' \
+  eval/golden/spreadsheets-de.report.json
+```
+
+The two variants can diverge when some judge calls fail outright (see
+`eval/golden/spreadsheets-de.acceptance.md` for a worked example); both
+cleared the 0.85 bar in the Phase 4 acceptance run, so the choice only
+affected the margin, not the pass verdict, there.
+
+### If no instance is reachable (Ruling R68)
+
+If `curl -fsS $JUSTRAG_URL/health` fails, or an instance is up but no admin
+credential is available in the environment, the acceptance record documents
+"not run" with the specific blocking reason instead of fabricating numbers.
+That is not a failure of this task — see
+`eval/golden/spreadsheets-de.acceptance.md`.
