@@ -26,10 +26,10 @@ Mechanism reference: `docs/retrieval.md`'s "Spreadsheets" section (the router's 
 
 Two independent size gates apply to a spreadsheet upload, and they do not agree by default:
 
-1. **Transport-wide cap** — `http.MaxBytesReader` in `internal/files/http.go`, a hardcoded Go constant (`maxUploadSize = 500 << 20`, i.e. exactly 500 MiB). It applies to **every** upload of **every** file type and is not a `site_config` key — there is no admin-UI knob for it. Exceeding it answers 413 with `"File too large: the upload limit is 500.0 MB"` (or whatever the constant currently is).
+1. **Transport-wide cap** — `http.MaxBytesReader` in `internal/files/http.go`, a package `var` (not a `const` — `maxUploadSize = 500 << 20`, i.e. exactly 500 MiB; it is a `var` only so a test can shrink it via `SetMaxUploadSizeForTest`, never mutated in production). It applies to **every** upload of **every** file type and is not a `site_config` key — there is no admin-UI knob for it. Exceeding it answers 413 with `"File too large: the upload limit is 500 MB"` (`humanBytes` strips the trailing `.0`; the message tracks whatever `maxUploadSize` currently is).
 2. **Spreadsheet-specific cap** — `tabular_max_file_bytes` (default 524,288,000 bytes = 500 MiB exactly, range 1 MiB – ~2 GiB), checked only for a file the spreadsheet parser recognises (`.xlsx`/`.xls`/`.ods`/`.csv`/`.tsv` — never `.xlsm`). Exceeding it answers 413 with `"Spreadsheet too large (<size>): the limit is <limit> (tabular_max_file_bytes)"`.
 
-**Operator gotcha:** the two defaults happen to be numerically identical (500 MiB), which can read as "the spreadsheet knob controls the ceiling." It does not, above that point. Raising `tabular_max_file_bytes` past 500 MiB has **no effect** — the transport-wide `MaxBytesReader` still rejects the body at 500 MiB before the spreadsheet-specific check ever runs. To actually allow spreadsheets larger than 500 MiB, the `maxUploadSize` constant in `internal/files/http.go` must also be raised and the binary rebuilt/redeployed; there is no runtime override. Lowering `tabular_max_file_bytes` below 500 MiB works as expected (it is the tighter of the two gates in that direction).
+**Operator gotcha:** the two defaults happen to be numerically identical (500 MiB), which can read as "the spreadsheet knob controls the ceiling." It does not, above that point. Raising `tabular_max_file_bytes` past 500 MiB has **no effect** — the transport-wide `MaxBytesReader` still rejects the body at 500 MiB before the spreadsheet-specific check ever runs. To actually allow spreadsheets larger than 500 MiB, the `maxUploadSize` var in `internal/files/http.go` must also be raised and the binary rebuilt/redeployed; there is no runtime override. Lowering `tabular_max_file_bytes` below 500 MiB works as expected (it is the tighter of the two gates in that direction).
 
 A non-spreadsheet file is governed by the transport cap alone, plus the pre-existing per-KB file-count/total-size limits (unrelated to this feature).
 
@@ -62,6 +62,8 @@ Every `tabular_*`/`tabular_profile_*` value is baked into the materialised table
 - `POST /api/kb/{id}/tabular/rematerialize` (kbAdmin) — re-ingests **every** spreadsheet file in the KB via `TypeReEmbedding`.
 
 The three Phase 4 size/concurrency keys (`tabular_max_file_bytes`, `tabular_large_file_bytes`, `tabular_large_file_concurrency`) are the exception: none is `RequiresReingest` (confirmed in `internal/siteconfig/registry.go`) — they govern upload rejection and ingest scheduling, not values baked into a table, so changing them needs no rematerialise (though `tabular_large_file_concurrency` needs a worker restart per §1).
+
+All three read only from the global site_config reader — the upload adapter (`internal/app/routes.go`) and the processor (`internal/app/worker.go`) both wire the deployment-wide `chatStore`, never a per-KB one — so, exactly like the pre-existing `tabular_max_rows`/`tabular_embed_max_rows`, a value set through the per-KB settings editor takes effect deployment-wide, not just for that KB, even though the editor shows them per KB; `tabular_large_file_concurrency` is additionally snapshotted once into the `*processor.LargeFileGate` at worker startup, so a live edit needs the worker restart mentioned above before it applies at all.
 
 ---
 

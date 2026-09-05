@@ -299,3 +299,60 @@ func TestWriteHumanSummary_TabularFireRateWordingReflectsRule(t *testing.T) {
 		}
 	})
 }
+
+// TestWriteHumanSummary_TabularFireRateNilExplicitPrintsNA covers the case
+// the fire_rate wording test above does not: a golden set that DOES carry
+// Question.TabularExpected (so the explicit R75 rule is in effect) but has
+// zero questions with TabularExpected == true, so TabularRouterRates
+// returns a nil fireRate (0/0 is undefined, not 0.0). That nil is a
+// genuine, reportable fact about the golden set — "this run had nothing
+// the router was expected to fire on" — and must render as an explicit
+// "n/a (0 tabular_expected questions)" line, not silently vanish the way a
+// nil fire_rate under the legacy query_type rule still does (no tabular
+// signal at all in that case means there's nothing informative to say).
+//
+// Mutation: removing the `case explicitTabularEligibility:` branch in
+// report.go (reverting to only the `if rep.TabularRouterFireRate != nil`
+// check, with no outer `|| explicitTabularEligibility`) makes this go RED —
+// confirmed below.
+func TestWriteHumanSummary_TabularFireRateNilExplicitPrintsNA(t *testing.T) {
+	t.Run("explicit rule, 0 tabular_expected questions prints n/a", func(t *testing.T) {
+		rep := Report{
+			Questions: []QuestionReport{
+				{Question: Question{QueryType: "lookup", TabularExpected: boolPtrForTest(false)}},
+			},
+			// TabularRouterFireRate left nil: TabularRouterRates(reports)
+			// would return nil here too (eligible == 0 under R75, since the
+			// one question's flag is false) — set directly to isolate the
+			// report.go rendering logic from the rate computation.
+		}
+		var buf bytes.Buffer
+		if err := WriteHumanSummary(&buf, rep); err != nil {
+			t.Fatalf("WriteHumanSummary: %v", err)
+		}
+		out := buf.String()
+		if !strings.Contains(out, "Tabular router:") {
+			t.Fatalf("expected a Tabular router section to be printed, got:\n%s", out)
+		}
+		if !strings.Contains(out, "fire_rate      = n/a (0 tabular_expected questions)") {
+			t.Errorf("expected the n/a line, got:\n%s", out)
+		}
+	})
+
+	t.Run("legacy rule, nil fire_rate stays silent", func(t *testing.T) {
+		rep := Report{
+			Questions: []QuestionReport{
+				{Question: Question{QueryType: "enumeration"}}, // no TabularExpected anywhere -> legacy rule
+			},
+			// TabularRouterFireRate and TabularSQLErrorRate both nil.
+		}
+		var buf bytes.Buffer
+		if err := WriteHumanSummary(&buf, rep); err != nil {
+			t.Fatalf("WriteHumanSummary: %v", err)
+		}
+		out := buf.String()
+		if strings.Contains(out, "Tabular router:") {
+			t.Errorf("legacy-rule nil fire_rate must stay silent (no tabular signal at all), got:\n%s", out)
+		}
+	})
+}

@@ -119,15 +119,30 @@ Aggregate (k=%d, count=%d):
 			fmt.Fprintf(w, "  %-20s %.3f (%d/%d)\n", e, acc, b.Correct, b.Scored)
 		}
 	}
-	if rep.TabularRouterFireRate != nil || rep.TabularSQLErrorRate != nil {
+	// explicitTabularEligibility: per Ruling R75, a golden set that carries
+	// Question.TabularExpected on any question switches the fire_rate
+	// denominator from the query_type fallback to the explicit flag (see
+	// tabularEligibilityIsExplicit / TabularRouterRates). When that rule is
+	// in effect and it yields zero eligible (tabular_expected=true)
+	// questions, TabularRouterFireRate is nil — but that nil is a genuine,
+	// reportable "0 tabular_expected questions" fact about the golden set,
+	// not the ordinary "nothing to report" silence the legacy query_type
+	// rule's nil should stay as. Print it as n/a instead of dropping the
+	// line (and, if it's the only tabular signal available, the whole
+	// section) silently.
+	explicitTabularEligibility := tabularEligibilityIsExplicit(rep.Questions)
+	if rep.TabularRouterFireRate != nil || rep.TabularSQLErrorRate != nil || explicitTabularEligibility {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Tabular router:")
-		if rep.TabularRouterFireRate != nil {
+		switch {
+		case rep.TabularRouterFireRate != nil:
 			eligibilityDesc := "of lookup/complex_reasoning questions"
-			if tabularEligibilityIsExplicit(rep.Questions) {
+			if explicitTabularEligibility {
 				eligibilityDesc = "of tabular_expected questions"
 			}
 			fmt.Fprintf(w, "  fire_rate      = %.3f (%s)\n", *rep.TabularRouterFireRate, eligibilityDesc)
+		case explicitTabularEligibility:
+			fmt.Fprintln(w, "  fire_rate      = n/a (0 tabular_expected questions)")
 		}
 		if rep.TabularSQLErrorRate != nil {
 			fmt.Fprintf(w, "  sql_error_rate = %.3f (of fired questions)\n", *rep.TabularSQLErrorRate)

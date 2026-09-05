@@ -65,10 +65,17 @@ log "Seeding against ${JUSTRAG_URL} ..."
 # ---------------------------------------------------------------------------
 # 1. Login
 # ---------------------------------------------------------------------------
-login_response="$(curl -fsS -X POST "${JUSTRAG_URL}/api/auth/login" \
-	-H 'Content-Type: application/json' \
-	-d "$(jq -n --arg u "${JUSTRAG_ADMIN_USER}" --arg p "${JUSTRAG_ADMIN_PASSWORD}" \
-		'{username: $u, password: $p}')")" \
+# The login body is piped into curl via stdin (--data-binary @-) rather than
+# passed as a -d argument: a -d value is visible in `ps` for as long as curl
+# is running (the network round trip), which would put the admin password
+# in the process table. jq still builds the JSON via --arg (its own argv
+# briefly carries the password too, but jq -n exits almost immediately,
+# unlike curl).
+login_response="$(jq -n --arg u "${JUSTRAG_ADMIN_USER}" --arg p "${JUSTRAG_ADMIN_PASSWORD}" \
+		'{username: $u, password: $p}' \
+	| curl -fsS -X POST "${JUSTRAG_URL}/api/auth/login" \
+		-H 'Content-Type: application/json' \
+		--data-binary @-)" \
 	|| die "login request failed"
 
 TOKEN="$(printf '%s' "${login_response}" | jq -r '.token // empty')"

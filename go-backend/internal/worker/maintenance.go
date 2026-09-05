@@ -300,9 +300,12 @@ func checkStuckFiles(ctx context.Context, mainDB *pgxpool.Pool, timeout time.Dur
 // sweepTabularOrphans drops materialized tabular tables (and their
 // tabular_column_values rows) whose owning `files` row no longer exists
 // (R65). The metric this should feed (rag_tabular_orphan_tables_dropped_total)
-// is not wired here — internal/observability/metrics.go is owned by another
-// concurrent workstream; the dropped count is logged instead so an operator
-// can see it in the meantime.
+// is not wired here — deferred, not blocked on anything: the drop count is
+// already surfaced via the "tabular orphan sweep completed"/"tabular orphan
+// sweep failed" log lines below (the maintenance loop registers this task as
+// "tabular_orphan_cleanup") and the sweep's return value, so an operator has
+// a way to see it today. Adding the Prometheus counter is a documented
+// follow-up — see docs/runbooks/spreadsheet-ingest-ops.md §7.
 func sweepTabularOrphans(ctx context.Context, sweeper *tabular.OrphanSweeper) {
 	dropped, err := sweeper.Sweep(ctx, 100)
 	if err != nil {

@@ -257,18 +257,10 @@ func NewHandlerWithEnqueuer(store Store, stor storage.Storage, chunkSvc ChunkDel
 
 // maxUploadSize is the hard transport cap http.MaxBytesReader enforces
 // against every upload, regardless of file type — a package var (not a
-// const) so a test can shrink it via SetMaxUploadSizeForTest without a
-// 500 MB request body. Production code never mutates it; it keeps its
-// 500 MB default for the life of the process.
+// const) so a test can shrink it via SetMaxUploadSizeForTest (export_test.go)
+// without a 500 MB request body. Production code never mutates it; it keeps
+// its 500 MB default for the life of the process.
 var maxUploadSize int64 = 500 << 20 // 500 MB
-
-// SetMaxUploadSizeForTest overrides the transport cap for the duration of a
-// test and returns a function that restores the previous value. Test-only.
-func SetMaxUploadSizeForTest(n int64) (restore func()) {
-	old := maxUploadSize
-	maxUploadSize = n
-	return func() { maxUploadSize = old }
-}
 
 // humanBytes renders n as a human-readable KB/MB/GB size with one decimal
 // place, trimming a trailing ".0" (500.0 MB -> "500 MB") so exact values
@@ -614,12 +606,29 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Detect MIME type from extension (fall back to octet-stream). Computed
+	// here — before the spreadsheet size gate below — and reused verbatim at
+	// the storage step further down, so the gate and the processor's later
+	// CanParse(mimeType, fileName) call (internal/processor/processor.go)
+	// agree on the same predicate. Previously this gate called
+	// CanParse("", header.Filename) (extension only) while the processor
+	// called CanParse(mimeType, fileName); on a host whose MIME database maps
+	// a legacy extension like .xlt/.xlm/.xla/.xlc/.xlw to
+	// "application/vnd.ms-excel" (in parser.spreadsheetMIMEs), CanParse
+	// matches only via the MIME argument — the extension switch does not
+	// include those — so such a file skipped this 413 check but was still
+	// routed into tabular/ingest by the processor.
+	mimeType := mime.TypeByExtension(ext)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
 	// 3d. Reject oversize spreadsheets against the tabular_max_file_bytes
 	// knob. Spreadsheet-specific: the materializer, not the generic
 	// chunk/embed ingest path, is what an oversize spreadsheet would blow up
 	// (memory-buffered parsing), so this does NOT apply to other file
 	// types — those stay governed only by maxUploadSize / maxTotalSizePerKB.
-	if h.uploadLimits != nil && (&parser.SpreadsheetParser{}).CanParse("", header.Filename) {
+	if h.uploadLimits != nil && (&parser.SpreadsheetParser{}).CanParse(mimeType, header.Filename) {
 		if limit := h.uploadLimits.TabularMaxFileBytes(r.Context()); limit > 0 && header.Size > int64(limit) {
 			httputil.WriteErrorCtx(r.Context(), w, http.StatusRequestEntityTooLarge,
 				fmt.Sprintf("Spreadsheet too large (%s): the limit is %s (tabular_max_file_bytes)",
@@ -667,12 +676,6 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	// 6. Build storage path.
 	sanitizedFilename := SanitizeFilename(header.Filename)
 	storagePath := storage.GetStoragePath(username, kbID, sanitizedFilename)
-
-	// Detect MIME type from extension (fall back to octet-stream).
-	mimeType := mime.TypeByExtension(ext)
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
 
 	// 7. Store file to storage.
 	if err := h.storage.StoreFileFromReader(r.Context(), storagePath, uploadedFile, mimeType); err != nil {
