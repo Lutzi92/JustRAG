@@ -26,6 +26,19 @@ type RunPayload struct {
 	RunID uuid.UUID `json:"run_id"`
 }
 
+// detachedWriteCtx returns a fresh context.Background()-derived context with
+// a short deadline, intended for terminal-status DB writes and other reads
+// that must not be gated by the asynq task ctx's deadline (e.g. the
+// checkScheduledRegression predecessor lookup, which runs after the eval
+// itself may have already consumed most of the task's 2h budget). Detached
+// so the request ctx (which can be cancelled by asynq's task timeout once
+// the run itself takes too long) cannot prevent this work from completing.
+// Each call gets its own freshly-started timer — sharing one across a long
+// handler would expire before later calls run.
+func detachedWriteCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 15*time.Second)
+}
+
 // evalGlobalSlots caps concurrent evals deployment-wide. Implemented as N
 // advisory-lock "slots" (asynq's Concurrency is global, with no per-queue cap,
 // so the cap lives here). evalSlotKeyBase..+N-1 are the slot lock keys.
@@ -93,16 +106,6 @@ func (w *Worker) HandleRun(ctx context.Context, t *asynq.Task) error {
 		return fmt.Errorf("eval run: unmarshal payload: %w", err)
 	}
 	log := logctx.From(ctx).With("run_id", p.RunID)
-
-	// detachedWriteCtx returns a fresh context.Background()-derived context with
-	// a short deadline, intended for terminal-status DB writes. Detached so the
-	// request ctx (which can be cancelled by asynq's task timeout once the run
-	// itself takes too long) cannot prevent us from persisting the outcome.
-	// Each call gets its own freshly-started timer — creating one writeCtx at
-	// handler entry would expire before the long-running w.run completes.
-	detachedWriteCtx := func() (context.Context, context.CancelFunc) {
-		return context.WithTimeout(context.Background(), 15*time.Second)
-	}
 
 	// 2. Load the run row first — we need kb_id to choose the per-KB lock.
 	run, err := w.store.Get(ctx, p.RunID)
@@ -227,15 +230,24 @@ func (w *Worker) HandleRun(ctx context.Context, t *asynq.Task) error {
 
 // checkScheduledRegression never fails the run: every error is logged and
 // the gauges are simply not updated.
+//
+// The DB reads below (the predecessor lookup and the threshold site_config
+// read) deliberately use a detached context, not the incoming ctx: this
+// method runs after a full eval run has already completed, so the asynq
+// task ctx may be at or near its deadline (see EnqueueRun's 2h timeout) —
+// using it here would make a slow-but-successful run silently skip its own
+// regression check.
 func (w *Worker) checkScheduledRegression(ctx context.Context, log *slog.Logger, run eval.Run, reportJSON json.RawMessage) {
 	cur, err := eval.ReadJSONReport(bytes.NewReader(reportJSON))
 	if err != nil {
 		log.Warn("eval.scheduled.report_parse_failed", "error", err)
 		return
 	}
+	dctx, dcancel := detachedWriteCtx()
+	defer dcancel()
 	var prevRep *eval.Report
 	if run.GoldenSetID != nil {
-		prevRun, err := w.prev.LatestCompletedScheduled(ctx, *run.GoldenSetID, run.ID)
+		prevRun, err := w.prev.LatestCompletedScheduled(dctx, *run.GoldenSetID, run.ID)
 		if err != nil {
 			log.Warn("eval.scheduled.previous_lookup_failed", "error", err)
 		} else if prevRun != nil && len(prevRun.Report) > 0 {
@@ -246,7 +258,7 @@ func (w *Worker) checkScheduledRegression(ctx context.Context, log *slog.Logger,
 			}
 		}
 	}
-	th := regressionThresholdsFrom(ctx, w.cfg)
+	th := regressionThresholdsFrom(dctx, w.cfg)
 	out := evaluateScheduledRun(prevRep, cur, th)
 	gs := ""
 	if run.GoldenSetID != nil {

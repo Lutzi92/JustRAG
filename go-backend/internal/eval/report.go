@@ -16,11 +16,22 @@ func WriteJSONReport(w io.Writer, rep Report) error {
 }
 
 // ReadJSONReport is the inverse of WriteJSONReport. Used by `cmd/eval
-// --baseline` to load a previously written report for comparison.
+// --baseline` to load a previously written report for comparison, and by
+// the scheduled-regression check to load the current/predecessor reports.
+// A payload that decodes cleanly but carries zero questions (e.g. `{}`, or
+// any other JSON object missing the "questions" field) is rejected: it is
+// almost certainly not a report at all — a truncated file, a different JSON
+// shape, an empty object — and letting it through would hand callers a
+// zero-valued Report that silently passes as a legitimate (empty) baseline
+// rather than erroring, e.g. `cmd/eval --baseline wrong.json` would exit 0
+// against a zero-valued gate instead of failing loudly.
 func ReadJSONReport(r io.Reader) (Report, error) {
 	var rep Report
 	if err := json.NewDecoder(r).Decode(&rep); err != nil {
 		return Report{}, fmt.Errorf("read json report: %w", err)
+	}
+	if len(rep.Questions) == 0 {
+		return Report{}, fmt.Errorf("read json report: report has no questions")
 	}
 	return rep, nil
 }

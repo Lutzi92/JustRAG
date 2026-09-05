@@ -41,3 +41,18 @@ func TestEffectiveRerankDepth_NeverBelowLimitAndCapped(t *testing.T) {
 		t.Fatalf("cap: want %d, got %d", MaxRerankCandidateDepth, got)
 	}
 }
+
+// TestEffectiveRerankDepth_LegacyIsUncapped asserts the legacy formula
+// (no explicit RerankCandidateDepth/per-route key configured) is returned
+// uncapped, exactly as it was before MaxRerankCandidateDepth existed. A
+// long-context query (limit 200 → legacy 4x = 800) or a KB with a large
+// top_n must not get a narrower rerank pool than before this branch.
+func TestEffectiveRerankDepth_LegacyIsUncapped(t *testing.T) {
+	cfg := KBVectorConfig{}
+	if got := EffectiveRerankDepth(cfg, QueryTypeComplexReasoning, 200, true); got != 800 {
+		t.Fatalf("legacy uncapped 4x: want 800, got %d", got)
+	}
+	if got := EffectiveRerankDepth(cfg, QueryTypeComplexReasoning, 150, true); got != 600 {
+		t.Fatalf("legacy uncapped 4x: want 600, got %d", got)
+	}
+}

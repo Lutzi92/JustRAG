@@ -42,7 +42,6 @@ func TestRawQueryForRetrieval(t *testing.T) {
 		{"condensed", true, "und wann?", "Wann fand der Workshop statt?", "und wann?"},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			if got := rawQueryForRetrieval(c.enabled, c.raw, c.condensed); got != c.want {

@@ -19,8 +19,14 @@ import (
 	"github.com/justrag/go-backend/internal/observability"
 )
 
+// rep builds a synthetic Report for regression-check tests. It carries one
+// placeholder QuestionReport — not because these tests inspect Questions,
+// but because eval.ReadJSONReport (F4) rejects a report with zero
+// questions, and checkScheduledRegression round-trips these reports through
+// JSON via mustReportJSON before decoding them back with ReadJSONReport.
 func rep(recall, mrr float64, lookupRecall, lookupMRR float64) eval.Report {
 	return eval.Report{
+		Questions: []eval.QuestionReport{{Question: eval.Question{ID: "q1"}}},
 		Aggregate: eval.AggregateMetrics{MeanRecall: recall, MRR: mrr},
 		RouteAggregates: map[string]eval.AggregateMetrics{
 			"lookup": {MeanRecall: lookupRecall, MRR: lookupMRR},
@@ -112,15 +118,23 @@ func TestRegressionThresholdsFrom_DefaultsAndOverrides(t *testing.T) {
 
 // fakeFinder is a scriptable previousRunFinder: it returns whatever run/err
 // is configured and counts how many times it was invoked, so tests can
-// assert the finder was (or wasn't) called.
+// assert the finder was (or wasn't) called. It also records whether the ctx
+// it was called with was already done AT CALL TIME (not the ctx itself —
+// checkScheduledRegression defers cancellation of its detached ctx until it
+// returns, so by the time a caller could inspect a stored ctx reference
+// after the call, Err() would read "canceled" even for a correctly detached
+// ctx; the call-time snapshot is the only point that distinguishes "handed
+// a live detached ctx" from "handed the already-cancelled incoming ctx").
 type fakeFinder struct {
-	calls int
-	run   *eval.Run
-	err   error
+	calls          int
+	run            *eval.Run
+	err            error
+	lastCtxWasLive bool
 }
 
-func (f *fakeFinder) LatestCompletedScheduled(_ context.Context, _, _ uuid.UUID) (*eval.Run, error) {
+func (f *fakeFinder) LatestCompletedScheduled(ctx context.Context, _, _ uuid.UUID) (*eval.Run, error) {
 	f.calls++
+	f.lastCtxWasLive = ctx.Err() == nil
 	return f.run, f.err
 }
 
@@ -270,6 +284,38 @@ func TestCheckScheduledRegression_UnparsableCurrentReportSetsNoGauges(t *testing
 	kb := kbID.String()
 	assertNoMetricSeriesForKB(t, kb)
 	assertNoRegressionSeriesForKB(t, kb)
+}
+
+// TestCheckScheduledRegression_DetachesFromCancelledTaskCtx is the
+// mutation-proof for F3: checkScheduledRegression must not pass the
+// incoming (asynq task) ctx straight through to the predecessor lookup or
+// the threshold read, because that ctx can be at/near its deadline after a
+// long-running eval. Using it directly would make a real store call fail
+// (ctx already cancelled); using the fake here can't catch that, so this
+// test instead asserts on what the fake finder saw AT CALL TIME: (a) it
+// must still be called (calls == 1, proving the lookup runs at all despite
+// the incoming ctx already being done) and (b) the ctx it received must not
+// itself have been done at call time (lastCtxWasLive), proving it is a
+// fresh detached context and not the cancelled one passed into
+// checkScheduledRegression.
+func TestCheckScheduledRegression_DetachesFromCancelledTaskCtx(t *testing.T) {
+	kbID, gsID := uuid.New(), uuid.New()
+	finder := &fakeFinder{run: &eval.Run{ID: uuid.New(), Report: mustReportJSON(t, rep(0.9, 0.9, 0.9, 0.9))}}
+	w := &Worker{prev: finder, cfg: staticCfg(nil)}
+	run := eval.Run{ID: uuid.New(), KBID: kbID, GoldenSetID: &gsID, Scheduled: true}
+	cur := rep(0.4, 0.4, 0.4, 0.4)
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate the asynq task ctx being at/near its deadline
+
+	w.checkScheduledRegression(cancelledCtx, testLogger(), run, mustReportJSON(t, cur))
+
+	if finder.calls != 1 {
+		t.Fatalf("finder calls: want 1, got %d (predecessor lookup must still run despite a cancelled incoming ctx)", finder.calls)
+	}
+	if !finder.lastCtxWasLive {
+		t.Fatal("finder must receive a detached, non-cancelled ctx at call time, not the cancelled incoming ctx")
+	}
 }
 
 func TestCheckScheduledRegression_FinderErrorFallsBackToNoBaseline(t *testing.T) {

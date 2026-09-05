@@ -6,8 +6,14 @@ import (
 	"testing"
 )
 
+// mkReport builds a synthetic Report for regression-check tests. It carries
+// one placeholder QuestionReport — not because these tests inspect
+// Questions, but because ReadJSONReport (F4) rejects a report with zero
+// questions, and TestReadJSONReport_RoundTrip below round-trips a mkReport
+// through JSON.
 func mkReport(overallRecall, overallMRR float64, routes map[string][2]float64) Report {
 	rep := Report{
+		Questions:       []QuestionReport{{Question: Question{ID: "q1"}}},
 		Aggregate:       AggregateMetrics{K: 10, Count: 10, MeanRecall: overallRecall, MRR: overallMRR},
 		RouteAggregates: map[string]AggregateMetrics{},
 	}
