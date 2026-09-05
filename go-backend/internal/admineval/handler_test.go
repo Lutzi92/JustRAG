@@ -1380,3 +1380,39 @@ func TestUpdateGoldenSet_UnknownIDIs404(t *testing.T) {
 		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// TestUpdateGoldenSet_EmptyBodyIs400 verifies an empty PATCH body (invalid
+// JSON — io.EOF from the decoder) yields 400 and never reaches the store.
+func TestUpdateGoldenSet_EmptyBodyIs400(t *testing.T) {
+	gsStore := &mockGoldenSetStore{}
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil, nil)
+
+	req := newUpdateGoldenSetRequest(testGoldenSetID.String(), ``)
+	rec := httptest.NewRecorder()
+	h.UpdateGoldenSet(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gsStore.setScheduleCalled {
+		t.Fatal("must not call SetSchedule for an unparsable body")
+	}
+}
+
+// TestUpdateGoldenSet_MalformedJSONIs400 verifies a syntactically invalid
+// JSON body yields 400 and never reaches the store.
+func TestUpdateGoldenSet_MalformedJSONIs400(t *testing.T) {
+	gsStore := &mockGoldenSetStore{}
+	h := NewHandler(&mockRunStore{}, &mockKBReader{}, &mockSiteConfig{}, &mockEnqueuer{}, gsStore, nil, nil)
+
+	req := newUpdateGoldenSetRequest(testGoldenSetID.String(), `{"schedule":`)
+	rec := httptest.NewRecorder()
+	h.UpdateGoldenSet(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gsStore.setScheduleCalled {
+		t.Fatal("must not call SetSchedule for an unparsable body")
+	}
+}

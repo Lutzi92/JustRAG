@@ -51,6 +51,14 @@ describe('AdminEvalTab', () => {
         render(<AdminEvalTab {...defaultProps} />);
 
         const select = await screen.findByLabelText(/Zeitplan|Schedule/i);
+
+        // Count the initial-mount fetch(es) of the golden-sets list so the
+        // post-PATCH refetch assertion below is robust to how many times
+        // the component fetches on mount.
+        const goldenSetsGetCalls = () =>
+            mockedAxios.get.mock.calls.filter(([url]) => typeof url === 'string' && url.endsWith('/golden-sets')).length;
+        const callsBeforePatch = goldenSetsGetCalls();
+
         fireEvent.change(select, { target: { value: 'daily' } });
 
         await waitFor(() =>
@@ -59,5 +67,9 @@ describe('AdminEvalTab', () => {
                 { schedule: 'daily' }
             )
         );
+
+        // handleScheduleChange refetches the list after a successful PATCH
+        // so the row's schedule/next_run_at reflect the server state.
+        await waitFor(() => expect(goldenSetsGetCalls()).toBe(callsBeforePatch + 1));
     });
 });
