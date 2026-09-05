@@ -109,10 +109,14 @@ func evalTabularCatalogEntry() tabular.CatalogEntry {
 	}
 }
 
-type evalFakeTabularExec struct{ calls int }
+type evalFakeTabularExec struct {
+	calls    int
+	lastOpts sqlexec.Options
+}
 
-func (f *evalFakeTabularExec) Execute(context.Context, string, sqlexec.Options) (*sqlexec.Result, error) {
+func (f *evalFakeTabularExec) Execute(_ context.Context, _ string, opts sqlexec.Options) (*sqlexec.Result, error) {
 	f.calls++
+	f.lastOpts = opts
 	return &sqlexec.Result{Columns: []string{"n"}, Rows: []map[string]any{{"n": 4}}, RowCount: 1}, nil
 }
 
@@ -164,6 +168,63 @@ func TestRunTrajectory_SupervisorWiresTabularRouter(t *testing.T) {
 	}
 	if exec.calls != 1 {
 		t.Fatalf("tabular executor calls = %d, want 1", exec.calls)
+	}
+}
+
+// TestRunTrajectory_SupervisorHonoursPerKBTabularRouterConfig is the
+// fix-round-1 guard (Important finding): the router's own wiring-time
+// cfgFn only ever sees whatever reader it was constructed with — here, a
+// deliberately "wrong" global MaxRows of 200 — but production
+// (internal/chat/http_send.go's OrchSupervisor case) always resolves
+// TabularRouterConfig from the per-KB-overlaid reader via
+// chat.ResolveTabularRouterConfig and passes it through
+// SupervisorChatParams.TabularRouterConfig, which wins over the router's
+// cfgFn (see TabularRouterInput.Config precedence in tabular_router.go).
+// deps.SiteReader carries a distinctive per-KB override
+// (chat_tabular_router_max_rows=777) that must reach the executor as
+// RowCap — proving the trajectory runner resolves config from
+// deps.SiteReader the same way, not from the router's global cfgFn.
+//
+// Mutation guard: dropping the `tabularCfg` resolution / the
+// `TabularRouterConfig: tabularCfg` field from trajectory_runner.go's
+// TrajectoryModeSupervisor case makes this red — RowCap would be 200 (the
+// router's own cfgFn) instead of 777 (deps.SiteReader's override).
+func TestRunTrajectory_SupervisorHonoursPerKBTabularRouterConfig(t *testing.T) {
+	var genCalls int
+	exec := &evalFakeTabularExec{}
+	router := chat.NewTabularRouter(
+		evalFakeTabularCat{entry: evalTabularCatalogEntry()},
+		exec,
+		newEvalFakeTabularGen(&genCalls),
+		// The router's own wiring-time cfgFn: the "wrong" global config a
+		// per-KB SiteReader override must beat.
+		func(context.Context) chat.TabularRouterConfig {
+			cfg := evalFiringTabularRouterConfig()
+			cfg.MaxRows = 200
+			return cfg
+		},
+	)
+
+	deps := TrajectoryRunDeps{
+		SearchService: fakeBaseSearcher{},
+		SiteReader: &stubSiteCfg{values: map[string]string{
+			"chat_tabular_query_enabled":   "true",
+			"chat_tabular_router_enabled":  "true",
+			"chat_tabular_router_max_rows": "777",
+		}},
+		TabularRouter: router,
+	}
+	q := Question{ID: "q1", KbID: "kb1", Question: "Wie viele Gebäude gibt es?", Language: "de"}
+
+	RunTrajectory(context.Background(), deps, q, TrajectoryModeSupervisor)
+
+	if genCalls != 1 {
+		t.Fatalf("tabular SQL generator calls = %d, want 1", genCalls)
+	}
+	if exec.lastOpts.RowCap != 777 {
+		t.Fatalf("executor RowCap = %d, want 777 (deps.SiteReader's per-KB override) — "+
+			"the trajectory runner fell back to the router's wiring-time cfgFn (RowCap 200) instead",
+			exec.lastOpts.RowCap)
 	}
 }
 
