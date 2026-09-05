@@ -3,9 +3,11 @@
 package admineval
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -39,6 +41,22 @@ type Worker struct {
 	// run performs the actual in-process eval. Typically bound to
 	// eval.RunInProcessFromRecord with injected RunDeps.
 	run func(ctx context.Context, r eval.Run) (json.RawMessage, error)
+
+	// prev and cfg are set by WithRegressionCheck; when prev is non-nil,
+	// a completed scheduled run is diffed against its predecessor and the
+	// result published as Prometheus gauges (see checkScheduledRegression).
+	prev previousRunFinder
+	cfg  siteConfigReader
+}
+
+// WorkerOption configures optional Worker behaviour.
+type WorkerOption func(*Worker)
+
+// WithRegressionCheck enables the post-completion delta for scheduled runs:
+// the report is compared to the previous completed scheduled run for the
+// same golden set and the result published as Prometheus gauges.
+func WithRegressionCheck(finder previousRunFinder, cfg siteConfigReader) WorkerOption {
+	return func(w *Worker) { w.prev, w.cfg = finder, cfg }
 }
 
 // NewWorker constructs a Worker. The run function is called with the loaded
@@ -47,8 +65,13 @@ func NewWorker(
 	pool *pgxpool.Pool,
 	store *eval.Store,
 	run func(ctx context.Context, r eval.Run) (json.RawMessage, error),
+	opts ...WorkerOption,
 ) *Worker {
-	return &Worker{pool: pool, store: store, run: run}
+	w := &Worker{pool: pool, store: store, run: run}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w
 }
 
 // HandleRun is the asynq task handler for TypeEvalRun tasks.
@@ -193,10 +216,51 @@ func (w *Worker) HandleRun(ctx context.Context, t *asynq.Task) error {
 		rwcancel()
 		return nil
 	}
+	if run.Scheduled && w.prev != nil {
+		w.checkScheduledRegression(ctx, log, *run, reportJSON)
+	}
 	observability.EvalRunsTotal.WithLabelValues("completed", kbLabel).Inc()
 	observability.EvalRunDuration.WithLabelValues(strconv.FormatBool(run.JudgeEnabled), "completed").Observe(durationSeconds)
 	log.Info("eval.run.finished", "duration_s", durationSeconds, "kb_id", run.KBID)
 	return nil
+}
+
+// checkScheduledRegression never fails the run: every error is logged and
+// the gauges are simply not updated.
+func (w *Worker) checkScheduledRegression(ctx context.Context, log *slog.Logger, run eval.Run, reportJSON json.RawMessage) {
+	cur, err := eval.ReadJSONReport(bytes.NewReader(reportJSON))
+	if err != nil {
+		log.Warn("eval.scheduled.report_parse_failed", "error", err)
+		return
+	}
+	var prevRep *eval.Report
+	if run.GoldenSetID != nil {
+		prevRun, err := w.prev.LatestCompletedScheduled(ctx, *run.GoldenSetID, run.ID)
+		if err != nil {
+			log.Warn("eval.scheduled.previous_lookup_failed", "error", err)
+		} else if prevRun != nil && len(prevRun.Report) > 0 {
+			if pr, perr := eval.ReadJSONReport(bytes.NewReader(prevRun.Report)); perr == nil {
+				prevRep = &pr
+			} else {
+				log.Warn("eval.scheduled.previous_parse_failed", "run_id", prevRun.ID, "error", perr)
+			}
+		}
+	}
+	th := regressionThresholdsFrom(ctx, w.cfg)
+	out := evaluateScheduledRun(prevRep, cur, th)
+	gs := ""
+	if run.GoldenSetID != nil {
+		gs = run.GoldenSetID.String()
+	}
+	publishScheduledGauges(run.KBID.String(), gs, cur, out)
+	for _, r := range out.Regressions {
+		log.Warn("eval.scheduled.regression", "route", r.Route, "metric", r.Metric,
+			"baseline", r.Baseline, "candidate", r.Candidate, "delta_pp", r.DeltaPP,
+			"threshold_recall_pp", th.RecallPP, "threshold_mrr_pp", th.MRRPP)
+	}
+	if out.HadBaseline && len(out.Regressions) == 0 {
+		log.Info("eval.scheduled.no_regression", "recall", cur.Aggregate.MeanRecall, "mrr", cur.Aggregate.MRR)
+	}
 }
 
 // EnqueueRun enqueues a TypeEvalRun task for runID. Called by the HTTP handler

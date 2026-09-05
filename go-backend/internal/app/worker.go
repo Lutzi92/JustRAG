@@ -387,7 +387,7 @@ func RunWorker(cfg *config.Config) error {
 	}
 	evalWorker := admineval.NewWorker(db.Main, evalStore, func(ctx context.Context, r eval.Run) (json.RawMessage, error) {
 		return eval.RunInProcessFromRecord(ctx, r, evalDeps)
-	})
+	}, admineval.WithRegressionCheck(evalStore, siteconfig.NewStore(db.Main)))
 	mux.HandleFunc(jobs.TypeEvalRun, worker.Instrument(evalWorker.HandleRun))
 
 	// Scheduled eval runs: the night-window sweeper enqueues one
