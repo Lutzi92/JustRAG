@@ -384,13 +384,31 @@ func main() {
 			)
 			slog.Info("eval: orchestrator-dispatch mode on (production-parity routing)")
 		} else {
-			// Router-free and lister-free by design: this is the
-			// byte-stable retrieval-only comparison branch.
+			// Router-free by design: this is the byte-stable
+			// retrieval-only comparison branch (TabularRouter materially
+			// changes retrieval and post-dates old byte-stable reports,
+			// so it stays excluded here — same reasoning as the
+			// orchestrator-dispatch branch above).
+			//
+			// RecencyLister is wired here too, unlike the router: with
+			// --orchestrator-dispatch=false this branch is the ONLY way
+			// to exercise recency listing without the LLM query-type
+			// classifier's run-to-run non-determinism in the loop (Wave 2
+			// Task 8 fix round 1 — the controller's requested
+			// dispatch-off rerun found 0 "rag.recency_listing.fired"
+			// events here before this line existed, since recency
+			// listing is standard-path-only and this branch previously
+			// carried no lister at all). Unlike TabularRouter, there is
+			// no pre-existing byte-stable report to preserve compat with
+			// here: RecencyLister was introduced by this same task, so
+			// including it changes nothing anyone was already diffing
+			// against.
 			adapter = eval.NewProductionContextAdapter(
 				aiResolver,
 				searchService,
 				siteReader,
 				flags,
+				eval.WithRecencyLister(recencyLister),
 			)
 		}
 	} else {

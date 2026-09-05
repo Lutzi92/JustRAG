@@ -605,23 +605,42 @@ the underlying mechanism). `chat_recency_listing_enabled` and
 `chat_date_awareness_enabled` both default **on** in production and need no
 override for this set.
 
+Write reports to a scratch location **outside** `eval/golden/` — that
+directory holds committed golden sets and gitignored `*.local.jsonl`
+copies only; an ad-hoc `--output` path landing there is an untracked file
+`.gitignore` doesn't cover. The acceptance run below used
+`.superpowers/sdd/2026-09-05-rag-sota-wave2/task8-out/` (gitignored
+wholesale via `.superpowers/sdd/`) through the dev-stack helper
+`run-eval.sh`, which builds `cmd/eval` fresh and exports the compose-stack
+env:
+
 ```bash
-cd go-backend
-go build ./cmd/eval
-./eval --golden ../eval/golden/cert-recency-de.local.jsonl \
+OUT=.superpowers/sdd/2026-09-05-rag-sota-wave2/task8-out
+bash .superpowers/sdd/2026-09-05-rag-sota-wave2/run-eval.sh \
+  --golden eval/golden/cert-recency-de.local.jsonl \
   --production-context --recency-boost off \
-  --output ../eval/golden/cert-recency-de.report-off.json
-./eval --golden ../eval/golden/cert-recency-de.local.jsonl \
+  --output "$OUT/cert-off1.json"
+bash .superpowers/sdd/2026-09-05-rag-sota-wave2/run-eval.sh \
+  --golden eval/golden/cert-recency-de.local.jsonl \
   --production-context --recency-boost on \
-  --output ../eval/golden/cert-recency-de.report-on.json
-# Noise band: repeat the first (off) run and diff against report-off.json.
-./eval --golden ../eval/golden/cert-recency-de.local.jsonl \
+  --output "$OUT/cert-on.json"
+# Noise band: repeat the first (off) run and diff against cert-off1.json.
+bash .superpowers/sdd/2026-09-05-rag-sota-wave2/run-eval.sh \
+  --golden eval/golden/cert-recency-de.local.jsonl \
   --production-context --recency-boost off \
-  --output ../eval/golden/cert-recency-de.report-off2.json
+  --output "$OUT/cert-off2.json"
 ```
 
-See `eval/golden/cert-recency-de.acceptance.md` for the recorded per-route
-table, the 6 listing questions' window-file `FinalChunks` coverage, the
-per-pair UPDATE-vs-NEU ranking outcome, and a log line proving the recency
-listing fired under `cmd/eval` (`grep recency` in the run's JSON log
-output).
+`--production-context` defaults `--orchestrator-dispatch` to `true`
+(production-parity routing); the acceptance record's second table repeats
+the same three runs with `--orchestrator-dispatch=false` to isolate the
+recency mechanisms from the LLM query-classifier's run-to-run
+non-determinism (recency listing fires only on the standard
+`PrepareChatContext` path — a question the classifier routes to
+`plan_execute`/`supervisor`/`agentic` skips it entirely for that turn).
+
+See `eval/golden/cert-recency-de.acceptance.md` for both tables
+(production-like dispatch-on, and dispatch-forced-standard), the 6 listing
+questions' window-file `FinalChunks` coverage, the per-pair UPDATE-vs-NEU
+ranking outcome, and a log line proving the recency listing fired under
+`cmd/eval` (`grep recency` in the run's JSON log output).

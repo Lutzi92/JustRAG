@@ -104,6 +104,13 @@ fi
 if [ "${RESTAMP}" -eq 1 ] && [ -z "${KB_ID_ARG}" ]; then
 	die "--restamp requires --kb-id <uuid>"
 fi
+# --kb-id is interpolated directly into the backdating SQL below (step 6)
+# as a literal `'<id>'::uuid` — reject anything that isn't shaped like a
+# UUID before it ever reaches that string, rather than relying on the
+# `::uuid` cast alone to catch a malformed/hostile value late.
+if [ -n "${KB_ID_ARG}" ] && ! [[ "${KB_ID_ARG}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+	die "--kb-id does not look like a UUID: ${KB_ID_ARG}"
+fi
 
 log "Seeding against ${JUSTRAG_URL} ..."
 

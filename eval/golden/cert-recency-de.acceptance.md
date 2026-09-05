@@ -204,9 +204,110 @@ depending on phrasing); this is a pre-existing characteristic of
 `ClassifyQueryTypeForEval`/`ai.ClassifyQueryComplexity`, unrelated to
 `recency_boost_enabled`.
 
+## Controller-requested rerun: orchestrator dispatch forced off (standard path)
+
+The dispatch-on table above is confounded: `--orchestrator-dispatch`
+defaults `true`, so each question's route (standard vs.
+`plan_execute`/`supervisor`/`agentic`) depends on an LLM query-complexity
+classification call that is not deterministic run-to-run, and
+recency-listing fires only on the standard path. Rerun with
+`--orchestrator-dispatch=false` to force every question onto the standard
+path deterministically, isolating both recency mechanisms from that
+confound. Re-stamped first (`--restamp`, since seeding happened on
+2026-09-05 and it was 2026-09-06 by rerun time — see `manifest.tsv`
+`days_ago` values, which are relative to `now()` at stamping time, not a
+fixed calendar date).
+
+**A wiring gap found and fixed during this rerun:** the first attempt at
+this table showed **zero** `rag.recency_listing.fired` log lines across
+all three `--orchestrator-dispatch=false` runs. Cause:
+`cmd/eval`'s `--orchestrator-dispatch=false` branch (`main.go`) was built
+as a "router-free **and lister-free** by design" byte-stable comparison
+branch — it never called `eval.WithRecencyLister` at all, so
+`ProductionContextAdapter.recencyLister` was `nil` and
+`applyRecencyListing` no-opped on every question, silently. Since
+`TabularRouter` predates this task and is deliberately excluded there to
+preserve byte-stable diffs against pre-existing reports, `RecencyLister`
+had been added to the same exclusion by analogy — but `RecencyLister` was
+introduced by *this* task, so there is no pre-existing byte-stable report
+for it to preserve compatibility with, and excluding it defeated the only
+realistic reason to combine `--orchestrator-dispatch=false` with this
+fixture in the first place. Fixed by wiring `eval.WithRecencyLister` into
+that branch too (`TabularRouter` stays excluded — that exclusion is
+unrelated to this task and unaffected). All three runs below are from the
+fixed binary; `rag.recency_listing.fired` appears 6/6 times (once per
+`cert-r01`..`cert-r06`) in every run.
+
+### Results — overall and per-route (k=10), standard path forced
+
+| Run | overall recall | overall MRR | overall nDCG | lookup recall | lookup MRR | enumeration recall | enumeration MRR |
+|---|---|---|---|---|---|---|---|
+| (a) nd-off1 | 0.651 | 0.680 | 0.702 | 0.631 | 0.636 | 0.800 | 1.000 |
+| (b) nd-on   | 0.696 | 0.767 | 0.778 | 0.682 | 0.735 | 0.800 | 1.000 |
+| (c) nd-off2 | 0.611 | 0.667 | 0.682 | 0.585 | 0.621 | 0.800 | 1.000 |
+
+**Noise band** (nd-off1 vs. nd-off2, both `recency_boost_enabled=false`,
+standard path forced): 0.040 overall recall / 0.013 MRR (lookup: 0.046
+recall / 0.015 MRR). This is smaller than the dispatch-on noise band above
+(0.084 / 0.053) but **not zero** — some residual non-determinism remains
+even with orchestrator-dispatch and the LLM query-type classifier taken
+out of the loop, most plausibly the CRAG grader's own LLM call (still
+part of the standard path) rather than anything specific to
+`recency_boost_enabled`. `nd-on` sits above both `nd-off` runs on every
+column, outside this smaller noise band.
+
+### NEU/UPDATE pair ranking, standard path forced
+
+| Question | WID id | nd-off1 | nd-on | nd-off2 |
+|---|---|---|---|---|
+| cert-p01 | 0104 | NEU | NEU | NEU |
+| cert-p02 | 0106 | **UPDATE** | **UPDATE** | NEU |
+| cert-p03 | 0107 | NEU | **UPDATE** | NEU |
+| cert-p04 | 0108 | NEU | NEU | NEU |
+| cert-p05 | 0109 | NEU | NEU | NEU |
+| cert-p06 | 0113 | NEU | **UPDATE** | NEU |
+| cert-p07 | 0119 | **UPDATE** | **UPDATE** | **UPDATE** |
+| cert-p08 | 0123 | **UPDATE** | **UPDATE** | **UPDATE** |
+| **UPDATE-outranks-NEU count** | | **3/8** | **5/8** | **2/8** |
+
+`nd-on` (5/8) is above both off runs (3/8, 2/8) — the same direction as
+the dispatch-on table, a smaller but still-real effect once the
+dispatch confound is removed.
+
+### Recency-listing questions, standard path forced (window coverage of 9)
+
+| Question | Window (days) | Marker | nd-off1 window-file coverage | nd-on | nd-off2 |
+|---|---|---|---|---|---|
+| cert-r01 | 7 | yes | 3/9 (2 NEU) | 4/9 (2 NEU) | 3/9 (2 NEU) |
+| cert-r02 | 3 | yes | 1/9 (1 NEU) | 1/9 (0 NEU) | 1/9 (1 NEU) |
+| cert-r03 | 7 | yes | 3/9 (2 NEU) | 3/9 (2 NEU) | 3/9 (2 NEU) |
+| cert-r04 | 3 | no | 3/9 (1 NEU) | 3/9 (1 NEU) | 3/9 (1 NEU) |
+| cert-r05 | 6 | no | 6/9 (2 NEU) | 6/9 (2 NEU) | 6/9 (2 NEU) |
+| cert-r06 | 14 | no | 8/9 (4 NEU) | 8/9 (5 NEU) | 8/9 (4 NEU) |
+
+All 6 fired in all 3 runs (log line below). `cert-r04`/`r05`/`r06`
+(window-only, no marker arm) are identical or near-identical across all
+three runs — expected, since `recency_boost_enabled` only reorders an
+already-small, window-scoped candidate set and MMR/rerank mostly land the
+same files regardless. `cert-r06`'s `must_cite` hit count (not shown,
+see JSON reports) actually improves under `recency_boost=on` (5/5 NEU
+window files reached `FinalChunks` vs. 4/5 for both off runs) — the boost
+pulling one additional window file above the MMR/top-10 cutoff.
+
+Log line confirming firing under the fixed binary:
+
+```
+{"time":"2026-09-06T00:55:06.18958403+02:00","level":"INFO","msg":"rag.recency_listing.fired","window_days":7,"since":"2026-08-30","files_listed":29,"name_marker_extra":21,"truncated":false}
+```
+
 ## Conclusion
 
-Both mechanisms this fixture targets fire and behave as designed:
+**The standard-path-forced table above is the one the conclusions below
+rest on** — it isolates both mechanisms from the orchestrator-dispatch
+confound the controller flagged; the dispatch-on table earlier in this
+document is kept as the "production-like" view (what the deployment
+actually does today, dispatch noise included) but is not used for causal
+claims about either flag.
 
 1. **Recency-listing** (`chat_recency_listing_enabled`): fires
    deterministically for every recency-listing question that reaches the
@@ -214,15 +315,22 @@ Both mechanisms this fixture targets fire and behave as designed:
    the name-marker arm ("neu"/"Neues" → all NEU files, window-only
    phrasings → just the window's NEU files), logs `rag.recency_listing.fired`
    with the expected window/marker counts, and window-scopes retrieval
-   (`SearchOptions.CreatedAfter`/`FileIDs`) as documented. It does **not**
-   fire when orchestrator-dispatch routes the same question elsewhere —
-   a real, pre-existing production interaction this fixture surfaces
-   rather than one it introduces.
-2. **Recency boost** (`recency_boost_enabled`): raises the UPDATE-over-NEU
-   win rate from 4/8 (off) to 7/8 (on), and raises overall/lookup
-   recall+MRR above both "off" runs (0.704/0.801 vs. 0.626/0.701 and
-   0.542/0.648) — directionally exactly as intended, though with only
-   n=25 questions and a single noise sample this is not a tight
-   statistical bound. Both `.local.jsonl` runs and the JSON reports live
-   under `.superpowers/sdd/2026-09-05-rag-sota-wave2/task8-out/`
+   (`SearchOptions.CreatedAfter`/`FileIDs`) as documented. Under
+   production-like dispatch, it does **not** fire when orchestrator-dispatch
+   routes the same question elsewhere — a real, pre-existing production
+   interaction this fixture surfaces rather than one it introduces (see
+   the dispatch-on table's "Orchestrator-dispatch interaction" note).
+2. **Recency boost** (`recency_boost_enabled`), standard path forced: raises
+   the UPDATE-over-NEU win rate from 3/8 (off1) and 2/8 (off2) to 5/8 (on),
+   and raises overall/lookup recall+MRR above both off runs (0.696/0.767 vs.
+   0.651/0.680 and 0.611/0.667) — directionally as intended, and outside the
+   0.040/0.013 noise band measured between the two off runs, though still a
+   modest effect on n=25 questions. This is a **weaker** effect than the
+   dispatch-on table suggested (4/8→7/8, +0.078 recall) — some of that
+   larger apparent effect was the dispatch confound itself (which orchestrator
+   a question lands on affects its recall independently of
+   `recency_boost_enabled`), not the recency prior alone. The standard-path-
+   forced numbers are the more trustworthy estimate of the recency prior's
+   isolated effect on this fixture. Both `.local.jsonl` runs and the JSON
+   reports live under `.superpowers/sdd/2026-09-05-rag-sota-wave2/task8-out/`
    (gitignored, not committed).
