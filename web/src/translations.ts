@@ -1844,6 +1844,27 @@ export const translations = {
     },
 
     // ---------------------------------------------------------------
+    // Wave-2 Task 6: BM25 scoring mode (ts_rank | bm25)
+    // ---------------------------------------------------------------
+    bm25ScoringMode: { de: 'BM25-Modus', en: 'BM25 scoring mode' },
+    bm25ScoringModeTsRank: { de: 'ts_rank (Standard)', en: 'ts_rank (default)' },
+    bm25ScoringModeBM25: { de: 'bm25 (echtes BM25)', en: 'bm25 (real BM25)' },
+    bm25ScoringModeHelp: {
+        de: 'ts_rank = bisheriges Postgres-Ranking (nur Termfrequenz, kein IDF). bm25 = echtes BM25 (IDF + Längennormalisierung aus den bm25_*_stats-Tabellen, die der Worker alle 15 Minuten nachführt). Fällt pro Anfrage auf ts_rank zurück, solange eine KB noch keine Statistik hat. Nach dem Umschalten query_cache_schema_version anheben, damit gecachte Treffer aus dem alten Modus nicht weiterserviert werden.',
+        en: 'ts_rank = the existing Postgres ranking (term frequency only, no IDF). bm25 = real BM25 (IDF + document-length normalisation from the bm25_*_stats tables the worker refreshes every 15 minutes). Falls back to ts_rank per query while a KB has no stats yet. Bump query_cache_schema_version after flipping this so cached hits from the old mode stop being served.',
+    },
+    bm25K1: { de: 'BM25 k1', en: 'BM25 k1' },
+    bm25K1Help: {
+        de: 'Termfrequenz-Sättigung im echten BM25-Modus — höhere Werte lassen die Termfrequenz länger ins Gewicht fallen, bevor sie sättigt. Standard 1,2 (Standardwert aus der Literatur). Bereich 0,5–3,0. Wirkt nur, wenn der BM25-Modus auf "bm25" steht.',
+        en: 'Term-frequency saturation in real BM25 mode — higher values let term frequency keep mattering longer before it saturates. Default 1.2 (the standard literature operating point). Range 0.5–3.0. Only effective when the BM25 scoring mode is "bm25".',
+    },
+    bm25B: { de: 'BM25 b', en: 'BM25 b' },
+    bm25BHelp: {
+        de: 'Längennormalisierung im echten BM25-Modus (0 = keine, 1 = volle Normalisierung nach Dokumentlänge). Standard 0,75 (Standardwert aus der Literatur). Bereich 0–1. Wirkt nur, wenn der BM25-Modus auf "bm25" steht.',
+        en: 'Document-length normalisation in real BM25 mode (0 = none, 1 = full normalisation by document length). Default 0.75 (the standard literature operating point). Range 0–1. Only effective when the BM25 scoring mode is "bm25".',
+    },
+
+    // ---------------------------------------------------------------
     // T0-4 Per-query-type query cache thresholds
     // ---------------------------------------------------------------
     queryCacheSimilarityThresholdLookup: { de: 'Query-Cache: Schwelle für Lookup', en: 'Query cache: threshold for lookup' },

@@ -69,6 +69,8 @@ func main() {
 	regressRecallPP := flag.Float64("regress-recall-pp", eval.DefaultRegressionThresholds.RecallPP, "Max tolerated mean-recall drop vs --baseline, in percentage points.")
 	regressMRRPP := flag.Float64("regress-mrr-pp", eval.DefaultRegressionThresholds.MRRPP, "Max tolerated MRR drop vs --baseline, in percentage points.")
 	refreshBM25Stats := flag.Bool("refresh-bm25-stats", false, "Before running, recompute BM25 statistics (vector.BM25StatsRefresher.RefreshKB) for every KB referenced by the golden set, across every dim table that has rows for that KB, so an A/B never runs against missing/stale stats.")
+	bm25ModeOverride := flag.String("bm25-mode", "", `Wave-2 Task 6 / ruling W2-R10: per-run override for bm25_scoring_mode ("ts_rank" | "bm25"). Empty = read the live site_config. Applied the same way as --rerank-blend-alpha (wraps the vector-layer site-config reader; no site_configs mutation) — combine with --refresh-bm25-stats when testing "bm25" against a golden set whose KBs haven't had a stats refresh yet.`)
+	bm25TieredBoostOverride := flag.String("bm25-tiered-boost", "", `Per-run override for bm25_tiered_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-mode.`)
 	flag.Parse()
 
 	var baseline *eval.Report
@@ -113,6 +115,15 @@ func main() {
 
 	if *cragOverride != "" && *cragOverride != "on" && *cragOverride != "off" {
 		slog.Error("invalid --crag value", "value", *cragOverride)
+		os.Exit(2)
+	}
+
+	if *bm25ModeOverride != "" && *bm25ModeOverride != "ts_rank" && *bm25ModeOverride != "bm25" {
+		slog.Error("invalid --bm25-mode value", "value", *bm25ModeOverride)
+		os.Exit(2)
+	}
+	if *bm25TieredBoostOverride != "" && *bm25TieredBoostOverride != "on" && *bm25TieredBoostOverride != "off" {
+		slog.Error("invalid --bm25-tiered-boost value", "value", *bm25TieredBoostOverride)
 		os.Exit(2)
 	}
 
@@ -239,6 +250,18 @@ func main() {
 	}
 	if *rrfWeightBM25Override >= 0 {
 		overlays["rrf_weight_bm25"] = strconv.FormatFloat(*rrfWeightBM25Override, 'f', -1, 64)
+	}
+	// bm25_scoring_mode / bm25_tiered_boost_enabled are internal/vector
+	// site_config keys (read via KBVectorConfig, not chat.SiteConfigReader),
+	// so they go through the same searchReader overlay as the rerank/RRF
+	// knobs above rather than the chat-level cragOverrideReader pattern —
+	// wrapping siteReader would have no effect on vector.SearchService's
+	// mode resolution.
+	if *bm25ModeOverride != "" {
+		overlays["bm25_scoring_mode"] = *bm25ModeOverride
+	}
+	if *bm25TieredBoostOverride != "" {
+		overlays["bm25_tiered_boost_enabled"] = strconv.FormatBool(*bm25TieredBoostOverride == "on")
 	}
 
 	var searchReader vector.SiteConfigReader = chatStore

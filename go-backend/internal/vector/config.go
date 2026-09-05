@@ -302,6 +302,32 @@ type KBVectorConfig struct {
 	// "bm25_tiered_boost_enabled".
 	BM25TieredBoost bool
 
+	// BM25ScoringMode selects how the keyword arm scores candidate chunks:
+	// "ts_rank" (default, byte-identical to pre-Task-6 behaviour — term
+	// frequency only, via Postgres's built-in ts_rank()) or "bm25" (real
+	// BM25 with corpus-wide IDF + document-length normalisation, read
+	// from the per-KB bm25_kb_stats_<dim>/bm25_term_stats_<dim> tables
+	// Task 5's refresher maintains). A KB/dimension without usable stats
+	// yet falls back to "ts_rank" for that query (fail-soft; see
+	// SearchService.bm25StatsAvailable). Tunable via
+	// "bm25_scoring_mode". Bump query_cache_schema_version after
+	// flipping this in production — it is a deployment-wide value and is
+	// deliberately NOT hashed into the query-cache shape.
+	BM25ScoringMode KeywordScoringMode
+
+	// BM25K1 is the BM25 term-frequency saturation parameter (higher =
+	// TF keeps mattering longer before saturating). Range [0.5, 3.0],
+	// default 1.2 (the standard Robertson/Sparck-Jones operating point).
+	// Only consumed when BM25ScoringMode is "bm25". Tunable via
+	// "bm25_k1".
+	BM25K1 float64
+
+	// BM25B is the BM25 document-length normalisation strength (0 = none,
+	// 1 = full). Range [0, 1], default 0.75 (the standard operating
+	// point). Only consumed when BM25ScoringMode is "bm25". Tunable via
+	// "bm25_b".
+	BM25B float64
+
 	// RerankBlendAlphaEntity overrides RerankBlendAlpha when the query
 	// matches the entity-asking heuristic (isEntityAskingQuery: starts
 	// with "Wer/Wem/Wen/Who…" or contains "welche rolle / funktion / …"
@@ -408,5 +434,12 @@ func DefaultConfig() KBVectorConfig {
 		RecencyBoostWeight:  0.1,
 		RecencyHalfLifeDays: 14,
 		BridgeBoostWeight:   0.1,
+		// BM25 scoring mode defaults to ts_rank (byte-identical to
+		// pre-Task-6 behaviour); k1/b are pre-seeded at the standard
+		// operating point so the first flip-on to "bm25" is already
+		// sensible.
+		BM25ScoringMode: KeywordScoringTsRank,
+		BM25K1:          1.2,
+		BM25B:           0.75,
 	}
 }

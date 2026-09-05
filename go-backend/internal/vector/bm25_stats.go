@@ -408,8 +408,6 @@ func DeleteBM25StatsForKB(ctx context.Context, vectorDB *pgxpool.Pool, kbID uuid
 // ---------------------------------------------------------------------------
 
 // bm25AvailEntry is one cached bm25StatsAvailable() verdict.
-//
-//nolint:unused // consumed by Task 6's query-time scorer; not wired in yet
 type bm25AvailEntry struct {
 	available bool
 	checkedAt time.Time
@@ -422,8 +420,6 @@ type bm25AvailEntry struct {
 // Cached for bm25StatsCacheTTL (60s) per (kbID, dim) — the stats sweep runs
 // on a many-minutes cadence, so a short TTL avoids a DB round-trip on every
 // search while still picking up a fresh refresh promptly.
-//
-//nolint:unused // consumed by Task 6's query-time scorer; not wired in yet
 func (s *SearchService) bm25StatsAvailable(ctx context.Context, kbID string, dim int) bool {
 	if s == nil || s.vectorDB == nil {
 		return false
@@ -439,7 +435,6 @@ func (s *SearchService) bm25StatsAvailable(ctx context.Context, kbID string, dim
 	return available
 }
 
-//nolint:unused // consumed by Task 6's query-time scorer; not wired in yet
 func (s *SearchService) checkBM25StatsAvailable(ctx context.Context, kbID string, dim int) bool {
 	table := GetBM25KBStatsTableName(dim)
 	if !validVectorTable.MatchString(table) {

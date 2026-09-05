@@ -5,8 +5,27 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/pgxutil"
 )
+
+// dimFromTableName recovers the embedding dimension from a chunk table
+// name produced by GetVectorTableName — "document_chunks" (bare) means the
+// legacy 1536-dim default, "document_chunks_<digits>" carries its own dim.
+// Used only to resolve the matching bm25_kb_stats_<dim>/bm25_term_stats_<dim>
+// tables for the KeywordSearch MCP tool's BM25 scoring mode; falls back to
+// 1536 for anything that doesn't parse (defensive — resolveKBChunkTable
+// only ever returns validVectorTable-shaped names).
+func dimFromTableName(tableName string) int {
+	if tableName == "document_chunks" {
+		return 1536
+	}
+	var dim int
+	if _, err := fmt.Sscanf(tableName, "document_chunks_%d", &dim); err == nil && dim > 0 {
+		return dim
+	}
+	return 1536
+}
 
 // kbTableCache memoises kb_id → chunks-table-name lookups so the
 // AP-B1 tools (keyword_search, chunk_read, document_outline) don't
@@ -139,12 +158,29 @@ func (s *SearchService) KeywordSearch(ctx context.Context, kbID, query string, l
 	}
 	pgConfig := PgTextSearchConfig(s.resolveKBLanguage(ctx, kbID))
 
-	// AP-B1 keyword_search tool path: read the simple-arm + tiered-boost
-	// flags from site_config so the agent's tool calls benefit from the
-	// same BM25 tuning as the main pipeline when operators enable them.
-	// Cached; no extra round-trip on the hot path.
+	// AP-B1 keyword_search tool path: read the simple-arm + tiered-boost +
+	// BM25 scoring-mode settings from site_config so the agent's tool
+	// calls benefit from the same BM25 tuning as the main pipeline when
+	// operators enable them. Cached; no extra round-trip on the hot path.
+	// Same fail-soft mode resolution as Search(): a KB/dimension without
+	// usable stats yet falls back to ts_rank for this call.
 	cfg := s.loadSiteConfigCached(ctx)
-	rows, err := s.runKeywordSearch(ctx, tableName, query, kbID, pgConfig, fileIDs, limit, cfg.BM25SimpleArmEnabled, cfg.BM25TieredBoost, "")
+	dim := dimFromTableName(tableName)
+	mode := cfg.BM25ScoringMode
+	if mode == KeywordScoringBM25 && !s.bm25StatsAvailable(ctx, kbID, dim) {
+		mode = KeywordScoringTsRank
+		observability.RecordBM25ModeFallback("no_stats")
+	}
+	observability.RecordKeywordArmMode(string(mode))
+	arm := keywordArmSettings{
+		SimpleArm:   cfg.BM25SimpleArmEnabled,
+		TieredBoost: cfg.BM25TieredBoost,
+		Mode:        mode,
+		Dim:         dim,
+		K1:          cfg.BM25K1,
+		B:           cfg.BM25B,
+	}
+	rows, err := s.runKeywordSearch(ctx, tableName, query, kbID, pgConfig, fileIDs, limit, arm, "")
 	if err != nil {
 		return nil, fmt.Errorf("keyword_search: %w", err)
 	}

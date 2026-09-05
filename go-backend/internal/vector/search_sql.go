@@ -293,201 +293,36 @@ func (s *SearchService) runKeywordSearch(
 	tableName, query, kbID, pgConfig string,
 	fileIDs []string,
 	limit int,
-	simpleArm, tieredBoost bool,
+	arm keywordArmSettings,
 	nodeKindFilter string,
 ) ([]rawRow, error) {
-	phrases, remainder := extractQuotedPhrases(query)
-	// Email literals: pulled out of remainder and promoted to phrases so
-	// phraseto_tsquery exact-matches them (the default text-search parser keeps
-	// emails as one token; bare-token tokenisation in keyword_query.go would
-	// shred them on `@` and `.`).
-	if emails, rest := extractEmailLiterals(remainder); len(emails) > 0 {
-		phrases = append(phrases, emails...)
-		remainder = rest
+	// arm.Mode is resolved exactly once per Search() call (including the
+	// bm25-stats-availability fallback and its metrics) and reused
+	// unchanged by every keyword-arm fan-out — see the keywordArmSettings
+	// doc comment. Callers outside Search() (the KeywordSearch MCP tool)
+	// resolve their own mode the same way before calling in.
+	mode := arm.Mode
+	if mode == "" {
+		mode = KeywordScoringTsRank
 	}
-	if remainder == "" && len(phrases) == 0 {
+
+	keywordSQL, args, ok := buildKeywordSQL(keywordSQLInput{
+		TableName:      tableName,
+		Query:          query,
+		KbID:           kbID,
+		PgConfig:       pgConfig,
+		FileIDs:        fileIDs,
+		Limit:          limit,
+		SimpleArm:      arm.SimpleArm,
+		TieredBoost:    arm.TieredBoost,
+		NodeKindFilter: nodeKindFilter,
+		Mode:           mode,
+		Dim:            arm.Dim,
+		K1:             arm.K1,
+		B:              arm.B,
+	})
+	if !ok {
 		return nil, nil
-	}
-
-	// Build parameters: kb_id is $1, pgConfig is $2. When the simple-arm
-	// is enabled, the literal `simple` regconfig occupies $3 so the two
-	// arms (language stemmer vs. surface form) share the SAME query-text
-	// placeholders — args binding stays single-bind and the composed
-	// expression is generated for arm-1 then string-substituted for arm-2.
-	args := []any{kbID, pgConfig}
-	simpleConfigParam := 0 // 0 = arm disabled; else the placeholder index of 'simple'
-	nextParam := 3
-	if simpleArm {
-		args = append(args, "simple")
-		simpleConfigParam = nextParam
-		nextParam++
-	}
-
-	filterClause := "kb_id = $1::uuid"
-	if len(fileIDs) > 0 {
-		filterClause += fmt.Sprintf(" AND file_id = ANY($%d::uuid[])", nextParam)
-		args = append(args, fileIDs)
-		nextParam++
-	}
-	if nodeKindFilter != "" {
-		// Phase F eval ablation: restrict the keyword arm to leaves
-		// or summaries. Must be applied before the tsvector match
-		// composition below since composed query parts use sequential
-		// $N indices and we need the placeholder to land here.
-		filterClause += fmt.Sprintf(" AND node_kind = $%d::text", nextParam)
-		args = append(args, nodeKindFilter)
-		nextParam++
-	}
-	filterClause += excludeCommunitySummaryClause(nodeKindFilter)
-
-	// websearchClause is hoisted to function scope so the tiered-boost CASE
-	// (applied to the SELECT's score expression below when tieredBoost is on)
-	// can reference it. Empty when remainder is empty — no strict-form text
-	// query to differentiate, so the boost is skipped for phrases-only queries.
-	var websearchClause string
-	var queryParts []string
-	if remainder != "" {
-		args = append(args, remainder)
-		websearchClause = fmt.Sprintf("websearch_to_tsquery($2::regconfig, $%d)", nextParam)
-		nextParam++
-
-		// Detected proper-noun phrases ("Eberhard Kurz", "Marcus Enger") get
-		// OR-folded into the websearch group as phraseto_tsquery clauses. The
-		// production websearch_to_tsquery ANDs every content stem in the query,
-		// so entity-role lookups like "Welche Rolle übernimmt Eberhard Kurz"
-		// require chunks that contain both the entity AND the question verb —
-		// a co-occurrence that fails for typical role-statement chunks
-		// ("Projektleitung: Eberhard Kurz") whose verbs differ from the
-		// question's. Folding the name as an OR'd phrase recovers those chunks
-		// for the reranker to score.
-		//
-		// Gated to entity-asking queries (who/role/function patterns) because
-		// the bare extractor over-extracts on German — every adjacent pair of
-		// capitalized common nouns ("Künstliche Intelligenz", "Best Practices")
-		// would otherwise broaden the BM25 pool and dilute reranker
-		// discrimination on complex_reasoning queries (eval q085fix
-		// 2026-05-07: ungated cost complex_reasoning MRR −3.2pp).
-		var detectedClauses []string
-		if isEntityAskingQuery(query) {
-			for _, p := range extractProperNounPhrases(remainder) {
-				args = append(args, p)
-				detectedClauses = append(detectedClauses, fmt.Sprintf("phraseto_tsquery($2::regconfig, $%d)", nextParam))
-				nextParam++
-			}
-		}
-
-		orTokens, hasOrTokens := buildOrTokensExpr(remainder)
-		var orClause string
-		if hasOrTokens {
-			args = append(args, orTokens)
-			orClause = fmt.Sprintf("to_tsquery($2::regconfig, $%d)", nextParam)
-			nextParam++
-		}
-
-		// Compose the websearch group: websearch (AND-required), optionally
-		// OR'd with the OR-of-tokens recall floor, optionally OR'd with each
-		// detected proper-noun phrase. The reranker breaks ties downstream.
-		groupAlts := []string{websearchClause}
-		if hasOrTokens {
-			groupAlts = append(groupAlts, orClause)
-		}
-		groupAlts = append(groupAlts, detectedClauses...)
-		if len(groupAlts) == 1 {
-			queryParts = append(queryParts, websearchClause)
-		} else {
-			queryParts = append(queryParts, parenJoin(groupAlts, " || "))
-		}
-	}
-	for _, p := range phrases {
-		args = append(args, p)
-		queryParts = append(queryParts, fmt.Sprintf("phraseto_tsquery($2::regconfig, $%d)", nextParam))
-		nextParam++
-	}
-
-	// If both the remainder and the phrase list produced zero clauses, there is
-	// nothing to search for. (The early return for query=="" higher up already
-	// covers most of this; this branch handles the corner case where remainder
-	// is non-empty but contains no phrases AND no characters at all in queryParts
-	// for some reason — defensive.)
-	if len(queryParts) == 0 {
-		return nil, nil
-	}
-
-	// Compose with && (AND) at the top level: each phrase clause is required,
-	// and the unquoted-remainder sub-clause (which itself is an OR-union of the
-	// AND-required and OR-of-tokens variants) is also required to match
-	// something. Wrap in parens so PG parses correctly.
-	composed := parenJoin(queryParts, " && ")
-
-	// SQL INJECTION INVARIANT:
-	//   - tableName: produced exclusively by GetVectorTableName(dimensions),
-	//     which returns only "document_chunks" or "document_chunks_{int}".
-	//     Both match validVectorTable.MatchString — never user-supplied data.
-	//   - composed: a string of the form
-	//     "((websearch_to_tsquery($2::regconfig, $N) || to_tsquery($2::regconfig, $M)
-	//        || phraseto_tsquery($2::regconfig, $P) …)
-	//      && phraseto_tsquery($2::regconfig, $K) …)"
-	//     — only $-placeholder numbers and the three whitelisted PG function
-	//     names; no user data embedded. Detected proper-noun phrases are
-	//     OR'd into the websearch group; quoted phrases / emails remain
-	//     AND-required at the top level.
-	//   - nextParam: monotonically-incremented int placeholder counter ($1, $2, …).
-	//   - LIMIT %d: int value bounded by caller.
-	// All user-controllable values (kbID, pgConfig, fileIDs, query text, phrases)
-	// are passed positionally via args and bound by pgx. The remainder text is
-	// passed twice — once to websearch_to_tsquery and once (as the OR-tokens
-	// string from buildOrTokensExpr, which strips to_tsquery operator characters
-	// at tokenization time) to to_tsquery.
-	// When the simple arm is enabled, generate a parallel composed
-	// expression that points every regconfig at the simple-config
-	// placeholder. String-substituting `$2::regconfig` → `$N::regconfig`
-	// is safe — composed contains only $-placeholder digits and the
-	// whitelisted PG function names (see invariant comment above), no
-	// user data. The two arms OR-fuse in the WHERE clause; ts_rank
-	// values are summed so a chunk matching either arm contributes,
-	// and a chunk matching both contributes more.
-	//
-	// Tiered-boost CASE: when tieredBoost is on AND remainder produced
-	// a strict-form websearchClause, multiply the language-stemmer
-	// ts_rank by 100 (chunk satisfies the AND-required form) or 10
-	// (chunk only satisfies the OR-tokens recall floor / proper-noun
-	// fallback). Single-token strict queries collapse to a uniform
-	// ×100 — order-preserving, so RRF is unaffected. Phrases-only
-	// queries (websearchClause unset) get ×1, a no-op. The boost is
-	// applied to the main (language-stemmed) arm only; the simple-arm
-	// contribution stays unboosted because a simple-arm-only match
-	// (e.g. an unstemmed surname) does not imply the strict tsvector
-	// matched, so it has no claim to the ×100 tier.
-	boostExpr := "1"
-	if tieredBoost && websearchClause != "" {
-		boostExpr = fmt.Sprintf("CASE WHEN vector_index @@ %s THEN 100 ELSE 10 END", websearchClause)
-	}
-	var keywordSQL string
-	if simpleConfigParam > 0 {
-		composedSimple := strings.ReplaceAll(composed, "$2::regconfig", fmt.Sprintf("$%d::regconfig", simpleConfigParam))
-		keywordSQL = fmt.Sprintf(`
-			SELECT id::text, content, COALESCE(contextual_prefix, ''), metadata::text, file_id::text,
-			       (ts_rank(vector_index, %s) * %s + COALESCE(ts_rank(vector_index_simple, %s), 0)) AS score,
-			       COALESCE(parent_chunk_id::text, ''),
-			       COALESCE(node_kind, 'leaf'),
-			       COALESCE(tree_level, 0)
-			FROM "%s"
-			WHERE %s AND (vector_index @@ %s OR vector_index_simple @@ %s)
-			ORDER BY score DESC
-			LIMIT %d
-		`, composed, boostExpr, composedSimple, tableName, filterClause, composed, composedSimple, limit)
-	} else {
-		keywordSQL = fmt.Sprintf(`
-			SELECT id::text, content, COALESCE(contextual_prefix, ''), metadata::text, file_id::text,
-			       (ts_rank(vector_index, %s) * %s) AS score,
-			       COALESCE(parent_chunk_id::text, ''),
-			       COALESCE(node_kind, 'leaf'),
-			       COALESCE(tree_level, 0)
-			FROM "%s"
-			WHERE %s AND vector_index @@ %s
-			ORDER BY score DESC
-			LIMIT %d
-		`, composed, boostExpr, tableName, filterClause, composed, limit)
 	}
 
 	rows, err := s.vectorDB.Query(ctx, keywordSQL, args...)

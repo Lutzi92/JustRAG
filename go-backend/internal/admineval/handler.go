@@ -106,6 +106,13 @@ var snapshotConfigKeys = []string{
 	// inherits). A live eval would silently run with the prototype off.
 	"bm25_simple_arm_enabled",
 	"bm25_tiered_boost_enabled",
+	// Wave-2 Task 6: BM25 scoring mode (ts_rank | bm25) + its k1/b
+	// parameters. Same reasoning as the pair above — without these in
+	// the snapshot, an eval run silently measures ts_rank even when the
+	// KB override is "bm25".
+	"bm25_scoring_mode",
+	"bm25_k1",
+	"bm25_b",
 	"rerank_blend_alpha_entity",
 	// T1-1 sub-question decomposition. Without these in the snapshot,
 	// re-runs of an eval after flipping the flag silently lose the

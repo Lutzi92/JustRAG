@@ -11,7 +11,15 @@ import (
 // format changes OR when an operator wants to manually invalidate the cache
 // without a table truncate. Bumping this value cause-fragments every shape
 // hash, effectively invalidating all entries.
-const queryCacheSchemaVersion byte = 2
+//
+// Bumped to 3 for Wave-2 Task 6 (bm25_scoring_mode): the keyword arm's
+// scoring formula (ts_rank vs. BM25) is a deployment-wide site_config value
+// and, per the global constraints doc, is deliberately NOT hashed into the
+// shape below — a cached entry produced under one mode must not be served
+// once the operator flips the mode, so the version bump does that
+// invalidation once, here, instead. Operators must bump this again by hand
+// whenever they flip bm25_scoring_mode in production thereafter.
+const queryCacheSchemaVersion byte = 3
 
 // shapeHash returns a deterministic identifier for a request's "shape" —
 // the set of inputs (besides the query text + embedding) that affect the

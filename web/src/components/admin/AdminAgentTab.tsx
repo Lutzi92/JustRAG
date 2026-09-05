@@ -16,7 +16,7 @@ const STORAGE_KEY = 'admin-agent-sections-open-v1';
 
 const SECTION_CONFIGS = [
     { id: 'general', titleKey: 'agentSectionGeneral', i18nKeys: ['defaultTopK', 'scoreDropThreshold', 'contextWindowSize', 'chatAnswerTemperature'], settingKeys: ['default_top_k', 'score_drop_threshold', 'context_window_size', 'chat_answer_temperature'] },
-    { id: 'hybrid', titleKey: 'agentSectionHybridSearch', i18nKeys: ['minSimilarityThreshold', 'mmrLambda', 'rrfWeightVector', 'rrfWeightBM25', 'bm25SimpleArmEnabled', 'bm25TieredBoostEnabled', 'hnswEfSearch', 'mrlTwoPassEnabled', 'queryInstruction', 'hyPESearchEnabled'], settingKeys: ['min_similarity_threshold', 'mmr_lambda', 'rrf_weight_vector', 'rrf_weight_bm25', 'bm25_simple_arm_enabled', 'bm25_tiered_boost_enabled', 'hnsw_ef_search', 'mrl_two_pass_enabled', 'query_instruction', 'hype_search_enabled'] },
+    { id: 'hybrid', titleKey: 'agentSectionHybridSearch', i18nKeys: ['minSimilarityThreshold', 'mmrLambda', 'rrfWeightVector', 'rrfWeightBM25', 'bm25SimpleArmEnabled', 'bm25TieredBoostEnabled', 'bm25ScoringMode', 'bm25K1', 'bm25B', 'hnswEfSearch', 'mrlTwoPassEnabled', 'queryInstruction', 'hyPESearchEnabled'], settingKeys: ['min_similarity_threshold', 'mmr_lambda', 'rrf_weight_vector', 'rrf_weight_bm25', 'bm25_simple_arm_enabled', 'bm25_tiered_boost_enabled', 'bm25_scoring_mode', 'bm25_k1', 'bm25_b', 'hnsw_ef_search', 'mrl_two_pass_enabled', 'query_instruction', 'hype_search_enabled'] },
     { id: 'reranker', titleKey: 'agentSectionReranker', i18nKeys: ['rerankBlendAlpha', 'rerankBlendAlphaLookup', 'rerankBlendAlphaEnumeration', 'rerankBlendAlphaComplexReasoning', 'rerankBlendAlphaEntity', 'hybridDynamicAlphaEnabled', 'hybridDynamicAlphaSensitivity', 'rerankUseChatTemplate', 'rerankInstruction'], settingKeys: ['rerank_blend_alpha', 'rerank_blend_alpha_lookup', 'rerank_blend_alpha_enumeration', 'rerank_blend_alpha_complex_reasoning', 'rerank_blend_alpha_entity', 'hybrid_dynamic_alpha_enabled', 'hybrid_dynamic_alpha_sensitivity', 'rerank_use_chat_template', 'rerank_instruction'] },
     { id: 'topn', titleKey: 'agentSectionPerRouteTopN', i18nKeys: ['topNLookup', 'topNEnumeration', 'topNComplexReasoning'], settingKeys: ['top_n_lookup', 'top_n_enumeration', 'top_n_complex_reasoning'] },
     { id: 'compression', titleKey: 'agentSectionCompression', i18nKeys: ['chatContextCompressionEnabled', 'chatContextCompressionMinChunks', 'chatContextCompressionThreshold', 'chatContextCompressionModel'], settingKeys: ['chat_context_compression_enabled', 'chat_context_compression_min_chunks', 'chat_context_compression_threshold', 'chat_context_compression_model'] },
@@ -312,6 +312,52 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             {t('bm25TieredBoostEnabled')}
                         </label>
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('bm25TieredBoostEnabledHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="bm25-scoring-mode">{t('bm25ScoringMode')}</label>
+                        <select
+                            id="bm25-scoring-mode"
+                            value={siteConfigs.bm25_scoring_mode || 'ts_rank'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, bm25_scoring_mode: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        >
+                            <option value="ts_rank">{t('bm25ScoringModeTsRank')}</option>
+                            <option value="bm25">{t('bm25ScoringModeBM25')}</option>
+                        </select>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('bm25ScoringModeHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="bm25-k1">{t('bm25K1')}</label>
+                        <input
+                            id="bm25-k1"
+                            type="number"
+                            min="0.5"
+                            max="3.0"
+                            step="0.1"
+                            value={siteConfigs.bm25_k1 || '1.2'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, bm25_k1: e.target.value }))}
+                            disabled={(siteConfigs.bm25_scoring_mode || 'ts_rank') !== 'bm25'}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('bm25K1Help')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="bm25-b">{t('bm25B')}</label>
+                        <input
+                            id="bm25-b"
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={siteConfigs.bm25_b || '0.75'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, bm25_b: e.target.value }))}
+                            disabled={(siteConfigs.bm25_scoring_mode || 'ts_rank') !== 'bm25'}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('bm25BHelp')}</p>
                     </div>
 
                     <div className="input-group" style={{ maxWidth: '400px' }}>
