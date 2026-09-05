@@ -1705,10 +1705,12 @@ func ChatCondenseKeepRawEnabled(ctx context.Context, reader SiteConfigReader) bo
 	return readBool(ctx, reader, "chat_condense_keep_raw_enabled", false)
 }
 
-// rawQueryForRetrieval returns the raw utterance to pass as
+// RawQueryForRetrieval returns the raw utterance to pass as
 // SearchOptions.RawQuery, or "" when the lane is off or nothing was
-// condensed (raw == condensed after trimming).
-func rawQueryForRetrieval(enabled bool, raw, condensed string) string {
+// condensed (raw == condensed after trimming). Exported so the eval
+// multi-turn replay (Wave 2 Task 3) can reuse the same decision the
+// production http_send path makes.
+func RawQueryForRetrieval(enabled bool, raw, condensed string) string {
 	if !enabled {
 		return ""
 	}

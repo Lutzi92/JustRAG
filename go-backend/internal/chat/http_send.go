@@ -297,7 +297,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	if anchor.Regenerate == nil || anchor.Regenerate.HistoryParentID != nil {
 		searchQuery, _ = CondenseFollowUp(ctx, h.aiResolver, h.store, chatID, parentMsgID, body.Message, kbID, lang)
 	}
-	rawQuery := rawQueryForRetrieval(ChatCondenseKeepRawEnabled(ctx, h.siteConfigReader), body.Message, searchQuery)
+	rawQuery := RawQueryForRetrieval(ChatCondenseKeepRawEnabled(ctx, h.siteConfigReader), body.Message, searchQuery)
 
 	cls := h.classifyQuery(ctx, searchQuery, body.Enhance, kbID, lang)
 
