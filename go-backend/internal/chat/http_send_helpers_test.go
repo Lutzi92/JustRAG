@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -204,6 +205,75 @@ func TestMaybeTabularGuidance_EmptyCatalogPlaceholder_German(t *testing.T) {
 	}
 	if !strings.Contains(g, "(keine Tabellen katalogisiert)") {
 		t.Errorf("expected the German placeholder line, got %q", g)
+	}
+}
+
+// manyColumnsEntry builds a CatalogEntry whose rendered schema block is
+// large enough (n verbose columns) to push the combined schema over a tiny
+// token budget while still fitting comfortably under the 6000-token
+// default, so a single test can distinguish "default budget: fits" from
+// "overridden tiny budget: pruned".
+func manyColumnsEntry(tableName string, rowCount int64, n int) tabular.CatalogEntry {
+	cols := make([]tabular.ColumnSpec, n)
+	for i := range cols {
+		cols[i] = tabular.ColumnSpec{
+			Original:    fmt.Sprintf("Original Column Header %d", i),
+			Name:        fmt.Sprintf("col_%04d", i),
+			Type:        tabular.TypeText,
+			Description: "auto-generated padding description to inflate the rendered token count for this column",
+		}
+	}
+	return tabular.CatalogEntry{
+		TableName: tableName,
+		SheetName: "Sheet1",
+		FileName:  "f.xlsx",
+		SheetKind: "table",
+		RowCount:  rowCount,
+		Columns:   cols,
+	}
+}
+
+// TestMaybeTabularGuidance_RespectsGuidanceMaxTokensOverride is the R66
+// carry guard: ChatTabularGuidanceMaxTokens must actually gate what
+// tabular.CompactSchema renders, not just exist as a dead reader. "keep"
+// has a far higher RowCount than "dropit", so CompactSchema's row-count
+// ranking (schema_summary.go's scoreOf) always tries "keep" first —
+// deterministic regardless of budget. At the 6000-token default both
+// tables' combined ~2-3k-token rendering fits, so both names appear; at
+// the overridden 1000-token minimum only "keep" (a two-column block) fits
+// and "dropit" (200 verbose columns) is pruned out entirely.
+//
+// Mutation guard: reverting maybeTabularGuidance's CompactSchema call to
+// the retired tabularSchemaSummaryMaxTokens constant makes the override
+// case red — the summary would still contain "dropit" at the hardcoded
+// 6000 default.
+func TestMaybeTabularGuidance_RespectsGuidanceMaxTokensOverride(t *testing.T) {
+	ctx := context.Background()
+	entries := []tabular.CatalogEntry{
+		manyColumnsEntry("keep", 1_000_000, 2),
+		manyColumnsEntry("dropit", 1, 200),
+	}
+
+	defReader := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_query_enabled": strPtr("true"),
+	}}
+	catDefault := &fakeCatalogChecker{has: true, entries: entries}
+	gDefault := maybeTabularGuidance(ctx, defReader, catDefault, "kb", "en")
+	if !strings.Contains(gDefault, "tabular.keep") || !strings.Contains(gDefault, "tabular.dropit") {
+		t.Fatalf("default 6000-token budget should fit both tables, got %q", gDefault)
+	}
+
+	tinyReader := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_query_enabled":       strPtr("true"),
+		"chat_tabular_guidance_max_tokens": strPtr("1000"),
+	}}
+	catTiny := &fakeCatalogChecker{has: true, entries: entries}
+	gTiny := maybeTabularGuidance(ctx, tinyReader, catTiny, "kb", "en")
+	if !strings.Contains(gTiny, "tabular.keep") {
+		t.Fatalf("the higher-ranked table must still fit at a 1000-token budget, got %q", gTiny)
+	}
+	if strings.Contains(gTiny, "tabular.dropit") {
+		t.Fatalf("a 1000-token budget must prune the 200-column table, got %q", gTiny)
 	}
 }
 

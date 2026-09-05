@@ -1032,6 +1032,17 @@ func ChatTabularRouterSchemaMaxTokens(ctx context.Context, reader SiteConfigRead
 	return readInt(ctx, reader, "chat_tabular_router_schema_max_tokens", 12000, 1000, 60000)
 }
 
+// ChatTabularGuidanceMaxTokens caps the per-KB catalog summary text folded
+// into the answer prompt by maybeTabularGuidance (Task 9's TabularGuidance
+// block) — the sibling budget to ChatTabularRouterSchemaMaxTokens, which
+// bounds the SEPARATE schema the router's SQL generator writes against.
+// Replaces the former hardcoded tabularSchemaSummaryMaxTokens constant.
+// Range [1000, 30000]; default 6000 (matches the constant's prior value).
+// Tunable via "chat_tabular_guidance_max_tokens".
+func ChatTabularGuidanceMaxTokens(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_tabular_guidance_max_tokens", 6000, 1000, 30000)
+}
+
 // ChatKBRouterEnabled reports whether the AP-A4 sub-KB router runs
 // when the chat request signals "auto" (via `?route=auto` query
 // param). Default off — existing single-KB requests are unaffected.

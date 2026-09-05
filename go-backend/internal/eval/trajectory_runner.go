@@ -49,6 +49,18 @@ type TrajectoryRunDeps struct {
 	SiteReader     chat.SiteConfigReader
 	KbSystemPrompt func(ctx context.Context, kbID string) string // may be nil
 	PlanningModel  string                                        // empty = inherit KB default
+	// TabularRouter wires the deterministic spreadsheet path (design §5.1)
+	// into the two trajectory modes that carry a TabularRouter field on
+	// their params struct — TrajectoryModeOff (chat.ChatContextParams) and
+	// TrajectoryModeSupervisor (chat.SupervisorChatParams) — the same way
+	// production wires it (internal/app/routes.go, and
+	// WithTabularRouter for the --production-context adapters). Nil
+	// (the default) is a no-op: chat.TabularRouter.Run and the params'
+	// own nil-checks (params.TabularRouter != nil) both degrade cleanly,
+	// so every trajectory run that doesn't set this behaves exactly as
+	// before the field existed. Agentic and Plan-Execute have no
+	// TabularRouter field at all, so this is never wired for those modes.
+	TabularRouter *chat.TabularRouter
 }
 
 // RunTrajectory runs one question through one orchestrator mode and
@@ -107,6 +119,7 @@ func RunTrajectory(ctx context.Context, deps TrajectoryRunDeps, q Question, mode
 			Language:       q.Language,
 			KbSystemPrompt: kbSystemPrompt,
 			PlanningModel:  deps.PlanningModel,
+			TabularRouter:  deps.TabularRouter,
 		}
 		if _, err := chat.RunSupervisorChat(ctx, deps.AIResolver, deps.SearchService, params, emit); err != nil {
 			events = append(events, chat.TrajectoryEvent{Stage: "answer", Decision: "orchestrator_error", Reason: err.Error()})
@@ -120,6 +133,7 @@ func RunTrajectory(ctx context.Context, deps TrajectoryRunDeps, q Question, mode
 			KbSystemPrompt: kbSystemPrompt,
 			QueryType:      q.QueryType,
 			Emit:           emit,
+			TabularRouter:  deps.TabularRouter,
 		}
 		if _, err := chat.PrepareChatContext(ctx, deps.AIResolver, deps.SearchService, deps.SiteReader, params); err != nil {
 			events = append(events, chat.TrajectoryEvent{Stage: "answer", Decision: "prepare_error", Reason: err.Error()})

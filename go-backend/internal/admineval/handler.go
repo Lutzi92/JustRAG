@@ -235,6 +235,10 @@ var snapshotConfigKeys = []string{
 	"chat_tabular_router_max_repairs",
 	"chat_tabular_router_timeout_ms",
 	"chat_tabular_router_schema_max_tokens",
+	// R66 carry (spreadsheet rework Phase 4): the answer-prompt guidance
+	// summary's own token budget, separate from the router's schema budget
+	// directly above.
+	"chat_tabular_guidance_max_tokens",
 	// Upload/ingest sizing knobs (spreadsheet rework Phase 4) registry keys;
 	// same rationale as the profiler/materializer keys above — read at
 	// upload/ingest time, not a chat-pipeline node, but still

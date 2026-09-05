@@ -1773,3 +1773,37 @@ func TestTabularRouterReaders(t *testing.T) {
 		t.Errorf("neither set should yield empty, got %q", got)
 	}
 }
+
+// TestChatTabularGuidanceMaxTokens_DefaultsAndRange is the R66 carry guard:
+// the answer-prompt guidance summary's token budget must be reader-driven
+// (default 6000, matching the retired tabularSchemaSummaryMaxTokens
+// constant) with the same out-of-range-falls-back-to-default convention as
+// its sibling ChatTabularRouterSchemaMaxTokens.
+func TestChatTabularGuidanceMaxTokens_DefaultsAndRange(t *testing.T) {
+	ctx := context.Background()
+
+	if got := ChatTabularGuidanceMaxTokens(ctx, nil); got != 6000 {
+		t.Errorf("ChatTabularGuidanceMaxTokens default = %d, want 6000", got)
+	}
+
+	r := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_guidance_max_tokens": strPtr("2000"),
+	}}
+	if got := ChatTabularGuidanceMaxTokens(ctx, r); got != 2000 {
+		t.Errorf("ChatTabularGuidanceMaxTokens override = %d, want 2000", got)
+	}
+
+	outOfRange := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_guidance_max_tokens": strPtr("99999999"), // above max 30000
+	}}
+	if got := ChatTabularGuidanceMaxTokens(ctx, outOfRange); got != 6000 {
+		t.Errorf("ChatTabularGuidanceMaxTokens out-of-range = %d, want default 6000", got)
+	}
+
+	belowMin := &fakeSiteConfigReader{values: map[string]*string{
+		"chat_tabular_guidance_max_tokens": strPtr("500"), // below min 1000
+	}}
+	if got := ChatTabularGuidanceMaxTokens(ctx, belowMin); got != 6000 {
+		t.Errorf("ChatTabularGuidanceMaxTokens below-min = %d, want default 6000", got)
+	}
+}

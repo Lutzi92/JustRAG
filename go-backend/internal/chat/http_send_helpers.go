@@ -343,11 +343,6 @@ func prependBlock(block, existing string) string {
 	return block + "\n" + existing
 }
 
-// tabularSchemaSummaryMaxTokens bounds the per-KB catalog summary text
-// folded into the answer prompt: generous enough for a KB with a handful of
-// tables, small enough to leave headroom for retrieval context.
-const tabularSchemaSummaryMaxTokens = 6000
-
 // maybeTabularGuidance returns the Task-9 per-turn tabular-guidance snippet
 // for the answer prompt: when the tabular master flag
 // (chat_tabular_query_enabled) is on and the KB has materialized tables, the
@@ -357,6 +352,15 @@ const tabularSchemaSummaryMaxTokens = 6000
 // snippet. Returns "" when neither flag is on, when cat is nil, or when the
 // KB has no materialized tabular data. Fails closed on any catalog error (no
 // guidance) so a transient DB issue never blocks the answer.
+//
+// R66: the token budget (ChatTabularGuidanceMaxTokens) is read and applied
+// HERE, on every call, never inside cachedTabularCatalog — that decorator
+// only memoizes ListByKB's raw []tabular.CatalogEntry for tabularCatalogTTL,
+// not the compacted summary text. So a per-KB config override (or an
+// operator changing the global default) takes effect on the very next turn,
+// even for a KB whose catalog entries are still served from the 60s cache;
+// there is no cache key to fold the budget into.
+
 func maybeTabularGuidance(ctx context.Context, reader SiteConfigReader, cat TabularCatalogSummariser, kbID, lang string) string {
 	master := ChatTabularQueryEnabled(ctx, reader)
 	charts := ChatTabularChartsEnabled(ctx, reader)
@@ -388,7 +392,7 @@ func maybeTabularGuidance(ctx context.Context, reader SiteConfigReader, cat Tabu
 			"kb_id", kbID, "error", err)
 		return ""
 	}
-	summary := tabular.CompactSchema(entries, nil, "", tabularSchemaSummaryMaxTokens).Text
+	summary := tabular.CompactSchema(entries, nil, "", ChatTabularGuidanceMaxTokens(ctx, reader)).Text
 	if summary == "" {
 		// R41: HasDataForKB reported materialized tables, but the
 		// compacted rendering came back empty. An empty catalogSummary

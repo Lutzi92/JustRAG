@@ -211,6 +211,36 @@ func TestTabularRouterKeysAreRegistered(t *testing.T) {
 	}
 }
 
+// TestChatTabularGuidanceMaxTokensIsRegistered is the R66 carry guard: the
+// answer-prompt guidance summary's token budget must be a registered,
+// per-KB-overridable int field — the sibling of
+// chat_tabular_router_schema_max_tokens, which bounds a separate summary
+// (the router's SQL-generation schema, not the answer-prompt guidance).
+func TestChatTabularGuidanceMaxTokensIsRegistered(t *testing.T) {
+	fld, ok := Field("chat_tabular_guidance_max_tokens")
+	if !ok {
+		t.Fatal("registry has no chat_tabular_guidance_max_tokens")
+	}
+	if fld.Type != FieldInt {
+		t.Errorf("chat_tabular_guidance_max_tokens.Type = %q, want FieldInt", fld.Type)
+	}
+	if fld.Group != "Tabular" {
+		t.Errorf("chat_tabular_guidance_max_tokens.Group = %q, want Tabular", fld.Group)
+	}
+	if fld.RequiresReingest {
+		t.Error("chat_tabular_guidance_max_tokens must not require reingest")
+	}
+	if fld.Min == nil || *fld.Min != 1000 {
+		t.Errorf("chat_tabular_guidance_max_tokens.Min = %v, want 1000", fld.Min)
+	}
+	if fld.Max == nil || *fld.Max != 30_000 {
+		t.Errorf("chat_tabular_guidance_max_tokens.Max = %v, want 30000", fld.Max)
+	}
+	if !IsPerKB("chat_tabular_guidance_max_tokens") {
+		t.Error("chat_tabular_guidance_max_tokens must be per-KB overridable")
+	}
+}
+
 func TestPresetKeysAreRegistered(t *testing.T) {
 	for _, key := range []string{"workspace_analysis_presets", "workspace_comparison_presets"} {
 		fld, ok := Field(key)

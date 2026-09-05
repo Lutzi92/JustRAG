@@ -359,6 +359,23 @@ func TestRouterHappyPathInjectsRecordsAndSources(t *testing.T) {
 		if res.Trace.RowCount != 2 || res.Trace.Repairs != 0 {
 			t.Fatalf("trace = %+v, want RowCount 2 / Repairs 0", res.Trace)
 		}
+		// R67: fired_ok emits tabular_router_sql exactly once (already
+		// pinned by the exact event-sequence check above) with outcome
+		// fired_ok and no error text.
+		for _, e := range evs {
+			if e["type"] != "tabular_router_sql" {
+				continue
+			}
+			if e["sql"] != stmt {
+				t.Fatalf("tabular_router_sql sql = %v, want %q", e["sql"], stmt)
+			}
+			if e["outcome"] != "fired_ok" {
+				t.Fatalf("tabular_router_sql outcome = %v, want fired_ok", e["outcome"])
+			}
+			if e["error"] != "" {
+				t.Fatalf("tabular_router_sql error = %v, want empty on success", e["error"])
+			}
+		}
 	})
 
 	// I1: sqlexec.Result.Truncated is only set on an (RowCap+1)-th row, but
@@ -593,7 +610,11 @@ func TestRouterExhaustedRepairsIsAttemptedOnly(t *testing.T) {
 	cfg.MaxRepairs = 2
 	r := newTestRouter(cat, ex, gen.fn, cfg, nil)
 
-	res := r.Run(context.Background(), TabularRouterInput{KbID: "kb1", Query: "Wie viele Gebäude gibt es?", Language: "de"})
+	var evs []map[string]any
+	res := r.Run(context.Background(), TabularRouterInput{
+		KbID: "kb1", Query: "Wie viele Gebäude gibt es?", Language: "de",
+		Emit: collectEvents(&evs),
+	})
 
 	if len(gen.reqs) != 3 || len(ex.calls) != 3 {
 		t.Fatalf("gen=%d exec=%d, want 3/3", len(gen.reqs), len(ex.calls))
@@ -615,6 +636,31 @@ func TestRouterExhaustedRepairsIsAttemptedOnly(t *testing.T) {
 	}
 	if !res.Fired {
 		t.Fatalf("an attempted SQL path still counts as fired")
+	}
+
+	// R67: a sql_error run must still emit tabular_router_sql exactly once,
+	// with the failing SQL, the outcome and the failure text — so an
+	// operator can see WHAT the router tried even when it never fired
+	// successfully. Mutation guard: reverting the terminal emit (deleting
+	// the emitTabularSQLOutcome call after the repair loop) makes this
+	// red — sql_error was never emitted before R67, only fired_ok was.
+	var sqlEvents []map[string]any
+	for _, e := range evs {
+		if e["type"] == "tabular_router_sql" {
+			sqlEvents = append(sqlEvents, e)
+		}
+	}
+	if len(sqlEvents) != 1 {
+		t.Fatalf("tabular_router_sql events = %d, want exactly 1: %+v", len(sqlEvents), evs)
+	}
+	if sqlEvents[0]["sql"] != last {
+		t.Fatalf("tabular_router_sql sql = %v, want %q", sqlEvents[0]["sql"], last)
+	}
+	if sqlEvents[0]["outcome"] != "sql_error" {
+		t.Fatalf("tabular_router_sql outcome = %v, want sql_error", sqlEvents[0]["outcome"])
+	}
+	if errText, _ := sqlEvents[0]["error"].(string); !strings.Contains(errText, "boom 3") {
+		t.Fatalf("tabular_router_sql error = %q, want it to carry the last failure (boom 3)", errText)
 	}
 }
 
