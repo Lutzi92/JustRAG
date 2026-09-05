@@ -3,6 +3,7 @@ package docling
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -403,5 +404,181 @@ func TestClient_Convert_ZeroOptionsOmitsNewFields(t *testing.T) {
 		if _, ok := got[k]; ok {
 			t.Errorf("field %q should be omitted with zero options", k)
 		}
+	}
+}
+
+// --- picture items -----------------------------------------------------
+//
+// Shapes below are docling-core's, not invented: a picture's description has
+// two homes across versions — the original `annotations[]` list (upstream now
+// marks the field deprecated) and `meta.description` — and its caption is a
+// `$ref` into `texts`, reachable only through the picture.
+
+const picLegacyAnnotationsDoc = `{
+  "schema_name": "DoclingDocument",
+  "body": {"self_ref": "#/body", "children": [
+    {"$ref": "#/texts/0"},
+    {"$ref": "#/pictures/0"}
+  ]},
+  "texts": [
+    {"self_ref": "#/texts/0", "label": "text", "content_layer": "body",
+     "text": "Vor der Abbildung.", "prov": [{"page_no": 4}]},
+    {"self_ref": "#/texts/1", "label": "caption", "content_layer": "body",
+     "text": "Abbildung 3: Stoerungsmeldungen je Monat.", "prov": [{"page_no": 4}]}
+  ],
+  "pictures": [
+    {"self_ref": "#/pictures/0", "label": "picture", "content_layer": "body",
+     "prov": [{"page_no": 4}],
+     "captions": [{"$ref": "#/texts/1"}],
+     "annotations": [
+       {"kind": "classification", "predicted_classes": [{"class_name": "bar_chart"}]},
+       {"kind": "description", "text": "Ein Balkendiagramm; die Meldungen steigen von 12 auf 47.",
+        "provenance": "jlu/gemma-4-26b-it"}
+     ]}
+  ]
+}`
+
+func TestItemsFromJSONContent_PictureLegacyAnnotationCarriesCaptionAndDescription(t *testing.T) {
+	items := itemsFromJSONContent([]byte(picLegacyAnnotationsDoc))
+
+	want := []DocItem{
+		{Text: "Vor der Abbildung.", Page: 4, Label: "text"},
+		{Page: 4, Label: "picture", Picture: &DocPicture{
+			Caption:     "Abbildung 3: Stoerungsmeldungen je Monat.",
+			Description: "Ein Balkendiagramm; die Meldungen steigen von 12 auf 47.",
+		}},
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("items mismatch:\n got %+v\nwant %+v", spew(items), spew(want))
+	}
+}
+
+func TestItemsFromJSONContent_PictureMetaDescriptionIsRead(t *testing.T) {
+	// docling-core deprecated `annotations` in favour of `meta`. A sidecar
+	// upgrade must not silently stop producing captions, which is exactly the
+	// class of failure this package already shipped twice.
+	doc := `{
+	  "body": {"children": [{"$ref": "#/pictures/0"}]},
+	  "texts": [],
+	  "pictures": [
+	    {"label": "picture", "content_layer": "body", "prov": [{"page_no": 2}],
+	     "meta": {"description": {"text": "Ein Netzplan mit drei Standorten.",
+	                              "created_by": "jlu/gemma-4-26b-it"}}}
+	  ]
+	}`
+	items := itemsFromJSONContent([]byte(doc))
+
+	if len(items) != 1 || items[0].Picture == nil {
+		t.Fatalf("expected one picture item, got %v", spew(items))
+	}
+	if got := items[0].Picture.Description; got != "Ein Netzplan mit drei Standorten." {
+		t.Errorf("meta.description.text not read, got %q", got)
+	}
+	if items[0].Page != 2 {
+		t.Errorf("picture page = %d, want 2", items[0].Page)
+	}
+}
+
+func TestItemsFromJSONContent_PictureCaptionIsNotEmittedTwice(t *testing.T) {
+	// A caption that is *also* listed as a body child must land on the page
+	// once, not once as its own text item and again inside the picture.
+	doc := `{
+	  "body": {"children": [{"$ref": "#/pictures/0"}, {"$ref": "#/texts/0"}]},
+	  "texts": [
+	    {"label": "caption", "content_layer": "body", "text": "Abbildung 1: Aufbau.",
+	     "prov": [{"page_no": 1}]}
+	  ],
+	  "pictures": [
+	    {"label": "picture", "content_layer": "body", "prov": [{"page_no": 1}],
+	     "captions": [{"$ref": "#/texts/0"}],
+	     "annotations": [{"kind": "description", "text": "Ein Schema."}]}
+	  ]
+	}`
+	items := itemsFromJSONContent([]byte(doc))
+
+	if len(items) != 1 {
+		t.Fatalf("caption must not be emitted a second time, got %v", spew(items))
+	}
+	if items[0].Picture == nil || items[0].Picture.Caption != "Abbildung 1: Aufbau." {
+		t.Fatalf("caption missing from picture item: %v", spew(items))
+	}
+}
+
+func TestItemsFromJSONContent_PictureWithoutTextIsSkipped(t *testing.T) {
+	// Captioning off, or the image fell below picture_description_area_threshold:
+	// there is nothing to chunk, so no empty item may reach the page.
+	doc := `{
+	  "body": {"children": [{"$ref": "#/pictures/0"}, {"$ref": "#/texts/0"}]},
+	  "texts": [{"label": "text", "content_layer": "body", "text": "Nur Text.",
+	             "prov": [{"page_no": 1}]}],
+	  "pictures": [{"label": "picture", "content_layer": "body", "prov": [{"page_no": 1}]}]
+	}`
+	items := itemsFromJSONContent([]byte(doc))
+
+	if len(items) != 1 || items[0].Text != "Nur Text." {
+		t.Fatalf("empty picture must be skipped, got %v", spew(items))
+	}
+}
+
+func TestItemsFromJSONContent_FurniturePictureIsMarked(t *testing.T) {
+	// A logo in the running header is furniture; buildPages drops it like any
+	// other furniture rather than captioning it onto every page.
+	doc := `{
+	  "body": {"children": [{"$ref": "#/pictures/0"}]},
+	  "texts": [],
+	  "pictures": [
+	    {"label": "picture", "content_layer": "furniture", "prov": [{"page_no": 1}],
+	     "annotations": [{"kind": "description", "text": "Das Logo der Universitaet."}]}
+	  ]
+	}`
+	items := itemsFromJSONContent([]byte(doc))
+
+	if len(items) != 1 || !items[0].Furniture {
+		t.Fatalf("furniture picture must be marked as such, got %v", spew(items))
+	}
+}
+
+// spew renders items readably, including the pointer-valued Picture field that
+// %+v would print as an address.
+func spew(items []DocItem) string {
+	var sb strings.Builder
+	for _, it := range items {
+		fmt.Fprintf(&sb, "{Page:%d Label:%q Furniture:%v Text:%q", it.Page, it.Label, it.Furniture, it.Text)
+		if it.Picture != nil {
+			fmt.Fprintf(&sb, " Picture:{Caption:%q Description:%q}", it.Picture.Caption, it.Picture.Description)
+		}
+		if it.Table != nil {
+			fmt.Fprintf(&sb, " Table:%dx%d", it.Table.NumRows, it.Table.NumCols)
+		}
+		sb.WriteString("} ")
+	}
+	return sb.String()
+}
+
+func TestItemsFromJSONContent_CaptionListedBeforeItsPictureIsNotRepeated(t *testing.T) {
+	// Sibling of the test above, with the body order reversed. That order is
+	// what actually exercises the seen-check *read* inside pictureItem: the
+	// caption is emitted as its own text item first, so the picture must not
+	// append it a second time.
+	doc := `{
+	  "body": {"children": [{"$ref": "#/texts/0"}, {"$ref": "#/pictures/0"}]},
+	  "texts": [
+	    {"label": "caption", "content_layer": "body", "text": "Abbildung 1: Aufbau.",
+	     "prov": [{"page_no": 1}]}
+	  ],
+	  "pictures": [
+	    {"label": "picture", "content_layer": "body", "prov": [{"page_no": 1}],
+	     "captions": [{"$ref": "#/texts/0"}],
+	     "annotations": [{"kind": "description", "text": "Ein Schema."}]}
+	  ]
+	}`
+	items := itemsFromJSONContent([]byte(doc))
+
+	want := []DocItem{
+		{Text: "Abbildung 1: Aufbau.", Page: 1, Label: "caption"},
+		{Page: 1, Label: "picture", Picture: &DocPicture{Description: "Ein Schema."}},
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("caption must appear once:\n got %v\nwant %v", spew(items), spew(want))
 	}
 }

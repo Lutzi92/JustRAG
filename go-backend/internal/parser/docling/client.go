@@ -75,8 +75,18 @@ type DocItem struct {
 	// them out of its own markdown; we drop them too, so repeated boilerplate
 	// doesn't land in every page's chunks.
 	Furniture bool
-	Text      string    // content for text-ish items; empty for tables
-	Table     *DocTable // non-nil for table items
+	Text      string      // content for text-ish items; empty for tables and pictures
+	Table     *DocTable   // non-nil for table items
+	Picture   *DocPicture // non-nil for picture items
+}
+
+// DocPicture is a figure's text content: the caption printed in the document
+// and, when picture description is enabled, the vision model's description of
+// the image. At least one of the two is non-empty — a picture carrying neither
+// contributes nothing to chunk and is never emitted as an item.
+type DocPicture struct {
+	Caption     string
+	Description string
 }
 
 // DocTable is a table's cell grid, enough to render it as markdown.
@@ -188,10 +198,11 @@ func (c *Client) Convert(ctx context.Context, fileName string, r io.Reader) (*Co
 // the body/group child references that give reading order, plus the text and
 // table items those references point at, each with its page provenance.
 type doclingJSONDoc struct {
-	Body   doclingNode    `json:"body"`
-	Groups []doclingNode  `json:"groups"`
-	Texts  []doclingText  `json:"texts"`
-	Tables []doclingTable `json:"tables"`
+	Body     doclingNode      `json:"body"`
+	Groups   []doclingNode    `json:"groups"`
+	Texts    []doclingText    `json:"texts"`
+	Tables   []doclingTable   `json:"tables"`
+	Pictures []doclingPicture `json:"pictures"`
 }
 
 type doclingNode struct {
@@ -221,6 +232,61 @@ type doclingText struct {
 // contentLayerFurniture is docling's marker for page furniture (running
 // headers, footers, page numbers) — content it keeps out of its own markdown.
 const contentLayerFurniture = "furniture"
+
+// doclingPicture is the subset of a DoclingDocument picture item we read.
+//
+// A picture reaches the page as text two ways, and both used to be dropped:
+// its caption, which is a reference into texts rather than a body child of its
+// own, and the vision model's description written by docling's
+// picture-description enrichment.
+//
+// The description has two homes across docling-core versions — the original
+// `annotations` list, which upstream now marks deprecated, and `meta.description`
+// — so both are read. Reading only one would repeat this package's recurring
+// failure: a response-shape assumption that holds until the sidecar is upgraded
+// and then silently drops content while every unit test stays green.
+type doclingPicture struct {
+	Label        string      `json:"label"`
+	ContentLayer string      `json:"content_layer"`
+	Prov         doclingProv `json:"prov"`
+	Captions     []struct {
+		Ref string `json:"$ref"`
+	} `json:"captions"`
+	Annotations []struct {
+		Kind string `json:"kind"`
+		Text string `json:"text"`
+	} `json:"annotations"`
+	Meta struct {
+		Description struct {
+			Text string `json:"text"`
+		} `json:"description"`
+	} `json:"meta"`
+}
+
+// annotationKindDescription is the discriminator docling sets on the
+// picture-description annotation; the same list also carries classification
+// and chart-data entries, which are not text.
+const annotationKindDescription = "description"
+
+// descriptionText returns the vision model's description of the picture, or ""
+// when it carries none — captioning disabled, the image below
+// picture_description_area_threshold, or the model call having failed
+// (abort_on_error=false means a failed caption is an absent one, not an error).
+// meta wins over the deprecated annotations list when both are present.
+func (p doclingPicture) descriptionText() string {
+	if s := strings.TrimSpace(p.Meta.Description.Text); s != "" {
+		return s
+	}
+	for _, a := range p.Annotations {
+		if a.Kind != annotationKindDescription {
+			continue
+		}
+		if s := strings.TrimSpace(a.Text); s != "" {
+			return s
+		}
+	}
+	return ""
+}
 
 type doclingTable struct {
 	Label        string      `json:"label"`
@@ -346,6 +412,12 @@ func itemsFromJSONContent(rawJSON json.RawMessage) []DocItem {
 						})
 					}
 				}
+			case "pictures":
+				if idx < len(doc.Pictures) {
+					if item, ok := pictureItem(doc.Pictures[idx], doc.Texts, seen); ok {
+						items = append(items, item)
+					}
+				}
 			case "groups":
 				if idx < len(doc.Groups) {
 					walk(doc.Groups[idx], depth+1)
@@ -361,6 +433,42 @@ func itemsFromJSONContent(rawJSON json.RawMessage) []DocItem {
 		}
 	}
 	return nil
+}
+
+// pictureItem builds the DocItem for one picture, resolving its caption refs
+// against the document's text items. Resolved captions are marked seen so a
+// caption that is *also* listed as a body child lands on the page once rather
+// than twice.
+//
+// ok is false when the picture carries neither caption nor description: there
+// is nothing to chunk, and an empty item would only add a blank paragraph.
+func pictureItem(pic doclingPicture, texts []doclingText, seen map[string]bool) (DocItem, bool) {
+	var captions []string
+	for _, ref := range pic.Captions {
+		if seen[ref.Ref] {
+			continue
+		}
+		seen[ref.Ref] = true
+		kind, idx, ok := parseSelfRef(ref.Ref)
+		if !ok || kind != "texts" || idx >= len(texts) {
+			continue
+		}
+		if s := strings.TrimSpace(texts[idx].Text); s != "" {
+			captions = append(captions, s)
+		}
+	}
+
+	caption := strings.Join(captions, " ")
+	description := pic.descriptionText()
+	if caption == "" && description == "" {
+		return DocItem{}, false
+	}
+	return DocItem{
+		Page:      pic.Prov.page(),
+		Label:     "picture",
+		Furniture: pic.ContentLayer == contentLayerFurniture,
+		Picture:   &DocPicture{Caption: caption, Description: description},
+	}, true
 }
 
 // parseSelfRef splits a DoclingDocument JSON pointer such as "#/texts/3" into

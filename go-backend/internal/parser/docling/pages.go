@@ -86,6 +86,9 @@ func renderItem(it DocItem) string {
 	if it.Table != nil {
 		return renderTable(it.Table)
 	}
+	if it.Picture != nil {
+		return renderPicture(it.Picture)
+	}
 	text := strings.TrimSpace(it.Text)
 	if text == "" {
 		return ""
@@ -104,6 +107,25 @@ func renderItem(it DocItem) string {
 	default:
 		return text
 	}
+}
+
+// renderPicture turns a figure into the text that gets chunked and embedded:
+// the caption printed in the document, then the vision model's description of
+// the image.
+//
+// Neither part is labelled. A printed caption already announces itself
+// ("Abbildung 3: …"), and any prefix invented here would be embedded into
+// every figure chunk in the corpus, diluting the content it is meant to
+// introduce.
+func renderPicture(p *DocPicture) string {
+	parts := make([]string, 0, 2)
+	if s := strings.TrimSpace(p.Caption); s != "" {
+		parts = append(parts, s)
+	}
+	if s := strings.TrimSpace(p.Description); s != "" {
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // renderTable renders a cell grid as a markdown table. Cells are placed by

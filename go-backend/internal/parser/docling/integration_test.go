@@ -114,3 +114,88 @@ func TestIntegration_RealSidecar_KeepsTables(t *testing.T) {
 		}
 	}
 }
+
+// TestIntegration_RealSidecar_KeepsFigureCaptions guards the third thing the
+// page rebuild has to carry: figures. A picture reaches the page only through
+// the `#/pictures/N` branch of the item walk — its printed caption is a `$ref`
+// into `texts` that is not a body child of its own, and the vision model's
+// description lives on the picture. Between 2026-08-11 and this test, neither
+// was walked, so every caption was silently dropped for any document with page
+// provenance while the unit suite stayed green.
+//
+// testdata/figure-2p.pdf is two pages: prose on page 1, and on page 2 a bar
+// chart with a printed caption below it.
+//
+// The caption half needs only a sidecar. The description half additionally
+// needs a reachable vision model, so it is gated separately:
+//
+//	DOCLING_TEST_URL=http://localhost:5001 \
+//	DOCLING_TEST_VLM_URL=https://<host>/v1/chat/completions \
+//	DOCLING_TEST_VLM_MODEL=jlu/gemma-4-26b-it \
+//	DOCLING_TEST_VLM_KEY=<key> \
+//	go test ./internal/parser/docling -run Integration -v
+func TestIntegration_RealSidecar_KeepsFigureCaptions(t *testing.T) {
+	baseURL := os.Getenv("DOCLING_TEST_URL")
+	if baseURL == "" {
+		t.Skip("set DOCLING_TEST_URL to run against a live docling-serve")
+	}
+
+	c := NewClient(baseURL, 300*time.Second)
+	vlmURL := os.Getenv("DOCLING_TEST_VLM_URL")
+	if vlmURL != "" {
+		c.Options = ConvertOptions{
+			PictureDescription:    true,
+			PictureClassification: true,
+			PictureAreaThreshold:  0.05,
+			PictureAPIURL:         vlmURL,
+			PictureAPIModel:       os.Getenv("DOCLING_TEST_VLM_MODEL"),
+			PictureAPIKey:         os.Getenv("DOCLING_TEST_VLM_KEY"),
+		}
+	}
+
+	p := &DoclingPDFParser{Client: c}
+	res, err := p.Parse(context.Background(), parser.ParseContext{
+		FilePath: "testdata/figure-2p.pdf",
+		FileName: "figure-2p.pdf",
+		MimeType: "application/pdf",
+	})
+	if err != nil {
+		t.Fatalf("parse against live sidecar: %v", err)
+	}
+	if len(res.Pages) != 2 {
+		t.Fatalf("expected 2 pages, got %d: %+v", len(res.Pages), res.Pages)
+	}
+	byNumber := map[int]string{}
+	for _, pg := range res.Pages {
+		byNumber[pg.PageNumber] = pg.Text
+	}
+
+	// The caption is on the figure's page, not merely somewhere in the doc.
+	if !strings.Contains(byNumber[2], "CAPTIONMARK") {
+		t.Errorf("figure caption missing from page 2; text=%q", byNumber[2])
+	}
+	if strings.Contains(byNumber[1], "CAPTIONMARK") {
+		t.Errorf("figure caption leaked onto page 1; text=%q", byNumber[1])
+	}
+	// It must appear exactly once: the caption is reachable both as a picture
+	// caption ref and (depending on layout detection) as a body child.
+	if n := strings.Count(byNumber[2], "CAPTIONMARK"); n != 1 {
+		t.Errorf("caption appears %d times on page 2, want 1; text=%q", n, byNumber[2])
+	}
+
+	if vlmURL == "" {
+		t.Log("DOCLING_TEST_VLM_URL unset: caption provenance checked, vision description NOT exercised")
+		return
+	}
+
+	// With a vision model wired, the chart must contribute prose of its own —
+	// more than the caption line it sits under. Asserting on the model's exact
+	// words would be a flaky test of gemma-4, not of this package, so the
+	// assertion is that a description arrived and is substantial.
+	body := strings.ReplaceAll(byNumber[2], "CAPTIONMARK Abbildung 1: Stoerungsmeldungen je Monat.", "")
+	body = strings.ReplaceAll(body, "UNIQUEPAGE2 Der folgende Abschnitt zeigt die Entwicklung der Meldungen.", "")
+	body = strings.ReplaceAll(body, "PAGETWO Auswertung", "")
+	if len(strings.Fields(body)) < 8 {
+		t.Errorf("no vision description landed on page 2 beyond the known prose; page text=%q", byNumber[2])
+	}
+}

@@ -168,3 +168,50 @@ func TestRenderItem_Labels(t *testing.T) {
 		t.Errorf("code: got %q", got)
 	}
 }
+
+func TestBuildPages_PictureCaptionAndDescriptionLandOnItsPage(t *testing.T) {
+	// The regression: picture items were never emitted at all, so every VLM
+	// caption was paid for and then discarded for any document with page
+	// provenance. They belong to the page the figure sits on.
+	pages := buildPages([]DocItem{
+		{Page: 7, Label: "text", Text: "Vor der Abbildung."},
+		{Page: 7, Label: "picture", Picture: &DocPicture{
+			Caption:     "Abbildung 3: Stoerungsmeldungen je Monat.",
+			Description: "Ein Balkendiagramm; die Meldungen steigen von 12 auf 47.",
+		}},
+		{Page: 8, Label: "text", Text: "Nach der Abbildung."},
+	})
+
+	want := []parser.PageText{
+		{PageNumber: 7, Text: "Vor der Abbildung.\n\nAbbildung 3: Stoerungsmeldungen je Monat.\n\nEin Balkendiagramm; die Meldungen steigen von 12 auf 47."},
+		{PageNumber: 8, Text: "Nach der Abbildung."},
+	}
+	if !reflect.DeepEqual(pages, want) {
+		t.Fatalf("pages mismatch:\n got %+v\nwant %+v", pages, want)
+	}
+}
+
+func TestBuildPages_FurniturePictureIsDropped(t *testing.T) {
+	// A captioned logo in the running header would otherwise repeat on every
+	// page, exactly what the furniture rule exists to prevent.
+	pages := buildPages([]DocItem{
+		{Page: 1, Label: "picture", Furniture: true, Picture: &DocPicture{Description: "Das Logo."}},
+		{Page: 1, Label: "text", Text: "Inhalt."},
+	})
+
+	if len(pages) != 1 || pages[0].Text != "Inhalt." {
+		t.Fatalf("furniture picture must not be ingested, got %+v", pages)
+	}
+}
+
+func TestRenderItem_PictureWithOnlyOnePartHasNoBlankPadding(t *testing.T) {
+	// Captioning off leaves a caption-only figure; a figure with no printed
+	// caption leaves a description only. Neither may emit a leading or
+	// trailing blank line, which would survive into the page text.
+	if got := renderItem(DocItem{Label: "picture", Picture: &DocPicture{Caption: "Abbildung 1: Aufbau."}}); got != "Abbildung 1: Aufbau." {
+		t.Errorf("caption-only picture = %q", got)
+	}
+	if got := renderItem(DocItem{Label: "picture", Picture: &DocPicture{Description: "Ein Schema."}}); got != "Ein Schema." {
+		t.Errorf("description-only picture = %q", got)
+	}
+}

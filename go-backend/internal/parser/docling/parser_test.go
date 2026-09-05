@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -283,5 +284,54 @@ func TestDoclingPptxParser_Parse_ErrorWhenClientNil(t *testing.T) {
 	_, err := p.Parse(context.Background(), parser.ParseContext{FileName: "x.pptx"})
 	if err == nil {
 		t.Fatal("expected error when client is nil")
+	}
+}
+
+func TestDoclingPDFParser_Parse_FigureCaptionLandsOnItsPage(t *testing.T) {
+	// End-to-end over the HTTP boundary: a picture-description caption must
+	// reach ParseResult.Pages, because processor.buildIndexedChunks chunks
+	// Pages whenever they are present and never looks at the markdown blob.
+	// Note the markdown here *does* carry the caption — that is what made the
+	// loss invisible: only the page rebuild dropped it.
+	md := "Vor der Abbildung.\n\nAbbildung 3: Meldungen je Monat.\n\nEin Balkendiagramm; 12 auf 47."
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"document":{"md_content":` + strconv.Quote(md) + `,"json_content":{
+		  "body": {"children": [{"$ref": "#/texts/0"}, {"$ref": "#/pictures/0"}, {"$ref": "#/texts/2"}]},
+		  "texts": [
+		    {"label": "text", "content_layer": "body", "text": "Vor der Abbildung.", "prov": [{"page_no": 4}]},
+		    {"label": "caption", "content_layer": "body", "text": "Abbildung 3: Meldungen je Monat.", "prov": [{"page_no": 4}]},
+		    {"label": "text", "content_layer": "body", "text": "Auf der naechsten Seite.", "prov": [{"page_no": 5}]}
+		  ],
+		  "pictures": [
+		    {"label": "picture", "content_layer": "body", "prov": [{"page_no": 4}],
+		     "captions": [{"$ref": "#/texts/1"}],
+		     "annotations": [{"kind": "description", "text": "Ein Balkendiagramm; 12 auf 47.",
+		                      "provenance": "jlu/gemma-4-26b-it"}]}
+		  ]
+		}}}`))
+	}))
+	defer srv.Close()
+
+	p := &DoclingPDFParser{Client: NewClient(srv.URL, 10*time.Second)}
+	res, err := p.Parse(context.Background(), parser.ParseContext{
+		FilePath: stubPDF(t), FileName: "test.pdf", MimeType: "application/pdf",
+	})
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+
+	want := []parser.PageText{
+		{PageNumber: 4, Text: "Vor der Abbildung.\n\nAbbildung 3: Meldungen je Monat.\n\nEin Balkendiagramm; 12 auf 47."},
+		{PageNumber: 5, Text: "Auf der naechsten Seite."},
+	}
+	if !reflect.DeepEqual(res.Pages, want) {
+		t.Fatalf("pages mismatch:\n got %+v\nwant %+v", res.Pages, want)
+	}
+	// The caption must be attributed to the figure's own page, not merely
+	// present somewhere in the document.
+	if strings.Contains(res.Pages[1].Text, "Balkendiagramm") {
+		t.Errorf("caption leaked onto the wrong page: %q", res.Pages[1].Text)
 	}
 }

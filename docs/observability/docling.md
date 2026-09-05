@@ -28,10 +28,16 @@ curl http://localhost:5001/health
 ## Image captioning (figures inside docs + standalone image uploads)
 
 Opt-in on top of `docling_enabled`. When on, Docling describes substantive
-images with a vision model and the caption lands inline in the markdown, so it
-flows through the normal text chunking + embedding pipeline and becomes
-retrievable (citations point back to the source page). No multimodal
-embeddings, no DB migration.
+images with a vision model, and the description flows through the normal text
+chunking + embedding pipeline and becomes retrievable (citations point back to
+the source page). No multimodal embeddings, no DB migration.
+
+A figure contributes two pieces of text, both attributed to the page the figure
+sits on: the **caption printed in the document** and the **vision model's
+description**. Neither is labelled — a printed caption already announces itself
+("Abbildung 3: …"), and a prefix invented here would be embedded into every
+figure chunk in the corpus. See *Page numbers* below for why they need explicit
+handling rather than arriving with the markdown.
 
 In the admin Agent panel:
 - `docling_picture_description_enabled` = `true` (default off)
@@ -102,7 +108,18 @@ sidecar that returned no `json_content`), the markdown blob is ingested with
 **no** page metadata and the UI omits the page label. That is deliberate: an
 absent page reads as unknown, a fabricated one silently misleads.
 
-**Two gotchas, both fixed 2026-08-11 — and both invisible to the unit suite:**
+Because the page text is rebuilt from items, **every kind of content has to be
+walked explicitly** — anything the walk does not resolve is dropped, and the
+markdown blob is no longer there to catch it. Pictures are the third branch,
+next to texts and tables, and the fiddliest: a figure's printed caption is a
+`$ref` into `texts` reachable only through the picture's `captions` list (it is
+usually not a body child of its own), and the vision description lives on the
+picture in one of two places depending on the sidecar's docling-core version —
+the original `annotations[]` list, which upstream now marks deprecated, or
+`meta.description`. Both are read, `meta` first. A caption that *is* also a
+body child is emitted once, not twice.
+
+**Three gotchas, none of them visible to the unit suite:**
 
 1. The client looked for a `document.pages[]` array that docling-serve has
    never emitted, then fell back to labelling the whole document page 1. Every
@@ -114,8 +131,16 @@ absent page reads as unknown, a fabricated one silently misleads.
    search offset only moves forward, every miss drags later pages' boundaries
    along with it. The result was confidently wrong page numbers, which is worse
    than the honest "S. 1" it replaced.
+3. Fixing (2) by rebuilding page text from items introduced a third: the walk
+   resolved only `texts`, `tables` and `groups`, so **`#/pictures/N` refs were
+   skipped entirely**. From 2026-08-11 until this was fixed, every PDF figure
+   was sent to the vision model, billed, and its caption thrown away — while
+   `md_content` still contained it, which is exactly why nothing looked wrong.
+   Only standalone image uploads kept working, because they have no page
+   provenance and so fall through to the markdown blob. Re-ingest to pick up
+   captions in already-parsed documents.
 
-Both shipped green because the mocks asserted a response shape nobody had
+All three shipped green because the mocks asserted a response shape nobody had
 verified against a real sidecar. `integration_test.go` now pins the contract
 against a live instance:
 
@@ -126,7 +151,19 @@ DOCLING_TEST_URL=http://localhost:5001 go test ./internal/parser/docling -run In
 It converts a 10-page fixture built specifically from what broke the anchoring
 (per-page markers, running header/footer, repeated boilerplate, escaped
 characters) and asserts every marker lands on its own page, plus a second
-fixture asserting a real detected table survives re-rendering.
+fixture asserting a real detected table survives re-rendering, plus a third
+(`testdata/figure-2p.pdf`, a bar chart with a printed caption on page 2)
+asserting the caption lands on the figure's page exactly once. Add the vision
+endpoint to exercise captioning end to end — without it the third test checks
+caption provenance only and says so in its log:
+
+```
+DOCLING_TEST_URL=http://localhost:5001 \
+DOCLING_TEST_VLM_URL=https://<host>/v1/chat/completions \
+DOCLING_TEST_VLM_MODEL=jlu/gemma-4-26b-it \
+DOCLING_TEST_VLM_KEY=<key> \
+go test ./internal/parser/docling -run Integration -v
+```
 
 **Page metadata is written at ingest time**, so any deployment that ran Docling
 before this fix must **re-ingest its PDFs**. Note that chunk dedup is
