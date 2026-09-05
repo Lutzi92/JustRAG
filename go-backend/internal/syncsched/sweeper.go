@@ -6,7 +6,8 @@
 // process start time — so "daily" meant "24h after this replica booted" — and
 // only ever read the DB at leader election, which made a schedule change in
 // the UI a no-op until the next restart. A single DB-driven sweeper fixes
-// both and covers git repositories, which had no scheduler at all.
+// both and covers git repositories, which had no scheduler at all, and
+// scheduled eval runs (internal/admineval).
 package syncsched
 
 import (
@@ -28,7 +29,7 @@ const TickInterval = 5 * time.Minute
 // SourceStore is the per-kind contract implemented by the rss, confluence and
 // gitrepo stores.
 type SourceStore interface {
-	// Kind is one of "rss", "confluence", "git_repo".
+	// Kind is one of "rss", "confluence", "git_repo", "eval".
 	Kind() string
 	// ListDue returns non-manual, active sources whose stamped slot is at or
 	// before now, each carrying its own schedule.
@@ -172,6 +173,9 @@ func (s *Sweeper) enqueue(kind, id string) {
 	case "git_repo":
 		payload, _ := json.Marshal(jobs.GitRepoSyncPayload{SourceID: id})
 		task = asynq.NewTask(jobs.TypeGitRepoSync, payload)
+	case "eval":
+		payload, _ := json.Marshal(jobs.EvalScheduledPayload{GoldenSetID: id})
+		task = asynq.NewTask(jobs.TypeEvalScheduled, payload)
 	default:
 		slog.Warn("sync sweeper: unknown source kind", "kind", kind, "id", id)
 		return

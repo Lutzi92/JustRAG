@@ -93,3 +93,10 @@ type EntityCanonicalizePayload struct {
 type KGCommunitiesBuildPayload struct {
 	KbID string `json:"kbId"`
 }
+
+// EvalScheduledPayload is enqueued by the night-window sweeper for a golden
+// set whose schedule slot is due. The handler creates the eval_runs row and
+// hands off to TypeEvalRun.
+type EvalScheduledPayload struct {
+	GoldenSetID string `json:"golden_set_id"`
+}

@@ -2,6 +2,7 @@ package syncsched
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -215,6 +216,33 @@ func TestTick_GitRepoDisabledSkipsGitStoreOnly(t *testing.T) {
 	}
 	if _, ok := confStore.marked["src-1"]; !ok {
 		t.Fatal("confluence store must still be swept while git_repo is disabled")
+	}
+}
+
+// TestTick_EnqueuesEvalScheduledForDueGoldenSet pins the "eval" kind case in
+// enqueue: a due golden set must produce a TypeEvalScheduled task carrying
+// its id, not fall through to the unknown-kind default branch.
+func TestTick_EnqueuesEvalScheduledForDueGoldenSet(t *testing.T) {
+	store := newFakeStore("eval")
+	store.due = []syncwindow.DueSource{daily("gs-1")}
+	enq := &fakeEnqueuer{}
+	s := New(enq, fakeConfig{}, store)
+
+	s.Tick(context.Background(), time.Now())
+
+	if len(enq.tasks) != 1 {
+		t.Fatalf("expected 1 enqueued task, got %d", len(enq.tasks))
+	}
+	task := enq.tasks[0]
+	if task.Type() != jobs.TypeEvalScheduled {
+		t.Fatalf("expected task type %q, got %q", jobs.TypeEvalScheduled, task.Type())
+	}
+	var payload jobs.EvalScheduledPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.GoldenSetID != "gs-1" {
+		t.Fatalf("expected golden_set_id %q, got %q", "gs-1", payload.GoldenSetID)
 	}
 }
 

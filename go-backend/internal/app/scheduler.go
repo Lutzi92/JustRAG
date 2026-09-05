@@ -9,6 +9,7 @@ import (
 	redsyncredis "github.com/go-redsync/redsync/v4/redis/goredis/v9"
 
 	"github.com/justrag/go-backend/internal/confluence"
+	"github.com/justrag/go-backend/internal/eval"
 	"github.com/justrag/go-backend/internal/gitrepo"
 	"github.com/justrag/go-backend/internal/rss"
 	"github.com/justrag/go-backend/internal/safego"
@@ -106,6 +107,7 @@ func runAsLeader(ctx context.Context, infra *serverInfra, mutex *redsync.Mutex) 
 		rss.NewStore(infra.db.Main),
 		confluence.NewStore(infra.db.Main),
 		gitrepo.NewStore(infra.db.Main),
+		eval.NewGoldenSetStore(infra.db.Main),
 	)
 	safego.Go(func() {
 		defer close(sweeperDone)
