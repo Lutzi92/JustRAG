@@ -46,10 +46,15 @@ spec:
           resources:
             requests:
               cpu: "1"
-              memory: 256Mi
+              memory: 512Mi
             limits:
-              cpu: "4"        # Tesseract OCR is CPU-bound (2 threads x 2 concurrent)
-              memory: 1Gi
+              cpu: "4"        # Streaming spreadsheet reader: ~100 MB RSS baseline for a
+              memory: 2Gi     # 125 MB workbook. At most tabular_large_file_concurrency (default 1)
+                              # large workbook (>tabular_large_file_bytes, default 20 MB) per process.
+                              # Hybrid-text render window: tabular_embed_max_rows (max 100k rows
+                              # in memory per table region). Tesseract OCR: CPU-bound, 2 threads x
+                              # 2 concurrent. WORKER_CONCURRENCY=4 with one large-file slot keeps
+                              # worst case well under 2 Gi.
           volumeMounts:
             # Chromium (fetcher Tier 2 auto-escalation during URL
             # processing — TypeURLProcessing is enqueued onto rag-heavy
