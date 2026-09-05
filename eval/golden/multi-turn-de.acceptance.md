@@ -90,21 +90,30 @@ kind the decision rule below is testing.
 
 ## Decision rule — `pronoun_ref` recall
 
-- `on − off` = 0.806 − 0.833 = **−0.027** (−2.7 pp; keep-raw ON is *worse*,
-  not better, on this run pair)
-- noise band `|off2 − off|` = |0.806 − 0.833| = **0.027** (2.7 pp)
+Deltas below are computed from the raw JSON floats
+(`turn_kind_aggregates.pronoun_ref` in each report: off `mean_recall =
+0.8333333333333334`, on `= 0.8055555555555557`, off2 `=
+0.8055555555555557`; `mrr` off `= 0.8333333333333334`, on `=
+0.7666666666666666`, off2 `= 0.8333333333333334`), not from the rounded
+0.833/0.806 table cells above — rounding first and subtracting after
+would silently drop the last significant digit on a 12-question bucket.
+
+- `on − off` = 0.8055555555555557 − 0.8333333333333334 = **−0.0278**
+  (−2.8 pp; keep-raw ON is *worse*, not better, on this run pair)
+- noise band `|off2 − off|` = |0.8055555555555557 − 0.8333333333333334|
+  = **0.0278** (2.8 pp)
 - rule: flip `chat_condense_keep_raw_enabled` ON in Task 9 only if
   `(on − off) > |off2 − off|` on `pronoun_ref` recall **and** no kind
   loses more than the noise band.
 
-`(on − off) = −0.027` is not merely below the noise band, it is negative —
-keep-raw ON underperforms keep-raw OFF on the one kind it should help, by
-exactly the same magnitude as the OFF-vs-OFF noise. The first half of the
-rule fails outright, so the second half (no kind losing more than the
-noise band) doesn't change the verdict, though it's worth recording:
-every kind's `on`-vs-`off` loss is ≤ the noise band already (`pronoun_ref`
-loses exactly 2.7 pp = the noise band itself; every other kind loses
-0.0 pp).
+`(on − off) = −0.0278` is not merely below the noise band, it is negative
+— keep-raw ON underperforms keep-raw OFF on the one kind it should help,
+by (to four decimal places) exactly the same magnitude as the OFF-vs-OFF
+noise. The first half of the rule fails outright, so the second half (no
+kind losing more than the noise band) doesn't change the verdict, though
+it's worth recording: every kind's `on`-vs-`off` loss is ≤ the noise band
+already (`pronoun_ref` loses exactly 2.8 pp = the noise band itself;
+every other kind loses 0.0 pp).
 
 **Verdict: do NOT flip `chat_condense_keep_raw_enabled` to ON in Task 9.**
 Keep the default OFF. On this 12-question `pronoun_ref` sample, raw-query
@@ -113,9 +122,10 @@ follow-up text back in alongside the condensed rewrite) performs at least
 as well as condensed-only retrieval, and the observed "improvement" bar
 the rule sets is not cleared in either direction with recall alone —
 `on` is strictly worse. MRR tells the same story more sharply: `pronoun_ref`
-MRR off 0.833 → on 0.767 (−6.6 pp) vs. off2 0.833 (0.0 pp noise) — a real,
-noise-exceeding *regression* under keep-raw ON, reinforcing the recall
-verdict rather than complicating it.
+MRR off 0.8333333333333334 → on 0.7666666666666666 (**−0.0667**, −6.7 pp)
+vs. off2 0.8333333333333334 (0.0 pp noise) — a real, noise-exceeding
+*regression* under keep-raw ON, reinforcing the recall verdict rather than
+complicating it.
 
 ## `condensed_query` — all six `answer_ref` turns
 

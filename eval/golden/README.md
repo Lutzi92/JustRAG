@@ -159,16 +159,17 @@ the cross-KB section disappears.
 (`chat.CondenseFromHistory`) against KB `PPM-Eval`
 (`83262307-3a1b-49bc-bd08-3b925a868a92`), the same KB as
 `production-ppm-2026-08.jsonl`. It is **derived from the JLU-internal
-production set** — every opening turn and every `topic_shift`/`post_abstain`
-follow-up reuses a question and `must_cite_file_names` from
-`production-ppm-2026-08.jsonl` — so it carries the same privacy status and
-is **gitignored** (`/eval/golden/multi-turn-de.jsonl` in `.gitignore`),
-never committed.
+production set** — every opening turn except the 3 `post_abstain` ones
+(see below), and every `topic_shift`/`post_abstain` follow-up, reuses a
+question and `must_cite_file_names` from `production-ppm-2026-08.jsonl` —
+so it carries the same privacy status and is **gitignored**
+(`/eval/golden/multi-turn-de.jsonl` in `.gitignore`), never committed.
 
 **Composition:** 18 conversations (`MT01`..`MT18`), 45 turns total. Every
 conversation opens with a `corpus` turn copied verbatim from an existing
-`production-ppm-2026-08.jsonl` question (same `query_type`, same
-`must_cite_file_names`). Follow-up turns:
+production question (same `query_type`, same `must_cite_file_names`),
+except the 3 `post_abstain` openers, which are newly authored unanswerable
+questions (see below). Follow-up turns:
 
 - **12 `pronoun_ref`** — a pronoun/ellipsis follow-up on the opener's
   subject ("und wer ist dafür verantwortlich?", "seit wann läuft es?",
