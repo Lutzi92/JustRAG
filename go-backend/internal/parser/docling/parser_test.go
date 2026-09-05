@@ -1,9 +1,11 @@
 package docling
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/parser"
 )
 
@@ -333,5 +336,36 @@ func TestDoclingPDFParser_Parse_FigureCaptionLandsOnItsPage(t *testing.T) {
 	// present somewhere in the document.
 	if strings.Contains(res.Pages[1].Text, "Balkendiagramm") {
 		t.Errorf("caption leaked onto the wrong page: %q", res.Pages[1].Text)
+	}
+}
+
+func TestDoclingPDFParser_Parse_LogsConfidence(t *testing.T) {
+	// docling's confidence block is the first objective signal for "this PDF
+	// parsed badly"; it must land in the structured log with the file name so
+	// it can be grepped by request_id like every other pipeline stage.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"document":{"md_content":"# T"},
+		  "confidence":{"parse_score":1.0,"layout_score":0.41,"mean_score":0.7,"low_score":0.41,
+		                "mean_grade":"good","low_grade":"poor"}}`))
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	logctx.SetBase(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { logctx.SetBase(nil) })
+
+	p := &DoclingPDFParser{Client: NewClient(srv.URL, 10*time.Second)}
+	if _, err := p.Parse(context.Background(), parser.ParseContext{
+		FilePath: stubPDF(t), FileName: "scan.pdf", MimeType: "application/pdf",
+	}); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{`"msg":"docling.confidence"`, `"fileName":"scan.pdf"`, `"low_grade":"poor"`, `"layout_score":0.41`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log missing %s; got %s", want, out)
+		}
 	}
 }

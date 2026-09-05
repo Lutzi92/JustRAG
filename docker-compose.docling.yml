@@ -11,28 +11,45 @@
 # uploads) — also set in the admin Agent panel:
 #   docling_picture_description_enabled = true
 #   docling_picture_area_threshold      = 0.05   # skip images < 5% of page area
-#   docling_table_mode                  = accurate
+#   docling_picture_description_prompt  = …      # optional; default asks for the
+#                                                # document's language + all numbers
 # Captioning is performed by this sidecar calling your model API, but the
 # endpoint + API key + vision model (describe_image_model) are injected by the Go
 # backend from the admin AI provider config — nothing to set on the sidecar. The
-# model URL just has to be reachable from this container.
+# model URL just has to be reachable from this container. What the sidecar DOES
+# need is DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true (below): without it docling
+# refuses to build the captioning pipeline and every conversion fails over to the
+# built-in parsers. The Go worker probes for exactly this at startup and logs an
+# error.
 #
 # The first cold start downloads ~3 GB of models — be patient.
 
 services:
   docling:
-    # PIN THIS in production. `latest` is a moving target and image captioning
-    # depends on /v1/convert/file + do_picture_description being present.
-    # Confirm a known-good tag against the releases, then pin it (e.g.
-    # quay.io/docling-project/docling-serve:vX.Y.Z):
+    # Pinned. `latest` is a moving target: the picture_description_api field this
+    # integration sends is deprecated upstream (since 1.21) and may be removed in
+    # a later minor, and a silent removal lands as "every PDF falls back to
+    # pdftotext". Bump deliberately, then re-run the live integration tests
+    # (docs/observability/docling.md):
     #   https://github.com/docling-project/docling-serve/releases
-    image: quay.io/docling-project/docling-serve:latest
+    # GPU variants (docling-serve-cu128 / -cu130) exist only as explicit versions.
+    image: quay.io/docling-project/docling-serve:v1.32.0
     container_name: justrag-docling
     restart: unless-stopped
     ports:
       - "5001:5001"
     environment:
       DOCLING_SERVE_ENABLE_UI: "false"
+      # Required for image captioning: docling only talks to a remote vision
+      # API when this is set explicitly. Harmless when captioning is off.
+      DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "true"
+      # Lets the Go backend send picture_description_custom_config (the
+      # non-deprecated successor of picture_description_api) per request.
+      DOCLING_SERVE_ALLOW_CUSTOM_PICTURE_DESCRIPTION_CONFIG: "true"
+      # The sync convert endpoint answers 504 after this many seconds no matter
+      # what the client's own timeout is (default 120). Keep it >= the Go side's
+      # DOCLING_TIMEOUT_SECONDS (default 300); captioned reports exceed 120.
+      DOCLING_SERVE_MAX_SYNC_WAIT: "600"
       # Image captioning config (endpoint + API key + model) is injected
       # per-request by the Go backend from the admin AI provider config — it is
       # NOT set on this sidecar, so the model-API credential never lives here.

@@ -12,12 +12,35 @@ docker compose -f docker-compose.yml -f docker-compose.docling.yml up -d
 Cold start downloads model weights (~3 GB). Subsequent restarts reuse the
 `docling-cache` named volume.
 
+The image is **pinned** (`quay.io/docling-project/docling-serve:v1.32.0` in both
+`docker-compose.docling.yml` and `k8s/docling.yml`). `:latest` is a moving
+target: the `picture_description_api` request field this integration sends is
+deprecated upstream since docling-serve 1.21, and a removal would land as "every
+PDF silently falls back to pdftotext" (see *Behaviour & fallback*). Bump the tag
+deliberately and re-run the live integration tests below afterwards.
+
 ## Configure
 
 In the admin Agent panel:
 - `docling_enabled` = `true`
 - `docling_base_url` = `http://docling:5001` (in-compose hostname; in k8s use the
   Service DNS, e.g. `http://docling.justrag.svc.cluster.local:5001`)
+- `docling_table_mode` = `accurate` (default; `fast` trades table structure
+  for speed)
+- `docling_ocr_languages` = `de,en` (default; comma list, sent as docling's
+  `ocr_lang`). Docling's automatic OCR engine on Linux is RapidOCR, whose
+  docling-serve default language list is English + Chinese; German scans need
+  `de` here or umlauts and word spacing come out wrong.
+- `docling_force_ocr` = `false` (default). `true` OCRs every page and replaces
+  the PDF text layer — for KBs that are mostly scans or PDFs with a broken
+  text layer (garbage characters, no spaces).
+- `docling_document_timeout_seconds` = `600` (default). Docling's own
+  per-document processing limit; the server default is a week.
+
+`docling_enabled` and `docling_base_url` are read at worker start (they decide
+which parsers get registered). **Every other `docling_*` key is re-read on each
+conversion**, so an admin-panel edit applies to the next file without a worker
+restart.
 
 ## Health check
 
@@ -39,12 +62,37 @@ description**. Neither is labelled — a printed caption already announces itsel
 figure chunk in the corpus. See *Page numbers* below for why they need explicit
 handling rather than arriving with the markdown.
 
+**The sidecar must run with `DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true`.** Docling
+refuses to build a pipeline that calls a remote vision API unless that is set,
+the refusal happens at pipeline construction (before any page is processed, so
+`abort_on_error` cannot soften it), and the sync endpoint then answers HTTP 404
+"Task result not found". The Go `FallbackParser` treats that like any other
+error, so the observable effect of turning captioning on against a sidecar
+without the flag is that **every PDF, DOCX and PPTX silently goes to pdftotext
+and the legacy parsers** — one warn line per file, no tables, no page-exact
+provenance. Both shipped manifests set the flag; the worker additionally
+**probes** for it at startup whenever captioning is on (it converts a tiny
+embedded PDF with the live options) and logs at error level if the sidecar
+rejects the request.
+
 In the admin Agent panel:
 - `docling_picture_description_enabled` = `true` (default off)
 - `docling_picture_area_threshold` = `0.05` (skip images below 5% of page
   area — filters logos/icons/decorative bullets; range [0,1])
-- `docling_table_mode` = `accurate` (better structured tables → cleaner
-  markdown; default `fast`)
+- `docling_picture_description_prompt` — what the vision model is asked per
+  figure. The default asks, in German, for the document's language, the
+  figure type, what it shows, and **every readable number, axis label, legend
+  entry and caption verbatim**. Docling's own default ("Describe this image in
+  a few sentences.") produced English one-liners without values.
+- `docling_picture_description_timeout_seconds` = `120` (default). Docling's
+  default is 20 s per image, and a timed-out image simply has no description —
+  no error, no log — which made caption coverage look random under GPU load.
+
+Two settings ride along without a key: pictures docling classifies as `logo`,
+`icon`, `signature`, `stamp`, `bar_code`, `qr_code` or `page_thumbnail` are
+never sent to the vision model (classification is always on with captioning,
+it is a cheap local model), and vision calls run one at a time per document
+(docling's default), because the replica cap below is the throttle.
 
 **The vision endpoint + API key are injected by the Go backend, not stored on the
 sidecar.** On each convert request the Go client sends a `picture_description_api`
@@ -71,8 +119,13 @@ Docling layer: **cap Docling replicas + its own request concurrency** (see the
 fixed `replicas` and the rationale comment in `k8s/docling.yml`). Only raise the
 replica count once you give ingestion its own gemma-4 instance.
 
-Captioning also extends per-document convert latency, so raise
-`DOCLING_TIMEOUT_SECONDS` on go-server / go-worker when it's enabled.
+Captioning also extends per-document convert latency. Two timeouts apply, and
+the smaller one wins: the Go client's `DOCLING_TIMEOUT_SECONDS` (default 300)
+and the **sidecar's** `DOCLING_SERVE_MAX_SYNC_WAIT` (docling-serve default
+**120**), after which the sync endpoint answers 504 regardless of what the
+client is willing to wait. Both manifests set it to 600; a deployment that
+raises the Go side must raise the sidecar side too, or long reports fall back
+to pdftotext.
 
 ## Behaviour & fallback
 
@@ -110,14 +163,33 @@ absent page reads as unknown, a fabricated one silently misleads.
 
 Because the page text is rebuilt from items, **every kind of content has to be
 walked explicitly** — anything the walk does not resolve is dropped, and the
-markdown blob is no longer there to catch it. Pictures are the third branch,
-next to texts and tables, and the fiddliest: a figure's printed caption is a
-`$ref` into `texts` reachable only through the picture's `captions` list (it is
-usually not a body child of its own), and the vision description lives on the
-picture in one of two places depending on the sidecar's docling-core version —
-the original `annotations[]` list, which upstream now marks deprecated, or
-`meta.description`. Both are read, `meta` first. A caption that *is* also a
-body child is emitted once, not twice.
+markdown blob is no longer there to catch it. What the walk carries today:
+
+- **Texts** by label (title, section headers with their `level` — the sidecar
+  is asked for `do_pdf_heading_hierarchy` so numbered headings, PDF outlines
+  and font-size cues turn into real nesting instead of a flat list of `##`;
+  that nesting is what the `sections` chunk metadata is built from), list
+  items, code, formulas.
+- **Tables** re-rendered from the cell grid, with the table's printed
+  **caption** before and its **footnotes** after. Docling's reading-order
+  stage parents captions and footnotes to the table itself and keeps them out
+  of `body.children`, so they are reachable only through the table's
+  `captions[]` / `footnotes[]` refs.
+- **Pictures**: the printed caption (same `captions[]` mechanism), then the
+  **text inside the figure** (docling parents every text item it finds inside
+  a picture's bounding box to the picture — for a vector chart that is the
+  axis values, bar labels and legend entries, i.e. the real numbers, and
+  docling's own markdown omits them), then the vision description, then
+  footnotes. The description lives on the picture in one of two places
+  depending on the sidecar's docling-core version — the original
+  `annotations[]` list, which upstream now marks deprecated, or
+  `meta.description`. Both are read, `meta` first. A caption that *is* also a
+  body child is emitted once, not twice.
+
+Every response also carries docling's **confidence** block (docling-serve ≥
+1.25: parse / layout / table / OCR scores and two letter grades). It is logged
+per file as `docling.confidence` — at warn level when the low grade is `poor` —
+so a badly parsed scan can be found by `request_id` and re-run with force OCR.
 
 **Three gotchas, none of them visible to the unit suite:**
 
@@ -153,7 +225,11 @@ It converts a 10-page fixture built specifically from what broke the anchoring
 characters) and asserts every marker lands on its own page, plus a second
 fixture asserting a real detected table survives re-rendering, plus a third
 (`testdata/figure-2p.pdf`, a bar chart with a printed caption on page 2)
-asserting the caption lands on the figure's page exactly once. Add the vision
+asserting the caption lands on the figure's page exactly once, plus a fourth
+that sends the worker's default request (accurate tables, `de,en` OCR,
+document timeout, heading hierarchy) through the startup probe and asserts the
+pinned image accepts every field — a 422 here would mean every real
+conversion falls back to pdftotext. Add the vision
 endpoint to exercise captioning end to end — without it the third test checks
 caption provenance only and says so in its log:
 
@@ -175,7 +251,8 @@ duplicate and changes nothing. Delete the old file first, or re-ingest the KB.
 - 1-page PDF: ~2–5 s.
 - Complex 20-page paper with tables/equations: ~20–60 s.
 - Default request timeout: 300 s. Override via the `DOCLING_TIMEOUT_SECONDS`
-  env var on go-server / go-worker if needed.
+  env var on go-server / go-worker if needed — **and** raise the sidecar's
+  `DOCLING_SERVE_MAX_SYNC_WAIT` to match (see the captioning section).
 
 ## Resource sizing
 

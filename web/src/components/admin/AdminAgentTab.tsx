@@ -30,7 +30,7 @@ const SECTION_CONFIGS = [
     { id: 'teams', titleKey: 'agentSectionTeams', i18nKeys: ['agentTeamRouterModel', 'agentsAllowPrivilegedTools'], settingKeys: ['agent_team_router_model', 'agents_allow_privileged_tools'] },
     { id: 'longmem', titleKey: 'agentSectionLongmem', i18nKeys: ['chatLongmemEnabled', 'chatLongmemMinSalience', 'chatLongmemRecallTopK', 'chatLongmemDecayDays', 'chatLongmemRecallSemantic', 'chatLongmemConflictResolution', 'chatLongmemConflictModel', 'chatLongmemConflictCandidates'], settingKeys: ['chat_longmem_enabled', 'chat_longmem_min_salience', 'chat_longmem_recall_top_k', 'chat_longmem_decay_days', 'chat_longmem_recall_semantic', 'chat_longmem_conflict_resolution', 'chat_longmem_conflict_model', 'chat_longmem_conflict_candidates'] },
     { id: 'validation', titleKey: 'agentSectionValidation', i18nKeys: ['factcheckInChat', 'citationValidationEnabled', 'citationValidationSemanticThreshold', 'chatFactualityGateEnabled', 'chatFactualityGateMaxRefines', 'chatSelfRAGEnabled', 'ragasSamplingEnabled', 'ragasSamplingRate'], settingKeys: ['factcheck_in_chat', 'citation_validation_enabled', 'citation_validation_semantic_threshold', 'chat_factuality_gate_enabled', 'chat_factuality_gate_max_refines', 'chat_self_rag_enabled', 'ragas_sampling_enabled', 'ragas_sampling_rate'] },
-    { id: 'ingestion', titleKey: 'agentSectionIngestion', i18nKeys: ['doclingEnabled', 'doclingBaseUrl', 'describeImageEnabled', 'describeImageEnabledHelp', 'describeImageModel', 'describeImageModelHelp', 'contextualEnrichment', 'embeddingBatchSize', 'lateChunkingEnabled', 'lateChunkingMaxInputTokens', 'parentChildEnabled', 'parentChunkSize', 'childChunkSize', 'raptorEnabled', 'raptorMinChunks', 'raptorMaxLevels', 'raptorBranchingFactor', 'raptorClusteringAlgorithm', 'raptorLeidenResolution', 'hyPEEnabled', 'hyPEQuestionsPerChunk', 'hyPEModel'], settingKeys: ['docling_enabled', 'docling_base_url', 'describe_image_enabled', 'describe_image_model', 'contextual_enrichment', 'embedding_batch_size', 'late_chunking_enabled', 'late_chunking_max_input_tokens', 'parent_child_enabled', 'parent_chunk_size', 'child_chunk_size', 'raptor_enabled', 'raptor_min_chunks', 'raptor_max_levels', 'raptor_branching_factor', 'raptor_clustering_algorithm', 'raptor_leiden_resolution', 'hype_enabled', 'hype_questions_per_chunk', 'hype_model'] },
+    { id: 'ingestion', titleKey: 'agentSectionIngestion', i18nKeys: ['doclingEnabled', 'doclingBaseUrl', 'doclingTableMode', 'doclingOcrLanguages', 'doclingForceOcr', 'doclingPictureDescriptionEnabled', 'doclingPictureAreaThreshold', 'doclingPictureDescriptionPrompt', 'describeImageEnabled', 'describeImageEnabledHelp', 'describeImageModel', 'describeImageModelHelp', 'contextualEnrichment', 'embeddingBatchSize', 'lateChunkingEnabled', 'lateChunkingMaxInputTokens', 'parentChildEnabled', 'parentChunkSize', 'childChunkSize', 'raptorEnabled', 'raptorMinChunks', 'raptorMaxLevels', 'raptorBranchingFactor', 'raptorClusteringAlgorithm', 'raptorLeidenResolution', 'hyPEEnabled', 'hyPEQuestionsPerChunk', 'hyPEModel'], settingKeys: ['docling_enabled', 'docling_base_url', 'docling_table_mode', 'docling_ocr_languages', 'docling_force_ocr', 'docling_picture_description_enabled', 'docling_picture_area_threshold', 'docling_picture_description_prompt', 'describe_image_enabled', 'describe_image_model', 'contextual_enrichment', 'embedding_batch_size', 'late_chunking_enabled', 'late_chunking_max_input_tokens', 'parent_child_enabled', 'parent_chunk_size', 'child_chunk_size', 'raptor_enabled', 'raptor_min_chunks', 'raptor_max_levels', 'raptor_branching_factor', 'raptor_clustering_algorithm', 'raptor_leiden_resolution', 'hype_enabled', 'hype_questions_per_chunk', 'hype_model'] },
     { id: 'observability', titleKey: 'agentSectionObservability', i18nKeys: ['langfuseBaseUrl'], settingKeys: ['langfuse_base_url'] },
     { id: 'tools', titleKey: 'agentSectionTools', i18nKeys: ['chatCodeExecEnabled'], settingKeys: ['mcp_servers', 'chat_use_mcp_tools', 'chat_code_exec_enabled'] },
     { id: 'tabular', titleKey: 'agentSectionTabular', i18nKeys: ['chatTabularQueryEnabled', 'chatTabularChartsEnabled', 'chatTabularRouterEnabled', 'chatTabularRouterModel', 'chatTabularRouterMaxRows', 'chatTabularRouterMaxRepairs', 'chatTabularRouterTimeoutMs', 'chatTabularRouterSchemaMaxTokens'], settingKeys: ['chat_tabular_query_enabled', 'chat_tabular_charts_enabled', 'chat_tabular_router_enabled', 'chat_tabular_router_model', 'chat_tabular_router_max_rows', 'chat_tabular_router_max_repairs', 'chat_tabular_router_timeout_ms', 'chat_tabular_router_schema_max_tokens'] },
@@ -88,6 +88,7 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
     const isCragEnabled = siteConfigs.crag_enabled === 'true' || siteConfigs.crag_enabled === '1';
     const isDoclingEnabled = siteConfigs.docling_enabled === 'true' || siteConfigs.docling_enabled === '1';
     const isDescribeImageEnabled = siteConfigs.describe_image_enabled === 'true' || siteConfigs.describe_image_enabled === '1';
+    const isDoclingCaptioningEnabled = siteConfigs.docling_picture_description_enabled === 'true' || siteConfigs.docling_picture_description_enabled === '1';
     const isContextualEnrichmentEnabled = siteConfigs.contextual_enrichment !== 'false' && siteConfigs.contextual_enrichment !== '0';
     const isQueryCacheEnabled = siteConfigs.query_cache_enabled === 'true' || siteConfigs.query_cache_enabled === '1';
     const isCorpusTableEnabled = siteConfigs.chat_corpus_table_enabled === 'true' || siteConfigs.chat_corpus_table_enabled === '1';
@@ -1817,6 +1818,95 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
                         />
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('doclingBaseUrlHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="docling-table-mode">{t('doclingTableMode')}</label>
+                        <select
+                            id="docling-table-mode"
+                            value={siteConfigs.docling_table_mode || 'accurate'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, docling_table_mode: e.target.value }))}
+                            disabled={!isDoclingEnabled}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        >
+                            <option value="accurate">{t('doclingTableModeAccurate')}</option>
+                            <option value="fast">{t('doclingTableModeFast')}</option>
+                        </select>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('doclingTableModeHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="docling-ocr-languages">{t('doclingOcrLanguages')}</label>
+                        <input
+                            id="docling-ocr-languages"
+                            type="text"
+                            placeholder="de,en"
+                            value={siteConfigs.docling_ocr_languages ?? 'de,en'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, docling_ocr_languages: e.target.value }))}
+                            disabled={!isDoclingEnabled}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('doclingOcrLanguagesHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="docling-force-ocr" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="docling-force-ocr"
+                                type="checkbox"
+                                checked={siteConfigs.docling_force_ocr === 'true' || siteConfigs.docling_force_ocr === '1'}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, docling_force_ocr: e.target.checked ? 'true' : 'false' }))}
+                                disabled={!isDoclingEnabled}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('doclingForceOcr')}
+                        </label>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('doclingForceOcrHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="docling-picture-description-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="docling-picture-description-enabled"
+                                type="checkbox"
+                                checked={isDoclingCaptioningEnabled}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, docling_picture_description_enabled: e.target.checked ? 'true' : 'false' }))}
+                                disabled={!isDoclingEnabled}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('doclingPictureDescriptionEnabled')}
+                        </label>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('doclingPictureDescriptionEnabledHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="docling-picture-area-threshold">{t('doclingPictureAreaThreshold')}</label>
+                        <input
+                            id="docling-picture-area-threshold"
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={siteConfigs.docling_picture_area_threshold || '0.05'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, docling_picture_area_threshold: e.target.value }))}
+                            disabled={!isDoclingEnabled || !isDoclingCaptioningEnabled}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('doclingPictureAreaThresholdHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '600px' }}>
+                        <label htmlFor="docling-picture-description-prompt">{t('doclingPictureDescriptionPrompt')}</label>
+                        <textarea
+                            id="docling-picture-description-prompt"
+                            rows={4}
+                            placeholder="Beschreibe diese Abbildung in der Sprache des Dokuments …"
+                            value={siteConfigs.docling_picture_description_prompt || ''}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, docling_picture_description_prompt: e.target.value }))}
+                            disabled={!isDoclingEnabled || !isDoclingCaptioningEnabled}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('doclingPictureDescriptionPromptHelp')}</p>
                     </div>
 
                     <div className="input-group" style={{ maxWidth: '400px' }}>

@@ -310,19 +310,35 @@ Code: `internal/chat/date_prompt.go` (injection), `internal/chat/recency_classif
 
 ## Image captioning + better tables (Docling)
 
+Sidecar prerequisites (both shipped manifests set them; a hand-rolled deployment must too):
+
 ```
-docling_enabled                     = true        # prerequisite: sidecar reachable (see docs/observability/docling.md)
-docling_base_url                    = http://docling:5001   # or the k8s Service DNS
-docling_picture_description_enabled = true        # gate; default off
-docling_picture_area_threshold      = 0.05        # skip images < 5% of page area (filters logos/icons); [0,1]
-docling_table_mode                  = accurate    # cleaner structured tables; default "fast"
+DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true                 # REQUIRED for captioning — without it docling refuses the
+                                                          # captioning pipeline and EVERY conversion falls back to pdftotext
+DOCLING_SERVE_ALLOW_CUSTOM_PICTURE_DESCRIPTION_CONFIG=true # for the non-deprecated per-request config (Phase 2)
+DOCLING_SERVE_MAX_SYNC_WAIT=600                           # sync endpoint 504s after this regardless of the Go timeout (upstream default 120)
+image: quay.io/docling-project/docling-serve:v1.32.0     # pinned; bump deliberately, then re-run the live integration tests
 ```
 
-No migration. Captioning rides the Docling convert call, so `docling_enabled` must be on. **The vision endpoint + API key are injected per-request by the Go backend** from the admin AI provider config (same endpoint + key the app already uses); the vision model follows `describe_image_model` (→ `model_tier_fast`) — set it to a vision-capable model (e.g. `jlu/gemma-4-26b-it`). The key is **never** stored on the Docling sidecar (required when the model API needs auth); Docling only needs network reachability to that model URL. Captions land inline in Docling's markdown and flow through the existing chunk/embed pipeline — retrieval is caption→text, no multimodal embeddings.
+```
+docling_enabled                              = true        # prerequisite: sidecar reachable (see docs/observability/docling.md)
+docling_base_url                             = http://docling:5001   # or the k8s Service DNS
+docling_table_mode                           = accurate    # default (the sidecar's own default; "fast" trades structure for speed)
+docling_ocr_languages                        = de,en       # default; docling's RapidOCR default is English + Chinese
+docling_force_ocr                            = false       # default; true for scan-heavy KBs or broken text layers
+docling_document_timeout_seconds             = 600         # default; docling's own per-document limit
+docling_picture_description_enabled          = true        # gate; default off
+docling_picture_area_threshold               = 0.05        # skip images < 5% of page area (filters logos/icons); [0,1]
+docling_picture_description_prompt           = …           # optional; default asks (in German) for the document's language,
+                                                           # figure type, and every readable number/label verbatim
+docling_picture_description_timeout_seconds  = 120         # default; docling's 20 s default silently drops slow captions
+```
 
-When on, standalone image uploads (`.png`/`.jpg`/…) also route through Docling (caption + OCR) with Tesseract as the fallback. Existing files are **not** retroactively captioned — re-ingest a KB to benefit.
+No migration. Captioning rides the Docling convert call, so `docling_enabled` must be on. **The vision endpoint + API key are injected per-request by the Go backend** from the admin AI provider config (same endpoint + key the app already uses); the vision model follows `describe_image_model` (→ `model_tier_fast`) — set it to a vision-capable model (e.g. `jlu/gemma-4-26b-it`). The key is **never** stored on the Docling sidecar (required when the model API needs auth); Docling only needs network reachability to that model URL plus the `ENABLE_REMOTE_SERVICES` flag above. The worker probes the captioning path at startup (tiny embedded PDF, live options) and logs at **error** level when the sidecar rejects it. Pictures docling classifies as logo / icon / signature / stamp / barcode / QR / page thumbnail never reach the vision model. Captions, the text found *inside* figures (axis values, labels), table captions and footnotes are walked out of the DoclingDocument and land on the figure's or table's own page; retrieval is caption→text, no multimodal embeddings.
 
-**Throttle / GPU contention:** Docling's calls to gemma-4 bypass `AI_MAX_CONCURRENT_REQUESTS`, so cap Docling replicas + per-pod concurrency (the `k8s/docling.yml` fixed replica count is the throttle) and raise `DOCLING_TIMEOUT_SECONDS` since captioning extends convert latency. Fast-follows available on the same request and not yet wired: `do_chart_extraction`, `do_formula_enrichment`.
+`docling_enabled` / `docling_base_url` are read at worker start; every other key above is re-read per conversion, so admin-panel edits apply to the next file. When on, standalone image uploads (`.png`/`.jpg`/…) also route through Docling (caption + OCR) with Tesseract as the fallback. Existing files are **not** retroactively captioned — re-ingest a KB to benefit (captions, in-figure text, table captions and heading levels are all baked into chunk text at ingest).
+
+**Throttle / GPU contention:** Docling's calls to gemma-4 bypass `AI_MAX_CONCURRENT_REQUESTS`, so cap Docling replicas + per-pod `DOCLING_SERVE_ENG_LOC_NUM_WORKERS` (the `k8s/docling.yml` fixed replica count is the throttle; vision calls run one at a time per document). Raising `DOCLING_TIMEOUT_SECONDS` on the Go side needs a matching `DOCLING_SERVE_MAX_SYNC_WAIT` on the sidecar. Fast-follows available on the same request and not yet wired: `do_chart_extraction` (granite-vision chart→table on the sidecar, GPU-only in practice), `do_formula_enrichment` (open upstream memory-growth issue).
 
 ## Git repository source
 

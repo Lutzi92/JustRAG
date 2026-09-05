@@ -84,7 +84,7 @@ func buildPages(items []DocItem) []parser.PageText {
 // it. Labels follow docling-core's DocItemLabel values.
 func renderItem(it DocItem) string {
 	if it.Table != nil {
-		return renderTable(it.Table)
+		return renderTableItem(it.Table)
 	}
 	if it.Picture != nil {
 		return renderPicture(it.Picture)
@@ -97,7 +97,13 @@ func renderItem(it DocItem) string {
 	case "title":
 		return "# " + text
 	case "section_header":
-		return "## " + text
+		// docling's markdown: level N → N+1 hashes, so a level-1 heading sits
+		// under the document title. A missing level reads as 1.
+		level := it.Level
+		if level < 1 {
+			level = 1
+		}
+		return strings.Repeat("#", level+1) + " " + text
 	case "list_item":
 		return "- " + text
 	case "code":
@@ -118,14 +124,37 @@ func renderItem(it DocItem) string {
 // every figure chunk in the corpus, diluting the content it is meant to
 // introduce.
 func renderPicture(p *DocPicture) string {
-	parts := make([]string, 0, 2)
-	if s := strings.TrimSpace(p.Caption); s != "" {
-		parts = append(parts, s)
+	parts := make([]string, 0, 4+len(p.Footnotes))
+	for _, s := range []string{p.Caption, p.InnerText, p.Description} {
+		if s = strings.TrimSpace(s); s != "" {
+			parts = append(parts, s)
+		}
 	}
-	if s := strings.TrimSpace(p.Description); s != "" {
-		parts = append(parts, s)
-	}
+	parts = appendNonEmpty(parts, p.Footnotes)
 	return strings.Join(parts, "\n\n")
+}
+
+// renderTableItem wraps the markdown grid with the table's printed caption
+// before it and its footnotes after it, each as its own paragraph.
+func renderTableItem(t *DocTable) string {
+	parts := make([]string, 0, 2+len(t.Footnotes))
+	if s := strings.TrimSpace(t.Caption); s != "" {
+		parts = append(parts, s)
+	}
+	if grid := renderTable(t); grid != "" {
+		parts = append(parts, grid)
+	}
+	parts = appendNonEmpty(parts, t.Footnotes)
+	return strings.Join(parts, "\n\n")
+}
+
+func appendNonEmpty(parts, more []string) []string {
+	for _, s := range more {
+		if s = strings.TrimSpace(s); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return parts
 }
 
 // renderTable renders a cell grid as a markdown table. Cells are placed by

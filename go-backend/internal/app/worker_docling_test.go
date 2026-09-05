@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -58,7 +59,74 @@ func TestBuildDoclingClient_DefaultsWhenCaptionKeysUnset(t *testing.T) {
 	if c.Options.PictureDescription {
 		t.Error("PictureDescription should default off")
 	}
-	if c.Options.TableMode != "fast" {
-		t.Errorf("table mode = %q, want fast default", c.Options.TableMode)
+	if c.Options.TableMode != "accurate" {
+		t.Errorf("table mode = %q, want accurate default", c.Options.TableMode)
+	}
+}
+
+func TestReadDoclingOptions_DefaultsForAGermanCorpus(t *testing.T) {
+	scr := fakeDoclingSCR{vals: map[string]string{
+		"docling_enabled":                     "true",
+		"docling_base_url":                    "http://docling:5001",
+		"docling_picture_description_enabled": "true",
+	}}
+	o := readDoclingOptions(context.Background(), scr, nil)
+	if o.TableMode != "accurate" {
+		t.Errorf("table mode = %q, want accurate (the sidecar's own default; \"fast\" was a downgrade)", o.TableMode)
+	}
+	if got := o.OCRLanguages; len(got) != 2 || got[0] != "de" || got[1] != "en" {
+		t.Errorf("ocr languages = %v, want [de en]", got)
+	}
+	if o.ForceOCR {
+		t.Error("force OCR must default off")
+	}
+	if o.DocumentTimeoutSeconds != 600 {
+		t.Errorf("document timeout = %v, want 600", o.DocumentTimeoutSeconds)
+	}
+	if o.PictureTimeoutSeconds != 120 {
+		t.Errorf("picture timeout = %v, want 120 (docling's 20 s default silently drops slow captions)", o.PictureTimeoutSeconds)
+	}
+	if !strings.Contains(o.PicturePrompt, "Sprache des Dokuments") || !strings.Contains(o.PicturePrompt, "Zahlen") {
+		t.Errorf("default prompt must ask for the document's language and the figure's numbers, got %q", o.PicturePrompt)
+	}
+}
+
+func TestReadDoclingOptions_ReadsTheNewKeys(t *testing.T) {
+	scr := fakeDoclingSCR{vals: map[string]string{
+		"docling_picture_description_enabled":         "true",
+		"docling_picture_description_prompt":          "Describe it.",
+		"docling_picture_description_timeout_seconds": "45",
+		"docling_ocr_languages":                       " de, en ,fr,",
+		"docling_force_ocr":                           "true",
+		"docling_document_timeout_seconds":            "900",
+		"docling_table_mode":                          "fast",
+	}}
+	o := readDoclingOptions(context.Background(), scr, nil)
+	if o.PicturePrompt != "Describe it." || o.PictureTimeoutSeconds != 45 {
+		t.Errorf("prompt/timeout = %q/%v", o.PicturePrompt, o.PictureTimeoutSeconds)
+	}
+	if got := o.OCRLanguages; len(got) != 3 || got[0] != "de" || got[1] != "en" || got[2] != "fr" {
+		t.Errorf("ocr languages = %v, want [de en fr]", got)
+	}
+	if !o.ForceOCR || o.DocumentTimeoutSeconds != 900 || o.TableMode != "fast" {
+		t.Errorf("force/timeout/table = %v/%v/%q", o.ForceOCR, o.DocumentTimeoutSeconds, o.TableMode)
+	}
+}
+
+func TestBuildDoclingClient_ResolvesOptionsPerRequest(t *testing.T) {
+	// The admin panel edits site_config; nothing restarts the worker. The
+	// client therefore re-reads its options on every convert.
+	scr := fakeDoclingSCR{vals: map[string]string{
+		"docling_enabled":    "true",
+		"docling_base_url":   "http://docling:5001",
+		"docling_table_mode": "fast",
+	}}
+	c := buildDoclingClient(context.Background(), scr, nil)
+	if c == nil || c.OptionsFunc == nil {
+		t.Fatal("client must carry an OptionsFunc")
+	}
+	scr.vals["docling_table_mode"] = "accurate"
+	if got := c.OptionsFunc(context.Background()).TableMode; got != "accurate" {
+		t.Errorf("table mode after site-config change = %q, want accurate", got)
 	}
 }

@@ -215,3 +215,46 @@ func TestRenderItem_PictureWithOnlyOnePartHasNoBlankPadding(t *testing.T) {
 		t.Errorf("description-only picture = %q", got)
 	}
 }
+
+func TestRenderItem_SectionHeaderLevelDrivesDepth(t *testing.T) {
+	// docling's own markdown export: title → "#", section_header level N → N+1 hashes.
+	// A missing level (older sidecars, or hierarchy inference off) reads as 1.
+	cases := map[string]DocItem{
+		"# T":     {Label: "title", Text: "T"},
+		"## S":    {Label: "section_header", Text: "S"},
+		"## S1":   {Label: "section_header", Level: 1, Text: "S1"},
+		"### S2":  {Label: "section_header", Level: 2, Text: "S2"},
+		"#### S3": {Label: "section_header", Level: 3, Text: "S3"},
+	}
+	for want, it := range cases {
+		if got := renderItem(it); got != want {
+			t.Errorf("level %d: got %q want %q", it.Level, got, want)
+		}
+	}
+}
+
+func TestRenderItem_TableCaptionBeforeFootnotesAfter(t *testing.T) {
+	got := renderItem(DocItem{Label: "table", Table: &DocTable{
+		NumRows: 1, NumCols: 1,
+		Cells:     []DocTableCell{{Text: "Giessen", Row: 0, Col: 0}},
+		Caption:   "Tabelle 2: Standorte.",
+		Footnotes: []string{"* Stand 2025."},
+	}})
+	want := "Tabelle 2: Standorte.\n\n| Giessen |\n| --- |\n\n* Stand 2025."
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestRenderItem_PictureOrderIsCaptionInnerTextDescriptionFootnotes(t *testing.T) {
+	got := renderItem(DocItem{Label: "picture", Picture: &DocPicture{
+		Caption:     "Abbildung 1: Meldungen.",
+		InnerText:   "40 31 Jan Feb",
+		Description: "Ein Balkendiagramm.",
+		Footnotes:   []string{"Quelle: Ticketsystem."},
+	}})
+	want := "Abbildung 1: Meldungen.\n\n40 31 Jan Feb\n\nEin Balkendiagramm.\n\nQuelle: Ticketsystem."
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}

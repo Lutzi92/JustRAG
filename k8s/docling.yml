@@ -9,10 +9,13 @@
 #   docling_base_url = http://docling.justrag.svc.cluster.local:5001
 #   (in-namespace, http://docling:5001 also resolves)
 #
-# Image captioning (do_picture_description) is configured server-side here, via
-# the picture-description env below pointing at the internal gemma-4 endpoint —
-# the Go client only sends the enabling flags. See
-# docs/superpowers/specs/2026-06-22-docling-image-table-parsing-design.md.
+# Image captioning (do_picture_description): the vision endpoint, API key and
+# model are injected per request by the Go backend — nothing model-related is
+# configured here. What this pod MUST carry is
+# DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true (env below); without it docling
+# refuses to build the captioning pipeline and every conversion fails over to
+# the built-in parsers. The Go worker probes for this at startup and logs an
+# error. See docs/observability/docling.md.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -51,12 +54,14 @@ spec:
       # - name: ghcr-secret
       containers:
         - name: docling
-          # PIN THIS. `latest` is a moving target and this integration depends
-          # on /v1/convert/file + do_picture_description being present. Confirm a
-          # known-good tag against the docling-serve releases, then pin it here
-          # (e.g. quay.io/docling-project/docling-serve:vX.Y.Z) — see
-          # https://github.com/docling-project/docling-serve/releases
-          image: quay.io/docling-project/docling-serve:latest
+          # Pinned. `latest` is a moving target: the picture_description_api
+          # field this integration sends is deprecated upstream (since 1.21) and
+          # a silent removal lands as "every PDF falls back to pdftotext". Bump
+          # deliberately and re-run the live integration tests
+          # (docs/observability/docling.md). For a GPU pool use the explicit
+          # version of docling-serve-cu128 / -cu130 — those have no :latest.
+          #   https://github.com/docling-project/docling-serve/releases
+          image: quay.io/docling-project/docling-serve:v1.32.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -64,6 +69,25 @@ spec:
           env:
             - name: DOCLING_SERVE_ENABLE_UI
               value: "false"
+            # Required for image captioning: docling only talks to a remote
+            # vision API when this is set explicitly. Harmless when captioning
+            # is off.
+            - name: DOCLING_SERVE_ENABLE_REMOTE_SERVICES
+              value: "true"
+            # Lets the Go backend send picture_description_custom_config (the
+            # non-deprecated successor of picture_description_api) per request.
+            - name: DOCLING_SERVE_ALLOW_CUSTOM_PICTURE_DESCRIPTION_CONFIG
+              value: "true"
+            # The sync convert endpoint answers 504 after this many seconds
+            # regardless of the client's timeout (default 120). Keep it >= the
+            # worker's DOCLING_TIMEOUT_SECONDS (default 300).
+            - name: DOCLING_SERVE_MAX_SYNC_WAIT
+              value: "600"
+            # Two conversion threads per pod (the default) × replicas is the
+            # real concurrency; at captioning concurrency 1 per document that
+            # bounds in-flight vision calls to 2 × replicas.
+            - name: DOCLING_SERVE_ENG_LOC_NUM_WORKERS
+              value: "2"
             # Image captioning config (endpoint + API key + model id) is injected
             # per-request by the Go backend from the admin AI provider config — it
             # is NOT set on this sidecar, so the model-API credential never lives
@@ -100,9 +124,10 @@ spec:
             - name: model-cache
               mountPath: /.cache
       volumes:
-        # emptyDir re-downloads the ~3GB models on every pod restart. For faster
-        # restarts, replace with a PersistentVolumeClaim (ReadWriteOnce per pod,
-        # or ReadWriteMany shared across replicas if your storage supports it):
+        # emptyDir re-downloads the ~3GB models on every pod restart, which
+        # turns a rollout into a multi-minute cold start (readiness gates on
+        # it). Prefer a PersistentVolumeClaim (ReadWriteOnce per pod, or
+        # ReadWriteMany shared across replicas if your storage supports it):
         #   - name: model-cache
         #     persistentVolumeClaim:
         #       claimName: docling-model-cache

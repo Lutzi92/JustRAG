@@ -199,3 +199,24 @@ func TestIntegration_RealSidecar_KeepsFigureCaptions(t *testing.T) {
 		t.Errorf("no vision description landed on page 2 beyond the known prose; page text=%q", byNumber[2])
 	}
 }
+
+// TestIntegration_RealSidecar_AcceptsTheDefaultRequest sends what a worker
+// with default site-config sends (accurate tables, de+en OCR, document
+// timeout, heading hierarchy) through Probe and asserts the sidecar accepts
+// the field set. A field the pinned image does not know is a 422, and a 422
+// here means every real conversion would fall back to pdftotext.
+func TestIntegration_RealSidecar_AcceptsTheDefaultRequest(t *testing.T) {
+	baseURL := os.Getenv("DOCLING_TEST_URL")
+	if baseURL == "" {
+		t.Skip("set DOCLING_TEST_URL to run against a live docling-serve")
+	}
+	c := NewClient(baseURL, 120*time.Second)
+	c.Options = ConvertOptions{
+		TableMode:              "accurate",
+		OCRLanguages:           []string{"de", "en"},
+		DocumentTimeoutSeconds: 600,
+	}
+	if err := c.Probe(context.Background()); err != nil {
+		t.Fatalf("sidecar rejected the default request: %v", err)
+	}
+}

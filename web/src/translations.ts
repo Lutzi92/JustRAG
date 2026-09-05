@@ -1601,6 +1601,38 @@ export const translations = {
         de: 'HTTP-URL des Docling-Sidecars. Beispiel: http://docling:5001 (innerhalb von docker compose).',
         en: 'HTTP URL of the Docling sidecar. Example: http://docling:5001 (inside docker compose).',
     },
+    doclingTableMode: { de: 'Docling-Tabellenmodus', en: 'Docling table mode' },
+    doclingTableModeHelp: {
+        de: '"accurate" (Standard, Docling-Standard) rekonstruiert verbundene Zellen und Kopfzeilen zuverlässiger; "fast" ist schneller, verliert aber Tabellenstruktur.',
+        en: '"accurate" (default, Docling\'s own default) reconstructs merged cells and header rows more reliably; "fast" is quicker but loses table structure.',
+    },
+    doclingTableModeAccurate: { de: 'accurate (Standard)', en: 'accurate (default)' },
+    doclingTableModeFast: { de: 'fast', en: 'fast' },
+    doclingOcrLanguages: { de: 'OCR-Sprachen', en: 'OCR languages' },
+    doclingOcrLanguagesHelp: {
+        de: 'Kommaliste, Standard "de,en". Doclings Standard-OCR-Engine (RapidOCR) lädt ohne Angabe Englisch + Chinesisch — deutsche Scans bekommen dann falsche Umlaute und Wortabstände.',
+        en: 'Comma list, default "de,en". Without it Docling\'s default OCR engine (RapidOCR) loads English + Chinese models — German scans get wrong umlauts and word spacing.',
+    },
+    doclingForceOcr: { de: 'OCR erzwingen (Textebene verwerfen)', en: 'Force OCR (discard text layer)' },
+    doclingForceOcrHelp: {
+        de: 'Standard: aus. Jede Seite wird per OCR gelesen und die PDF-Textebene ersetzt. Für KBs, die überwiegend aus Scans bestehen oder deren PDFs eine kaputte Textebene haben (Zeichensalat, fehlende Leerzeichen). Verlangsamt jede Konvertierung deutlich.',
+        en: 'Default: off. Every page is OCRed and the PDF text layer replaced. For KBs that are mostly scans or whose PDFs carry a broken text layer (garbage characters, missing spaces). Slows every conversion noticeably.',
+    },
+    doclingPictureDescriptionEnabled: { de: 'Abbildungen per Vision-Modell beschreiben', en: 'Describe figures with the vision model' },
+    doclingPictureDescriptionEnabledHelp: {
+        de: 'Standard: aus. Docling schickt jede ausreichend große Abbildung an das Bildbeschreibungs-Modell (siehe unten); Beschreibung, gedruckte Bildunterschrift und der Text in der Abbildung landen im Chunk der jeweiligen Seite. Der Sidecar braucht DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true — der Worker prüft das beim Start und loggt sonst einen Fehler. Bestehende Dateien: KB neu ingestieren.',
+        en: 'Default: off. Docling sends every sufficiently large figure to the image-description model (below); the description, the printed caption and the text inside the figure land in that page\'s chunk. The sidecar needs DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true — the worker probes for it at startup and logs an error otherwise. Existing files: re-ingest the KB.',
+    },
+    doclingPictureAreaThreshold: { de: 'Mindestfläche einer Abbildung (Anteil der Seite)', en: 'Minimum figure area (fraction of page)' },
+    doclingPictureAreaThresholdHelp: {
+        de: 'Bereich 0–1, Standard 0.05: Bilder unter 5 % der Seitenfläche (Logos, Icons, Aufzählungszeichen) werden nicht beschrieben. Logos, Signaturen, Stempel, Barcodes und QR-Codes werden unabhängig davon per Klassifikation übersprungen.',
+        en: 'Range 0–1, default 0.05: images below 5% of the page area (logos, icons, bullets) are not described. Logos, signatures, stamps, barcodes and QR codes are skipped by classification regardless.',
+    },
+    doclingPictureDescriptionPrompt: { de: 'Prompt für die Abbildungsbeschreibung', en: 'Figure description prompt' },
+    doclingPictureDescriptionPromptHelp: {
+        de: 'Leer = Standard: fragt in der Sprache des Dokuments nach Typ, Inhalt und allen lesbaren Zahlen, Achsen- und Legendenbeschriftungen. Doclings eigener Standard ("Describe this image in a few sentences.") liefert englische Einzeiler ohne Werte.',
+        en: 'Empty = default: asks, in the document\'s language, for the figure type, its content and every readable number, axis label and legend entry. Docling\'s own default ("Describe this image in a few sentences.") yields English one-liners without values.',
+    },
     describeImageEnabled: { de: 'Bildbeschreibung aktivieren', en: 'Enable image description' },
     describeImageEnabledHelp: {
         de: 'Aktiviert den Endpunkt POST /api/describe-image. Erfordert ein bildfähiges Modell (siehe unten). Standard: aus.',

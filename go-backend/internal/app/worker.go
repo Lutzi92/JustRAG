@@ -152,6 +152,7 @@ func RunWorker(cfg *config.Config) error {
 				Fallback: &parser.ImageParser{},
 			})
 			slog.Info("docling image captioning enabled for standalone image uploads")
+			probeDoclingCaptioning(dc)
 		}
 		slog.Info("docling parser enabled for pdf + docx + pptx", "base_url", dc.BaseURL())
 	}
@@ -600,19 +601,61 @@ func buildDoclingClient(ctx context.Context, scr siteConfigReaderForDocling, res
 		}
 	}
 	client := docling.NewClient(*urlRaw, timeout)
+	// Startup snapshot (used for the parser-registration decision below) plus
+	// a per-request resolver, so an admin-panel edit of any docling_* key
+	// reaches the next conversion rather than the next worker restart.
 	client.Options = readDoclingOptions(ctx, scr, resolver)
+	client.OptionsFunc = func(ctx context.Context) docling.ConvertOptions {
+		return readDoclingOptions(ctx, scr, resolver)
+	}
 	return client
 }
 
-// readDoclingOptions derives caption/table flags from site-config. Read
-// failures degrade to safe defaults (captioning off, table_mode "fast").
+// probeDoclingCaptioning converts a tiny embedded PDF with captioning on, in
+// the background, and logs at error level if the sidecar rejects it. The
+// failure it exists for is silent otherwise: a sidecar started without
+// DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true refuses to build the captioning
+// pipeline, and FallbackParser then routes every PDF/DOCX/PPTX to the
+// built-in parsers with one warn line per file.
+func probeDoclingCaptioning(client *docling.Client) {
+	safego.Go(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := client.Probe(ctx); err != nil {
+			slog.Error("docling: captioning probe failed — every Docling conversion will fall back to the built-in parsers until this is fixed. "+
+				"Check that the sidecar runs with DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true and can reach the model API.",
+				"error", err.Error())
+			return
+		}
+		slog.Info("docling: captioning probe ok")
+	})
+}
+
+// DefaultDoclingPicturePrompt is what the vision model is asked per figure
+// when docling_picture_description_prompt is unset. It replaces docling's
+// "Describe this image in a few sentences.": the corpus is mostly German,
+// and the values printed in a chart are the part worth retrieving.
+const DefaultDoclingPicturePrompt = "Beschreibe diese Abbildung in der Sprache des Dokuments (sonst auf Deutsch). " +
+	"Nenne zuerst den Typ (z. B. Balkendiagramm, Tabelle, Screenshot, Schema, Foto), dann was sie zeigt. " +
+	"Übertrage alle lesbaren Zahlen, Achsenbeschriftungen, Legendeneinträge und Beschriftungen wörtlich. " +
+	"Keine Einleitung, keine Wertung."
+
+// readDoclingOptions derives the convert options from site-config. Read
+// failures degrade to safe defaults (captioning off, table_mode "accurate",
+// OCR de+en, 600 s per document).
 //
 // When picture description is on, the vision endpoint + API key are sourced
 // from the app's AI provider config (the same one /api/describe-image uses) and
 // passed to Docling per-request, so the model-API credential never lives on the
 // Docling sidecar.
 func readDoclingOptions(ctx context.Context, scr siteConfigReaderForDocling, resolver *ai.ConfigResolver) docling.ConvertOptions {
-	opts := docling.ConvertOptions{TableMode: "fast"}
+	opts := docling.ConvertOptions{
+		// The sidecar's own default; "fast" was a downgrade.
+		TableMode: "accurate",
+		// Docling's auto engine is RapidOCR with English + Chinese models.
+		OCRLanguages:           []string{"de", "en"},
+		DocumentTimeoutSeconds: 600,
+	}
 
 	if v, err := scr.GetSiteConfigValue(ctx, "docling_picture_description_enabled"); err == nil && v != nil && (*v == "true" || *v == "1") {
 		opts.PictureDescription = true
@@ -633,6 +676,38 @@ func readDoclingOptions(ctx context.Context, scr siteConfigReaderForDocling, res
 		}
 		if opts.PictureAPIModel == "" {
 			slog.Warn("docling: picture description enabled but no vision model resolved (set describe_image_model or model_tier_fast)")
+		}
+		opts.PicturePrompt = DefaultDoclingPicturePrompt
+		if v, err := scr.GetSiteConfigValue(ctx, "docling_picture_description_prompt"); err == nil && v != nil && strings.TrimSpace(*v) != "" {
+			opts.PicturePrompt = strings.TrimSpace(*v)
+		}
+		// Docling's default is 20 s per image and a timed-out image simply
+		// has no description — no error, no log.
+		opts.PictureTimeoutSeconds = 120
+		if v, err := scr.GetSiteConfigValue(ctx, "docling_picture_description_timeout_seconds"); err == nil && v != nil {
+			if f, perr := strconv.ParseFloat(strings.TrimSpace(*v), 64); perr == nil && f > 0 {
+				opts.PictureTimeoutSeconds = f
+			}
+		}
+	}
+
+	if v, err := scr.GetSiteConfigValue(ctx, "docling_ocr_languages"); err == nil && v != nil {
+		var langs []string
+		for _, l := range strings.Split(*v, ",") {
+			if l = strings.TrimSpace(l); l != "" {
+				langs = append(langs, l)
+			}
+		}
+		if len(langs) > 0 {
+			opts.OCRLanguages = langs
+		}
+	}
+	if v, err := scr.GetSiteConfigValue(ctx, "docling_force_ocr"); err == nil && v != nil && (*v == "true" || *v == "1") {
+		opts.ForceOCR = true
+	}
+	if v, err := scr.GetSiteConfigValue(ctx, "docling_document_timeout_seconds"); err == nil && v != nil {
+		if f, perr := strconv.ParseFloat(strings.TrimSpace(*v), 64); perr == nil && f > 0 {
+			opts.DocumentTimeoutSeconds = f
 		}
 	}
 
