@@ -9,12 +9,17 @@ export interface MessageSource {
 }
 
 // CitationStatus is one entry in MessageVerification.citations — produced
-// by the deterministic n-gram validator. `n` is the 1-based citation number
-// as it appears in the answer ([3] → n=3). Discriminated union enforces
-// the backend invariant: verified=true has no reason, verified=false
-// always carries one of the stable keys "out_of_range" / "no_overlap".
+// by the deterministic n-gram validator, or (method: 'span') by the
+// Wave-3 span verifier. `n` is the 1-based citation number as it appears
+// in the answer ([3] → n=3). Discriminated union enforces the backend
+// invariant: verified=true has no reason, verified=false always carries
+// one of the stable keys "out_of_range" / "no_overlap". `span` is present
+// only for method 'span': RUNE offsets (Unicode code points, end
+// exclusive) into the corresponding `sources[n-1].content` — convert with
+// `Array.from(content)` before slicing, never `content.slice`, since JS
+// strings index UTF-16 code units.
 export type CitationStatus =
-    | { n: number; verified: true; method?: 'ngram' | 'semantic' }
+    | { n: number; verified: true; method?: 'ngram' | 'semantic' | 'span'; span?: { start: number; end: number } }
     | { n: number; verified: false; reason: 'out_of_range' | 'no_overlap' };
 
 // FlaggedClaimStatus is one entry produced by the Phase 3 §3.3

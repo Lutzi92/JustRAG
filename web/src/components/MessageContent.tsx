@@ -7,6 +7,7 @@ import { Brain, Loader2, FileText, ArrowRight } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import type { MessageSource, TrajectoryEvent, FlaggedClaimStatus } from '../types';
 import { formatPageRanges } from '../utils/citations';
+import { excerptAroundSpan } from '../utils/verification';
 import { AnchoredPopover } from './AnchoredPopover';
 import { TrajectoryPanel } from './TrajectoryPanel';
 import { MarkdownTable } from './MarkdownTable';
@@ -34,6 +35,15 @@ interface MessageContentProps {
      * citations the same as ngram-verified (no badge).
      */
     semanticCitations?: Set<number>;
+    /**
+     * 1-based citation numbers with a verified span (method = "span"),
+     * mapped to the RUNE offsets into `sources[n-1].content`. When a pill's
+     * citation has an entry here, its source popover highlights the exact
+     * quoted passage with `<mark class="citation-span">` inside a windowed
+     * excerpt instead of the old flat 320-char snippet. Pass undefined or
+     * empty to render every popover the old way.
+     */
+    citationSpans?: Map<number, { start: number; end: number }>;
     /**
      * Streaming trajectory: one entry per orchestrator decision point. When
      * present and non-empty, a collapsible "Reasoning steps" panel is rendered
@@ -76,14 +86,32 @@ interface MessageContentProps {
  * The popover is click-triggered. It used to open on hover, which left touch
  * users with no way to preview a source at all — a tap went straight into the
  * document instead.
+ *
+ * When `span` is present (the Wave-3 span verifier matched this citation to
+ * an exact passage), the snippet becomes a windowed excerpt around that span
+ * — up to 160 runes of context each side, ellipsis when truncated — with the
+ * quoted passage itself wrapped in `<mark class="citation-span">`. Without a
+ * span it falls back to the flat 320-char content slice, unchanged.
  */
-function CitationPreview({ source, t, onOpenSource }: {
+function CitationPreview({ source, span, t, onOpenSource }: {
     source: MessageSource;
+    span?: { start: number; end: number };
     t: (key: string) => string;
     onOpenSource?: (source: MessageSource) => void;
 }) {
     const pageLabel = source.pages && source.pages.length > 0 ? `S. ${formatPageRanges(source.pages)}` : '';
-    const snippet = source.content && source.content.length > 320 ? `${source.content.slice(0, 320)}…` : source.content;
+    const snippetNode = span
+        ? (() => {
+            const { before, quote, after } = excerptAroundSpan(source.content, span, 160);
+            return (
+                <>
+                    {before}
+                    <mark className="citation-span">{quote}</mark>
+                    {after}
+                </>
+            );
+        })()
+        : (source.content && source.content.length > 320 ? `${source.content.slice(0, 320)}…` : source.content);
 
     return (
         <div style={{ padding: '10px 12px' }}>
@@ -94,9 +122,9 @@ function CitationPreview({ source, t, onOpenSource }: {
             {pageLabel && (
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>{pageLabel}</div>
             )}
-            {snippet && (
+            {source.content && (
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.45, maxHeight: '7.5em', overflow: 'hidden' }}>
-                    {snippet}
+                    {snippetNode}
                 </div>
             )}
             {onOpenSource && source.fileId && (
@@ -375,7 +403,7 @@ function buildMarkdownComponents(language: 'de' | 'en') {
     };
 }
 
-const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectCitations, semanticCitations, trajectory, flaggedClaims, onOpenSource, reasoningOpen = false, onToggleReasoning }: MessageContentProps) => {
+const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectCitations, semanticCitations, citationSpans, trajectory, flaggedClaims, onOpenSource, reasoningOpen = false, onToggleReasoning }: MessageContentProps) => {
     const { language, t } = useTheme();
     const reasoningLabel = language === 'en' ? 'Chain of Thought' : 'Gedankengang';
     const markdownComponents = useMemo(() => buildMarkdownComponents(language), [language]);
@@ -458,6 +486,7 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
     }, [onOpenSource]);
 
     const openSource = openCitation != null ? sources?.[openCitation - 1] : undefined;
+    const openSpan = openCitation != null ? citationSpans?.get(openCitation) : undefined;
 
     return (
         <>
@@ -554,6 +583,7 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
                 {openSource && (
                     <CitationPreview
                         source={openSource}
+                        span={openSpan}
                         t={t}
                         // Keep the prop optional-aware: CitationPreview renders the
                         // open link only when a handler exists.

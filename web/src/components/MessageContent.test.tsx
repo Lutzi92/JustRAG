@@ -372,4 +372,63 @@ describe('MessageContent citation source popover', () => {
         expect(pill.getAttribute('tabindex')).toBe('0');
         expect(pill.getAttribute('aria-haspopup')).toBe('dialog');
     });
+
+    it('renders the plain 320-char snippet with no <mark> when no span is available', () => {
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.click(firstPill(container));
+
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toHaveTextContent(sources[0].content);
+        expect(dialog.querySelector('mark.citation-span')).toBeNull();
+    });
+
+    describe('with a verified citation span', () => {
+        // Umlaut before the span, as the brief specifies; the rune-safety of
+        // the slicing itself is covered by excerptAroundSpan's own unit tests.
+        const spanContent = 'Die Übersicht zeigt: der zitierte Paragraph regelt die Kündigungsfrist ausführlich und gilt ab sofort für den gesamten Vertrag.';
+        const quotedText = 'zitierte Paragraph';
+        const start = spanContent.indexOf(quotedText);
+        const end = start + Array.from(quotedText).length;
+        const spanSources = [
+            { index: 1, fileName: 'vertrag.pdf', fileId: 'f9', content: spanContent, score: 0.9 },
+        ];
+
+        it('renders a <mark class="citation-span"> whose text is exactly the quoted span', () => {
+            const { container } = render(
+                <MessageContent
+                    content="Claim [1]."
+                    sources={spanSources}
+                    citationSpans={new Map([[1, { start, end }]])}
+                    onOpenSource={vi.fn()}
+                />,
+            );
+            fireEvent.click(firstPill(container));
+
+            const dialog = screen.getByRole('dialog');
+            const mark = dialog.querySelector('mark.citation-span');
+            expect(mark).not.toBeNull();
+            expect(mark).toHaveTextContent(Array.from(spanContent).slice(start, end).join(''));
+        });
+
+        it('shows at most 160 chars of context on each side, with an ellipsis when truncated', () => {
+            const long = 'x'.repeat(500) + 'ZIEL-SATZ' + 'y'.repeat(500);
+            const longSources = [
+                { index: 1, fileName: 'lang.pdf', fileId: 'f10', content: long, score: 0.9 },
+            ];
+            const { container } = render(
+                <MessageContent
+                    content="Claim [1]."
+                    sources={longSources}
+                    citationSpans={new Map([[1, { start: 500, end: 509 }]])}
+                    onOpenSource={vi.fn()}
+                />,
+            );
+            fireEvent.click(firstPill(container));
+
+            const dialog = screen.getByRole('dialog');
+            expect(dialog).toHaveTextContent(`…${'x'.repeat(160)}`);
+            expect(dialog).toHaveTextContent(`${'y'.repeat(160)}…`);
+            expect(dialog.querySelector('mark.citation-span')).toHaveTextContent('ZIEL-SATZ');
+        });
+    });
 });

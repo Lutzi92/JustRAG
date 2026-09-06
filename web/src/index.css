@@ -728,6 +728,19 @@ button.source-card {
   opacity: 0.85;
 }
 
+/* Span-verified citation quote (Wave-3 span verifier): the exact passage
+   the citation was matched to, inside the source popover's windowed
+   excerpt. Low-alpha accent fill + a left border reads as "this is the
+   verified quote", distinct from the amber suspect/flagged treatments
+   above (which signal a problem, not a confirmation). */
+.citation-span {
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  color: inherit;
+  border-left: 2px solid var(--accent-primary);
+  border-radius: 2px;
+  padding: 0 3px;
+}
+
 .source-label {
   font: var(--type-caption);
   /* improvement #4 — overline/label (QUELLEN) */

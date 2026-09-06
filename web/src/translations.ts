@@ -1559,6 +1559,21 @@ export const translations = {
         de: 'Wahrscheinlichkeit, mit der eine abgeschlossene Antwort an den RAGAS-Judge weitergeleitet wird. Bereich 0.0–1.0; Standard 0.0 (nichts wird gesampelt, auch wenn der Master-Schalter oben an ist). Empfehlung: mit 0.01 (1%) starten, Kosten in den Prometheus-Counters beobachten, dann nach Bedarf anpassen. Bei 100 Anfragen/Tag und Rate 0.05 ergibt das ~5 Samples/Tag = 15 Judge-LLM-Aufrufe/Tag — klein genug für stabile Wochen-Trends ohne nennenswerte Zusatzkosten.',
         en: 'Probability that a completed response is forwarded to the RAGAS judge. Range 0.0–1.0; default 0.0 (nothing is sampled even when the master switch above is on). Recommended starting point: 0.01 (1%), watch the Prometheus counters, then adjust as needed. At 100 queries/day with rate 0.05 you get ~5 samples/day = 15 judge LLM calls/day — small enough for stable weekly trends without meaningful additional cost.',
     },
+    chatCitationSpansEnabled: { de: 'Zitat-Fundstellen (wortgenaue Belegstelle)', en: 'Citation spans (verbatim quote match)' },
+    chatCitationSpansEnabledHelp: {
+        de: 'Wenn aktiviert: zitiert der Antworttext [N], extrahiert ein Fast-Tier-Modell nach der Antwort ein wörtliches Zitat aus der jeweiligen Quelle und prüft es exakt gegen den Chunk-Text; die gefundene Fundstelle (Rune-Offsets in die Quelle) wird im Quellen-Popover als hervorgehobene Textstelle angezeigt statt des bisherigen 320-Zeichen-Ausschnitts. Ein zusätzlicher Modellaufruf pro Antwort, zeitbudgetiert (s. Timeout unten); bei Fehler oder Timeout bleibt die bisherige Zitatprüfung unverändert bestehen. Standard: aus.',
+        en: 'When on: for each [N] the answer cites, a fast-tier model extracts a verbatim quote from that source after the answer and checks it exactly against the chunk text; the resulting span (rune offsets into the source) is shown as a highlighted passage in the source popover instead of the old flat 320-char snippet. One extra model call per response, time-boxed (see timeout below); on error or timeout the existing citation validation is unchanged. Default: off.',
+    },
+    chatCitationSpansMaxSources: { de: 'Zitat-Fundstellen: max. Quellen', en: 'Citation spans: max sources' },
+    chatCitationSpansMaxSourcesHelp: {
+        de: 'Obergrenze für unterschiedliche Quellen, die pro Antwort in einem Aufruf an die Fundstellen-Extraktion gehen. Bereich 1–50; Standard 12. Höhere Werte decken mehr Zitate ab, verlängern aber den Prompt und damit die Latenz des Modellaufrufs.',
+        en: 'Upper bound on distinct sources sent to the span-extraction call per response. Range 1–50; default 12. Higher values cover more citations but lengthen the prompt and the model call\'s latency.',
+    },
+    chatCitationSpansTimeoutMs: { de: 'Zitat-Fundstellen: Timeout (ms)', en: 'Citation spans: timeout (ms)' },
+    chatCitationSpansTimeoutMsHelp: {
+        de: 'Zeitbudget für den Fundstellen-Modellaufruf in Millisekunden. Bereich 1000–60000; Standard 8000. Läuft die Extraktion nicht rechtzeitig durch, bleibt die bisherige Zitatprüfung unverändert bestehen — die Post-Response-Verarbeitung wartet nicht länger.',
+        en: 'Time budget for the span-extraction model call, in milliseconds. Range 1000–60000; default 8000. If extraction doesn\'t finish in time, the existing citation validation is left unchanged — post-response processing never waits longer.',
+    },
     chatAgenticEnabled: { de: 'Agentischer Chat-Loop (Multi-Hop Suche)', en: 'Agentic chat loop (multi-hop search)' },
     chatAgenticEnabledHelp: {
         de: 'Wenn aktiviert: für Anfragen, die der Query-Klassifikator als komplex einstuft (Vergleichs- / Synthese-Fragen, mehrteilig), führt der Chat-Handler statt der bestehenden 2-Schritt-Recherche eine adaptive Multi-Hop-Schleife aus. Pro Hop nach dem ersten fragt ein LLM-Richter, ob die bisherigen Quellen die Frage vollständig beantworten — falls nein, schlägt er eine fokussierte Folgeanfrage vor. Stops früh wenn (a) der Richter sagt "genug", (b) keine neuen Chunks dazukommen, oder (c) das Hop-Budget aufgebraucht ist. Standard: aus. Kosten: 1-2 zusätzliche LLM-Aufrufe (kleines Modell), 1-2 zusätzliche Suchen pro betroffener Anfrage. Wirkt nur im Streaming-Modus auf complex_reasoning-Anfragen ohne explizites Enhance — andere Anfragen behalten den bestehenden Pfad.',
