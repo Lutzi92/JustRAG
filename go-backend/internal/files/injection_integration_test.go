@@ -12,69 +12,123 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/justrag/go-backend/internal/files"
 )
 
-func TestSetAndClearInjectionFlag(t *testing.T) {
+// readVerdict returns the two screening columns as (flag, detail-or-nil).
+func readVerdict(t *testing.T, pool *pgxpool.Pool, fileID string) (bool, map[string]any) {
+	t.Helper()
+	var flag bool
+	var raw *string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT injection_flag, injection_detail::text FROM files WHERE id = $1::uuid`, fileID,
+	).Scan(&flag, &raw); err != nil {
+		t.Fatalf("read verdict: %v", err)
+	}
+	if raw == nil {
+		return flag, nil
+	}
+	var m map[string]any
+	// The column is jsonb, so the round trip must survive as an OBJECT — a
+	// missing ::jsonb cast would store the payload as a quoted string and
+	// this unmarshal into a map is what catches it.
+	if err := json.Unmarshal([]byte(*raw), &m); err != nil {
+		t.Fatalf("injection_detail is not a JSON object: %v (%s)", err, *raw)
+	}
+	return flag, m
+}
+
+// TestInjectionVerdictThreeStates walks all three states of the
+// (injection_flag, injection_detail) pair and the conditional no-op that
+// keeps a poll from rewriting an already-clean row.
+//
+//	detail IS NULL          never screened
+//	detail = {screened_at}  screened, clean
+//	detail carries "rule"   screened, flagged
+func TestInjectionVerdictThreeStates(t *testing.T) {
 	pool := openMainPool(t)
 	store := files.NewStore(pool)
 	ctx := context.Background()
 	_, fileID := seedErrorFile(t, pool, "processing")
 
-	// A freshly inserted row is unflagged with a NULL detail: that pair is
-	// what migration 0072 defines as "never screened", as opposed to
-	// "screened and clean" (false flag, non-NULL detail).
-	var flag bool
-	var detail *string
-	if err := pool.QueryRow(ctx,
-		`SELECT injection_flag, injection_detail::text FROM files WHERE id = $1::uuid`, fileID,
-	).Scan(&flag, &detail); err != nil {
-		t.Fatalf("read initial: %v", err)
-	}
+	// State 1: never screened. A freshly inserted row must be false/NULL,
+	// which is what an already-ingested corpus looks like after migration
+	// 0072 (no backfill).
+	flag, detail := readVerdict(t, pool, fileID)
 	if flag || detail != nil {
 		t.Fatalf("fresh row: flag=%v detail=%v, want false/NULL", flag, detail)
 	}
 
+	// State 2: screened, clean. The detail must carry screened_at and
+	// NOTHING else — a rule or snippet here would read as a finding.
+	firstClean := []byte(`{"screened_at":"2026-09-06T00:00:00Z"}`)
+	if err := store.MarkInjectionScreenedClean(ctx, fileID, firstClean); err != nil {
+		t.Fatalf("MarkInjectionScreenedClean: %v", err)
+	}
+	flag, detail = readVerdict(t, pool, fileID)
+	if flag {
+		t.Error("a clean pass must leave injection_flag false")
+	}
+	if detail == nil {
+		t.Fatal("a clean pass must WRITE a detail — a NULL one is indistinguishable from never screened")
+	}
+	if len(detail) != 1 || detail["screened_at"] != "2026-09-06T00:00:00Z" {
+		t.Errorf("clean detail = %v, want screened_at only", detail)
+	}
+
+	// The conditional: an already-clean row must NOT be rewritten. Every
+	// RSS/Confluence/git poll re-ingests unchanged documents, so an
+	// unconditional UPDATE would churn the files table on every sweep.
+	secondClean := []byte(`{"screened_at":"2026-09-07T00:00:00Z"}`)
+	if err := store.MarkInjectionScreenedClean(ctx, fileID, secondClean); err != nil {
+		t.Fatalf("MarkInjectionScreenedClean (repeat): %v", err)
+	}
+	_, detail = readVerdict(t, pool, fileID)
+	if detail["screened_at"] != "2026-09-06T00:00:00Z" {
+		t.Errorf("an already-clean row must not be rewritten, got %v", detail)
+	}
+
+	// State 3: screened, flagged.
 	payload := []byte(`{"rule":"ignore_previous","position":42,"snippet":"Ignore all previous instructions","screened_at":"2026-09-06T00:00:00Z"}`)
 	if err := store.SetInjectionFlag(ctx, fileID, payload); err != nil {
 		t.Fatalf("SetInjectionFlag: %v", err)
 	}
-	if err := pool.QueryRow(ctx,
-		`SELECT injection_flag, injection_detail::text FROM files WHERE id = $1::uuid`, fileID,
-	).Scan(&flag, &detail); err != nil {
-		t.Fatalf("read after set: %v", err)
-	}
+	flag, detail = readVerdict(t, pool, fileID)
 	if !flag {
 		t.Error("injection_flag must be true after SetInjectionFlag")
 	}
-	if detail == nil {
-		t.Fatal("injection_detail must be written")
-	}
-	// The column is jsonb, so the round trip must survive as JSON — a
-	// text/jsonb cast mistake would store the payload as a quoted string.
-	var back struct {
-		Rule     string `json:"rule"`
-		Position int    `json:"position"`
-		Snippet  string `json:"snippet"`
-	}
-	if err := json.Unmarshal([]byte(*detail), &back); err != nil {
-		t.Fatalf("injection_detail is not jsonb-readable JSON: %v (%s)", err, *detail)
-	}
-	if back.Rule != "ignore_previous" || back.Position != 42 {
-		t.Errorf("round trip lost fields: %+v", back)
+	if detail["rule"] != "ignore_previous" || detail["position"] != float64(42) {
+		t.Errorf("round trip lost fields: %v", detail)
 	}
 
-	// A re-ingest that finds nothing must drop the badge, not keep it.
-	if err := store.ClearInjectionFlag(ctx, fileID); err != nil {
-		t.Fatalf("ClearInjectionFlag: %v", err)
+	// Back to clean: a flagged row IS rewritten (first disjunct of the
+	// WHERE clause), so a re-ingest drops the stale badge.
+	if err := store.MarkInjectionScreenedClean(ctx, fileID, secondClean); err != nil {
+		t.Fatalf("MarkInjectionScreenedClean (after flag): %v", err)
 	}
-	if err := pool.QueryRow(ctx,
-		`SELECT injection_flag, injection_detail::text FROM files WHERE id = $1::uuid`, fileID,
-	).Scan(&flag, &detail); err != nil {
-		t.Fatalf("read after clear: %v", err)
+	flag, detail = readVerdict(t, pool, fileID)
+	if flag {
+		t.Error("a clean re-screen must drop the flag")
 	}
-	if flag || detail != nil {
-		t.Errorf("after clear: flag=%v detail=%v, want false/NULL", flag, detail)
+	if len(detail) != 1 || detail["screened_at"] != "2026-09-07T00:00:00Z" {
+		t.Errorf("after re-screen: detail = %v, want screened_at only", detail)
+	}
+
+	// And a row carrying an old finding but a false flag (a hand-fixed row)
+	// is rewritten too — the third disjunct.
+	if _, err := pool.Exec(ctx,
+		`UPDATE files SET injection_flag = false, injection_detail = $1::jsonb WHERE id = $2::uuid`,
+		payload, fileID); err != nil {
+		t.Fatalf("seed stale finding: %v", err)
+	}
+	if err := store.MarkInjectionScreenedClean(ctx, fileID, firstClean); err != nil {
+		t.Fatalf("MarkInjectionScreenedClean (stale finding): %v", err)
+	}
+	_, detail = readVerdict(t, pool, fileID)
+	if len(detail) != 1 || detail["screened_at"] != "2026-09-06T00:00:00Z" {
+		t.Errorf("a stale finding must be replaced, got %v", detail)
 	}
 }
 

@@ -95,8 +95,10 @@ type FileRow struct {
 	// never affected what was ingested, chunked or retrieved, it only tells
 	// an operator that this externally sourced document contains
 	// instruction-shaped text. InjectionDetail is {rule, position, snippet,
-	// screened_at}; the snippet is untrusted, document-derived text and must
-	// be rendered as data (a tooltip), never re-sent to a model.
+	// screened_at} on a hit, {screened_at} alone on a clean pass, and absent
+	// when the file was never screened; the snippet is untrusted,
+	// document-derived text and must be rendered as data (a tooltip), never
+	// re-sent to a model.
 	InjectionFlag   bool            `json:"injectionFlag"             db:"injection_flag"`
 	InjectionDetail json.RawMessage `json:"injectionDetail,omitempty" db:"injection_detail"`
 }

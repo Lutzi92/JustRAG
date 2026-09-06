@@ -162,7 +162,7 @@ func (f *fakeFileStore) SetInjectionFlag(context.Context, string, []byte) error 
 	return nil
 }
 
-func (f *fakeFileStore) ClearInjectionFlag(context.Context, string) error {
+func (f *fakeFileStore) MarkInjectionScreenedClean(context.Context, string, []byte) error {
 	return nil
 }
 

@@ -49,7 +49,15 @@ type mockStore struct {
 	origins          map[string]string
 	originCalls      int
 	injectionDetails map[string][]byte
-	injectionCleared []string
+	// injectionClean records the screened-clean detail written per file id
+	// (a {"screened_at": …} payload), in call order.
+	injectionClean []cleanScreenCall
+}
+
+// cleanScreenCall is one MarkInjectionScreenedClean call.
+type cleanScreenCall struct {
+	fileID string
+	detail []byte
 }
 
 func (m *mockStore) UpdateFileStatus(_ context.Context, _ string, status string) error {
@@ -113,8 +121,8 @@ func (m *mockStore) SetInjectionFlag(_ context.Context, fileID string, detail []
 	return nil
 }
 
-func (m *mockStore) ClearInjectionFlag(_ context.Context, fileID string) error {
-	m.injectionCleared = append(m.injectionCleared, fileID)
+func (m *mockStore) MarkInjectionScreenedClean(_ context.Context, fileID string, detail []byte) error {
+	m.injectionClean = append(m.injectionClean, cleanScreenCall{fileID: fileID, detail: detail})
 	return nil
 }
 
@@ -160,7 +168,7 @@ func (s *contextCapturingStore) SetInjectionFlag(context.Context, string, []byte
 	return nil
 }
 
-func (s *contextCapturingStore) ClearInjectionFlag(context.Context, string) error {
+func (s *contextCapturingStore) MarkInjectionScreenedClean(context.Context, string, []byte) error {
 	return nil
 }
 
@@ -973,7 +981,9 @@ func (s *gateTestStore) GetFileOrigin(context.Context, string) (string, error) {
 	return "upload", nil
 }
 func (s *gateTestStore) SetInjectionFlag(context.Context, string, []byte) error { return nil }
-func (s *gateTestStore) ClearInjectionFlag(context.Context, string) error       { return nil }
+func (s *gateTestStore) MarkInjectionScreenedClean(context.Context, string, []byte) error {
+	return nil
+}
 
 func (s *gateTestStore) UpdateFileStageDetail(_ context.Context, fileID, detail string) error {
 	s.mu.Lock()

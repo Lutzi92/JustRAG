@@ -27,13 +27,26 @@ var screenedOrigins = map[string]bool{
 	"crawl":      true,
 }
 
-// injectionDetail is the shape persisted into files.injection_detail. The
-// Finding is embedded, so the JSON is flat: {rule, position, snippet,
-// screened_at}. ScreenedAt distinguishes "screened and clean" (a row with a
-// false flag written by a screening pass) from "ingested before screening
-// existed" (a false flag with a NULL detail) — see migration 0072.
+// injectionDetail is the shape persisted into files.injection_detail on a
+// HIT. The Finding is embedded, so the JSON is flat: {rule, position,
+// snippet, screened_at}.
 type injectionDetail struct {
 	promptsafety.Finding
+	ScreenedAt time.Time `json:"screened_at"`
+}
+
+// screenedCleanDetail is what a pass that found NOTHING writes: the
+// timestamp and nothing else. Deliberately not an injectionDetail with a
+// zero Finding — that would persist rule:"" / position:0 / snippet:"", and
+// a reader could not tell an empty rule from a real one.
+//
+// Together with injectionDetail these give files.injection_detail three
+// readable states: NULL = never screened (ingested before the screen
+// existed, an origin that is never screened, or the kill switch was off);
+// {screened_at} = screened and clean; anything carrying "rule" = flagged.
+// Without this shape, "clean" and "never screened" would both be NULL and
+// an operator could not tell whether a badge-free file had been checked.
+type screenedCleanDetail struct {
 	ScreenedAt time.Time `json:"screened_at"`
 }
 
@@ -68,19 +81,28 @@ func (p *Processor) screenIfExternal(ctx context.Context, fileID, text string) {
 		return
 	}
 
+	now := time.Now().UTC()
 	finding, hit := promptsafety.ScreenText(text, resolveScreeningWindowRunes(ctx, p.siteConfigReader))
 	if !hit {
-		// Clear rather than leave alone: a re-ingest of a file that was
-		// flagged on a previous pass (the upstream page was fixed, or the
-		// pattern set changed) must drop the stale badge.
-		if err := p.store.ClearInjectionFlag(ctx, fileID); err != nil {
-			logctx.From(ctx).Warn("processor: clear injection flag failed",
+		// Record the clean verdict rather than leaving the row alone: it
+		// drops a stale badge from a previous pass (the upstream page was
+		// fixed, or the pattern set changed) AND it is what makes "screened,
+		// clean" visible at all. The store makes the write conditional so an
+		// already-clean row is not rewritten on every poll.
+		clean, err := json.Marshal(screenedCleanDetail{ScreenedAt: now})
+		if err != nil {
+			logctx.From(ctx).Warn("processor: marshal clean screening detail failed",
+				"fileId", fileID, "error", err)
+			return
+		}
+		if err := p.store.MarkInjectionScreenedClean(ctx, fileID, clean); err != nil {
+			logctx.From(ctx).Warn("processor: mark injection screened clean failed",
 				"fileId", fileID, "error", err)
 		}
 		return
 	}
 
-	detail, err := json.Marshal(injectionDetail{Finding: finding, ScreenedAt: time.Now().UTC()})
+	detail, err := json.Marshal(injectionDetail{Finding: finding, ScreenedAt: now})
 	if err != nil {
 		// Cannot happen for this shape, but a marshal failure must not
 		// leave a stale flag behind either.

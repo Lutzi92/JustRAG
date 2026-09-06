@@ -330,4 +330,25 @@ describe('SourcesSection injection screening badge', () => {
     render(<SourcesSection {...baseProps} files={[makeFile({})]} />);
     expect(screen.queryByLabelText(/fileInjectionFlagged \(/)).not.toBeInTheDocument();
   });
+
+  // A flagged upload can only be a leftover from before an origin change
+  // (the screen never runs on uploads). It keeps its own row and its own
+  // badge; counting it in the header too would double-report it.
+  it('excludes upload-origin files from the header summary but keeps their own badge', () => {
+    const files = [
+      makeFile({ id: 'u1', origin: 'upload', injectionFlag: true }),
+      makeFile({ id: 'c1', name: 'page.html', origin: 'crawl', injectionFlag: true }),
+    ];
+    render(<SourcesSection {...baseProps} files={files} />);
+
+    // Both files still carry their own per-file badge…
+    expect(screen.getAllByLabelText('fileInjectionFlagged')).toHaveLength(2);
+    // …but the header counts the crawl one only.
+    expect(screen.getByLabelText('fileInjectionFlagged (1)')).toBeInTheDocument();
+  });
+
+  it('renders no header summary when only an upload is flagged', () => {
+    render(<SourcesSection {...baseProps} files={[makeFile({ origin: 'upload', injectionFlag: true })]} />);
+    expect(screen.queryByLabelText(/fileInjectionFlagged \(/)).not.toBeInTheDocument();
+  });
 });

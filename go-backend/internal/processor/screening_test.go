@@ -111,8 +111,8 @@ func TestProcessFile_ScreensExternalOriginAndFlags(t *testing.T) {
 	if detail.ScreenedAt == "" {
 		t.Error("screened_at must be set — it is what distinguishes a screened-clean row from a never-screened one")
 	}
-	if len(store.injectionCleared) != 0 {
-		t.Errorf("a flagged file must not also be cleared, got %v", store.injectionCleared)
+	if len(store.injectionClean) != 0 {
+		t.Errorf("a flagged file must not also be recorded clean, got %v", store.injectionClean)
 	}
 	if got := testutil.ToFloat64(observability.IngestInjectionFlagTotalForTest().WithLabelValues("rss")) - before; got != 1 {
 		t.Errorf("rag_ingest_injection_flag_total{origin=rss} delta = %v, want 1", got)
@@ -131,8 +131,8 @@ func TestProcessFile_UploadOriginIsNeverScreened(t *testing.T) {
 	if len(store.injectionDetails) != 0 {
 		t.Errorf("an upload must never be flagged, got %v", store.injectionDetails)
 	}
-	if len(store.injectionCleared) != 0 {
-		t.Errorf("an upload must not even be cleared, got %v", store.injectionCleared)
+	if len(store.injectionClean) != 0 {
+		t.Errorf("an upload must not even be recorded clean, got %v", store.injectionClean)
 	}
 }
 
@@ -174,14 +174,16 @@ func TestProcessFile_KillSwitchOffSkipsScreeningEntirely(t *testing.T) {
 	if store.originCalls != 0 {
 		t.Errorf("kill switch off must skip the origin lookup, got %d calls", store.originCalls)
 	}
-	if len(store.injectionDetails) != 0 || len(store.injectionCleared) != 0 {
+	if len(store.injectionDetails) != 0 || len(store.injectionClean) != 0 {
 		t.Error("kill switch off must write nothing")
 	}
 }
 
-// A clean external file clears the flag, so a re-ingest of a previously
-// flagged document drops the stale badge.
-func TestProcessFile_CleanExternalFileClearsTheFlag(t *testing.T) {
+// A clean external file records a screened-clean verdict: it drops a stale
+// flag from a previous pass AND makes "screened, clean" distinguishable from
+// "never screened". The detail carries screened_at and nothing else — a rule
+// or snippet here would read as a finding.
+func TestProcessFile_CleanExternalFileRecordsScreenedClean(t *testing.T) {
 	store := &mockStore{origins: map[string]string{"f-rss": "rss"}}
 	p := newScreeningProcessor(store, nil)
 
@@ -191,8 +193,18 @@ func TestProcessFile_CleanExternalFileClearsTheFlag(t *testing.T) {
 	if len(store.injectionDetails) != 0 {
 		t.Errorf("a clean document (a bare URL is not a hit) must not be flagged, got %v", store.injectionDetails)
 	}
-	if len(store.injectionCleared) != 1 || store.injectionCleared[0] != "f-rss" {
-		t.Errorf("a clean screen must clear the flag, got %v", store.injectionCleared)
+	if len(store.injectionClean) != 1 || store.injectionClean[0].fileID != "f-rss" {
+		t.Fatalf("a clean screen must record the clean verdict, got %v", store.injectionClean)
+	}
+	var clean map[string]any
+	if err := json.Unmarshal(store.injectionClean[0].detail, &clean); err != nil {
+		t.Fatalf("clean detail is not valid JSON: %v", err)
+	}
+	if _, ok := clean["screened_at"]; !ok {
+		t.Errorf("clean detail must carry screened_at, got %v", clean)
+	}
+	if len(clean) != 1 {
+		t.Errorf("clean detail must carry ONLY screened_at (no rule/position/snippet), got %v", clean)
 	}
 }
 

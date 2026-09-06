@@ -192,9 +192,12 @@ type ProcessorStore interface {
 	// injection_detail). detail is document-derived, untrusted text —
 	// never log it in full.
 	SetInjectionFlag(ctx context.Context, fileID string, detail []byte) error
-	// ClearInjectionFlag resets the screening verdict to clean, so a
-	// re-ingest drops a stale flag rather than keeping it forever.
-	ClearInjectionFlag(ctx context.Context, fileID string) error
+	// MarkInjectionScreenedClean records a pass that found nothing:
+	// injection_flag = false with a detail carrying only screened_at. A
+	// re-ingest therefore drops a stale flag rather than keeping it
+	// forever, and "screened, clean" stays distinguishable from "never
+	// screened" (a NULL detail).
+	MarkInjectionScreenedClean(ctx context.Context, fileID string, detail []byte) error
 }
 
 // SiteConfigReader reads individual site config values.

@@ -680,26 +680,26 @@ export default function KBOverviewDashboard() {
                                                 cellStyle.minWidth = '14rem';
                                             }
                                             // The files column doubles as the screening
-                            // surface: a flagged file is advisory, so it gets
-                            // a tooltip on a count that is already there
-                            // rather than a column of its own.
-                            const title = c.key === 'fileCount'
-                                ? `${t('colInjectionFlagged')}: ${row.injectionFlagged ?? 0}`
-                                : c.key === 'lastActivity'
-                                                ? mergedActivityIso(row)
-                                                : c.key === 'activity'
-                                                    ? `Web: ${row.webTurns ?? 0} · API: ${row.apiTurns ?? 0}`
-                                                    : c.key === 'createdAt'
-                                                        ? row.createdAt
-                                                        : c.key === 'oldestFileAt'
-                                                            ? row.oldestFileAt
-                                                            : c.key === 'staleShare'
-                                                                ? `${row.staleFileCount ?? 0}/${row.fileCount} > ${data?.staleDays ?? 180}d`
-                                                                : c.key === 'lastSyncAt'
-                                                                    ? syncTooltip(row, t)
-                                                                    : c.key === 'ragasN24h'
-                                                                        ? t('colRagasTooltip')
-                                                                        : undefined;
+                                            // surface: a flagged file is advisory, so it
+                                            // gets a tooltip on a count that is already
+                                            // there rather than a column of its own.
+                                            const title = c.key === 'fileCount'
+                                                ? `${t('colInjectionFlagged')}: ${row.injectionFlagged ?? 0}`
+                                                : c.key === 'lastActivity'
+                                                    ? mergedActivityIso(row)
+                                                    : c.key === 'activity'
+                                                        ? `Web: ${row.webTurns ?? 0} · API: ${row.apiTurns ?? 0}`
+                                                        : c.key === 'createdAt'
+                                                            ? row.createdAt
+                                                            : c.key === 'oldestFileAt'
+                                                                ? row.oldestFileAt
+                                                                : c.key === 'staleShare'
+                                                                    ? `${row.staleFileCount ?? 0}/${row.fileCount} > ${data?.staleDays ?? 180}d`
+                                                                    : c.key === 'lastSyncAt'
+                                                                        ? syncTooltip(row, t)
+                                                                        : c.key === 'ragasN24h'
+                                                                            ? t('colRagasTooltip')
+                                                                            : undefined;
                                             return (
                                                 <td key={c.key} style={cellStyle} title={title}>
                                                     {renderCell(row, c.key)}

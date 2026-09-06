@@ -74,7 +74,13 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
     // nonRssFiles below — their files are folded into the feed/source rows.
     // So the per-file badge alone would be invisible for exactly the sources
     // that get screened; this header count is what makes them visible.
-    const injectionFlaggedCount = files.filter(f => f.injectionFlag).length;
+    //
+    // Uploads are excluded: they are never screened, so a flagged one can
+    // only be a leftover from before an origin change — and it already has
+    // its own row and its own badge, which is where an operator should see
+    // it. Counting it here would double-report the one case the summary is
+    // NOT for.
+    const injectionFlaggedCount = files.filter(f => f.injectionFlag && f.origin !== 'upload').length;
     // Untrusted, document-derived text: it goes into title/aria-label as a
     // plain string and is never rendered as markup.
     const injectionLabel = (file: FileEntry) => {

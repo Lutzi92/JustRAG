@@ -534,8 +534,9 @@ type fileDBRow struct {
 	CreatedAt          time.Time `db:"created_at"`
 	// Ingest prompt-injection screening verdict (migration 0072). The flag
 	// is NOT NULL DEFAULT false, so false covers both "screened and clean"
-	// and "ingested before screening existed"; InjectionDetail (NULL in the
-	// latter case) is what tells them apart.
+	// and "never screened"; InjectionDetail is what tells them apart —
+	// NULL = never screened, {"screened_at": …} alone = screened and clean,
+	// a payload carrying "rule" = the finding behind a true flag.
 	InjectionFlag   bool            `db:"injection_flag"`
 	InjectionDetail json.RawMessage `db:"injection_detail"`
 	TotalCount      int             `db:"total_count"`

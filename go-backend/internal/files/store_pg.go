@@ -392,14 +392,34 @@ func (s *PGStore) SetInjectionFlag(ctx context.Context, fileID string, detail []
 	return nil
 }
 
-// ClearInjectionFlag resets the screening verdict to "clean". Called on a
-// screening pass that finds nothing, so a re-ingest of a previously flagged
-// file (the source page was fixed, or the pattern set changed) drops the
-// stale badge instead of keeping it forever.
-func (s *PGStore) ClearInjectionFlag(ctx context.Context, fileID string) error {
-	const sql = `UPDATE files SET injection_flag = false, injection_detail = NULL WHERE id = $1`
-	if _, err := s.pool.Exec(ctx, sql, fileID); err != nil {
-		return fmt.Errorf("ClearInjectionFlag: %w", err)
+// MarkInjectionScreenedClean records a screening pass that found nothing:
+// injection_flag = false with a detail carrying ONLY {"screened_at": …} —
+// no rule, no position, no snippet. That is what makes the three states of
+// these two columns distinguishable:
+//
+//	detail IS NULL            never screened (ingested before the screen
+//	                          existed, an origin that is never screened, or
+//	                          the kill switch was off)
+//	detail = {screened_at}    screened, clean
+//	detail carries "rule"     screened, flagged (injection_flag is true)
+//
+// It also drops a stale flag: a re-ingest of a file that was flagged on a
+// previous pass (the source page was fixed, or the pattern set changed)
+// must not keep the badge forever.
+//
+// The WHERE clause makes this a no-op for a row that is already recorded as
+// clean. Every RSS/Confluence/git poll re-ingests unchanged documents, and
+// an unconditional UPDATE would rewrite (and bloat) the files table on every
+// sweep just to store a new timestamp nothing reads. The three disjuncts are
+// exactly the rows whose verdict actually changes: currently flagged, never
+// screened, or carrying an old finding.
+func (s *PGStore) MarkInjectionScreenedClean(ctx context.Context, fileID string, detail []byte) error {
+	const sql = `
+		UPDATE files SET injection_flag = false, injection_detail = $1::jsonb
+		WHERE id = $2
+		  AND (injection_flag OR injection_detail IS NULL OR injection_detail ? 'rule')`
+	if _, err := s.pool.Exec(ctx, sql, detail, fileID); err != nil {
+		return fmt.Errorf("MarkInjectionScreenedClean: %w", err)
 	}
 	return nil
 }
