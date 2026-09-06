@@ -15,8 +15,12 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
@@ -24,6 +28,7 @@ import (
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/database"
 	"github.com/justrag/go-backend/internal/eval"
+	"github.com/justrag/go-backend/internal/recencylister"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/tabular/sqlexec"
 	"github.com/justrag/go-backend/internal/vector"
@@ -58,11 +63,16 @@ func main() {
 	depthBuckets := flag.Bool("depth-buckets", false, `P9: enable position-aware retrieval analysis. When set, the report includes a "depth_buckets" section with per-quartile counts of relevant vs non-relevant chunks retrieved (chunkIndex/totalChunks bucketing). Useful for spotting position bias in the retrieval pipeline (e.g. "all our hits come from the first 25% of every file"). Off by default to keep the on-disk report shape byte-stable for diff tools.`)
 	nodeKindFilter := flag.String("node-kind", "", `Phase F (RAPTOR) ablation: restrict retrieval to a single node_kind. "leaf" reproduces pre-RAPTOR behaviour; "summary" runs against summaries only; "" (default) lets both compete in one pool — production parity. Eval-only — the chat handler never sets this.`)
 	depthBucketsMinChunks := flag.Int("depth-buckets-min-chunks", 4, `Min totalChunks required for a chunk to count toward the depth-bucket aggregate. Suppresses noise from short files where bucketing has no useful signal. Pass 1 to disable filtering. Only effective with --depth-buckets.`)
-	orchestratorDispatch := flag.Bool("orchestrator-dispatch", true, `With --production-context: route each question through the same orchestrator predicate production uses (Supervisor / Plan-Execute / Plan-Execute-DAG / Agentic / standard fallback) and record per-question 'agent' + per-orchestrator aggregates in the report. Default true. Set to false to reproduce pre-2026-05 retrieval-only behaviour for byte-stable diffs against historical eval runs. Ignored when --production-context is unset.`)
+	orchestratorDispatch := flag.Bool("orchestrator-dispatch", true, `With --production-context: route each question through the same orchestrator predicate production uses (Supervisor / Plan-Execute / Plan-Execute-DAG / Agentic / standard fallback) and record per-question 'agent' + per-orchestrator aggregates in the report. Default true. Set to false to reproduce pre-2026-05 retrieval-only behaviour for byte-stable diffs against historical eval runs, except that recency-listing-shaped questions now exercise the recency lister and window scoping, which pre-2026-09 runs did not. Ignored when --production-context is unset.`)
 	teamID := flag.String("team-id", "", "Dispatch every question through this user-created agent team (requires --production-context; team must be attached + enabled on the golden set's KB)")
+	keepRawFlag := flag.String("keep-raw", "", `Multi-turn replay override for the rewrite⊕raw retrieval lane (ruling W2-R10): "on" forces chat_condense_keep_raw_enabled on for this run, "off" forces it off, "" (default) reads the live site_config — same three-way shape as --crag. Only effective on a golden set with turns (a multi-turn replay); ignored otherwise.`)
 	baselinePath := flag.String("baseline", "", "Path to a previous eval-report.json. When set, prints a per-route delta table and exits 3 if recall or MRR dropped beyond --regress-recall-pp / --regress-mrr-pp (overall or on any route present in both reports). Runs with question errors exit 1 before the delta is computed.")
 	regressRecallPP := flag.Float64("regress-recall-pp", eval.DefaultRegressionThresholds.RecallPP, "Max tolerated mean-recall drop vs --baseline, in percentage points.")
 	regressMRRPP := flag.Float64("regress-mrr-pp", eval.DefaultRegressionThresholds.MRRPP, "Max tolerated MRR drop vs --baseline, in percentage points.")
+	refreshBM25Stats := flag.Bool("refresh-bm25-stats", false, "Before running, recompute BM25 statistics (vector.BM25StatsRefresher.RefreshKB) for every KB referenced by the golden set, across every dim table that has rows for that KB, so an A/B never runs against missing/stale stats.")
+	bm25ModeOverride := flag.String("bm25-mode", "", `Wave-2 Task 6 / ruling W2-R10: per-run override for bm25_scoring_mode ("ts_rank" | "bm25"). Empty = read the live site_config. Applied the same way as --rerank-blend-alpha (wraps the vector-layer site-config reader; no site_configs mutation) — combine with --refresh-bm25-stats when testing "bm25" against a golden set whose KBs haven't had a stats refresh yet.`)
+	bm25TieredBoostOverride := flag.String("bm25-tiered-boost", "", `Per-run override for bm25_tiered_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-mode.`)
+	recencyBoostOverride := flag.String("recency-boost", "", `Wave 2 Task 8: per-run override for recency_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-tiered-boost (a vector-layer key, applied via the searchReader overlay, not the chat-level siteReader). Lets the CERT recency fixture A/B the recency prior without a site_configs mutation.`)
 	flag.Parse()
 
 	var baseline *eval.Report
@@ -110,6 +120,34 @@ func main() {
 		os.Exit(2)
 	}
 
+	if *bm25ModeOverride != "" && *bm25ModeOverride != "ts_rank" && *bm25ModeOverride != "bm25" {
+		slog.Error("invalid --bm25-mode value", "value", *bm25ModeOverride)
+		os.Exit(2)
+	}
+	if *bm25TieredBoostOverride != "" && *bm25TieredBoostOverride != "on" && *bm25TieredBoostOverride != "off" {
+		slog.Error("invalid --bm25-tiered-boost value", "value", *bm25TieredBoostOverride)
+		os.Exit(2)
+	}
+	if *recencyBoostOverride != "" && *recencyBoostOverride != "on" && *recencyBoostOverride != "off" {
+		slog.Error("invalid --recency-boost value", "value", *recencyBoostOverride)
+		os.Exit(2)
+	}
+
+	var keepRaw *bool
+	switch *keepRawFlag {
+	case "on":
+		b := true
+		keepRaw = &b
+	case "off":
+		b := false
+		keepRaw = &b
+	case "":
+		// nil = read chat_condense_keep_raw_enabled from site_configs
+	default:
+		slog.Error("invalid --keep-raw value", "value", *keepRawFlag)
+		os.Exit(2)
+	}
+
 	if *goldenPath == "" {
 		slog.Error("--golden is required")
 		os.Exit(2)
@@ -125,9 +163,20 @@ func main() {
 		os.Exit(1)
 	}
 	if *singleID != "" {
+		// A per-turn id ("MT01#t2") names a conversation row's expanded
+		// turn, which doesn't exist yet at this pre-expand stage — match
+		// the conversation prefix (before "#") so the whole conversation
+		// survives filtering and ExpandTurns can still build that turn's
+		// History from its predecessors. A plain id ("MT01" or a
+		// single-turn question's own id) matches exactly, since it has no
+		// "#" to strip.
+		conversationID := *singleID
+		if i := strings.IndexByte(*singleID, '#'); i >= 0 {
+			conversationID = (*singleID)[:i]
+		}
 		filtered := questions[:0]
 		for _, q := range questions {
-			if q.ID == *singleID {
+			if q.ID == conversationID {
 				filtered = append(filtered, q)
 			}
 		}
@@ -136,6 +185,36 @@ func main() {
 			slog.Error("no question with that id", "id", *singleID)
 			os.Exit(1)
 		}
+	}
+
+	loaded := questions
+	questions = eval.ExpandTurns(questions)
+	hasTurns := len(questions) != len(loaded)
+
+	if *singleID != "" && strings.Contains(*singleID, "#") {
+		// Narrow down from "the whole conversation" (kept above so
+		// ExpandTurns had the full turn sequence) to just the requested
+		// turn.
+		filtered := questions[:0]
+		for _, q := range questions {
+			if q.ID == *singleID {
+				filtered = append(filtered, q)
+			}
+		}
+		questions = filtered
+		if len(questions) == 0 {
+			slog.Error("no turn with that id", "id", *singleID)
+			os.Exit(1)
+		}
+	}
+
+	if hasTurns && !*productionContext {
+		slog.Error("golden set has turns; --multi-turn replay requires --production-context")
+		os.Exit(2)
+	}
+	if hasTurns && *teamID != "" {
+		slog.Error("--team-id is not supported with a golden set that has turns (multi-turn replay always runs the standard PrepareChatContext path)")
+		os.Exit(2)
 	}
 
 	cfg, err := config.Load()
@@ -157,6 +236,10 @@ func main() {
 		defer db.Vector.Close()
 	}
 
+	if *refreshBM25Stats {
+		refreshBM25StatsForGoldenSet(ctx, db.Vector, db.Main, questions)
+	}
+
 	aiResolver := ai.NewConfigResolver(ai.NewStore(db.Main))
 	chatStore := chat.NewStore(db.Main)
 
@@ -173,6 +256,21 @@ func main() {
 	}
 	if *rrfWeightBM25Override >= 0 {
 		overlays["rrf_weight_bm25"] = strconv.FormatFloat(*rrfWeightBM25Override, 'f', -1, 64)
+	}
+	// bm25_scoring_mode / bm25_tiered_boost_enabled are internal/vector
+	// site_config keys (read via KBVectorConfig, not chat.SiteConfigReader),
+	// so they go through the same searchReader overlay as the rerank/RRF
+	// knobs above rather than the chat-level cragOverrideReader pattern —
+	// wrapping siteReader would have no effect on vector.SearchService's
+	// mode resolution.
+	if *bm25ModeOverride != "" {
+		overlays["bm25_scoring_mode"] = *bm25ModeOverride
+	}
+	if *bm25TieredBoostOverride != "" {
+		overlays["bm25_tiered_boost_enabled"] = strconv.FormatBool(*bm25TieredBoostOverride == "on")
+	}
+	if *recencyBoostOverride != "" {
+		overlays["recency_boost_enabled"] = strconv.FormatBool(*recencyBoostOverride == "on")
 	}
 
 	var searchReader vector.SiteConfigReader = chatStore
@@ -235,7 +333,35 @@ func main() {
 			},
 		)
 		trajTabularRouter = tabularRouter
-		if *teamID != "" {
+		// Wave 2 Task 8 (W2-R9): the deterministic recency-listing path
+		// ("Welche neuen Meldungen gibt es?") needs a RecencyLister to
+		// fire under cmd/eval at all — without it, PrepareChatContext
+		// silently skips window scoping and the listing addendum
+		// (applyRecencyListing no-ops on a nil lister), and the CERT
+		// fixture's headline mechanism never exercises. Built once, like
+		// tabularRouter above, and wired into every --production-context
+		// branch that runs the standard PrepareChatContext path.
+		recencyLister := recencylister.New(db.Main)
+		if hasTurns {
+			// Turn rows bypass orchestrator dispatch and teams entirely
+			// (validated above: --team-id is already rejected when
+			// hasTurns) and always run the standard PrepareChatContext
+			// path — the same one production's condense→retrieve follow-up
+			// handling uses. MultiTurnAdapter sits in front of a plain
+			// ProductionContextAdapter, condensing each turn's query (or
+			// carrying over the previous turn's sources for an answer_ref
+			// reformat) before delegating.
+			prod := eval.NewProductionContextAdapter(
+				aiResolver,
+				searchService,
+				siteReader,
+				flags,
+				eval.WithTabularRouter(tabularRouter),
+				eval.WithRecencyLister(recencyLister),
+			)
+			adapter = eval.NewMultiTurnAdapter(prod, aiResolver, siteReader, keepRaw)
+			slog.Info("eval: multi-turn replay mode on (golden set has turns; standard PrepareChatContext path, no orchestrator dispatch, no team)")
+		} else if *teamID != "" {
 			teamStore := agentteams.NewStore(db.Main)
 			adapter = eval.NewTeamDispatchAdapter(
 				aiResolver,
@@ -254,16 +380,35 @@ func main() {
 				getKbSystemPrompt,
 				flags,
 				eval.WithTabularRouter(tabularRouter),
+				eval.WithRecencyLister(recencyLister),
 			)
 			slog.Info("eval: orchestrator-dispatch mode on (production-parity routing)")
 		} else {
 			// Router-free by design: this is the byte-stable
-			// retrieval-only comparison branch.
+			// retrieval-only comparison branch (TabularRouter materially
+			// changes retrieval and post-dates old byte-stable reports,
+			// so it stays excluded here — same reasoning as the
+			// orchestrator-dispatch branch above).
+			//
+			// RecencyLister is wired here too, unlike the router: with
+			// --orchestrator-dispatch=false this branch is the ONLY way
+			// to exercise recency listing without the LLM query-type
+			// classifier's run-to-run non-determinism in the loop (Wave 2
+			// Task 8 fix round 1 — the controller's requested
+			// dispatch-off rerun found 0 "rag.recency_listing.fired"
+			// events here before this line existed, since recency
+			// listing is standard-path-only and this branch previously
+			// carried no lister at all). Unlike TabularRouter, there is
+			// no pre-existing byte-stable report to preserve compat with
+			// here: RecencyLister was introduced by this same task, so
+			// including it changes nothing anyone was already diffing
+			// against.
 			adapter = eval.NewProductionContextAdapter(
 				aiResolver,
 				searchService,
 				siteReader,
 				flags,
+				eval.WithRecencyLister(recencyLister),
 			)
 		}
 	} else {
@@ -398,6 +543,7 @@ func main() {
 		rep.Aggregate = eval.Aggregate(rep.Questions, *topK)
 		rep.RouteAggregates = eval.AggregateByRoute(rep.Questions, *topK)
 		rep.OrchestratorAggregates = eval.AggregateByOrchestrator(rep.Questions, *topK)
+		rep.TurnKindAggregates = eval.AggregateByTurnKind(rep.Questions, *topK)
 	}
 
 	// P9: position-aware retrieval analysis. Off by default — when
@@ -468,6 +614,75 @@ func main() {
 				slog.Error("eval.regression", "route", r.Route, "metric", r.Metric, "baseline", r.Baseline, "candidate", r.Candidate, "delta_pp", r.DeltaPP)
 			}
 			os.Exit(3)
+		}
+	}
+}
+
+// refreshBM25StatsForGoldenSet recomputes BM25 statistics (per-KB doc
+// count/avg length, per-term document frequency) for every KB referenced by
+// the golden set, across every dim table that actually has rows for that
+// KB — the intersection of vector.ListChunkTableDimensions and "has rows
+// for this KB", per the --refresh-bm25-stats flag's contract. Runs before
+// RunEval so an A/B never measures against missing or stale stats (per-KB
+// staleness detection, W2-R5, is otherwise only driven by the worker's
+// maintenance sweep). Best-effort: a bad KB id or a refresh failure is
+// logged and skipped rather than aborting the whole eval run.
+func refreshBM25StatsForGoldenSet(ctx context.Context, vectorDB, mainDB *pgxpool.Pool, questions []eval.Question) {
+	kbIDs := map[string]struct{}{}
+	for _, q := range questions {
+		if q.KbID != "" {
+			kbIDs[q.KbID] = struct{}{}
+		}
+	}
+	if len(kbIDs) == 0 {
+		return
+	}
+
+	dims, err := vector.NewChunkService(vectorDB).ListChunkTableDimensions(ctx)
+	if err != nil {
+		slog.Error("--refresh-bm25-stats: list chunk table dimensions failed", "error", err)
+		return
+	}
+
+	// Controller-found gap: the bm25_kb_stats_<dim>/bm25_term_stats_<dim>
+	// side tables are normally created by the server/worker boot path
+	// (migrate.EnsureVectorTables), which cmd/eval never runs — so
+	// RefreshKB failed with "relation ... does not exist" against a dev
+	// DB that had never booted the main app for a given dim.
+	// EnsureBM25StatsTables is idempotent (CREATE TABLE IF NOT EXISTS
+	// under an advisory lock), so calling it once per dim here is safe
+	// even when the tables already exist.
+	for _, dim := range dims {
+		if err := vector.EnsureBM25StatsTables(ctx, vector.PgxpoolExec{Pool: vectorDB}, dim); err != nil {
+			slog.Error("--refresh-bm25-stats: ensure stats tables failed", "dim", dim, "error", err)
+		}
+	}
+
+	refresher := vector.NewBM25StatsRefresher(vectorDB, mainDB)
+	for kbIDStr := range kbIDs {
+		kbID, perr := uuid.Parse(kbIDStr)
+		if perr != nil {
+			slog.Warn("--refresh-bm25-stats: skipping golden-set kb id (not a UUID)", "kb_id", kbIDStr, "error", perr)
+			continue
+		}
+		for _, dim := range dims {
+			table := vector.GetVectorTableName(dim)
+			if !vector.IsValidVectorTableName(table) {
+				continue
+			}
+			var hasRows bool
+			checkErr := vectorDB.QueryRow(ctx,
+				fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM "%s" WHERE kb_id = $1)`, table),
+				kbID,
+			).Scan(&hasRows)
+			if checkErr != nil || !hasRows {
+				continue
+			}
+			if err := refresher.RefreshKB(ctx, kbID, dim); err != nil {
+				slog.Error("--refresh-bm25-stats: refresh failed", "kb_id", kbIDStr, "dim", dim, "error", err)
+				continue
+			}
+			slog.Info("--refresh-bm25-stats: refreshed", "kb_id", kbIDStr, "dim", dim)
 		}
 	}
 }

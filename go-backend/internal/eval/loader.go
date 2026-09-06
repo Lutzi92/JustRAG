@@ -13,6 +13,15 @@ import (
 // into a slice of Questions. Applies the same validation as LoadGoldenSet.
 // Returns an error with a 1-based index into the array when any question fails
 // validation.
+//
+// Multi-turn rows (turns) are rejected here: ExpandTurns — the only code
+// that replays a conversation row into per-turn Questions with History —
+// is called exclusively by cmd/eval (see cmd/eval/main.go). The DB/admin
+// path this function backs (runner_inproc.go, the admin eval handlers)
+// never calls ExpandTurns, so a turns row saved through the admin UI would
+// otherwise run silently as an empty top-level question instead of the
+// authored conversation. ParseGoldenSetJSONL (the file-upload path
+// cmd/eval itself reads through) keeps accepting turns rows.
 func ParseGoldenSetContent(raw json.RawMessage) ([]Question, error) {
 	var qs []Question
 	if err := json.Unmarshal(raw, &qs); err != nil {
@@ -20,6 +29,9 @@ func ParseGoldenSetContent(raw json.RawMessage) ([]Question, error) {
 	}
 	seen := make(map[string]int, len(qs))
 	for i, q := range qs {
+		if len(q.Turns) > 0 {
+			return nil, fmt.Errorf("question %q: multi-turn rows (turns) are supported only by cmd/eval; the in-app eval runner cannot replay conversations", q.ID)
+		}
 		if err := validateQuestion(q); err != nil {
 			return nil, fmt.Errorf("validate question %d: %w", i+1, err)
 		}
@@ -84,6 +96,17 @@ func validateQuestion(q Question) error {
 	if q.ID == "" {
 		return fmt.Errorf("missing id")
 	}
+	if len(q.Turns) > 0 {
+		// Conversation row: ground truth lives per turn, so the
+		// top-level question/must_cite fields are not required here.
+		if q.KbID == "" {
+			return fmt.Errorf("missing kb_id")
+		}
+		if q.Language != "de" && q.Language != "en" {
+			return fmt.Errorf("language must be 'de' or 'en', got %q", q.Language)
+		}
+		return validateTurns(q)
+	}
 	if q.Question == "" {
 		return fmt.Errorf("missing question")
 	}
@@ -106,11 +129,8 @@ func validateQuestion(q Question) error {
 			return fmt.Errorf("must_cite_file_names[%d] is empty", i)
 		}
 	}
-	switch q.QueryType {
-	case "", "lookup", "enumeration", "global_synthesis", "complex_reasoning":
-		// accepted
-	default:
-		return fmt.Errorf("query_type must be one of lookup|enumeration|global_synthesis|complex_reasoning, got %q", q.QueryType)
+	if err := validateQueryType(q.QueryType); err != nil {
+		return err
 	}
 	// AP-A4 ExpectedKBIDs: optional. When present every entry must be
 	// non-empty; KbID need not appear in the list (a multi-KB question
@@ -123,4 +143,15 @@ func validateQuestion(q Question) error {
 	// R75 TabularExpected: optional *bool, nothing to validate — absent,
 	// true, and false are all accepted values.
 	return nil
+}
+
+// validateQueryType checks the shared query_type enum used both at the
+// top-level Question and per Turn.
+func validateQueryType(qt string) error {
+	switch qt {
+	case "", "lookup", "enumeration", "global_synthesis", "complex_reasoning":
+		return nil
+	default:
+		return fmt.Errorf("query_type must be one of lookup|enumeration|global_synthesis|complex_reasoning, got %q", qt)
+	}
 }

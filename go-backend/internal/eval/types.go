@@ -59,6 +59,47 @@ type Question struct {
 	// query_type-based eligibility rule to this flag when at least one
 	// question in the run carries it.
 	TabularExpected *bool `json:"tabular_expected,omitempty"`
+	// Turns marks this row as a conversation: a sequence of follow-up
+	// turns sharing KbID/Language, expanded by ExpandTurns into one
+	// Question per turn (ID "<id>#t<n>") carrying History. When Turns is
+	// non-empty, the top-level Question/MustCite* fields are not
+	// required — ground truth lives per turn (see validateTurns).
+	Turns []Turn `json:"turns,omitempty"`
+	// History is populated by ExpandTurns on the per-turn Questions it
+	// produces; it is never authored directly in a golden-set file. The
+	// json tag is kept so a report round-trips it.
+	History []HistoryEntry `json:"history,omitempty"`
+	// TurnKind is populated by ExpandTurns on the per-turn Questions it
+	// produces (copied from the originating Turn.Kind); it is never
+	// authored directly. The json tag is kept so a report round-trips it.
+	TurnKind string `json:"turn_kind,omitempty"`
+}
+
+// HistoryEntry is one prior conversation turn, replayed as chat history so
+// a multi-turn golden question can be scored without any real chat rows.
+type HistoryEntry struct {
+	Role    string `json:"role"` // "user" | "ai"
+	Content string `json:"content"`
+	// Sources lists the file names the "ai" message cited, so an
+	// answer_ref follow-up can default its ground truth to them.
+	Sources []string `json:"sources,omitempty"`
+}
+
+// Turn is one turn of an authored multi-turn conversation row (Question.Turns).
+type Turn struct {
+	Question string `json:"question"`
+	// Kind labels the turn's conversational shape; one of the TurnKind*
+	// constants. See ValidTurnKind.
+	Kind      string `json:"kind"`
+	QueryType string `json:"query_type,omitempty"`
+	// MustCiteFileNames is required for every kind except answer_ref,
+	// where it defaults to the previous turn's AnswerSources (a
+	// retrieval-free reformat carries over the prior answer's sources).
+	MustCiteFileNames []string `json:"must_cite_file_names,omitempty"`
+	// Answer is the assistant reply used as history for later turns.
+	Answer        string   `json:"answer,omitempty"`
+	AnswerSources []string `json:"answer_sources,omitempty"`
+	Notes         string   `json:"notes,omitempty"`
 }
 
 // RetrievedChunk is the minimal view the evaluator needs of a search hit.
@@ -123,6 +164,13 @@ type QuestionReport struct {
 	// dataset shape, then it's discarded with the Report at process
 	// exit.
 	Contents []string `json:"-"`
+	// CondensedQuery is the standalone query a multi-turn adapter
+	// (MultiTurnAdapter) condensed this turn's Question into before
+	// retrieval, so a report reviewer can see what was actually searched
+	// for. Empty when the searcher doesn't condense (single-turn
+	// questions, legacy/production adapters without history) — existing
+	// on-disk report shapes stay byte-stable.
+	CondensedQuery string `json:"condensed_query,omitempty"`
 }
 
 // AggregateMetrics summarizes metric values across all non-errored questions at a fixed k.
@@ -178,4 +226,10 @@ type Report struct {
 	// of the turns the router actually attempted, how often it ended in
 	// an unusable statement. Nil when no question fired.
 	TabularSQLErrorRate *float64 `json:"tabular_sql_error_rate,omitempty"`
+	// TurnKindAggregates buckets retrieval metrics by the golden set's
+	// per-turn TurnKind label (Wave 2 Task 3 multi-turn replay). Nil when
+	// no question in the run carries a TurnKind (i.e. no golden row used
+	// `turns`), so legacy report shapes stay byte-stable. Mirrors
+	// RouteAggregates/OrchestratorAggregates in shape.
+	TurnKindAggregates map[string]AggregateMetrics `json:"turn_kind_aggregates,omitempty"`
 }

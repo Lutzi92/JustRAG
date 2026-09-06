@@ -21,6 +21,9 @@ Fields:
 | `expected_kb_ids`    | string[] | (optional, AP-A4) KBs the sub-KB router should pick. Empty defaults to `[kb_id]` (single-KB). Multi-element rows test cross-KB fan-out. |
 | `expected_tools`     | string[] | (optional, Phase 2 §2.2) MCP tool names the agent should invoke. |
 | `notes`              | string   | (optional) Human context; ignored by the runner.          |
+| `turns`              | Turn[]   | (optional) Marks this row as a multi-turn conversation instead of a single question — see "Multi-turn set" below. When present, the top-level `question`/`must_cite_*` fields are not required; ground truth lives per turn. Each `Turn` is `{question, kind, query_type?, must_cite_file_names?, answer?, answer_sources?, notes?}` — `kind` is one of `corpus`, `pronoun_ref`, `topic_shift`, `answer_ref`, `post_abstain`; `must_cite_file_names` is required for every kind except `answer_ref`, where it defaults to the previous turn's `answer_sources`. **`cmd/eval`-only**: only `cmd/eval` calls `ExpandTurns` to replay a `turns` row, so `internal/eval.ParseGoldenSetContent` (the path behind the admin UI / `eval_golden_sets` DB copy) rejects any row with a non-empty `turns` array — save and run multi-turn sets as a file via `cmd/eval`, never through the admin UI. |
+| `history`            | HistoryEntry[] | Populated by `ExpandTurns` on the per-turn `Question`s it produces from `turns` (one prior `{role, content, sources?}` entry per earlier turn); never authored directly — the field exists so a report round-trips it. |
+| `turn_kind`          | string   | Populated by `ExpandTurns` (copied from the originating `Turn.kind`); never authored directly — labels each expanded per-turn question for `turn_kind_aggregates`. |
 
 ## Ground truth by name, not by UUID
 
@@ -149,6 +152,81 @@ with placeholder UUIDs (search for `TODO-A5`); the target shape is:
 When extending the file: append, never rewrite. The fixture is already
 loaded by a regression test (`TestLoadGoldenSet_MultiKB`) that fails if
 the cross-KB section disappears.
+
+## Multi-turn set
+
+`multi-turn-de.jsonl` (Wave 2, Task 4) exercises follow-up condensation
+(`chat.CondenseFromHistory`) against KB `PPM-Eval`
+(`83262307-3a1b-49bc-bd08-3b925a868a92`), the same KB as
+`production-ppm-2026-08.jsonl`. It is **derived from the JLU-internal
+production set** — every opening turn except the 3 `post_abstain` ones
+(see below), and every `topic_shift`/`post_abstain` follow-up, reuses a
+question and `must_cite_file_names` from `production-ppm-2026-08.jsonl` —
+so it carries the same privacy status and is **gitignored**
+(`/eval/golden/multi-turn-de.jsonl` in `.gitignore`), never committed.
+
+**Composition:** 18 conversations (`MT01`..`MT18`), 45 turns total. Every
+conversation opens with a `corpus` turn copied verbatim from an existing
+production question (same `query_type`, same `must_cite_file_names`),
+except the 3 `post_abstain` openers, which are newly authored unanswerable
+questions (see below). Follow-up turns:
+
+- **12 `pronoun_ref`** — a pronoun/ellipsis follow-up on the opener's
+  subject ("und wer ist dafür verantwortlich?", "seit wann läuft es?",
+  "welche Version ist das?", "wer vertritt sie?"). Ground truth is
+  authored directly (usually the same file(s) as the opener, since the
+  pronoun refers to the same project page) rather than copied from another
+  golden question.
+- **6 `topic_shift`** — a second, unrelated existing question dropped in
+  after the opener; ground truth is that second question's own
+  `must_cite_file_names`. Condensation must not drag the first subject into
+  the rewritten query.
+- **6 `answer_ref`** — a retrieval-free reformat of the prior turn's answer
+  ("das als Tabelle", "fass das kürzer zusammen", "als Stichpunkte bitte",
+  "kannst du das übersetzen?"). No `must_cite_file_names` is authored; per
+  `Turn.MustCiteFileNames`'s doc comment, `ExpandTurns` defaults it to the
+  previous turn's `answer_sources`.
+- **3 `post_abstain` conversations** (2 turns each, not counted in the
+  12/6/6 above): turn 1 is a `corpus` question the corpus cannot answer (a
+  budget/date figure the target project page does not contain),
+  `must_cite_file_names` = the page that *should* have been consulted,
+  `answer` = `"Dazu enthält die Wissensbasis keine Angaben."`,
+  `answer_sources` = that same page (`notes` says why it's unanswerable);
+  turn 2 (`kind: post_abstain`) is a normal, answerable question on a
+  related subject, reusing another existing question's ground truth.
+
+Every turn with a following turn carries an authored `answer` (1–2 German
+sentences paraphrasing the question) and `answer_sources` — **not verified
+facts**, just plausible history text to steer the condensation LLM the way
+a real prior turn would (each turn's `notes` says so explicitly).
+
+**How to run** (dev stack; builds `cmd/eval` fresh):
+
+```bash
+bash .superpowers/sdd/2026-09-05-rag-sota-wave2/run-eval.sh \
+  --golden eval/golden/multi-turn-de.jsonl --production-context \
+  --keep-raw off --output <out>.json
+```
+
+`--production-context` is required — the multi-turn replay adapter only
+wires up under the standard `PrepareChatContext` path (no orchestrator
+dispatch, no team). `--keep-raw on|off` forces
+`chat_condense_keep_raw_enabled` for the run regardless of the live
+site_config, so an A/B needs no DB mutation. The report's
+`turn_kind_aggregates` gives recall/MRR/nDCG per `turn_kind`; each
+question's `condensed_query` shows what the condenser produced for that
+follow-up. See `eval/golden/multi-turn-de.acceptance.md` for the recorded
+keep-raw on/off/noise run and the flag-default decision it produced.
+
+**Final decision (Wave 2, Task 9):** `chat_condense_keep_raw_enabled`
+stays **off**. On `pronoun_ref` (n=12, the kind it should help), keep-raw
+ON scored *worse* than OFF on both recall (0.833 → 0.806, a −2.8 pp delta
+against a 2.8 pp same-flag noise band) and MRR (0.833 → 0.767, −6.7 pp,
+well outside the 0.0 pp noise band on that metric) — the MTRAG
+"rewrite ⊕ raw" gain did not replicate on this fixture. See
+`docs/feature-recipes.md`'s "Rewrite ⊕ raw last turn" recipe and
+`docs/retrieval.md`'s "Raw-query lane" section for the full numbers and
+caveats.
 
 ## Sampling methodology
 
@@ -435,3 +513,160 @@ credential is available in the environment, the acceptance record documents
 "not run" with the specific blocking reason instead of fabricating numbers.
 That is not a failure of this task — see
 `eval/golden/spreadsheets-de.acceptance.md`.
+
+## CERT recency set (Wave 2 Task 8)
+
+`cert-recency-de.jsonl` is a fully synthetic, fictional German CERT-advisory
+corpus (`eval/fixtures/cert-advisories/*.md`, 40 files + `manifest.tsv`)
+purpose-built to exercise the date-aware chat mechanisms that a static
+corpus cannot: `chat_recency_listing_enabled` (the deterministic
+"Welche neuen Meldungen gibt es?" listing path,
+`internal/chat/recency_listing.go`) and `recency_boost_enabled` (the
+exponential-decay freshness prior post-rerank,
+`internal/vector/recency_boost.go`). 12 fictional products (OpenSSL, Citrix
+NetScaler, Cisco IOS XE, Microsoft Exchange, Atlassian Confluence, Fortinet
+FortiOS, Ivanti Connect Secure, VMware ESXi, Apache Tomcat, GitLab, Moodle,
+TYPO3), 26 fictional `WID-SEC-2026-NNNN` advisories (14 issued as an
+initial `NEU` advisory later followed by an `UPDATE` on the same WID id,
+each UPDATE dated younger than its NEU; 12 issued once and never updated),
+ages spread 1–120 days, 9 files inside the default 7-day recency-listing
+window (5 of them NEU). All CVE numbers are fictional
+(`CVE-2026-1xxxx`) and no real vendor text is used anywhere in the corpus.
+
+File names follow the CERT-Bund feed convention the name-marker arm keys
+on: `NEU WID-SEC-2026-0101 OpenSSL - Schwachstelle ermoeglicht Denial of
+Service.md` / `UPDATE WID-SEC-2026-0101 OpenSSL - ....md`. Titles
+deliberately avoid umlauts/ß (`ermoeglicht`, not `ermöglicht`) for
+readability — the corpus's `.md` filename stem doubles as the exact
+`title` sent to `POST /api/kb/{id}/text`, and the resulting `files.name`
+is `req.Title` **verbatim**: `AddTextSource`
+(`internal/files/http_ingest.go`) only runs the title through
+`sanitizeTitle`/`SafeNameSegment` to build the on-disk *storage path*; the
+`files.name` DB column it writes is the raw title, no extension appended
+(confirmed against a live-seeded row — an earlier draft of this doc
+assumed a `.txt` suffix that does not exist in practice). So
+`must_cite_file_names` in the golden set are the titles as-is, matching
+the corpus's `.md` filenames minus the extension.
+
+25 questions in 5 groups: 6 recency-listing (`query_type: lookup`; `notes`
+on each spells out which window/marker arm should fire and why, since
+"Welche neuen Meldungen gibt es?"-style questions land on **every**
+NEU-labeled file once the name-marker arm fires — see
+`internal/chat/recency_listing.go`'s two-arm design — while a
+window-only phrasing like "Welche Meldungen wurden in den letzten 6 Tagen
+veröffentlicht?" is scoped to just that window's NEU files), 8 NEU/UPDATE
+product lookups (`must_cite` is the UPDATE file only — tests whether the
+recency boost/prior promotes the newer, more complete advisory over its
+near-duplicate NEU predecessor), 6 CVE/WID-id lookups (lexical/BM25
+exercise; two target a CVE that exists only in an UPDATE, not its NEU
+predecessor), 3 cross-advisory enumerations (`query_type: enumeration`),
+and 2 "newest for product" lookups (recency boost ranking a single file,
+deliberately phrased to avoid tripping the recency-listing classifier).
+
+`kb_id` in the committed file is the placeholder
+`REPLACE_WITH_FIXTURE_KB_ID` (see "Ground truth by name, not by UUID"
+above); one question (`cert-r06`) carries a `{TODAY-14}` placeholder in its
+question text that the seed script rewrites to an ISO date.
+
+### Seeding
+
+```bash
+JUSTRAG_URL=http://localhost:3000 \
+JUSTRAG_ADMIN_USER=admin \
+JUSTRAG_ADMIN_PASSWORD=<the ADMIN_PASSWORD the instance was started with> \
+  ./eval/fixtures/seed-cert.sh
+```
+
+Logs in as the admin user, creates or reuses a KB named "CERT Fixtures",
+ingests every corpus file via `POST /api/kb/{id}/text` (skipping any title
+already present, so reruns are cheap), polls until ingestion finishes,
+**verifies** every manifest row landed under its expected name (fails
+loudly otherwise — a mismatch here would make the backdating UPDATE below
+a silent 0-row no-op), then backdates each file's
+`files.created_at` per `manifest.tsv`'s `days_ago` column via
+`UPDATE files SET created_at = now() - make_interval(days => N) WHERE
+kb_id = ... AND name = ...`, run through
+`${PSQL_CMD:-docker compose -p justrag exec -T db psql -U postgres -d rag_db}`.
+Only `files.created_at` needs backdating — both the date-window filter
+(`SearchService.fileIDsInDateRange`) and the recency boost
+(`fileCreatedTimes`) read `files.created_at` on the **main** DB; there is
+no `document_chunks_<dim>` row to touch (verified against
+`internal/vector/recency_boost.go`). Every run (fresh seed or `--restamp`)
+re-runs the backdating UPDATEs relative to `now()`, so a previously seeded
+KB stays inside the 7-day recency-listing window no matter how much
+wall-clock time has passed since it was first seeded. Writes
+`eval/golden/cert-recency-de.local.jsonl` — the committed set with `kb_id`
+rewritten to the real KB id and `{TODAY-N}` rewritten to an ISO date. That
+file is gitignored (`eval/golden/*.local.jsonl`); never edit
+`cert-recency-de.jsonl` itself to point at a real KB.
+
+`--restamp --kb-id <uuid>` skips ingestion entirely and only re-runs the
+backdating UPDATEs (plus regenerating the `.local.jsonl`) against an
+already-seeded KB — useful for refreshing the window without waiting for a
+full re-ingest.
+
+### Running the A/B
+
+`cmd/eval` has no site_config to flip for `recency_boost_enabled` short of
+the same overlay mechanism the other ablation flags use (`--bm25-tiered-boost`
+etc.): pass `--recency-boost on|off` (a vector-layer key, applied via the
+searchReader overlay — see `docs/retrieval.md`'s Recency prior section for
+the underlying mechanism). `chat_recency_listing_enabled` and
+`chat_date_awareness_enabled` both default **on** in production and need no
+override for this set.
+
+Write reports to a scratch location **outside** `eval/golden/` — that
+directory holds committed golden sets and gitignored `*.local.jsonl`
+copies only; an ad-hoc `--output` path landing there is an untracked file
+`.gitignore` doesn't cover. The acceptance run below used
+`.superpowers/sdd/2026-09-05-rag-sota-wave2/task8-out/` (gitignored
+wholesale via `.superpowers/sdd/`) through the dev-stack helper
+`run-eval.sh`, which builds `cmd/eval` fresh and exports the compose-stack
+env:
+
+```bash
+OUT=.superpowers/sdd/2026-09-05-rag-sota-wave2/task8-out
+bash .superpowers/sdd/2026-09-05-rag-sota-wave2/run-eval.sh \
+  --golden eval/golden/cert-recency-de.local.jsonl \
+  --production-context --recency-boost off \
+  --output "$OUT/cert-off1.json"
+bash .superpowers/sdd/2026-09-05-rag-sota-wave2/run-eval.sh \
+  --golden eval/golden/cert-recency-de.local.jsonl \
+  --production-context --recency-boost on \
+  --output "$OUT/cert-on.json"
+# Noise band: repeat the first (off) run and diff against cert-off1.json.
+bash .superpowers/sdd/2026-09-05-rag-sota-wave2/run-eval.sh \
+  --golden eval/golden/cert-recency-de.local.jsonl \
+  --production-context --recency-boost off \
+  --output "$OUT/cert-off2.json"
+```
+
+`--production-context` defaults `--orchestrator-dispatch` to `true`
+(production-parity routing); the acceptance record's second table repeats
+the same three runs with `--orchestrator-dispatch=false` to isolate the
+recency mechanisms from the LLM query-classifier's run-to-run
+non-determinism (recency listing fires only on the standard
+`PrepareChatContext` path — a question the classifier routes to
+`plan_execute`/`supervisor`/`agentic` skips it entirely for that turn).
+
+See `eval/golden/cert-recency-de.acceptance.md` for both tables
+(production-like dispatch-on, and dispatch-forced-standard), the 6 listing
+questions' window-file `FinalChunks` coverage, the per-pair UPDATE-vs-NEU
+ranking outcome, and a log line proving the recency listing fired under
+`cmd/eval` (`grep recency` in the run's JSON log output).
+
+**Final decision (Wave 2, Task 9):** `recency_boost_enabled` stays **off**
+by default. The standard-path-forced table (the trustworthy isolated
+estimate, dispatch confound removed) shows overall recall 0.651 → 0.696
+with the boost on, against a 4.0 pp same-flag noise band, and the
+UPDATE-outranks-NEU win rate on the 8 NEU/UPDATE pairs rising from 3/8 to
+5/8 — a marginal but directionally positive, noise-exceeding effect on
+n=25 questions. Recommended for RSS/CERT-style time-sensitive KBs
+specifically, not as a new global default. `chat_recency_listing_enabled`
+and `chat_date_awareness_enabled` were both already default-on and are
+unaffected by this decision; the fixture additionally confirms the
+listing mechanism fires correctly whenever a question reaches the
+standard path (it does not fire when orchestrator dispatch routes the
+same question elsewhere — a pre-existing production interaction, not a
+fixture defect). See `docs/retrieval.md`'s "Recency prior" section and
+`docs/feature-recipes.md`'s "Recency prior" / "Date-aware chat" recipes.

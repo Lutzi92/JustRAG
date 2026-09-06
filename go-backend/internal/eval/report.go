@@ -103,6 +103,20 @@ Aggregate (k=%d, count=%d):
 				label, a.Count, a.MeanRecall, a.MeanPrecision, a.MRR, a.MeanNDCG)
 		}
 	}
+	if len(rep.TurnKindAggregates) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Per turn kind:")
+		kinds := make([]string, 0, len(rep.TurnKindAggregates))
+		for k := range rep.TurnKindAggregates {
+			kinds = append(kinds, k)
+		}
+		sort.Strings(kinds)
+		for _, k := range kinds {
+			a := rep.TurnKindAggregates[k]
+			fmt.Fprintf(w, "  %-20s count=%-3d mean_recall=%.3f mean_precision=%.3f mrr=%.3f ndcg=%.3f\n",
+				k, a.Count, a.MeanRecall, a.MeanPrecision, a.MRR, a.MeanNDCG)
+		}
+	}
 	if len(rep.OrchestratorAggregates) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Orchestrators:")

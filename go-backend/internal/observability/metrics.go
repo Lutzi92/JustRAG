@@ -1080,6 +1080,48 @@ func RecordBM25FloorReinserted(count int) {
 	bm25FloorReinserted.Observe(float64(count))
 }
 
+// --- BM25 scoring mode (Wave-2 Task 6) -------------------------------------
+
+var keywordArmModeTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name:        "rag_keyword_arm_mode_total",
+		Help:        "Per-mode counter for the keyword-arm scoring formula actually used per search (mode: ts_rank | bm25). Recorded once per Search() call (and once per KeywordSearch MCP-tool call) after any per-query bm25→ts_rank fallback has already been applied, so this reflects what actually ran, not the site_config setting.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"mode"},
+)
+
+// RecordKeywordArmMode increments the per-mode counter for the keyword
+// arm's scoring formula. Callers pass the mode AFTER any fallback
+// resolution (see RecordBM25ModeFallback) — this metric answers "what
+// scored this search", not "what the operator configured".
+func RecordKeywordArmMode(mode string) {
+	if mode == "" {
+		mode = "ts_rank"
+	}
+	keywordArmModeTotal.WithLabelValues(mode).Inc()
+}
+
+var bm25ModeFallbackTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name:        "rag_bm25_mode_fallback_total",
+		Help:        "Per-reason counter for a per-query fallback from bm25 scoring mode back to ts_rank. reason=no_stats: the KB's dimension has no usable bm25_kb_stats_<dim> row yet (new KB, or the refresher hasn't run since ingestion). reason=no_simple_stats: the 'simple' arm specifically has no usable stats row (e.g. backfilled without a subsequent refresh) while 'lang' does.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"reason"},
+)
+
+// RecordBM25ModeFallback increments the per-reason fallback counter. Only
+// called when bm25 mode was configured but a query actually ran ts_rank
+// instead — a sustained non-zero rate on a KB means its BM25 stats never
+// refresh (worker down, or the KB is permanently mid-ingestion).
+func RecordBM25ModeFallback(reason string) {
+	if reason == "" {
+		reason = "no_stats"
+	}
+	bm25ModeFallbackTotal.WithLabelValues(reason).Inc()
+}
+
 // --- Plan-and-Execute (Phase 1) -------------------------------------------
 
 var (

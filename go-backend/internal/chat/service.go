@@ -89,7 +89,7 @@ type ChatContextParams struct {
 	// without a read-only DSN. Nil-receiver safe either way.
 	TabularRouter *TabularRouter
 	// RawQuery is the verbatim user utterance for the rewrite ⊕ raw
-	// lane; empty = off. Set by the caller via rawQueryForRetrieval
+	// lane; empty = off. Set by the caller via RawQueryForRetrieval
 	// (gated on chat_condense_keep_raw_enabled) and forwarded verbatim
 	// into vector.SearchOptions.RawQuery.
 	RawQuery string
@@ -1275,31 +1275,13 @@ func CondenseFollowUp(
 		return message, nil
 	}
 
-	if len(messages) < 2 {
-		return message, nil
-	}
-
-	// Take last 6 messages, truncate content to 500 chars each.
-	if len(messages) > 6 {
-		messages = messages[len(messages)-6:]
-	}
-
 	history := make([]ai.ChatHistoryEntry, len(messages))
 	for i, m := range messages {
-		content := m.Content
-		if len(content) > 500 {
-			content = content[:500]
-		}
 		history[i] = ai.ChatHistoryEntry{
 			Role:    m.Role,
-			Content: content,
+			Content: m.Content,
 		}
 	}
 
-	condensed, err := ai.CondenseQuestion(ctx, aiResolver, history, message, kbID, language)
-	if err != nil {
-		// Fail open.
-		return message, nil
-	}
-	return condensed, nil
+	return CondenseFromHistory(ctx, aiResolver, history, message, kbID, language)
 }

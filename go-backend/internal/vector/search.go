@@ -403,6 +403,14 @@ type SearchService struct {
 	kbLangSF       singleflight.Group
 
 	feedback FeedbackReader // nil when the feedback loop is unwired/disabled
+
+	// bm25AvailCache memoises bm25ArmAvailability() verdicts (both arms)
+	// for bm25StatsCacheTTL. Defined in bm25_stats.go; declared here so
+	// the struct stays the canonical "things SearchService owns" view
+	// (same convention as kbTableCache above). Consulted by Search() and
+	// the KeywordSearch MCP tool, via bm25ModeDecision, to decide the
+	// per-query bm25→ts_rank fallback.
+	bm25AvailCache sync.Map
 }
 
 const (
@@ -485,7 +493,8 @@ func (s *SearchService) CloneWithSiteConfigReader(r SiteConfigReader) *SearchSer
 		// clone path (nil reader = boost off, fail-open).
 		feedback: s.feedback,
 		// rerankDefaultNoticeOnce, kbTableCache, siteConfigCache, siteConfigSF,
-		// kbLangCachePtr, kbLangSF: zero values — fresh, independent caches.
+		// kbLangCachePtr, kbLangSF, bm25AvailCache: zero values — fresh,
+		// independent caches.
 		// NOTE for future fields: every new dependency field must be copied
 		// here explicitly or per-KB-override KBs silently lose it.
 	}
@@ -788,10 +797,14 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	}
 	timer.Mark("embed")
 
-	// The keyword-arm decision is made exactly once per search and reused
-	// by every BM25 fan-out below (primary, multi-query, step-back,
-	// sub-queries) so the request can never run a mixed set of arms.
+	// The keyword-arm decision (simple arm + BM25 scoring mode, including
+	// its stats-availability fallback) is made exactly once per search
+	// and reused by every BM25 fan-out below (primary, multi-query,
+	// step-back, sub-queries) so the request can never run a mixed set
+	// of arms or scoring modes. Extracted to resolveKeywordArm to keep
+	// Search's own statement count down (funlen).
 	simpleArm := effectiveSimpleArm(ctx, siteCfg.BM25SimpleArmEnabled, opts.ForceBM25SimpleArm)
+	keywordArm := s.resolveKeywordArm(ctx, siteCfg, kbID, dimensions, simpleArm)
 
 	// ------------------------------------------------------------------
 	// 5 & 6. Vector + keyword search
@@ -799,8 +812,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 	vectorResults, keywordResults, err := s.runPrimarySearches(
 		ctx, tableName, embeddingStr, finalQuery, kbID, pgConfig,
 		opts.FileIDs, searchLimit, dimensions, useHalfvec, siteCfg.HNSWEfSearch,
-		siteCfg.MRLTwoPass, embeddingLowStr, simpleArm,
-		siteCfg.BM25TieredBoost, opts.NodeKindFilter,
+		siteCfg.MRLTwoPass, embeddingLowStr, keywordArm, opts.NodeKindFilter,
 	)
 	if err != nil {
 		return nil, err
@@ -849,6 +861,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		"vector_docs", len(vectorResults), "vector_files", countFilesRaw(vectorResults),
 		"keyword_docs", len(keywordResults), "keyword_files", countFilesRaw(keywordResults),
 		"top_n_route", routeLabelFor(opts.QueryType),
+		"keyword_mode", string(keywordArm.Mode),
 	)
 
 	// ------------------------------------------------------------------
@@ -873,7 +886,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 			)
 			if siteCfg.RAGFusionEnabled {
 				bm25Lists := s.runMultiQueryBM25Searches(
-					ctx, tableName, altQueries, kbID, pgConfig, opts.FileIDs, searchLimit, simpleArm, siteCfg.BM25TieredBoost,
+					ctx, tableName, altQueries, kbID, pgConfig, opts.FileIDs, searchLimit, keywordArm,
 				)
 				keywordExtraLists = append(keywordExtraLists, bm25Lists...)
 			}
@@ -916,7 +929,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 			stageLog = append(stageLog, "stepback_lists", len(sbLists))
 			if siteCfg.RAGFusionEnabled {
 				sbBM25 := s.runMultiQueryBM25Searches(
-					ctx, tableName, []string{stepBackQuery}, kbID, pgConfig, opts.FileIDs, searchLimit, simpleArm, siteCfg.BM25TieredBoost,
+					ctx, tableName, []string{stepBackQuery}, kbID, pgConfig, opts.FileIDs, searchLimit, keywordArm,
 				)
 				keywordExtraLists = append(keywordExtraLists, sbBM25...)
 			}
@@ -944,7 +957,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		)
 		if siteCfg.RAGFusionEnabled {
 			subBM25 := s.runMultiQueryBM25Searches(
-				ctx, tableName, opts.SubQueries, kbID, pgConfig, opts.FileIDs, searchLimit, simpleArm, siteCfg.BM25TieredBoost,
+				ctx, tableName, opts.SubQueries, kbID, pgConfig, opts.FileIDs, searchLimit, keywordArm,
 			)
 			keywordExtraLists = append(keywordExtraLists, subBM25...)
 		}
@@ -962,7 +975,7 @@ func (s *SearchService) Search(ctx context.Context, kbID, query string, limit in
 		)
 		extraLists = append(extraLists, rawVec...)
 		rawBM25 := s.runMultiQueryBM25Searches(
-			ctx, tableName, []string{raw}, kbID, pgConfig, opts.FileIDs, searchLimit, simpleArm, siteCfg.BM25TieredBoost,
+			ctx, tableName, []string{raw}, kbID, pgConfig, opts.FileIDs, searchLimit, keywordArm,
 		)
 		keywordExtraLists = append(keywordExtraLists, rawBM25...)
 		stageLog = append(stageLog, "raw_query_lists", len(rawVec)+len(rawBM25))
@@ -1428,6 +1441,34 @@ func effectiveSimpleArm(ctx context.Context, cfg, force bool) bool {
 	return cfg || force
 }
 
+// resolveKeywordArm resolves the BM25 scoring mode (including its
+// stats-availability fallback, per bm25ModeDecision) exactly once per
+// search and bundles it with the already-resolved simpleArm/tiered-boost/
+// k1/b settings into the keywordArmSettings every downstream keyword-arm
+// fan-out (runPrimarySearches, runMultiQueryBM25Searches) reuses unchanged.
+// Records both keyword-arm-mode metrics. Extracted out of Search itself
+// purely to keep that function's statement count under the funlen limit.
+func (s *SearchService) resolveKeywordArm(ctx context.Context, siteCfg KBVectorConfig, kbID string, dimensions int, simpleArm bool) keywordArmSettings {
+	keywordMode := siteCfg.BM25ScoringMode
+	if keywordMode == KeywordScoringBM25 {
+		langAvailable, simpleAvailable := s.bm25ArmAvailability(ctx, kbID, dimensions)
+		var fallbackReason string
+		keywordMode, fallbackReason = bm25ModeDecision(keywordMode, simpleArm, langAvailable, simpleAvailable)
+		if fallbackReason != "" {
+			observability.RecordBM25ModeFallback(fallbackReason)
+		}
+	}
+	observability.RecordKeywordArmMode(string(keywordMode))
+	return keywordArmSettings{
+		SimpleArm:   simpleArm,
+		TieredBoost: siteCfg.BM25TieredBoost,
+		Mode:        keywordMode,
+		Dim:         dimensions,
+		K1:          siteCfg.BM25K1,
+		B:           siteCfg.BM25B,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // runPrimarySearches — vector + keyword in parallel
 // ---------------------------------------------------------------------------
@@ -1441,7 +1482,7 @@ func (s *SearchService) runPrimarySearches(
 	efSearch int,
 	mrlTwoPass bool,
 	embeddingLowJSON string,
-	bm25SimpleArm, bm25TieredBoost bool,
+	arm keywordArmSettings,
 	nodeKindFilter string,
 ) (vector []rawRow, keyword []rawRow, err error) {
 	// Each goroutine below writes exactly one of these (vectorRows vs
@@ -1465,7 +1506,7 @@ func (s *SearchService) runPrimarySearches(
 	g.Go(func() (gErr error) {
 		defer safego.RecoverError(&gErr)
 		rows, kErr := s.runKeywordSearch(
-			gCtx, tableName, query, kbID, pgConfig, fileIDs, limit, bm25SimpleArm, bm25TieredBoost, nodeKindFilter,
+			gCtx, tableName, query, kbID, pgConfig, fileIDs, limit, arm, nodeKindFilter,
 		)
 		if kErr != nil {
 			// Non-fatal: leave keywordRows nil, do not propagate. Surface the
@@ -1601,7 +1642,7 @@ func (s *SearchService) runMultiQueryBM25Searches(
 	kbID, pgConfig string,
 	fileIDs []string,
 	limit int,
-	simpleArm, tieredBoost bool,
+	arm keywordArmSettings,
 ) [][]RankedDoc {
 	type result struct {
 		docs []RankedDoc
@@ -1623,7 +1664,7 @@ func (s *SearchService) runMultiQueryBM25Searches(
 				return
 			}
 			defer func() { <-sem }()
-			rows, err := s.runKeywordSearch(ctx, tableName, q, kbID, pgConfig, fileIDs, limit, simpleArm, tieredBoost, "")
+			rows, err := s.runKeywordSearch(ctx, tableName, q, kbID, pgConfig, fileIDs, limit, arm, "")
 			if err != nil {
 				observability.RecordKeywordSearchFailed("multi_query")
 				logctx.From(ctx).Warn("multi-query bm25: keyword search failed", "alt_query", q, "error", err)
