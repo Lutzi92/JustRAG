@@ -287,6 +287,12 @@ var ignoredKeys = map[string]string{
 	"chat_answer_history_max_chars":   "tuning knob for the answer-time conversation-history correctness fix",
 	"chat_transform_followup_enabled": "retrieval-free reformat follow-ups, default-on correctness/UX kill switch, not a retrieval/answer pipeline stage",
 
+	// Generation-layer safety guard, not a pipeline stage: it watches the
+	// answer stream for a runaway repetition and aborts the completion. It
+	// is global-only (a model failure mode, not a per-KB trade-off), so it
+	// has no registry entry and nothing for a KB admin to wire on a canvas.
+	"chat_answer_degenerate_run_limit": "degenerate-answer guard on the generation layer (aborts a runaway repeated run); a deployment-wide safety limit, not a per-KB pipeline stage",
+
 	// Operational budget siblings of the already-ignored chat_turn_budget_seconds.
 	"chat_turn_budget_tokens":     "operational budget, sibling of chat_turn_budget_seconds",
 	"chat_turn_budget_tool_calls": "operational budget, sibling of chat_turn_budget_seconds",

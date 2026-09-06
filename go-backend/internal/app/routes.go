@@ -1369,6 +1369,9 @@ func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 	openaiHandler := openaicompat.NewHandler(&openaiDeps{PGStore: rc.kbStore, kbAccessStore: rc.kbAccessStore}, rc.aiResolver, rc.searchService)
 	openaiHandler.SetUsageRecorder(usage.NewRecorder(rc.infra.db.Main))
 	openaiHandler.SetFileDates(&fileDatesAdapter{store: rc.filesStore})
+	// Only for the degenerate-run guard's limit — this surface otherwise
+	// reads no site_config.
+	openaiHandler.SetSiteConfig(rc.chatStore)
 
 	rc.mux.Handle("GET /openai/v1/models", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(openaiHandler.ListModels))))
 	rc.mux.Handle("POST /openai/v1/chat/completions", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(openaiHandler.ChatCompletions))))
@@ -1377,6 +1380,9 @@ func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 	publicHandler.SetResearchDeps(rc.chatStore, rc.infra.rdb.Client)
 	publicHandler.SetUsageRecorder(usage.NewRecorder(rc.infra.db.Main))
 	publicHandler.SetFileDates(&fileDatesAdapter{store: rc.filesStore})
+	// Only for the degenerate-run guard's limit — this surface otherwise
+	// runs the pipeline with a nil site-config reader by design.
+	publicHandler.SetSiteConfig(rc.chatStore)
 
 	rc.mux.Handle("GET /api/v1/kb", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(publicHandler.ListKBs))))
 	rc.mux.Handle("GET /api/v1/kb/{id}/chats", apiRL.Middleware(apiKeyAuth.Authenticate(

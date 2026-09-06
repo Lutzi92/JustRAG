@@ -2750,3 +2750,39 @@ func RecordIngestInjectionFlag(origin string) {
 func IngestInjectionFlagTotalForTest() *prometheus.CounterVec {
 	return ingestInjectionFlagTotal
 }
+
+// --- Degenerate answer guard (Wave-5 Task 7) -------------------------------
+
+var answerDegenerateTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name:        "rag_answer_degenerate_total",
+		Help:        "Answers the degenerate-run guard truncated, by answering surface (web | api_v1 | openai_compat | mcp). One increment per affected answer: on the streaming surfaces the completion was cancelled mid-run, on the non-streaming ones the finished answer was stripped post hoc. A non-zero rate means the model is collapsing into runaway repetition — the guard contains the symptom, it does not fix it.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"surface"},
+)
+
+// answerDegenerateKnownSurfaces bounds the label cardinality: surface is a
+// compile-time constant at every call site, so a value outside this set
+// means a caller drifted, not that a new surface exists.
+var answerDegenerateKnownSurfaces = map[string]bool{
+	"web":           true,
+	"api_v1":        true,
+	"openai_compat": true,
+	"mcp":           true,
+}
+
+// RecordAnswerDegenerate increments the per-surface counter for one answer
+// the degenerate-run guard had to truncate.
+func RecordAnswerDegenerate(surface string) {
+	if !answerDegenerateKnownSurfaces[surface] {
+		return
+	}
+	answerDegenerateTotal.WithLabelValues(surface).Inc()
+}
+
+// AnswerDegenerateTotalForTest exposes the guard counter to other test
+// packages. Mirrors IngestInjectionFlagTotalForTest.
+func AnswerDegenerateTotalForTest() *prometheus.CounterVec {
+	return answerDegenerateTotal
+}

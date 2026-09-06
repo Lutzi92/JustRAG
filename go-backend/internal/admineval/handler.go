@@ -214,6 +214,10 @@ var snapshotConfigKeys = []string{
 	"chat_conflict_model",
 	"chat_conflict_max_chunks",
 	"chat_conflict_timeout_ms",
+	// Wave-5 Task 7 degenerate-answer guard. Global-only (no registry
+	// entry), but it can truncate an answer, so a snapshotted eval run has
+	// to record the limit that was in force.
+	"chat_answer_degenerate_run_limit",
 	// Retrieval/orchestrator registry keys (kb-workflow-editor Phase 2
 	// Task 3; cross-checked by snapshot_registry_test.go like the blocks
 	// above).

@@ -1284,6 +1284,29 @@ func ChatAnswerTemperature(ctx context.Context, reader SiteConfigReader) float64
 	return readFloat(ctx, reader, "chat_answer_temperature", ai.DefaultAnswerTemperature, 0, 2)
 }
 
+// ChatAnswerDegenerateRunLimit is the maximum length, in runes, of a run of
+// one repeated character — or of a repeated 2–4-rune pattern — that an
+// answer may contain before the degenerate-run guard aborts the completion
+// and truncates the answer (W5-R4). See internal/chat/degenerate_guard.go.
+//
+// Default 400: above any realistic Markdown rule width (a 300-`-` table
+// rule is common; 400 is not), well below the ~15 400-rune `_` run the
+// Wave-4 G01 answer produced. **0 disables the guard entirely** — the kill
+// switch. Any other value outside [50, 100000], and anything unparseable,
+// falls back to the default, the same convention as every other int knob
+// here. Global-only: this guards the deployment against a model failure
+// mode, it is not a per-KB retrieval trade-off, so there is no registry
+// entry and no per-KB override.
+func ChatAnswerDegenerateRunLimit(ctx context.Context, reader SiteConfigReader) int {
+	// lo=0 so the explicit "disabled" value survives parseInt's range
+	// check; the [50, …] floor for a real limit is applied after.
+	n := readInt(ctx, reader, "chat_answer_degenerate_run_limit", degenerateRunLimitDefault, 0, degenerateRunLimitMax)
+	if n != 0 && n < degenerateRunLimitMin {
+		return degenerateRunLimitDefault
+	}
+	return n
+}
+
 // ChatAgenticPlateauStop reports whether the Phase 1 §1.3 quality-plateau
 // early-stop check is active. When true, the agentic / plan-execute loops
 // track per-step `topScore` and `chunksAdded` deltas; two consecutive

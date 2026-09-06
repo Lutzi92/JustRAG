@@ -1034,16 +1034,20 @@ func (h *Handler) tryDeepChat(
 	// byte-identically to today.
 	deepChatStart := time.Now()
 	var responseBuf, reasoningBuf strings.Builder
-	streamEmit := func(e ai.StreamEvent) {
-		if e.Content != "" {
-			responseBuf.WriteString(e.Content)
-			writeSSE(ctx, w, map[string]string{"content": e.Content})
-		}
-		if e.Reasoning != "" {
-			reasoningBuf.WriteString(e.Reasoning)
-			writeSSE(ctx, w, map[string]string{"reasoning": e.Reasoning})
-		}
-	}
+	// Degenerate-run guard (W5-R4). The completion — and ONLY the
+	// completion — runs under a cancellable child of ctx: when the answer
+	// collapses into a runaway repetition, cancelling genCtx is what stops
+	// the provider generating (and billing) the rest of it. ctx itself
+	// stays live for the SSE writes, the AddMessage and the post-response
+	// tasks that follow, so a guard cancel completes the turn normally
+	// instead of surfacing as a stream error.
+	genCtx, cancelGen := context.WithCancel(ctx)
+	defer cancelGen()
+	guard := newAnswerGuard(ChatAnswerDegenerateRunLimit(ctx, h.siteConfigReader), lang, "web", cancelGen)
+	streamEmit := newGuardedEmit(guard, &responseBuf, &reasoningBuf,
+		func(s string) { writeSSE(ctx, w, map[string]string{"content": s}) },
+		func(s string) { writeSSE(ctx, w, map[string]string{"reasoning": s}) },
+	)
 	// Team synthesis carries user-authored, persona-influenced findings in its
 	// system prompt (a prompt-injection amplifier if handed the full,
 	// unrestricted answer-tool catalog) — answer tools stay off on any turn a
@@ -1071,7 +1075,7 @@ func (h *Handler) tryDeepChat(
 		if mcpDisp != nil {
 			catalog = mcpDisp.AnswerToolCatalog(kbID)
 		}
-		err = RunAnswerWithTools(ctx, AnswerToolsParams{
+		err = RunAnswerWithTools(genCtx, AnswerToolsParams{
 			AIResolver:      h.aiResolver,
 			KbID:            kbID,
 			ChatID:          chatID,
@@ -1084,14 +1088,17 @@ func (h *Handler) tryDeepChat(
 			ReasoningEffort: reasoningLevel,
 			Temperature:     ChatAnswerTemperature(ctx, h.siteConfigReader),
 		}, streamEmit, answerTrace)
-		if err != nil {
+		// A guard trip cancels genCtx, which the tool loop reports as a
+		// context error — that is a deliberate abort with a usable answer
+		// behind it, not a stream failure. Only a real error bails.
+		if err != nil && !guard.tripped() {
 			writeSSE(ctx, w, map[string]string{"error": "failed to run AI stream"})
 			writeSSEDone(ctx, w)
 			sseFinished = true
 			return true
 		}
 	} else {
-		events, sErr := ai.StreamCompletionWithHistory(ctx, h.aiResolver, answerHistory, body.Message, chatCtx.SystemPrompt, kbID, reasoningLevel, ChatAnswerTemperature(ctx, h.siteConfigReader))
+		events, sErr := ai.StreamCompletionWithHistory(genCtx, h.aiResolver, answerHistory, body.Message, chatCtx.SystemPrompt, kbID, reasoningLevel, ChatAnswerTemperature(ctx, h.siteConfigReader))
 		if sErr != nil {
 			writeSSE(ctx, w, map[string]string{"error": "failed to start AI stream"})
 			writeSSEDone(ctx, w)
@@ -1105,8 +1112,14 @@ func (h *Handler) tryDeepChat(
 				break
 			}
 			streamEmit(ai.StreamEvent{Content: event.Content, Reasoning: event.Reasoning})
+			if guard.tripped() {
+				// genCtx is already cancelled; stop consuming instead of
+				// waiting for the provider's terminal event (which would
+				// arrive carrying context.Canceled).
+				break
+			}
 		}
-		if streamErr != nil {
+		if streamErr != nil && !guard.tripped() {
 			// Mid-stream abort (connection reset, oversized SSE frame): the
 			// buffered content is truncated. Surface the error and bail
 			// instead of persisting it as a complete AI message.
@@ -1119,6 +1132,19 @@ func (h *Handler) tryDeepChat(
 	}
 
 	fullResponse := responseBuf.String()
+	if guard.tripped() {
+		// Strip the run from the answer that gets persisted, append the
+		// notice, and stream that notice as the final content frame so the
+		// user sees why the answer stops mid-sentence. The turn then
+		// completes normally — message saved, post-response tasks run.
+		guarded, appended := guard.finish(fullResponse)
+		fullResponse = guarded
+		writeSSE(ctx, w, map[string]string{"content": appended})
+		guard.recordTrajectory(func(pl map[string]any) { writeSSE(ctx, w, pl) })
+		logctx.From(ctx).Warn("chat.send: degenerate answer run truncated",
+			"chat_id", chatID, "kb_id", kbID,
+			"limit", guard.tracker.Limit(), "run_length", guard.tracker.RunLength())
+	}
 
 	toolCallsThisTurn := 0
 	if rec := ToolCallRecorderFromContext(ctx); rec != nil {

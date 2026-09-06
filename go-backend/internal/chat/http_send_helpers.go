@@ -647,16 +647,17 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	// path runs byte-identically when the flag is off.
 	streamStart := time.Now()
 	var responseBuf, reasoningBuf strings.Builder
-	streamEmit := func(e ai.StreamEvent) {
-		if e.Content != "" {
-			responseBuf.WriteString(e.Content)
-			writeSSE(ctx, w, map[string]string{"content": e.Content})
-		}
-		if e.Reasoning != "" {
-			reasoningBuf.WriteString(e.Reasoning)
-			writeSSE(ctx, w, map[string]string{"reasoning": e.Reasoning})
-		}
-	}
+	// Degenerate-run guard (W5-R4) — same wiring as the orchestrator tail in
+	// tryDeepChat: only the completion runs under the cancellable child ctx,
+	// so a guard cancel ends generation without disturbing the SSE writes,
+	// the AddMessage or the post-response tasks that follow.
+	genCtx, cancelGen := context.WithCancel(ctx)
+	defer cancelGen()
+	guard := newAnswerGuard(ChatAnswerDegenerateRunLimit(ctx, h.siteConfigReader), p.lang, "web", cancelGen)
+	streamEmit := newGuardedEmit(guard, &responseBuf, &reasoningBuf,
+		func(s string) { writeSSE(ctx, w, map[string]string{"content": s}) },
+		func(s string) { writeSSE(ctx, w, map[string]string{"reasoning": s}) },
+	)
 	useAnswerTools := ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
 	if useAnswerTools {
 		answerTrace := func(stage, decision, reason string, details map[string]any) {
@@ -675,7 +676,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		if mcpDisp != nil {
 			catalog = mcpDisp.AnswerToolCatalog(p.kbID)
 		}
-		err := RunAnswerWithTools(ctx, AnswerToolsParams{
+		err := RunAnswerWithTools(genCtx, AnswerToolsParams{
 			AIResolver:      h.aiResolver,
 			KbID:            p.kbID,
 			ChatID:          p.chatID,
@@ -688,7 +689,10 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			ReasoningEffort: p.reasoningLevel,
 			Temperature:     ChatAnswerTemperature(ctx, h.siteConfigReader),
 		}, streamEmit, answerTrace)
-		if err != nil {
+		// A guard trip cancels genCtx, which the tool loop reports as a
+		// context error — a deliberate abort with a usable answer behind it,
+		// not a stream failure. Only a real error bails.
+		if err != nil && !guard.tripped() {
 			logctx.From(ctx).Error("chat.send: run answer-tools", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
 			writeSSE(ctx, w, map[string]string{"error": "failed to run AI stream"})
 			writeSSEDone(ctx, w)
@@ -696,7 +700,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			return
 		}
 	} else {
-		events, err := ai.StreamCompletionWithHistory(ctx, h.aiResolver, p.history, p.userMessage, systemPrompt, p.kbID, p.reasoningLevel, ChatAnswerTemperature(ctx, h.siteConfigReader))
+		events, err := ai.StreamCompletionWithHistory(genCtx, h.aiResolver, p.history, p.userMessage, systemPrompt, p.kbID, p.reasoningLevel, ChatAnswerTemperature(ctx, h.siteConfigReader))
 		if err != nil {
 			logctx.From(ctx).Error("chat.send: start AI stream", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
 			writeSSE(ctx, w, map[string]string{"error": "failed to start AI stream"})
@@ -711,8 +715,14 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 				break
 			}
 			streamEmit(ai.StreamEvent{Content: event.Content, Reasoning: event.Reasoning})
+			if guard.tripped() {
+				// genCtx is already cancelled; stop consuming instead of
+				// waiting for the provider's terminal event (which would
+				// arrive carrying context.Canceled).
+				break
+			}
 		}
-		if streamErr != nil {
+		if streamErr != nil && !guard.tripped() {
 			// Mid-stream abort (connection reset, oversized SSE frame): the
 			// buffered content is truncated. Surface the error and bail
 			// instead of persisting it as a complete AI message.
@@ -725,6 +735,18 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	}
 
 	fullResponse := responseBuf.String()
+	if guard.tripped() {
+		// Strip the run from the persisted answer, append the notice, and
+		// stream that notice as the final content frame so the user sees why
+		// the answer stops. The turn completes normally from here.
+		guarded, appended := guard.finish(fullResponse)
+		fullResponse = guarded
+		writeSSE(ctx, w, map[string]string{"content": appended})
+		guard.recordTrajectory(func(pl map[string]any) { writeSSE(ctx, w, pl) })
+		logctx.From(ctx).Warn("chat.send: degenerate answer run truncated",
+			"chat_id", p.chatID, "kb_id", p.kbID,
+			"limit", guard.tracker.Limit(), "run_length", guard.tracker.RunLength())
+	}
 
 	toolCallsThisTurn := 0
 	if rec := ToolCallRecorderFromContext(ctx); rec != nil {
@@ -833,6 +855,14 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 		logctx.From(ctx).Error("chat.send: generate completion", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
 		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to generate response")
 		return
+	}
+	// Degenerate-run guard, post hoc (W5-R4): nothing to abort on a
+	// non-streaming completion, but the answer must not be persisted or
+	// returned with the run in it.
+	if guarded, appended := GuardAnswerText(ctx, h.siteConfigReader, result.Content, p.lang, "web"); appended != "" {
+		logctx.From(ctx).Warn("chat.send: degenerate answer run stripped (non-streaming)",
+			"chat_id", p.chatID, "kb_id", p.kbID)
+		result.Content = guarded
 	}
 
 	logctx.From(ctx).Info("rag.completion",

@@ -61,6 +61,11 @@ type TrajectoryEvent struct {
 	// rebuilds message content from this field rather than from Diff — the
 	// diff is purely visual. Empty when the refine was a no-op.
 	RefinedText string `json:"refined_text,omitempty"`
+	// Limit / RunLength belong to the answer_degenerate_guard event
+	// (Wave-5 Task 7): the configured chat_answer_degenerate_run_limit and
+	// the length in runes of the repeated run that tripped it.
+	Limit     int `json:"limit,omitempty"`
+	RunLength int `json:"run_length,omitempty"`
 }
 
 // TrajChunkRef is the per-step chunk preview surfaced to the trajectory
