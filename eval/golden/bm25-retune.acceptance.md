@@ -306,3 +306,175 @@ reported `chunks=0 kb_stats=0 term_stats=0` and `kb_rows=0`, and an
 independent `SELECT count(*) FROM document_chunks_768` returned 0 (the table
 is empty again, as it was before seeding). The seed writes no other main-DB
 rows, so nothing was left to cascade.
+
+## Dispatch-on rerun (Wave 4, 2026-09-06)
+
+- **Task:** Wave-4 Task 6 (`.superpowers/sdd/2026-09-06-rag-sota-wave4/task-6-brief.md`),
+  ruling **W4-R8**.
+- **Question this closes:** the Wave-3 retune grid above ran with
+  `--orchestrator-dispatch=false`, so it never exercised the path Wave-2's
+  A/B measured its −7 pp `complex_reasoning` MRR regression on
+  (`complex_reasoning` routes through `plan_execute` only when dispatch is
+  on). This rerun repeats the ts_rank/bm25 comparison with dispatch on the
+  dev-stack default, 3 repeats per cell, to measure that path directly.
+
+### Setup
+
+- **Fixed binary**: `eval-wave4-grid`, built from the clean local `main`
+  checkout at commit `270bcf5` (`.superpowers/sdd/2026-09-06-rag-sota-wave4/build-grid-bin.sh`,
+  refused to build unless `main`'s HEAD was exactly `270bcf5` and clean) —
+  so in-progress Wave-4 branch edits could not leak into the measurement,
+  and the retrieval code path is identical to the branch's base.
+- **Fixture / args**: same as Wave 2's `ab-A`/`ab-C` and the Wave-3 retune
+  grid — `eval/golden/production-ppm-2026-08.jsonl` (89 questions: 43
+  lookup, 32 complex_reasoning, 14 enumeration), `--production-context
+  --top-k 10 --bm25-tiered-boost off`, plus `--bm25-mode ts_rank|bm25`
+  (`--refresh-bm25-stats` before every `bm25` cell) and, for the C5 arm,
+  `--rrf-weight-bm25 0.5`. **Dispatch left at its default (on)** — the one
+  deliberate difference from the Wave-3 retune grid, and the one that
+  matches Wave 2's A/B.
+- **Dispatch-path facts** (`t6-grid.log`, checked immediately before the
+  run): dev `site_configs` — `chat_plan_execute_enabled=true`,
+  `chat_agentic_enabled=true`, `chat_supervisor_enabled=<null>`,
+  `chat_drift_enabled`/`chat_longcontext_enabled` absent — so a
+  `complex_reasoning` question with dispatch on routes through
+  `plan_execute` (never `supervisor`/`drift`/`longcontext`), as in Wave 2.
+- **The 15:44 stack-restart incident.** The first grid attempt
+  (`t6-grid.sh`, log `t6-grid.log`) started cell A1 at 15:42:29; the dev
+  stack restarted mid-run, and A1 exited with a non-zero status after
+  121 s wall time. A2 started at 15:44:30 and failed after 15 s for the
+  same reason. Both partial/failed outputs were discarded (deleted, never
+  analysed) and the grid was relaunched at 15:49:50 with the resumable
+  driver `t6-grid-resume.sh` (log `t6-grid-resume.log`, lock
+  `t6-grid.lock`), which skips a cell only if its JSON report exists **and**
+  its log ends with a `JSON report:` line — i.e. a genuinely completed run.
+  All 9 cells then ran to completion with `exit=0`, back to back, finishing
+  at 18:57:04 (≈ 20–21.5 min per cell, matching the Wave-2/Wave-3 wall
+  times for this fixture). No cell in the analysed set carries any trace of
+  the incident.
+
+### Cells
+
+| cell | mode | errors | plan_execute | agent.orchestrator | keyword_mode lines |
+|---|---|---|---|---|---|
+| A1 | ts_rank | 0 | 29 | {standard: 60, plan_execute: 29} | {ts_rank: 127} |
+| A2 | ts_rank | 0 | 29 | {standard: 60, plan_execute: 29} | {ts_rank: 128} |
+| A3 | ts_rank | 0 | 28 | {standard: 61, plan_execute: 28} | {ts_rank: 128} |
+| C1 | bm25 | 0 | 27 | {standard: 62, plan_execute: 27} | {bm25: 127} |
+| C2 | bm25 | 0 | 29 | {standard: 60, plan_execute: 29} | {bm25: 128} |
+| C3 | bm25 | 0 | 29 | {standard: 60, plan_execute: 29} | {bm25: 126} |
+| C51 | bm25 | 0 | 28 | {standard: 61, plan_execute: 28} | {bm25: 126} |
+| C52 | bm25 | 0 | 29 | {standard: 60, plan_execute: 29} | {bm25: 126} |
+| C53 | bm25 | 0 | 29 | {standard: 60, plan_execute: 29} | {bm25: 125} |
+
+Every cell: 0 errors, 89/89 questions answered, plan_execute count 27–29
+(the 25–30 expected range), and `keyword_mode` lines exclusively the
+cell's own mode (no A cell logged `bm25`, no C/C5 cell logged `ts_rank`,
+confirming no stats-fallback and no leaked mode) — all 9 cells pass the
+per-cell validity rules and none was discarded.
+
+### Per route / metric (mean ± max-spread over 3 repeats, pp)
+
+| route | metric | A (ts_rank) | C (bm25) | C5 (bm25, w=0.5) | band A (pp) |
+|---|---|---|---|---|---|
+| overall | recall | 0.802 ± 0.1 (3) | 0.827 ± 0.0 (3) | 0.818 ± 2.6 (3) | 1.0 |
+| overall | mrr | 0.889 ± 1.0 (3) | 0.874 ± 0.7 (3) | 0.859 ± 1.7 (3) | 1.0 |
+| overall | ndcg | 0.894 ± 0.7 (3) | 0.882 ± 0.6 (3) | 0.872 ± 1.9 (3) | 1.0 |
+| lookup | recall | 0.865 ± 1.9 (3) | 0.886 ± 0.0 (3) | 0.877 ± 5.1 (3) | 1.9 |
+| lookup | mrr | 0.880 ± 2.3 (3) | 0.884 ± 0.0 (3) | 0.872 ± 3.5 (3) | 2.3 |
+| lookup | ndcg | 0.882 ± 2.6 (3) | 0.889 ± 0.1 (3) | 0.879 ± 3.8 (3) | 2.6 |
+| enumeration | recall | 0.860 ± 0.0 (3) | 0.932 ± 0.0 (3) | 0.896 ± 0.0 (3) | 1.0 |
+| enumeration | mrr | 1.000 ± 0.0 (3) | 1.000 ± 0.0 (3) | 0.952 ± 0.0 (3) | 1.0 |
+| enumeration | ndcg | 1.000 ± 0.0 (3) | 0.994 ± 0.0 (3) | 0.964 ± 0.0 (3) | 1.0 |
+| complex_reasoning | recall | 0.691 ± 2.5 (3) | 0.702 ± 0.0 (3) | 0.705 ± 0.4 (3) | 2.5 |
+| complex_reasoning | mrr | 0.854 ± 2.6 (3) | 0.807 ± 2.1 (3) | 0.801 ± 0.0 (3) | 2.6 |
+| complex_reasoning | ndcg | 0.864 ± 2.3 (3) | 0.824 ± 1.6 (3) | 0.821 ± 0.1 (3) | 2.3 |
+
+Band = max spread across A1..A3 for that route/metric, floored at 1.0 pp
+(W4-R8).
+
+**Lookup / enumeration recall gains** (the direction Wave 2 and the Wave-3
+retune grid both found): lookup recall C +2.1 pp vs A (beyond the 1.9 pp
+band), C5 +1.2 pp (within band); enumeration recall C +7.1 pp (beyond the
+1.0 pp band), C5 +3.6 pp (beyond the 1.0 pp band). `bm25` keeps lifting
+recall on the plan-execute path exactly as it did on the standard path —
+the cost this rerun surfaces is specific to ranking on
+`complex_reasoning`, not to recall anywhere.
+
+### Decision (W4-R8)
+
+`bm25_scoring_mode` flips only if C or C5 beats A's mean lookup MRR beyond
+the band AND no route's mean recall/MRR drops beyond its band.
+
+- **C**: lookup MRR +0.4 pp vs band 2.3 pp → **within band** (does not
+  clear the first half of the rule). Losses beyond band regardless: overall
+  MRR −1.5 pp (band 1.0), complex_reasoning MRR −4.7 pp (band 2.6).
+  → **does not win.**
+- **C5**: lookup MRR −0.8 pp vs band 2.3 pp → **within band** (the mean
+  actually moves the wrong way). Losses beyond band: overall MRR −3.0 pp
+  (band 1.0), enumeration MRR −4.8 pp (band 1.0), complex_reasoning MRR
+  −5.2 pp (band 2.6). → **does not win.**
+
+**`bm25_scoring_mode` stays `ts_rank`.** Neither bm25 arm clears the
+lookup-MRR bar on the plan-execute path — the recall-loss guard isn't even
+needed to reach the decision, though both arms would fail it too.
+
+### The Wave-2 claim, settled
+
+On the plan-execute path (dispatch on), complex_reasoning MRR under bm25
+is **0.807 ± 2.1 pp (n=3)** vs ts_rank **0.854 ± 2.6 pp (n=3)** — a
+**−4.7 pp** difference against a **2.6 pp** band. The Wave-2 −7 pp is
+**confirmed in direction** (a real loss beyond the noise band, on the
+correct path this time) but **not in full magnitude**: −4.7 pp measured
+here over 3 repeats vs −7.0 pp on Wave-2's single run.
+
+### Per-question drivers
+
+Top 5 of 32 shared `complex_reasoning` question ids by |Δ mean reciprocal
+rank| between the 3-repeat A-mean and 3-repeat C-mean:
+
+| question id | \|Δ RR\| | A mean RR | C mean RR | question |
+|---|---|---|---|---|
+| Q058 | 0.889 | 1.000 | 0.111 | Welche KI-Dienste werden auf den Best-Practice-Seiten zu Stanford und Oxford jeweils dokumentiert? |
+| Q025 | 0.500 | 0.500 | 0.000 | Welche Projekte im Portfolio 2026 adressieren laut Titel und Zielsetzung das Thema Informationssicherheit direkt? |
+| Q023 | 0.444 | 0.444 | 0.000 | Welche KI-bezogenen Projekte aus dem Digital-PPM haben bereits den Status 'entschieden' erreicht? |
+| Q056 | 0.333 | 0.667 | 1.000 | Welche Projekte haben höhere geschätzte Projektkosten: 'JLU Future Data Center - Teil 1' oder 'M365-Planung'? |
+| Q029 | 0.153 | 0.708 | 0.556 | Welche Projekte aus dem Portfolio befassen sich schwerpunktmäßig mit der Ablösung oder Erneuerung von Microsoft-Technologien? |
+
+Four of the five swing questions move against bm25 (Q058, Q025, Q023,
+Q029); one (Q056) moves in its favor. Q058 alone accounts for most of the
+route MRR gap — a single question falling from rank 1 to effectively
+unranked (RR 0.111 ≈ rank 9) under bm25 in all 3 repeats — consistent with
+a ranking effect (the tokeniser-divergence / RRF-scale-mismatch mechanisms
+already documented above), not a recall failure, since route recall does
+not regress (0.702 vs 0.691, actually +1.1 pp).
+
+### Operating point for opt-in KBs
+
+**No change to the documented operating point** above
+(`rrf_weight_bm25 = 0.5`, α unchanged, for a KB opted into `bm25` on the
+standard path). This rerun gives no reason to move it: C5 (weight 0.5) is
+not better than C (default weight 1.0) on the plan-execute path — it loses
+more, not less, beyond the bands (enumeration MRR −4.8 pp vs C's clean
+pass, complex_reasoning MRR −5.2 pp vs C's −4.7 pp) — so there is no new,
+dispatch-on-specific operating point to recommend; the standard-path
+recommendation is unaffected because it was never about the plan-execute
+path.
+
+### Artifacts
+
+- `.superpowers/sdd/2026-09-06-rag-sota-wave4/t6-{A1,A2,A3,C1,C2,C3,C51,C52,C53}.json`
+  — full `eval.Report` per cell (workspace-only, gitignored).
+- `.superpowers/sdd/2026-09-06-rag-sota-wave4/t6-{A1,A2,A3,C1,C2,C3,C51,C52,C53}.log`
+  — driver stdout/stderr per cell, including `rag.search.stages`
+  `keyword_mode` evidence (workspace-only, gitignored).
+- `.superpowers/sdd/2026-09-06-rag-sota-wave4/t6-grid.sh`,
+  `t6-grid-resume.sh` — the grid drivers (first attempt / resumable
+  relaunch).
+- `eval/fixtures/bm25-scale/analyse-dispatch-grid.py` — the analysis
+  script (tracked; produces every table and number in this section from
+  the 9 JSON/log pairs above; supersedes the controller's draft
+  `.superpowers/sdd/2026-09-06-rag-sota-wave4/t6-analyse.py`, whose numbers
+  it reproduces exactly on spot-check and extends with the
+  `agent.orchestrator` distribution, nDCG, the C5 arm, the recall-gain
+  narrative, and the per-question driver table above).

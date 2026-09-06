@@ -233,7 +233,7 @@ Per-alt-query BM25 (P4): when `rag_fusion_enabled` is on, every alternative-phra
 
 However, this recall-only guard misses a real and consistent side effect: both C and D regress `complex_reasoning` MRR by ~7.0pp — roughly 14× that route's own 0.5pp noise band, and more than double `cmd/eval`'s own default MRR regression threshold (3pp), tripping the regression gate (exit 3) on every C/D/B run. Recall is essentially unchanged on that route (+0.1pp / +1.0pp), so the right chunks are still retrieved — they just rank lower after CRAG's multi-round grading and the RRF fusion. The most likely cause is scale mismatch: `rrf_weight_bm25` (currently 1, tuned against `ts_rank`'s output range) is applied unchanged to `bm25`'s IDF·TF-saturation scores, which live on a different numeric scale, especially once multiple sub-query lists get fused for `complex_reasoning`'s plan-execute path.
 
-**This wave keeps the default at `ts_rank`** (no code or config change lands in this task, per the global constraints — Task 9 owns flipping any default). The literal per-metric rule favors flipping to `bm25` (uncapped, no tiered boost), but this doc recommends Task 9 treat that reading with the complex_reasoning caveat squarely in view rather than flip on the lookup-MRR number alone — either re-tune `rrf_weight_bm25` for the `bm25` scale range first, or land the flip with an explicit note that complex_reasoning ranking quality is accepted as a known regression pending that re-tune. **Read this paragraph together with the Wave-3 retune grid below, which measured −0.3 pp on that route at the same weights — but with orchestrator dispatch OFF, i.e. on the standard path only, whereas this A/B ran with dispatch ON and routed `complex_reasoning` through plan-execute. The two are not the same experiment: the ~7 pp is a plan-execute finding that the later grid neither reproduced nor refuted, and the scale-mismatch explanation below is untested rather than confirmed.**
+**This wave keeps the default at `ts_rank`** (no code or config change lands in this task, per the global constraints — Task 9 owns flipping any default). The literal per-metric rule favors flipping to `bm25` (uncapped, no tiered boost), but this doc recommends Task 9 treat that reading with the complex_reasoning caveat squarely in view rather than flip on the lookup-MRR number alone — either re-tune `rrf_weight_bm25` for the `bm25` scale range first, or land the flip with an explicit note that complex_reasoning ranking quality is accepted as a known regression pending that re-tune. **Read this paragraph together with the Wave-3 retune grid below, which measured −0.3 pp on that route at the same weights — but with orchestrator dispatch OFF, i.e. on the standard path only, whereas this A/B ran with dispatch ON and routed `complex_reasoning` through plan-execute. The two are not the same experiment: the ~7 pp is a plan-execute finding, now measured directly on that path by the "Dispatch-on rerun" below — complex_reasoning MRR under bm25 comes out −4.7 pp vs ts_rank against a 2.6 pp band, confirming the direction at roughly two-thirds the original magnitude; the scale-mismatch explanation remains a plausible but untested mechanism.**
 
 ### Retune grid: `rrf_weight_bm25` × α under `bm25` (Wave 3 Task 7, 2026-09-06)
 
@@ -299,10 +299,13 @@ Two consequences:
    `bm25`") is likewise **untested** rather than refuted, though it gains no
    support here: down-weighting BM25 does not monotonically improve
    complex_reasoning on the standard path (C1/C2/C4 +2.8 pp, C3/C5/C6 −0.3 pp,
-   across all three weights). **Follow-up:** rerun this grid with
-   `--orchestrator-dispatch=true` to measure the plan-execute path Wave 2
-   actually exercised; until then, treat the −7 pp as a plan-execute finding
-   of unknown reproducibility, not as a property of the scoring mode.
+   across all three weights). **Measured directly (Wave 4 Task 6, see
+   "Dispatch-on rerun" below):** rerunning with
+   `--orchestrator-dispatch=true` (dispatch on, 3 repeats/cell) puts
+   complex_reasoning MRR under bm25 at 0.807 ± 2.1 pp vs ts_rank
+   0.854 ± 2.6 pp — a −4.7 pp difference against a 2.6 pp band, confirming
+   the Wave-2 −7 pp in direction on the plan-execute path, at a smaller
+   magnitude.
 2. **This fixture cannot resolve effects below ~5 pp on `lookup` with one run
    per cell.** CRAG is enabled on the PPM-Eval KB, so an LLM call sits inside
    the retrieval path of every question — that, not the keyword arm, is the
@@ -329,6 +332,67 @@ C1 (the same weight at α 0.6) is equivalent within noise; nothing in this grid
 justifies moving α. Re-run `--refresh-bm25-stats` and bump
 `queryCacheSchemaVersion` when flipping the mode, per the mode's own note
 above, and read the cost check below first if the KB is large.
+
+### Dispatch-on rerun (Wave 4 Task 6, 2026-09-06)
+
+Re-ran the ts_rank-vs-bm25 comparison with `--orchestrator-dispatch=true`
+(dispatch default ON, the setting Wave 2's A/B actually used — the retune
+grid above ran with dispatch off), 3 repeats per cell: A (ts_rank) ×3, C
+(bm25, default weights) ×3, C5 (bm25 + `--rrf-weight-bm25 0.5`) ×3, same
+fixture/args as the retune grid otherwise (`--production-context --top-k 10
+--bm25-tiered-boost off --refresh-bm25-stats`). 25–29 of 89 questions routed
+through `plan_execute` per run (dispatch classification is itself
+non-deterministic; every one of the 9 runs landed in that range). Noise band
+= max spread across the three A runs per route/metric, floored at 1.0 pp.
+
+| route | metric | A (ts_rank) | C (bm25) | C5 (bm25, w=0.5) | band |
+|---|---|---|---|---|---|
+| overall | recall | 0.802 ± 0.1 | 0.827 ± 0.0 | 0.818 ± 2.6 | 1.0 |
+| overall | MRR | 0.889 ± 1.0 | 0.874 ± 0.7 | 0.859 ± 1.7 | 1.0 |
+| lookup | recall | 0.865 ± 1.9 | 0.886 ± 0.0 | 0.877 ± 5.1 | 1.9 |
+| lookup | MRR | 0.880 ± 2.3 | 0.884 ± 0.0 | 0.872 ± 3.5 | 2.3 |
+| enumeration | recall | 0.860 ± 0.0 | 0.932 ± 0.0 | 0.896 ± 0.0 | 1.0 |
+| complex_reasoning | recall | 0.691 ± 2.5 | 0.702 ± 0.0 | 0.705 ± 0.4 | 2.5 |
+| complex_reasoning | MRR | 0.854 ± 2.6 | 0.807 ± 2.1 | 0.801 ± 0.0 | 2.6 |
+
+(n=3 per cell; means ± max-spread across the 3 repeats, in percentage
+points; nDCG and the full per-question breakdown are in
+`eval/golden/bm25-retune.acceptance.md` §"Dispatch-on rerun (Wave 4,
+2026-09-06)".)
+
+Neither `bm25` cell clears W4-R8's bar: lookup MRR gain stays inside the
+band for both (C +0.4 pp, C5 −0.8 pp, vs a 2.3 pp band), so the flip
+condition never triggers — and both cells also lose beyond their bands
+elsewhere (overall MRR −1.5/−3.0 pp, complex_reasoning MRR −4.7/−5.2 pp).
+**`bm25_scoring_mode` stays `ts_rank`** by the letter of the rule, without
+even needing the recall-loss guard to decide it.
+
+This settles the Wave-2 claim: on the plan-execute path (dispatch on),
+complex_reasoning MRR under bm25 is 0.807 ± 2.1 pp (n=3) vs ts_rank
+0.854 ± 2.6 pp (n=3) — a −4.7 pp difference against a 2.6 pp band. The
+Wave-2 −7.0 pp is **confirmed in direction** (the loss is real and exceeds
+the band) but not in full magnitude (−4.7 pp measured here vs −7.0 pp on
+Wave-2's single run). Five questions, all `complex_reasoning`, account for
+most of the swing (ranked by |Δ mean reciprocal rank| between the 3-repeat
+A-mean and the 3-repeat C-mean): Q058 (Stanford/Oxford AI-services
+question, RR 1.000→0.111, Δ 0.889), Q025 (Δ 0.500), Q023 (Δ 0.444), Q056
+(the one question that moves in bm25's favor, RR 0.667→1.000, Δ 0.333),
+Q029 (Δ 0.153) — full table and the script that produced it in
+`eval/golden/bm25-retune.acceptance.md`. `bm25` still lifts recall (lookup
++2.1 pp beyond its 1.9 pp band, enumeration +7.1 pp beyond its 1.0 pp band
+under C), consistent with the standard-path grid above — the plan-execute
+path adds a complex_reasoning ranking cost the standard-path grid didn't
+have.
+
+**Documented operating point unchanged.** This rerun does not move the
+standard-path operating-point recommendation above (`rrf_weight_bm25 =
+0.5`, α unchanged, for an operator opting a KB into `bm25`): C5 (weight
+0.5) performs no better than C (default weight) on the plan-execute path,
+and neither clears the bar, so there is no new operating point to
+document for dispatch-on deployments. Artifacts:
+`.superpowers/sdd/2026-09-06-rag-sota-wave4/t6-{A1..A3,C1..C3,C51..C53}.json`
+(+ matching `.log`, workspace-only, gitignored), analysed by
+`eval/fixtures/bm25-scale/analyse-dispatch-grid.py`.
 
 ### Cost at corpus scale (Wave 3 Task 7, 2026-09-06)
 
