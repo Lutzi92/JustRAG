@@ -63,9 +63,15 @@ func SelectOrchestrator(ctx context.Context, siteCfg chat.SiteConfigReader, quer
 	if queryType != vector.QueryTypeComplexReasoning {
 		return OrchestratorStandard, "fallback_query_type_" + queryType
 	}
-	// W3-R5: mirrors the chat ladder's OrchLongContext arm. DRIFT is not
-	// mirrored here (the eval adapter has never dispatched it), so
-	// long-context is the first gate on this lane.
+	// W4-R3: mirrors the chat ladder's OrchDrift arm, at the same position
+	// as production (directly above long-context — DRIFT needs KG
+	// community summaries and is the more specific global-synthesis
+	// answer). Comparison/Team/CorpusTable stay un-mirrored: none of them
+	// are complex-lane dispatch, so they have no place on this ladder.
+	if chat.ChatDriftEnabled(ctx, siteCfg) && chat.IsGlobalSynthesisQuery(query) {
+		return OrchestratorDrift, "complex_reasoning_drift_gate"
+	}
+	// W3-R5: mirrors the chat ladder's OrchLongContext arm.
 	if chat.ChatLongContextEnabled(ctx, siteCfg) && chat.IsGlobalSynthesisQuery(query) {
 		return OrchestratorLongContext, "complex_reasoning_longcontext_gate"
 	}
@@ -265,6 +271,21 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 			DAG:            dag,
 			MaxDAGDepth:    a.planExecuteMaxDAGDepth,
 			MaxDAGNodes:    a.planExecuteMaxDAGNodes,
+		}, emit)
+	case OrchestratorDrift:
+		// Resolved HERE, not at wiring time — mirrors the Supervisor case
+		// above and http_send.go's OrchDrift case: chat_drift_model must
+		// come from a.siteCfg (the per-KB-overlaid reader) for THIS
+		// question's KB, not from a resolver snapshotted at construction.
+		chatCtx, err = chat.RunDriftChat(ctx, a.aiResolver, a.searchService, chat.DriftChatParams{
+			KbID:           q.KbID,
+			Query:          q.Question,
+			Language:       q.Language,
+			KbSystemPrompt: kbSystemPrompt,
+			PlanningModel:  chat.ResolveFastTierModel(ctx, a.siteCfg, "chat_drift_model"),
+			MaxFollowups:   chat.ChatDriftMaxFollowups(ctx, a.siteCfg),
+			PrimerTopK:     chat.ChatDriftPrimerTopK(ctx, a.siteCfg),
+			SearchTopK:     chat.ChatDriftSearchTopK(ctx, a.siteCfg),
 		}, emit)
 	case OrchestratorLongContext:
 		chatCtx, err = chat.RunLongContextChat(ctx, a.aiResolver, a.searchService, a.siteCfg, chat.LongContextParams{
