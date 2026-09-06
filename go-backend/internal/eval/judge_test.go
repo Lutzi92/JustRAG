@@ -197,6 +197,106 @@ func TestContextPrecision_UnparseableJSONErrors(t *testing.T) {
 	}
 }
 
+// --- W4-R5: coverage judge over optional expected_points ---
+
+func TestJudgeEvaluate_CoverageScoresAgainstExpectedPoints(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{
+		`{"claims":[]}`,
+		`{"score":"3","reasoning":"ok"}`,
+		`{"covered":[true,false,true]}`,
+	}}
+	q := Question{
+		ID: "q", Question: "why?", Language: "en",
+		ExpectedPoints: []string{"point A", "point B", "point C"},
+	}
+
+	got := NewJudge(completer).Evaluate(context.Background(), q, "answer", nil, nil)
+
+	if got.Coverage == nil {
+		t.Fatal("expected non-nil Coverage")
+	}
+	if *got.Coverage < 0.666 || *got.Coverage > 0.667 {
+		t.Errorf("expected coverage ~0.666 (2/3), got %f", *got.Coverage)
+	}
+	if len(got.JudgeErrors) != 0 {
+		t.Errorf("expected no errors, got %v", got.JudgeErrors)
+	}
+}
+
+func TestCoverage_TruncatesExtraBooleansWithWarning(t *testing.T) {
+	// 4 booleans returned for 3 expected points.
+	j := NewJudge(&scriptedCompleter{responses: []string{`{"covered":[true,true,false,true]}`}})
+	q := Question{ID: "q", Question: "why?", Language: "en", ExpectedPoints: []string{"a", "b", "c"}}
+
+	got, warnings, err := j.coverage(context.Background(), q, "answer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got < 0.666 || got > 0.667 {
+		t.Errorf("expected ~0.666 (2/3), got %f", got)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "expected 3") {
+		t.Errorf("expected 1 warning mentioning 'expected 3', got %v", warnings)
+	}
+}
+
+func TestCoverage_PadsMissingBooleansWithWarning(t *testing.T) {
+	j := NewJudge(&scriptedCompleter{responses: []string{`{"covered":[true]}`}})
+	q := Question{ID: "q", Question: "why?", Language: "en", ExpectedPoints: []string{"a", "b", "c"}}
+
+	got, warnings, err := j.coverage(context.Background(), q, "answer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got < 0.333 || got > 0.334 {
+		t.Errorf("expected ~0.333 (1/3), got %f", got)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "expected 3") {
+		t.Errorf("expected 1 warning mentioning 'expected 3', got %v", warnings)
+	}
+}
+
+func TestCoverage_UnparseableJSONErrors(t *testing.T) {
+	j := NewJudge(&scriptedCompleter{responses: []string{`not json`}})
+	q := Question{ID: "q", Question: "why?", Language: "en", ExpectedPoints: []string{"a"}}
+
+	got, warnings, err := j.coverage(context.Background(), q, "answer")
+	if err == nil {
+		t.Fatal("expected error for unparseable JSON")
+	}
+	if got != 0 {
+		t.Errorf("expected 0 on error, got %f", got)
+	}
+	if warnings != nil {
+		t.Errorf("expected nil warnings on error, got %v", warnings)
+	}
+}
+
+func TestJudgeEvaluate_NoExpectedPointsSkipsCoverageAndDoesNotCallCompleter(t *testing.T) {
+	// Only 2 scripted responses (faithfulness, answer_relevance); no
+	// contents so context_precision is also skipped. If coverage were
+	// called anyway, the completer would run out of responses and error,
+	// which would surface as a JudgeError — asserting zero errors proves
+	// no coverage call happened.
+	completer := &scriptedCompleter{responses: []string{
+		`{"claims":[]}`,
+		`{"score":"3","reasoning":"ok"}`,
+	}}
+	q := Question{ID: "q", Question: "why?", Language: "en"} // no ExpectedPoints
+
+	got := NewJudge(completer).Evaluate(context.Background(), q, "answer", nil, nil)
+
+	if got.Coverage != nil {
+		t.Errorf("expected nil Coverage when ExpectedPoints is empty, got %+v", got.Coverage)
+	}
+	if len(got.JudgeErrors) != 0 {
+		t.Errorf("expected no errors, got %v", got.JudgeErrors)
+	}
+	if completer.calls != 2 {
+		t.Errorf("expected exactly 2 completer calls (faithfulness + answer_relevance), got %d — coverage must not have been called", completer.calls)
+	}
+}
+
 func TestJudgeEvaluate_ContextPrecisionMismatchProducesWarningNotError(t *testing.T) {
 	completer := &scriptedCompleter{responses: []string{
 		`{"claims":[]}`,

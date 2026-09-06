@@ -10,9 +10,11 @@ import (
 	"github.com/justrag/go-backend/internal/prompts"
 )
 
-// Judge runs LLM-as-judge evaluations. Construct with NewJudge; all three
-// metrics (faithfulness, answer relevance, context precision) are attempted
-// per Evaluate call. Per-metric failures are captured in JudgeErrors.
+// Judge runs LLM-as-judge evaluations. Construct with NewJudge; the three
+// core metrics (faithfulness, answer relevance, context precision) are
+// attempted per Evaluate call, plus a fourth "coverage" metric (W4-R5) when
+// the question carries ExpectedPoints. Per-metric failures are captured in
+// JudgeErrors.
 type Judge struct {
 	completer Completer
 }
@@ -22,8 +24,10 @@ func NewJudge(completer Completer) *Judge {
 	return &Judge{completer: completer}
 }
 
-// Evaluate runs all three judge prompts and assembles a JudgeMetrics.
-// When chunks/contents is empty, context precision is skipped.
+// Evaluate runs the judge prompts and assembles a JudgeMetrics. When
+// chunks/contents is empty, context precision is skipped. When
+// q.ExpectedPoints is empty, coverage is skipped (Coverage stays nil and
+// the completer is not called for it).
 func (j *Judge) Evaluate(ctx context.Context, q Question, answer string, chunks []RetrievedChunk, contents []string) JudgeMetrics {
 	out := JudgeMetrics{Answer: answer}
 
@@ -50,6 +54,15 @@ func (j *Judge) Evaluate(ctx context.Context, q Question, answer string, chunks 
 		out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("context_precision: %v", err))
 	} else {
 		out.ContextPrecision = &p
+		out.JudgeWarnings = append(out.JudgeWarnings, warnings...)
+	}
+
+	if len(q.ExpectedPoints) == 0 {
+		// skip coverage — no ground-truth points authored for this row (W4-R5)
+	} else if c, warnings, err := j.coverage(ctx, q, answer); err != nil {
+		out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("coverage: %v", err))
+	} else {
+		out.Coverage = &c
 		out.JudgeWarnings = append(out.JudgeWarnings, warnings...)
 	}
 
@@ -153,25 +166,63 @@ func (j *Judge) contextPrecision(ctx context.Context, q Question, contents []str
 	if err := unmarshalStrict(resp, &parsed); err != nil {
 		return 0, nil, err
 	}
-	relevant := parsed.Relevant
-	var warnings []string
-	if len(relevant) != len(contents) {
-		warnings = append(warnings, fmt.Sprintf("context_precision: judge returned %d booleans, expected %d — truncated/padded", len(relevant), len(contents)))
-		if len(relevant) > len(contents) {
-			relevant = relevant[:len(contents)]
-		} else {
-			padded := make([]bool, len(contents))
-			copy(padded, relevant)
-			relevant = padded
-		}
-	}
+	relevant, warnings := alignBooleans("context_precision", parsed.Relevant, len(contents))
 	relevantCount := 0
-	for i := 0; i < len(contents); i++ {
-		if relevant[i] {
+	for _, r := range relevant {
+		if r {
 			relevantCount++
 		}
 	}
 	return float64(relevantCount) / float64(len(contents)), warnings, nil
+}
+
+// coverage returns the W4-R5 coverage score (covered points / total points)
+// plus any tolerance warnings, mirroring contextPrecision's shape. An error
+// is returned only when the judge's response is not valid JSON at all; a
+// boolean-count mismatch is tolerated via alignBooleans, same as
+// contextPrecision. Callers must not invoke this when q.ExpectedPoints is
+// empty — Evaluate guards on that.
+func (j *Judge) coverage(ctx context.Context, q Question, answer string) (float64, []string, error) {
+	points := q.ExpectedPoints
+	sys := prompts.CoverageSystemPrompt(q.Language)
+	user := prompts.CoverageUserPrompt(q.Question, answer, points)
+	resp, err := j.completer.Complete(ctx, user, sys)
+	if err != nil {
+		return 0, nil, err
+	}
+	var parsed struct {
+		Covered []bool `json:"covered"`
+	}
+	if err := unmarshalStrict(resp, &parsed); err != nil {
+		return 0, nil, err
+	}
+	covered, warnings := alignBooleans("coverage", parsed.Covered, len(points))
+	coveredCount := 0
+	for _, c := range covered {
+		if c {
+			coveredCount++
+		}
+	}
+	return float64(coveredCount) / float64(len(points)), warnings, nil
+}
+
+// alignBooleans truncates or pads a judge-returned boolean slice to exactly
+// n elements (the expected count — chunks for context_precision, points for
+// coverage), returning a one-element warning describing the mismatch when
+// the counts differ. label identifies the caller in the warning message.
+// Shared by contextPrecision and coverage so the tolerance policy (W4-R1)
+// cannot drift between the two judges.
+func alignBooleans(label string, got []bool, n int) ([]bool, []string) {
+	if len(got) == n {
+		return got, nil
+	}
+	warning := fmt.Sprintf("%s: judge returned %d booleans, expected %d — truncated/padded", label, len(got), n)
+	if len(got) > n {
+		return got[:n], []string{warning}
+	}
+	padded := make([]bool, n)
+	copy(padded, got)
+	return padded, []string{warning}
 }
 
 func assembleContextText(chunks []RetrievedChunk, contents []string) string {
