@@ -184,16 +184,327 @@ Under `.superpowers/sdd/2026-09-06-rag-sota-wave3/` (gitignored workspace):
 (the noise table above) and `t4-validate-golden.py` (fixture validator:
 trigger verbatim-ness, file-name existence against the live KB, row shape).
 
-## §2 Wave 4 re-measurement (pending)
+## §2 Wave 4 re-measurement (2026-09-06)
 
-**Status:** only Step 1 (author `expected_points` + validate the loader) is
-done as of this record. Steps 2–4 (judged flat×2 / map_reduce×2 runs,
-pairwise comparison, the W4-R7 decision) are a separate dispatch (5b),
-deliberately not started here — the Task 6 BM25 grid was still running on
-the same dev stack and LLM backend (`t6-grid.lock` pid live, `t6-grid-resume.log`
-mid-cell `C1`) when this record was written, and both a judged run and the
-grid would contend for the same model server. This section will be filled in
-by 5b once the grid finishes.
+**Status:** complete. Steps 2–4 (judged flat×2 / map_reduce×2 runs, pairwise
+comparison, the W4-R7 decision) ran as dispatch 5b, after the Task 6 BM25
+grid finished (`t6-grid-resume.log` ended `== grid done`; `t5b-run.sh`
+refuses to start while `t6-grid.lock` names a live pid). Binary built once
+from commit `7ebf72f`.
+
+### Setup
+
+Same fixture, KB and site-config baseline as §1 (unchanged `chat_longcontext_*`
+defaults; mode supplied per run via `--longcontext`/`--longcontext-mode`
+overlays). New in Wave 4: `--judge` now also runs the **pairwise preference
+judge** (offline, W4-R4) and the **coverage judge** (W4-R5, driven by the
+`expected_points` curated in this file below) in addition to the three
+judges from §1.
+
+### Commands (exact, `t5b-run.sh`)
+
+```bash
+export DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=rag_db
+export VECTOR_DB_HOST=localhost VECTOR_DB_PORT=5433 VECTOR_DB_USER=postgres VECTOR_DB_PASSWORD=postgres VECTOR_DB_NAME=rag_vector_db
+export JWT_SECRET=local-eval-acceptance-secret-0123456789abcdef
+export REDIS_HOST=localhost REDIS_PORT=6379 REDIS_PASSWORD=redis
+export S3_ENDPOINT=http://localhost:9000 S3_ACCESS_KEY=minioadmin S3_SECRET_KEY=minioadmin S3_BUCKET=rag-files S3_REGION=us-east-1
+
+# four judged runs, alternating flat / map_reduce
+eval-wave4 --golden eval/golden/global-synthesis-de.jsonl --production-context \
+  --orchestrator-dispatch=true --judge --longcontext on --longcontext-mode flat \
+  --output t5-flat1.json        # then mr1 (map_reduce), flat2, mr2, same shape
+
+# three pairwise comparisons (win rate is A's; A is always the first path named)
+eval-wave4 --pairwise-a t5-flat1.json --pairwise-b t5-mr1.json   --pairwise-out t5-pw-1.json
+eval-wave4 --pairwise-a t5-flat2.json --pairwise-b t5-mr2.json   --pairwise-out t5-pw-2.json
+eval-wave4 --pairwise-a t5-flat1.json --pairwise-b t5-flat2.json --pairwise-out t5-pw-ctrl.json
+```
+
+Full driver: `.superpowers/sdd/2026-09-06-rag-sota-wave4/t5b-run.sh`. Wall
+clock: flat1 575 s, mr1 925 s, flat2 565 s, mr2 951 s (`t5b-run.log`), total
+≈ 55 min plus the three pairwise comparisons (fast — no answer generation).
+
+### Run table (n=12, k=10 per run)
+
+All four runs: `errors = 0`, all 12 questions `agent.orchestrator ==
+"longcontext"`, `agent.classified_query_type == "complex_reasoning"`,
+`judge.coverage` present for all 12 (`coverage_n = 12`).
+
+| Run | mean coverage | mean faithfulness (n) | mean context precision | mean answer relevance | mean answer length (runes) | judge warnings | judge errors | wall time |
+|---|---|---|---|---|---|---|---|---|
+| flat1 | 0.5625 | 0.5310 (11) | 0.4667 | 1.0000 | 4540¹ | 2 | 1 | 575 s |
+| mr1 | 0.6319 | 0.5608 (12) | 0.5583 | 1.0000 | 3940 | 0 | 0 | 925 s |
+| flat2 | 0.5458 | 0.6137 (12) | 0.4583 | 0.9167 | 4367 | 4 | 0 | 565 s |
+| mr2 | 0.5736 | 0.5424 (12) | 0.5667 | 0.9792 | 4029 | 0 | 0 | 951 s |
+
+¹ flat1's mean answer length is inflated by a single degenerate answer
+(G01, 17337 runes, ~15400 of them a runaway underscore repetition before the
+generation recovered and produced a correct, complete table — see
+"Anomalies" below); excluding G01, flat1's mean is 3377 runes, in line with
+the other three runs.
+
+Contrary to the "expect saturation as in Wave 3" prior (§1: answer relevance
+5/5 on all-but-one question across three runs), answer relevance is **not**
+uniformly saturated this wave — flat2 (11/12 at 1.0, one lower) and mr2
+(one question below 1.0) both come in under 1.000. Faithfulness and context
+precision were never saturated (consistent with §1) and continue to move
+0.46–0.61 across runs — both remain diagnostic, not decision inputs, per
+W4-R7 (only coverage and the pairwise judge feed the decision).
+
+**Judge instrument faults, all pre-existing and independent of mode:**
+flat1 G08's faithfulness judge call returned a ```` ```json ```` code-fenced
+response the strict JSON decoder rejected (`judge_errors`, `faithfulness`
+absent for that question, mean is over the other 11); flat1 G02/G07 and
+flat2 G02/G07/G08/G11 hit the recurring `context_precision: judge returned
+11 booleans, expected 10 — truncated/padded` warning already documented in
+§1. mr1 and mr2 carry zero judge warnings/errors.
+
+### Coverage — noise band + per-question table
+
+Noise band = `|mean_coverage(flat1) − mean_coverage(flat2)| = |0.5625 −
+0.5458| = 0.0167` (**1.67 pp**).
+
+| Q | flat1 | mr1 | flat2 | mr2 |
+|---|---|---|---|---|
+| G01 | 1.000 | 1.000 | 0.800 | 0.800 |
+| G02 | 0.667 | 0.667 | 0.833 | 0.667 |
+| G03 | 0.667 | 0.500 | 0.667 | 0.500 |
+| G04 | 0.500 | 0.500 | 0.167 | 0.333 |
+| G05 | 0.167 | 0.667 | 0.333 | 0.667 |
+| G06 | 0.750 | 0.250 | 0.750 | 0.250 |
+| G07 | 0.167 | 0.500 | 0.333 | 0.667 |
+| G08 | 0.667 | 0.833 | 0.833 | 0.500 |
+| G09 | 0.500 | 0.833 | 0.667 | 0.667 |
+| G10 | 0.500 | 0.667 | 0.500 | 0.667 |
+| G11 | 0.667 | 0.667 | 0.667 | 0.667 |
+| G12 | 0.500 | 0.500 | 0.000 | 0.500 |
+
+Cross-pair coverage deltas (map_reduce − flat, same run pair):
+pw1 `mr1 − flat1 = 0.6319 − 0.5625 = +0.0694` (**+6.94 pp**, beyond the 1.67 pp
+band); pw2 `mr2 − flat2 = 0.5736 − 0.5458 = +0.0278` (**+2.78 pp**, also
+beyond the band). Coverage rises for map_reduce in both cross pairs — the
+coverage arm of W4-R7 is satisfied on both pairs.
+
+### Map/reduce trajectory stats (mr1, mr2 logs)
+
+Both runs: 12 questions × 25 groups/question (`chat_longcontext_map_group_size`
+default 8, 200-chunk pool ÷ 8 ≈ 25) = 300 groups/run, `dropped_findings = 0`
+throughout (no reduce-stage truncation, W3-R7 fallback never needed to spill).
+
+| Run | groups | failed groups | findings | dropped findings |
+|---|---|---|---|---|
+| mr1 | 300 | 3 | 1068 | 0 |
+| mr2 | 300 | 1 | 1095 | 0 |
+
+The 4 failed groups (all `longcontext.map_group_failed`, `error: "context
+deadline exceeded"`) landed on G02 in both runs (3 in mr1: groups 1, 20, 22;
+1 in mr2: group 2) — the W3-R7 fallback (raw first-600-rune chunk text
+instead of an extracted finding) covered them; no question errored.
+
+### Pairwise comparisons (W4-R4; winner is from A's perspective)
+
+| Pair | A | B | wins(A) | ties | losses(A)=wins(B) | decisive | A win rate | A Wilson [lo,hi] | B (map_reduce) win rate | B Wilson [lo,hi] | tie rate | skipped/errors |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| pw1 | flat1 | mr1 | 3 | 1 | 8 | 11 | 0.2727 | [0.097, 0.566] | **0.7273** | **[0.434, 0.902]** | 0.083 | 0/0 |
+| pw2 | flat2 | mr2 | 1 | 3 | 8 | 9 | 0.1111 | [0.020, 0.435] | **0.8889** | **[0.565, 0.980]** | 0.250 | 0/0 |
+| ctrl | flat1 | flat2 | 3 | 6 | 2 | 5 | 0.6000 | [0.231, 0.882] | 0.4000 | [0.118, 0.769] | 0.545 | 1/1 |
+
+(B's Wilson interval is the exact complement of A's, `[1−hi(A), 1−lo(A)]`,
+confirmed by direct Wilson computation in `t5b-analyse.py` §5.)
+
+**Control pair (flat1 vs flat2, self-pair):** win rate 0.60 with a wide
+Wilson interval `[0.231, 0.882]` that comfortably spans 0.5, and by far the
+highest tie rate of the three pairs (0.545 — 6 of 11 judged pairs). Both are
+the expected control signature: a same-configuration comparison should be
+indistinguishable, and a judge that ties more than half the time on
+identical-quality answers is telling you its discriminative power is modest
+at this margin, not that flat1 systematically beats flat2. **One pair was
+skipped and counted as an error**: G05's `(B,A)`-order judge call returned a
+```` ```json ```` code-fenced response the strict decoder rejected
+(`"note":"judge (B,A) failed: response is not valid JSON: ...`); the pair
+contributes to neither wins/ties/losses nor the win rate denominator.
+
+### Per-question verdict table
+
+| Q | pw1 (flat1/mr1) | pw2 (flat2/mr2) | ctrl (flat1/flat2) |
+|---|---|---|---|
+| G01 | B | B | tie |
+| G02 | B | B | B |
+| G03 | B | B | tie |
+| G04 | A | tie | A |
+| G05 | B | tie | skipped |
+| G06 | A | tie | tie |
+| G07 | A | A | B |
+| G08 | tie | B | tie |
+| G09 | B | B | tie |
+| G10 | B | B | tie |
+| G11 | B | B | A |
+| G12 | B | B | A |
+
+### Three disagreement excerpts (both orders' reasoning, `agree_both_orders = false`)
+
+**pw1 G08** (winner recorded as `tie`):
+> **A-then-B order:** "Antwort A ist etwas besser strukturiert, da sie am
+> Ende eine sehr hilfreiche Vergleichstabelle bietet... die Tabelle in A
+> erhöht die Konkretisierung und den Vergleichswert der Antwort deutlich."
+>
+> **B-then-A order:** "Antwort A ist umfassender und detaillierter. Sie
+> nennt deutlich mehr konkrete Beispiele für Hochschulen... Antwort B ist
+> zwar gut strukturiert, lässt aber viele der in A genannten Informationen
+> aus."
+
+Both orders pick "the answer shown first" as the winner (a table vs. more
+named examples) — a textbook position-bias flip, exactly what the swap-and-
+require-agreement design (W4-R4) exists to neutralise into a tie rather than
+a false win.
+
+**pw2 G04** (winner recorded as `tie`):
+> **A-then-B order:** "Antwort A bietet ein besseres 'Gesamtbild', da sie
+> die strategische Verbindung zwischen der physischen Infrastruktur... als
+> logische Kette beschreibt."
+>
+> **B-then-A order:** "Antwort A ist besser, da sie die zeitlichen und
+> technischen Abhängigkeiten präziser und konkreter benennt... Antwort B
+> bleibt bei den Abhängigkeiten eher auf einer sehr allgemeinen,
+> konzeptionellen Ebene."
+
+Same signature as G08 — both orders prefer the first-shown answer, this time
+on a genuinely close call (structural coherence vs. concrete dependency
+detail), correctly resolved to a tie rather than credited to either mode.
+
+**ctrl G01** (winner recorded as `tie`, between the two flat runs):
+> **A-then-B order:** "Antwort A ist vollständiger, da sie zusätzliche
+> relevante Projekte (Windows 10-Ablösung, AD-Domaincontroller) enthält,
+> die in Antwort B fehlen. Beide Antworten sind inhaltlich korrekt und gut
+> strukturiert."
+>
+> **B-then-A order:** "Antwort A ist deutlich besser, da Antwort B mit
+> einer extrem langen Zeichenfolge aus Unterstrichen beginnt, was die
+> Lesbarkeit massiv stört. Zudem ist die Tabelle in Antwort A korrekter
+> strukturiert..."
+
+This is the flat1 G01 degenerate-answer anomaly (see below) surfacing in the
+judge's own reasoning — one order weighs plain completeness and calls it
+close, the other explicitly flags the ~15400-underscore garbage run as "massiv
+die Lesbarkeit störend" and prefers the other answer outright. The swap
+still resolves to a tie (the orders disagree on the *winner*, not merely the
+margin), which is the conservative, correct outcome for a pair with a
+readability defect on one side.
+
+### Pooled cross-pair statistics (post-hoc supporting evidence — **not** the W4-R7 criterion)
+
+Pooling pw1's and pw2's decisive pairs (excludes both pairs' ties and the
+control pair entirely): 16 of 20 decisive pairs went to map_reduce —
+**0.800**, Wilson interval **[0.584, 0.919]** — comfortably clears both the
+0.60 rate and the >0.50 lower-bound thresholds. Pooled coverage delta
+(mean(mr1, mr2) − mean(flat1, flat2)) = **+4.86 pp**, also beyond the 1.67 pp
+noise band. This pooled view is reported because it is the more
+statistically efficient read of the same two measurements, but it was **not
+pre-registered** — W4-R7 specifies the rule per pair, and relaxing to the
+pooled statistic after seeing pw1 miss would be exactly the kind of
+post-hoc rule-softening the pre-registration is meant to prevent. It is
+recorded as directional evidence for a future re-registration (see
+"Recommendation" below), not as grounds for flipping the default now.
+
+### Power note: the per-pair Wilson criterion is under-powered at this set size
+
+Minimum wins needed, at a given number of decisive pairs, for the Wilson
+lower bound to clear 0.50 (z = 1.96):
+
+| decisive pairs (n) | wins needed | resulting Wilson low |
+|---|---|---|
+| 9 | 8 | 0.565 |
+| 10 | 9 | 0.596 |
+| 11 | 9 | 0.523 |
+| 12 | 10 | 0.552 |
+
+With only 12 golden questions per run (and 1–3 of them tied away by the
+swap-and-agree design each time), a pair typically has 9–11 decisive
+comparisons — and at that range the Wilson-low>0.50 bar requires missing at
+most one or two losses out of the total. pw2 (9 decisive) cleared it with
+8/9; **pw1 (11 decisive) needed 9/11 and landed on exactly 8/11 — one win
+short.** The pre-registered per-pair rule is therefore under-powered at
+n=12 questions: a single additional map_reduce loss (or a single additional
+tie resolving the other way) in either direction would flip the outcome of
+either pair. This is a property of the sample size, not evidence that the
+true effect is near the boundary — the pooled point estimate (0.800) sits
+well clear of it.
+
+**Recommendation (roadmap item, not executed this wave):** extend the
+global-synthesis golden set to 24–36 questions before the next flat vs.
+map_reduce measurement, or explicitly re-register the decision rule on the
+**pooled** cross-pair statistic (rather than requiring both pairs
+individually) before that run — either change would let this comparison
+resolve at the confidence level W4-R7 intends instead of being decided by
+a one-pair margin.
+
+### Decision (W4-R7)
+
+Rule: map_reduce becomes the `chat_longcontext_mode` route default only if
+the **map_reduce** win rate is ≥ 0.60 **with Wilson lower bound > 0.50 on
+BOTH cross pairs**, and mean coverage does not drop below flat's by more
+than the flat-vs-flat noise band. ("Win" here is map_reduce's win rate,
+i.e. **losses from flat's (A's) perspective** — pw1/pw2 above report both
+directions explicitly to avoid ambiguity.) Cost is reported, does not veto.
+
+| Pair | map_reduce win rate | ≥ 0.60? | Wilson low | > 0.50? | coverage delta | within noise band (no drop)? | Pair verdict |
+|---|---|---|---|---|---|---|---|
+| pw1 (flat1 vs mr1) | 0.7273 | yes | **0.434** | **no** | +6.94 pp | yes | **FAILS** |
+| pw2 (flat2 vs mr2) | 0.8889 | yes | 0.565 | yes | +2.78 pp | yes | PASSES |
+
+**pw1's Wilson lower bound (0.434) is below the required 0.50 threshold.**
+Applying W4-R7 exactly as pre-registered — both pairs must pass, no
+relaxation after seeing the data — the rule **FAILS overall on pw1 alone**,
+regardless of pw2 passing and regardless of the pooled/directional evidence
+above.
+
+**`chat_longcontext_mode` stays `flat`.** map_reduce remains an opt-in mode
+(`--longcontext-mode map_reduce` / the site_config, gated by
+`chat_longcontext_enabled` as before); Task 9 does **not** flip the default
+this wave.
+
+**Cost, reported per W4-R7 (does not veto):** map_reduce's mean wall time
+(938 s = mean of 925 s, 951 s) is **1.65×** flat's (570 s = mean of 575 s,
+565 s), driven by 25 fast-tier map-stage LLM calls per question on top of
+the reduce/answer call. Even had both pairs passed, this is the standing
+cost of switching the default.
+
+### Anomalies (reported, not averaged away)
+
+- **flat1 G01: a degenerate answer that self-corrected.** 17337 runes total,
+  of which ~15400 are a single unbroken run of `_` characters starting
+  immediately after "Bas", followed by a complete, well-formed, correctly
+  sourced comparison table. Neither faithfulness (0.5) nor coverage (1.0)
+  penalised it much (the judges evidently look past the garbage run to the
+  substantive tail), but it visibly influenced the **pairwise** judge — see
+  the ctrl G01 disagreement excerpt above, where one ordering explicitly
+  cites the underscore run as a readability defect. A generation-layer bug
+  (runaway token repetition), independent of long-context mode — flat2's
+  G01 answer (1708 runes) is unaffected — and out of scope for this task;
+  worth a follow-up ticket against the answer LLM/streaming path.
+- **One faithfulness judge parse failure, isolated to flat1 G08**:
+  `faithfulness: response is not valid JSON: "```json\n{...` — the model
+  wrapped its structured-output JSON in a markdown code fence, which the
+  strict decoder rejects. Pre-existing failure mode (also seen in the
+  control pair's G05 pairwise call), independent of longcontext mode.
+- **The recurring `context_precision: judge returned 11 booleans, expected
+  10` warning** (documented in §1) recurred on 6 of the 48 question-runs
+  this wave (flat1 G02/G07; flat2 G02/G07/G08/G11) — zero occurrences in
+  either map_reduce run. Not investigated further here; same pre-existing
+  boolean-count judge quirk as §1.
+
+### Artifacts
+
+Under `.superpowers/sdd/2026-09-06-rag-sota-wave4/` (gitignored workspace):
+`t5-flat1.json`/`.log`, `t5-mr1.json`/`.log`, `t5-flat2.json`/`.log`,
+`t5-mr2.json`/`.log` (the four judged runs), `t5-pw-1.json`/`.log`,
+`t5-pw-2.json`/`.log`, `t5-pw-ctrl.json`/`.log` (the three pairwise
+comparisons), `t5b-run.sh`/`t5b-run.log` (the driver + wall-time log),
+`t5b-summary.py` (controller's quick summary) and `t5b-analyse.py` (this
+record's source of truth — every number above is reproducible by running
+`python3 t5b-analyse.py` from that directory; its output is also saved at
+`t5b-analyse-output.txt`).
 
 ### `expected_points` curation (Task 5 / W4-R5) — see "Fix round 1" below for corrections
 

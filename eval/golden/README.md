@@ -441,6 +441,12 @@ calls. Exit code is always 0 on a completed comparison (this measures, it
 does not gate); only an unusable invocation (missing report, no shared
 question ids, no reachable AI provider) exits non-zero.
 
+Worked example: `eval/golden/global-synthesis-de.acceptance.md` §2 (Wave 4
+flat-vs-map_reduce re-measurement) — two cross pairs, a self-pair control,
+disagreement excerpts, and the observation that the W4-R7 per-pair Wilson
+criterion is under-powered at 9–11 decisive pairs (one pair needed 9/11 wins
+and landed on 8/11).
+
 ## Coverage judge — optional `expected_points`
 
 Faithfulness/answer-relevance/context-precision each grade some aspect of
@@ -480,6 +486,11 @@ alongside the other judge means.
 Cost: +1 LLM call per question that carries `expected_points`, on top of
 the ~4 calls judge mode already makes (see "Cost note" above) — zero calls
 added for rows without the field.
+
+Worked example: `eval/golden/global-synthesis-de.acceptance.md` §2 — four
+runs' `mean_coverage`/`coverage_n`, a per-question coverage table across
+flat×2/map_reduce×2, and the flat-vs-flat run pair used as the coverage
+noise band.
 
 ## Tabular Q&A (table_query) — follow-up
 
