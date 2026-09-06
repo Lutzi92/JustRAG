@@ -148,6 +148,15 @@ one-step rollback** (`cmd/migrate` is up-only).
   dispatch on, `complex_reasoning` MRR is −4.7 pp against a 2.6 pp band over 3
   repeats).
 
+### Fixes
+
+- **Confluence `isPageUpdated` routes through `VersionWhen()`; dead fallback
+  layout removed.** No behaviour change for well-formed timestamps (the
+  second literal-layout parse was unreachable — `time.RFC3339` already
+  accepts the fractional-second component it was trying to catch); a page
+  whose `version.when` is unparseable is now logged once per sync and treated
+  as unchanged (previously silent, same "unchanged" outcome).
+
 ## v0.10.0 — 2026-08-19
 
 ### ⚠ Upgrade notes
