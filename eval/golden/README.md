@@ -406,7 +406,7 @@ visibly to a reader both land around 0.9, so it cannot rank them. The
 on an absolute scale, it only says which of two answers is better for the
 same question.
 
-It is an **offline** mode: it reads the `judge.answer` two finished reports
+It is an **offline** mode: it reads the `judge.answer` of two finished reports
 already persisted, so both must come from runs made with `--judge`. No
 retrieval, no answer generation, no DB writes, no golden set — the two
 report files are the whole input.

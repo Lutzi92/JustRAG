@@ -283,3 +283,60 @@ describe('KBOverviewDashboard last-sync sort (Wave-4 Task 7 fix round 1)', () =>
         expect(namesDesc).toEqual(['KB One', 'KB Two', 'KB Three']);
     });
 });
+
+// Fix wave, finding F5: an unknown sync kind has no syncKindLabel_* entry,
+// and t() returns the key itself for a missing translation — so the cell and
+// the tooltip used to read "syncKindLabel_svn" at the operator.
+//
+// Mutation: change syncKindLabel back to t(`syncKindLabel_${kind}`) → the
+// raw key is rendered and both assertions below fail.
+describe('KBOverviewDashboard unknown sync kind (F5)', () => {
+    const unknownKindOverview = {
+        rows: [
+            {
+                id: 'kb-9', name: 'Epsilon KB', ownerName: 'Eve', ownerId: 'user-9', ownerUsername: 'eve',
+                isGlobal: false, isPublished: true, fileCount: 1, totalSizeBytes: 100,
+                failedFileCount: 0, processingFileCount: 0, webTurns: 0, apiTurns: 0, chatCount: 0,
+                createdAt: '2026-01-01T00:00:00Z',
+                lastSyncAt: '2026-09-01T00:00:00Z', syncSucceeded: false, syncFailing: false, syncKinds: ['svn'],
+                syncByKind: [
+                    { kind: 'svn', lastSyncAt: '2026-09-01T00:00:00Z', syncSucceeded: false, syncFailing: false, sourceCount: 1 },
+                ],
+            },
+        ],
+        queueSummary: {},
+        timestamp: '2026-09-06T12:00:00Z',
+        staleDays: 180,
+    };
+
+    beforeEach(() => {
+        installMemoryStorage();
+        mockedAxios.get = vi.fn().mockResolvedValue({ data: unknownKindOverview });
+        mockedAxios.delete = vi.fn().mockResolvedValue({});
+        mockedAxios.patch = vi.fn().mockResolvedValue({ data: {} });
+        mockedAxios.post = vi.fn().mockResolvedValue({ status: 204 });
+    });
+
+    it('falls back to the raw kind in the cell and the tooltip', async () => {
+        await openColumnsMenuAndEnableAll('Epsilon KB');
+
+        const row = screen.getByRole('row', { name: /Epsilon KB/ });
+        expect(row.textContent).not.toContain('syncKindLabel_svn');
+        expect(row.textContent).toContain('svn');
+
+        const cells = Array.from(row.querySelectorAll('td'));
+        const syncCell = cells.find((c) => c.getAttribute('title')?.includes('svn'));
+        expect(syncCell).toBeTruthy();
+        expect(syncCell!.getAttribute('title')).not.toContain('syncKindLabel_svn');
+    });
+
+    it('still translates a known kind', async () => {
+        // The known-kind path must keep going through t(): the identity-t stub
+        // in this file renders the key, which is how the tests above assert it.
+        mockedAxios.get = vi.fn().mockResolvedValue({ data: perKindOverview });
+        await openColumnsMenuAndEnableAll('Delta KB');
+
+        const row = screen.getByRole('row', { name: /Delta KB/ });
+        expect(row.textContent).toContain('syncKindLabel_git');
+    });
+});

@@ -216,3 +216,53 @@ func initFixtureRepoAt(t *testing.T, when string) string {
 	run("commit", "-q", "-m", "init")
 	return dir
 }
+
+// Fix wave, item 7: the repository content date is computed once per sync,
+// so handing the SAME *time.Time to every CreateGitRepoFileInput aliased one
+// value into every row — a single in-place normalisation anywhere downstream
+// would then rewrite the date of every file of the sync. Each input gets its
+// own copy.
+//
+// Mutation: change `PublishedAt: copyTime(publishedAt)` back to
+// `PublishedAt: publishedAt` in syncGitRepoSource → every file shares one
+// pointer and both assertions below fail.
+func TestSyncGivesEachFileItsOwnPublishedAtPointer(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary not available for fixture creation")
+	}
+	dir := initFixtureRepo(t)
+	want := headCommitDate(t, dir)
+
+	store := &recordingFileStore{}
+	store.getByID = &GitRepoSourceRow{ID: "src-1", KbID: "kb-1", RepoURL: "file://" + dir, Status: "active"}
+
+	if err := syncGitRepoSource(context.Background(), SyncDeps{
+		Store:       store,
+		AsynqClient: unreachableAsynqClient(t),
+		Storage:     nopStorage{},
+	}, "src-1"); err != nil {
+		t.Fatalf("syncGitRepoSource: %v", err)
+	}
+	if len(store.created) < 2 {
+		t.Fatalf("expected at least 2 created files, got %d", len(store.created))
+	}
+
+	seen := map[*time.Time]string{}
+	for _, in := range store.created {
+		if in.PublishedAt == nil {
+			t.Fatalf("%s: published_at is nil", in.Name)
+		}
+		if other, dup := seen[in.PublishedAt]; dup {
+			t.Fatalf("%s and %s share one *time.Time (%p)", other, in.Name, in.PublishedAt)
+		}
+		seen[in.PublishedAt] = in.Name
+	}
+
+	// Writing through one file's pointer must not move any other file's date.
+	*store.created[0].PublishedAt = want.Add(72 * time.Hour)
+	for _, in := range store.created[1:] {
+		if !in.PublishedAt.Equal(want) {
+			t.Fatalf("%s: published_at moved to %v when another file's copy was written", in.Name, in.PublishedAt)
+		}
+	}
+}

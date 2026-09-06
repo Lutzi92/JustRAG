@@ -420,4 +420,10 @@ func isWIDLink(link string) bool {
 // column it guards) once Confluence and git started writing published_at
 // too: three copies of a bound that only matters when it is applied
 // everywhere is how one source ends up skipping it.
-var clampPublishedAt = files.ClampPublishedAt
+//
+// A function, not a `var` alias: package-level mutable state that any test
+// (or future code) could reassign is not worth the two saved lines when the
+// thing being aliased is a pure function.
+func clampPublishedAt(t *time.Time, now time.Time) *time.Time {
+	return files.ClampPublishedAt(t, now)
+}

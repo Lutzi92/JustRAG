@@ -9,8 +9,10 @@ import (
 
 // FileDates carries the two date columns of a `files` row: CreatedAt is the
 // ingest timestamp (never NULL), PublishedAt the document's own publication
-// date, which only the RSS poller fills today (W3-R9) and which is nil for
-// every other origin. Consumers that need "the" date of a document use
+// date, filled by the RSS poller (W3-R9), by Confluence page sync (W4-R10,
+// the page version's date) and by git repository sync (W4-R11, the HEAD
+// commit's committer time, shared by every file of one sync), and nil for
+// every other origin — an uploaded file has no publication date. Consumers that need "the" date of a document use
 // PublishedAt when set and CreatedAt otherwise — the Go-side twin of the SQL
 // COALESCE(published_at, created_at) used by every date-window query.
 type FileDates struct {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/justrag/go-backend/internal/prompts"
 )
@@ -121,9 +122,21 @@ func (j *Judge) answerRelevance(ctx context.Context, q Question, answer string) 
 // parseJudgeScore parses a judge-emitted "score" field that may arrive as a
 // JSON number (5, 4.0) or, tolerated because some models emit it that way,
 // a numeric JSON string ("5", "4.0"). The result is rounded to the nearest
-// integer and clamped to the 1..5 Likert range. An error is returned only
-// when raw is neither a number nor a numeric string.
+// integer and clamped to the 1..5 Likert range. An error is returned when
+// raw is missing, JSON null, or neither a number nor a numeric string.
+//
+// The null case needs its own guard: `json.Unmarshal("null", &float64)`
+// SUCCEEDS and leaves the zero value untouched, so a judge that answered
+// {"score":null} — "I have no verdict" — used to be scored 0 and clamped up
+// to 1, i.e. silently recorded as a real "barely relevant" rating that
+// dragged the mean down. A missing verdict must drop the sample instead
+// (the caller turns the error into a judge_errors entry and leaves
+// AnswerRelevance nil, which W4-R2's per-metric `n` then makes visible).
 func parseJudgeScore(raw json.RawMessage) (int, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return 0, fmt.Errorf("missing (%q)", trimmed)
+	}
 	var f float64
 	if err := json.Unmarshal(raw, &f); err == nil {
 		return clampScore(f), nil
@@ -180,10 +193,16 @@ func (j *Judge) contextPrecision(ctx context.Context, q Question, contents []str
 // plus any tolerance warnings, mirroring contextPrecision's shape. An error
 // is returned only when the judge's response is not valid JSON at all; a
 // boolean-count mismatch is tolerated via alignBooleans, same as
-// contextPrecision. Callers must not invoke this when q.ExpectedPoints is
-// empty — Evaluate guards on that.
+// contextPrecision. Evaluate is the primary path and skips this method when
+// q.ExpectedPoints is empty; the guard below makes a direct call safe too —
+// covered/len(points) would otherwise be 0/0 = NaN, and returning an error
+// rather than a 0.0 keeps such a misuse out of mean_coverage instead of
+// recording "the answer covered nothing".
 func (j *Judge) coverage(ctx context.Context, q Question, answer string) (float64, []string, error) {
 	points := q.ExpectedPoints
+	if len(points) == 0 {
+		return 0, nil, fmt.Errorf("no expected points for question %q", q.ID)
+	}
 	sys := prompts.CoverageSystemPrompt(q.Language)
 	user := prompts.CoverageUserPrompt(q.Question, answer, points)
 	resp, err := j.completer.Complete(ctx, user, sys)
@@ -236,31 +255,84 @@ func assembleContextText(chunks []RetrievedChunk, contents []string) string {
 	return out
 }
 
-// unmarshalStrict tries JSON; if that fails, attempts to extract a JSON
-// object from within a larger string (LLMs sometimes wrap JSON in prose).
+// unmarshalStrict tries JSON; if that fails, extracts a JSON object from
+// within a larger string (LLMs wrap JSON in prose, and in ```json fences).
+//
+// The extraction scans BALANCED objects rather than taking the span from the
+// first '{' to the last '}', because that span is wrong in the two shapes
+// that actually failed live (fix wave, finding F4 — the parked diagnosis
+// "the judge used a code fence" is not the cause: a fenced but complete
+// object parses under either strategy):
+//
+//   - Two objects in one reply. The span swallows both plus whatever sits
+//     between them, which is never valid JSON, so a perfectly good first
+//     verdict was thrown away. Now the first object that unmarshals wins.
+//   - A reply cut off before the object closes (a completion-token limit on
+//     a long German "reasoning" string, or a long faithfulness claim list).
+//     The span then ends at some earlier INNER '}' — or there is no '}' at
+//     all — and the error read "response is not valid JSON", which is true
+//     but useless. An unterminated object is now reported as "truncated
+//     JSON" so the next occurrence is diagnosable from the report alone.
+//
+// Tolerance is otherwise unchanged and deliberately conservative: this
+// parser also runs in production for the RAGAS background sampler
+// (internal/worker/ragas_sample.go) and the in-app/scheduled eval runner, so
+// garbage must still error rather than be coerced into a score.
 func unmarshalStrict(text string, v any) error {
 	if err := json.Unmarshal([]byte(text), v); err == nil {
 		return nil
 	}
-	start, end := -1, -1
-	for i := 0; i < len(text); i++ {
-		if text[i] == '{' {
-			start = i
-			break
-		}
-	}
-	for i := len(text) - 1; i >= 0; i-- {
-		if text[i] == '}' {
-			end = i + 1
-			break
-		}
-	}
-	if start >= 0 && end > start {
-		if err := json.Unmarshal([]byte(text[start:end]), v); err == nil {
+	objects, unterminated := scanJSONObjects(text)
+	for _, obj := range objects {
+		if err := json.Unmarshal([]byte(obj), v); err == nil {
 			return nil
 		}
 	}
+	if unterminated {
+		return fmt.Errorf("truncated JSON: the response opens an object that never closes (%d bytes — a completion-token limit on the judge model is the usual cause): %q", len(text), firstN(text, 120))
+	}
 	return fmt.Errorf("response is not valid JSON: %q", firstN(text, 120))
+}
+
+// scanJSONObjects returns every top-level {...} span in text, in order, plus
+// a flag reporting that the last '{' was never closed. It tracks string
+// literals and their escapes so a brace inside a string value (common in
+// judge reasoning that quotes JSON) neither opens nor closes an object.
+func scanJSONObjects(text string) (objects []string, unterminated bool) {
+	depth, start := 0, -1
+	inString, escaped := false, false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+				if depth == 0 && start >= 0 {
+					objects = append(objects, text[start:i+1])
+					start = -1
+				}
+			}
+		}
+	}
+	return objects, depth > 0
 }
 
 func firstN(s string, n int) string {

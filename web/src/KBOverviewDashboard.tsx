@@ -3,6 +3,7 @@ import axios from 'axios';
 import { RefreshCw, AlertTriangle, Loader2, ChevronDown, Hourglass, Play, XCircle, Trash2, UserCog, Globe } from 'lucide-react';
 import { getApiErrorMessage } from './utils/apiError';
 import { formatRelative } from './utils/dates';
+import { translations } from './translations';
 import { API_BASE_URL } from './api';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
@@ -118,6 +119,16 @@ function worstSyncKind(row: KBRow): SyncKindStatus | undefined {
     return [...row.syncByKind].sort((a, b) => syncKindRank(a) - syncKindRank(b))[0];
 }
 
+// Label for one sync kind. t() returns the KEY when a translation is missing,
+// so an unknown kind would render "syncKindLabel_svn" at the operator; fall
+// back to the raw kind string instead. The lookup goes against the translation
+// table rather than t()'s return value because "did t() find it?" is not
+// answerable from the return value alone — the key IS the fallback.
+function syncKindLabel(t: (key: string) => string, kind: string): string {
+    const key = `syncKindLabel_${kind}`;
+    return key in translations ? t(key) : kind;
+}
+
 // Tooltip text listing EVERY sync kind with its own last-sync time (raw ISO,
 // matching the other columns' title convention) — the cell above shows only
 // the worst kind, this is where an operator finds the other ones. Falls back
@@ -127,7 +138,7 @@ function syncTooltip(row: KBRow, t: (key: string) => string): string | undefined
     if (row.syncByKind && row.syncByKind.length > 0) {
         return row.syncByKind
             .map((k) => {
-                const label = t(`syncKindLabel_${k.kind}`);
+                const label = syncKindLabel(t, k.kind);
                 const when = k.lastSyncAt ?? '—';
                 return k.syncSucceeded ? `${label}: ${when}` : `${label}: ${when} (${t('syncNeverSucceeded')})`;
             })
@@ -453,7 +464,7 @@ export default function KBOverviewDashboard() {
                                     <AlertTriangle size={14} style={{ verticalAlign: 'middle', marginRight: 4, color: 'var(--error-text)' }} />
                                 </span>
                             )}
-                            {t(`syncKindLabel_${worst.kind}`)}: {worst.lastSyncAt ? formatRelative(worst.lastSyncAt, language) : '—'}
+                            {syncKindLabel(t, worst.kind)}: {worst.lastSyncAt ? formatRelative(worst.lastSyncAt, language) : '—'}
                         </>
                     );
                 }

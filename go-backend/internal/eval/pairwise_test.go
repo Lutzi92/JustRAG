@@ -2,10 +2,13 @@ package eval
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/justrag/go-backend/internal/prompts"
 )
 
 // --- fakes -----------------------------------------------------------------
@@ -300,5 +303,28 @@ func TestRunPairwise_JudgeErrorSkipsPair(t *testing.T) {
 	}
 	if p.Route != RouteUnclassified {
 		t.Errorf("Route = %q, want %q for an unlabeled question", p.Route, RouteUnclassified)
+	}
+}
+
+// Fix wave, item 3: parsePairwiseWinner accepts "1"/"2" as aliases for A/B,
+// but the schema shown to the model listed only A|B|tie — a model that read
+// the schema literally and a parser that accepted more than it advertised.
+// The two are now consistent in the DOCUMENTING direction (the aliases stay,
+// because models emit them): both prompt languages name 1/2, and every value
+// the prompts name must parse.
+func TestPairwiseSystemPrompt_DocumentsTheNumericAliases(t *testing.T) {
+	for _, lang := range []string{"de", "en"} {
+		sys := prompts.PairwiseSystemPrompt(lang)
+		for _, want := range []string{`"winner":"A"|"B"|"tie"`, `"1"`, `"2"`} {
+			if !strings.Contains(sys, want) {
+				t.Errorf("PairwiseSystemPrompt(%q) does not document %s", lang, want)
+			}
+		}
+		for raw, want := range map[string]string{`"A"`: WinnerA, `"B"`: WinnerB, `"tie"`: WinnerTie, `"1"`: WinnerA, `"2"`: WinnerB} {
+			got, err := parsePairwiseWinner(json.RawMessage(raw))
+			if err != nil || got != want {
+				t.Errorf("prompt documents %s but parsePairwiseWinner returned (%q, %v)", raw, got, err)
+			}
+		}
 	}
 }

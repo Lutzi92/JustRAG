@@ -319,3 +319,61 @@ func TestJudgeEvaluate_ContextPrecisionMismatchProducesWarningNotError(t *testin
 		t.Errorf("expected 1 warning, got %v", got.JudgeWarnings)
 	}
 }
+
+// --- fix wave, item 1: a null score is a missing verdict, not a 1 ---
+
+func TestAnswerRelevance_NullScoreErrors(t *testing.T) {
+	// `json.Unmarshal("null", &float64)` succeeds and leaves the zero value,
+	// so a judge that answered {"score":null} used to be scored 0 → clamped
+	// to the Likert minimum 1 → recorded as a real "barely relevant" verdict.
+	// It is a missing verdict: drop the sample instead.
+	j := NewJudge(&scriptedCompleter{responses: []string{`{"score":null,"reasoning":"x"}`}})
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	if _, err := j.answerRelevance(context.Background(), q, "answer"); err == nil {
+		t.Fatal("expected an error for a null score")
+	}
+}
+
+func TestJudgeEvaluate_NullScoreLeavesAnswerRelevanceNil(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{
+		`{"claims":[]}`,
+		`{"score":null,"reasoning":"x"}`,
+	}}
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	got := NewJudge(completer).Evaluate(context.Background(), q, "answer", nil, nil)
+
+	if got.AnswerRelevance != nil {
+		t.Errorf("expected nil AnswerRelevance, got %v", *got.AnswerRelevance)
+	}
+	if len(got.JudgeErrors) != 1 || !strings.Contains(got.JudgeErrors[0], "answer_relevance") {
+		t.Errorf("expected 1 answer_relevance error, got %v", got.JudgeErrors)
+	}
+}
+
+func TestParseJudgeScore_RejectsNullAndNonNumbers(t *testing.T) {
+	for _, raw := range []string{`null`, `{}`, `[]`, `true`, `"abc"`, ``} {
+		if _, err := parseJudgeScore([]byte(raw)); err == nil {
+			t.Errorf("expected an error for %q", raw)
+		}
+	}
+}
+
+// --- fix wave, item 5: coverage is safe when called directly ---
+
+func TestCoverage_NoExpectedPointsErrorsWithoutCallingTheCompleter(t *testing.T) {
+	// Evaluate skips coverage when ExpectedPoints is empty; this guards the
+	// method itself, whose covered/len(points) would be 0/0 = NaN. An error
+	// (rather than a 0.0) keeps a misuse out of mean_coverage.
+	completer := &scriptedCompleter{responses: []string{`{"covered":[true]}`}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	if _, _, err := j.coverage(context.Background(), q, "answer"); err == nil {
+		t.Fatal("expected an error when there are no expected points")
+	}
+	if completer.calls != 0 {
+		t.Errorf("expected no completer call, got %d", completer.calls)
+	}
+}

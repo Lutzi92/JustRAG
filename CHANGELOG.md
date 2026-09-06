@@ -118,7 +118,21 @@ one-step rollback** (`cmd/migrate` is up-only).
   aggregate fields `faithfulness_n` / `answer_relevance_n` /
   `context_precision_n` / `coverage_n`, printed as `(n=…)`. Old judge numbers
   stay comparable for well-formed responses, but `n` may be higher than before
-  because fewer samples are dropped.
+  because fewer samples are dropped. The extractor also survives two shapes it
+  used to reject outright: a reply containing **two** JSON objects (the first
+  parseable one wins) and one wrapped in a ```json fence around an object that
+  is complete. A reply cut off before its object closes is still an error, now
+  reported as a distinct `truncated JSON` (a completion-token limit on the
+  judge model is the usual cause) instead of a generic "not valid JSON". A
+  `"score": null` — the judge declining to rate — is now an error too, so the
+  sample is dropped: it used to unmarshal to 0 and clamp **up** to 1, silently
+  recording a real "barely relevant" rating. **This is not eval-only.** The
+  same `internal/eval.Judge` runs at runtime in the RAGAS background sampler
+  (`ragas_sampling_enabled`, `internal/worker/ragas_sample.go`) and in the
+  in-app / scheduled eval runner, so those surfaces get the same tolerance:
+  expect fewer `error`-outcome samples and the `rag_ragas_*` distributions to
+  shift accordingly (more samples, and no more `null` scores landing on the
+  Likert floor).
 - **The eval ladder now mirrors DRIFT.** `cmd/eval --production-context
   --orchestrator-dispatch=true` dispatches global-synthesis questions through
   the real DRIFT orchestrator at production's ladder position (above
