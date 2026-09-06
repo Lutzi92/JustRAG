@@ -38,6 +38,40 @@ one-step rollback** (`cmd/migrate` is up-only).
 - This release contains a migration, so it cannot be rolled back by
   re-pointing the image tag alone.
 
+- **Migration 0071 required** (RAG Wave 3, freshness surface). Adds
+  `files.published_at` and `last_success_at` on `rss_feeds`,
+  `confluence_sources` and `git_repo_sources`. Compose applies it via the
+  `migrate` one-shot service; **Kubernetes does not** — run `/app/migrate` out
+  of the release image before `kubectl apply`, per `docs/runbooks/release.md`.
+  As with 0068, a release carrying a migration has **no one-step rollback**.
+- **No `published_at` backfill.** Every file ingested before 0071 keeps
+  `published_at = NULL` and therefore keeps being aged by `created_at` (ingest
+  time); RSS files pick the real publication date up on their next poll or
+  re-ingest. Likewise, every source shows its last *attempt* with
+  `syncSucceeded = false` until its next successful sync stamps
+  `last_success_at`. Both are surfaced in the UI rather than hidden, and both
+  heal on their own — do not hand-write either column.
+- **`rag_longcontext_route_total` changed shape.** It gained a `mode` label,
+  and `outcome` gained `considered` (gate on, turn eligible, classifier did not
+  fire) and `map_empty`. Dashboards and alerts keyed on the previous label set
+  break and must be updated. An orchestrator error that falls back to
+  `PrepareChatContext` can count the same turn twice.
+- **Long-context routing is now an orchestrator** (`chat_longcontext_enabled`,
+  still default off). It previously lived only inside `PrepareChatContext`,
+  which streaming `complex_reasoning` turns never reach, so the route was
+  unreachable for the query class it targets. Deployments with the flag **on**
+  will now actually see it fire — and it sits above the Supervisor in the
+  ladder, below DRIFT. New key `chat_longcontext_mode` (`flat` | `map_reduce`)
+  defaults to `flat`, whose prompt is byte-identical to the previous
+  behaviour; `map_reduce` is opt-in and costs ~25 extra fast-tier calls per
+  turn (set `AI_MAX_CONCURRENT_REQUESTS` first).
+- **New optional `site_config` keys, all default-off or default-unchanged:**
+  `chat_citation_spans_enabled` (+ `_max_sources`, `_timeout_ms`, `_model`),
+  `chat_longcontext_mode` (+ `_map_group_size`, `_map_concurrency`,
+  `_map_model`), and the global-only integer `kb_stale_days` (default 180).
+- **No `site_config` default was flipped, no re-ingest is required, and
+  `queryCacheSchemaVersion` is unchanged this wave.**
+
 ## v0.10.0 — 2026-08-19
 
 ### ⚠ Upgrade notes
