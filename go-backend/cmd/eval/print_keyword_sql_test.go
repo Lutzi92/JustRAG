@@ -18,10 +18,10 @@ import (
 // Mutation this test catches: dropping the `kbID == ""` branch from
 // validateKeywordSQLFlags (the empty-kb case would then return nil).
 func TestValidateKeywordSQLFlags_RequiresKBID(t *testing.T) {
-	if err := validateKeywordSQLFlags("Zugriffsrechte", ""); err == nil {
+	if err := validateKeywordSQLFlags(""); err == nil {
 		t.Fatal("want an error when --kb-id is missing, got nil")
 	}
-	if err := validateKeywordSQLFlags("Zugriffsrechte", "5ca1e000-0000-4000-8000-000000000001"); err != nil {
+	if err := validateKeywordSQLFlags("5ca1e000-0000-4000-8000-000000000001"); err != nil {
 		t.Fatalf("want no error for a complete invocation, got %v", err)
 	}
 }

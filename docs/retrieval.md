@@ -231,7 +231,7 @@ Per-alt-query BM25 (P4): when `rag_fusion_enabled` is on, every alternative-phra
 
 However, this recall-only guard misses a real and consistent side effect: both C and D regress `complex_reasoning` MRR by ~7.0pp — roughly 14× that route's own 0.5pp noise band, and more than double `cmd/eval`'s own default MRR regression threshold (3pp), tripping the regression gate (exit 3) on every C/D/B run. Recall is essentially unchanged on that route (+0.1pp / +1.0pp), so the right chunks are still retrieved — they just rank lower after CRAG's multi-round grading and the RRF fusion. The most likely cause is scale mismatch: `rrf_weight_bm25` (currently 1, tuned against `ts_rank`'s output range) is applied unchanged to `bm25`'s IDF·TF-saturation scores, which live on a different numeric scale, especially once multiple sub-query lists get fused for `complex_reasoning`'s plan-execute path.
 
-**This wave keeps the default at `ts_rank`** (no code or config change lands in this task, per the global constraints — Task 9 owns flipping any default). The literal per-metric rule favors flipping to `bm25` (uncapped, no tiered boost), but this doc recommends Task 9 treat that reading with the complex_reasoning caveat squarely in view rather than flip on the lookup-MRR number alone — either re-tune `rrf_weight_bm25` for the `bm25` scale range first, or land the flip with an explicit note that complex_reasoning ranking quality is accepted as a known regression pending that re-tune. **Read this paragraph together with the Wave-3 retune grid below: the ~7 pp `complex_reasoning` MRR regression it reasons from did NOT reproduce on a fresh pair of runs (−0.3 pp at the same weights), so its scale-mismatch explanation is not supported by the later evidence.**
+**This wave keeps the default at `ts_rank`** (no code or config change lands in this task, per the global constraints — Task 9 owns flipping any default). The literal per-metric rule favors flipping to `bm25` (uncapped, no tiered boost), but this doc recommends Task 9 treat that reading with the complex_reasoning caveat squarely in view rather than flip on the lookup-MRR number alone — either re-tune `rrf_weight_bm25` for the `bm25` scale range first, or land the flip with an explicit note that complex_reasoning ranking quality is accepted as a known regression pending that re-tune. **Read this paragraph together with the Wave-3 retune grid below, which measured −0.3 pp on that route at the same weights — but with orchestrator dispatch OFF, i.e. on the standard path only, whereas this A/B ran with dispatch ON and routed `complex_reasoning` through plan-execute. The two are not the same experiment: the ~7 pp is a plan-execute finding that the later grid neither reproduced nor refuted, and the scale-mismatch explanation below is untested rather than confirmed.**
 
 ### Retune grid: `rrf_weight_bm25` × α under `bm25` (Wave 3 Task 7, 2026-09-06)
 
@@ -283,15 +283,24 @@ to trip `cmd/eval --baseline`'s own default gate (exit 3) on three route+metric
 pairs. Every one of the six `bm25` cells exited **0** against the same gate.
 Two consequences:
 
-1. **Wave 2's headline regression did not reproduce.** Cell C6 here is
-   Wave-2's cell C (`bm25`, weights at 1.0, α 0.8), which measured
-   complex_reasoning MRR −7.0 pp. This wave the same configuration measures
-   **−0.3 pp** on that route, inside its own 1.2 pp band. The −7 pp was a
-   single-run artefact, not a property of the mode. The Wave-2 table above
-   stands as recorded, but its causal story ("`rrf_weight_bm25` is off-scale
-   for `bm25`, especially on complex_reasoning") is **not supported** by this
-   grid: down-weighting BM25 does not monotonically improve complex_reasoning
-   (C1/C2/C4 +2.8 pp, C3/C5/C6 −0.3 pp, across all three weights).
+1. **Wave 2's headline regression does not appear on the standard path — but
+   this grid did not test the path it was measured on.** The two runs are not
+   the same experiment: Wave 2's A/B ran with orchestrator dispatch at its
+   **default (on)**, which routed 27–29 of the 89 questions — including the
+   whole `complex_reasoning` route — through **plan-execute**; this grid ran
+   `--orchestrator-dispatch=false`, i.e. the standard `PrepareChatContext`
+   path only. So cell C6 is *not* a rerun of Wave-2's cell C, and the −7 pp is
+   neither reproduced nor refuted here. What this grid supports is narrower
+   and still useful: **at identical weights (1.0 / α 0.8), `bm25` costs −0.3 pp
+   of `complex_reasoning` MRR on the standard path**, inside that route's
+   1.2 pp band. Wave 2's causal story ("`rrf_weight_bm25` is off-scale for
+   `bm25`") is likewise **untested** rather than refuted, though it gains no
+   support here: down-weighting BM25 does not monotonically improve
+   complex_reasoning on the standard path (C1/C2/C4 +2.8 pp, C3/C5/C6 −0.3 pp,
+   across all three weights). **Follow-up:** rerun this grid with
+   `--orchestrator-dispatch=true` to measure the plan-execute path Wave 2
+   actually exercised; until then, treat the −7 pp as a plan-execute finding
+   of unknown reproducibility, not as a property of the scoring mode.
 2. **This fixture cannot resolve effects below ~5 pp on `lookup` with one run
    per cell.** CRAG is enabled on the PPM-Eval KB, so an LLM call sits inside
    the retrieval path of every question — that, not the keyword arm, is the
@@ -299,12 +308,15 @@ Two consequences:
    needs repeated runs per cell (or CRAG forced off, `--crag off`) before a
    3–5 pp effect means anything.
 
-**What the grid does show**, consistently and in the same direction across
-every cell, is that `bm25` **helps recall and never hurts it**: enumeration
-recall +3.6 to +7.1 pp in all six cells, overall recall +0.0 to +2.8 pp,
-lookup recall +2.2 pp in the three cells that move it. Ranking (MRR) is flat
-to slightly better. That is the same conclusion Wave 2 reached about recall,
-now without the complex_reasoning caveat attached to it.
+**What the grid does show** is that `bm25` **lifts recall in most cells, but
+not universally**: enumeration recall is up in all six (+3.6 to +7.1 pp) and
+overall recall is up or flat in all six (+0.0 to +2.8 pp), but lookup recall
+is −0.1 pp in three cells, and **C3 (0.75 / 0.6) loses 1.5 pp of
+`complex_reasoning` recall** — the one route-recall loss in the grid, and the
+reason C3 is flagged as a rule violation on the second half of W3-R13 as well
+as the first. Ranking (MRR) is flat to slightly better everywhere except C4's
+lookup (−2.3 pp). The recall direction agrees with Wave 2's; the magnitude is
+smaller and the exceptions are real.
 
 **Documented operating point** (for an operator who opts a KB into `bm25`, not
 a new default and explicitly **not** a change for `ts_rank` deployments, whose
@@ -341,8 +353,22 @@ shapes, 3 runs each, LIMIT 50:
 Reading it: the candidate set grows exactly 55× (the copy factor) on every
 shape, `ts_rank` execution grows 16–27×, `bm25` grows 46–51×. The
 `bm25`/`ts_rank` ratio therefore *widens* with corpus size — 6.8× → 12.8×
-(`rare`), 6.2× → 19.9× (`common`), 4.3× → 7.9× (`phrase`) — because the work
-that scales is per-candidate (`unnest` the candidate's tsvector, join it
+(`rare`), 6.2× → 19.9× (`common`), 4.3× → 7.9× (`phrase`).
+
+**Part of that widening is lost parallelism, not extra work.** At 100k the two
+low-selectivity `ts_rank` plans go parallel (`Gather Merge`, 2 workers
+launched + the leader = 3 processes, `loops=3` on the `Parallel Seq Scan`)
+while the `bm25` plans stay **serial** — the materialised `cand` CTE blocks
+parallelism. Counting the `ts_rank` side's extra workers as CPU time, the
+ratio is roughly **6.6× (`common`) and 4.3× (`rare`)** rather than 19.9× and
+12.8×. The `phrase` shape is serial on both sides at both sizes, so its 7.9×
+is a clean like-for-like comparison. The wall-clock numbers are still what a
+user waits for, and the operational conclusion below is unchanged — but the
+CPU-side gap is smaller than the wall-clock gap, and a Postgres configured
+with more parallel workers would widen the wall-clock ratio further without
+`bm25` doing anything worse.
+
+The reason the work scales at all is that it is per-candidate (`unnest` the candidate's tsvector, join it
 against the query lexemes, `LEFT JOIN bm25_term_stats_<dim>` per matched
 lexeme, once **per arm**; the simple arm doubles it). The worst case measured
 is one keyword arm taking **5.6 s** (`bm25`, the low-selectivity `common`

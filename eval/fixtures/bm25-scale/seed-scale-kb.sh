@@ -31,8 +31,13 @@
 #                     dev stack, so the synthetic corpus never shares a table
 #                     with real data).
 #   PG_CONFIG         Text-search config for the copied tsvectors. Default:
-#                     german. MUST match what the query path resolves for the
-#                     scale KB's language (PgTextSearchConfig('de') = german).
+#                     german — NOT read from the source KB, but fixed to match
+#                     the KB this script creates, which it always seeds with
+#                     language='de' (PgTextSearchConfig('de') = 'german'), so
+#                     the tsvectors written here are the ones the query path
+#                     will later build its tsqueries against. Override BOTH
+#                     this and the language in the INSERT below if you seed a
+#                     non-German corpus, or the two will silently disagree.
 #   PSQL_MAIN         Command (split on whitespace) that runs SQL against the
 #                     MAIN db on stdin.
 #                     Default: "docker exec -i justrag-db-1 psql -U postgres -d rag_db"
@@ -79,6 +84,12 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+# --copies is interpolated into SQL (as a salt literal and a loop bound), so it
+# is validated rather than trusted: anything but a run of digits is refused.
+case "$COPIES" in
+  ''|*[!0-9]*) echo "--copies must be a non-negative integer, got: $COPIES" >&2; exit 2 ;;
+esac
 
 SRC_TABLE="document_chunks_${SOURCE_DIM}"
 DST_TABLE="document_chunks_${TARGET_DIM}"

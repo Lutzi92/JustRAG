@@ -21,7 +21,8 @@
 #
 # Output (per query shape, per mode, per run):
 #   <out>/<label>-<shape>-<mode>-run<N>.txt   full EXPLAIN (ANALYZE, BUFFERS) plan
-#   <out>/<label>-sql.json                    the rendered statements
+#   <out>/<label>-<shape>-sql.json            the rendered statements (per shape)
+#   <out>/<label>-<shape>-<mode>.sql          the EXPLAIN-wrapped statement
 #   <out>/<label>-summary.tsv                 label, shape, mode, run, planning ms,
 #                                             execution ms, candidate rows, gin used
 #

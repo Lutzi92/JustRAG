@@ -130,22 +130,39 @@ change to the default", which is a valid result.
 
 Two findings behind that verdict:
 
-1. **Wave 2's `complex_reasoning` MRR regression did not reproduce.** The
-   `w=1.0, α=0.8` cell here is Wave-2's cell C, which measured −7.0 pp on that
-   route. This wave: **−0.3 pp**, inside the route's own 1.2 pp band. Nor is
-   the effect monotone in the weight (C1/C2/C4 +2.8 pp, C3/C5/C6 −0.3 pp), so
-   the "RRF weights are off-scale for bm25's score range" explanation Wave 2
-   offered is not supported by this grid.
+1. **Wave 2's `complex_reasoning` MRR regression does not appear on the
+   standard path — and this grid did not test the path it was measured on.**
+   The two runs differ in more than the weights: Wave 2's A/B
+   (`ab-A.json`/`ab-C.json`) ran `--production-context` with orchestrator
+   dispatch at its **default (on)**, which sent 27–29 of the 89 questions —
+   the entire `complex_reasoning` route among them — through **plan-execute**.
+   This grid ran `--orchestrator-dispatch=false`, so every question took the
+   standard `PrepareChatContext` path and **plan-execute was never
+   exercised**. The `w=1.0, α=0.8` cell here is therefore *not* a rerun of
+   Wave-2's cell C, and the −7.0 pp is neither reproduced nor refuted by these
+   numbers. The supported statement is: **at identical weights, `bm25` costs
+   −0.3 pp of `complex_reasoning` MRR on the standard path**, inside that
+   route's 1.2 pp band. Wave 2's "RRF weights are off-scale for bm25's score
+   range" explanation is correspondingly **untested** here, not disproven —
+   it gains no support on the standard path (the effect is not monotone in the
+   weight: C1/C2/C4 +2.8 pp, C3/C5/C6 −0.3 pp), but the path it was proposed
+   for was not measured. **Follow-up:** rerun the grid with
+   `--orchestrator-dispatch=true`.
 2. **The fixture's resolution on `lookup` is ~5 pp with one run per cell.**
    CRAG is enabled on this KB, putting an LLM call inside every question's
    retrieval path; that is the likeliest dominant variance source. A future
    retune of these weights needs repeated runs per cell, or `--crag off`,
    before a 3–5 pp effect is interpretable.
 
-**Consistent, direction-stable signal:** `bm25` helps recall and never hurts
-it — enumeration recall +3.6 to +7.1 pp in all six cells, overall recall +0.0
-to +2.8 pp, lookup recall +2.2 pp where it moves. MRR is flat to slightly
-better. That reproduces Wave 2's recall finding without its ranking caveat.
+**Direction-stable but not universal:** `bm25` lifts recall in most cells,
+not in all. Enumeration recall is up in all six (+3.6 to +7.1 pp) and overall
+recall is up or flat in all six (+0.0 to +2.8 pp); but lookup recall is
+−0.1 pp in three cells, and **C3 (0.75 / 0.6) loses 1.5 pp of
+`complex_reasoning` recall** — the grid's only route-recall loss, and the one
+the mechanical rule check flags as violating the second half of W3-R13 as
+well as the first. MRR is flat to slightly better everywhere except C4's
+lookup (−2.3 pp). The recall direction agrees with Wave 2's; the magnitude is
+smaller and the exceptions are real.
 
 **Documented operating point** for an operator who opts a KB into `bm25`
 (explicitly NOT a new default, and NOT a change for `ts_rank` deployments,
@@ -216,6 +233,17 @@ reported; plans in `.superpowers/sdd/2026-09-06-rag-sota-wave3/t7-scale/`.
 
 **bm25 / ts_rank execution-time ratio** (median of 3): `rare` 6.8× → 12.8×,
 `common` 6.2× → 19.9×, `phrase` 4.3× → 7.9× going from 1.8k to 100k chunks.
+
+**Part of the widening is lost parallelism, not extra work.** At 100k the two
+low-selectivity `ts_rank` plans go parallel (`Gather Merge`, `Workers
+Launched: 2` plus the leader, `loops=3` on the `Parallel Seq Scan`) while both
+`bm25` plans stay **serial** — the materialised `cand` CTE blocks parallelism.
+Charging the `ts_rank` side for its extra workers puts the ratio at roughly
+**6.6× (`common`)** and **4.3× (`rare`)** in CPU terms rather than 19.9× and
+12.8× in wall-clock terms. The `phrase` shape is serial on both sides at both
+sizes (no `Gather` in any of its plans), so its 7.9× is a clean like-for-like
+number. Wall clock is what a user waits for, so the operational conclusion
+stands — but the CPU-side gap is materially smaller than the wall-clock gap.
 The candidate count grows exactly 55× (the copy factor) on all three shapes;
 `ts_rank` execution grows 16–27×, `bm25` grows 46–51×. **BM25's relative cost
 therefore grows with the corpus**, it does not merely track it: the per-

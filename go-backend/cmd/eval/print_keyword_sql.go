@@ -28,11 +28,14 @@ import (
 // that drifts from the builders the next time they change.
 
 // validateKeywordSQLFlags checks the flag combination for the diagnostic
-// mode. The query itself is the caller's business (an empty-match query is a
-// legitimate thing to inspect — the renderer reports ok=false for it), but a
-// missing --kb-id has no sensible default: the KB decides the chunk table,
-// the text-search config and the stats tables.
-func validateKeywordSQLFlags(query, kbID string) error {
+// mode. The query itself is deliberately not validated and so is not passed
+// here: a whitespace-only query is a legitimate thing to inspect (the renderer
+// reports ok=false for both modes, i.e. "the keyword arm would be skipped for
+// this input"), and an empty one cannot reach this branch at all — an empty
+// --print-keyword-sql means the flag was not given. A missing --kb-id, by
+// contrast, has no sensible default: the KB decides the chunk table, the
+// text-search config and the stats tables.
+func validateKeywordSQLFlags(kbID string) error {
 	if kbID == "" {
 		return fmt.Errorf("--print-keyword-sql requires --kb-id")
 	}

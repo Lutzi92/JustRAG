@@ -83,7 +83,7 @@ func main() {
 	// Diagnostic mode short-circuits before --golden is required: it needs
 	// only a KB and a query.
 	if *printKeywordSQL != "" {
-		if err := validateKeywordSQLFlags(*printKeywordSQL, *printKeywordSQLKBID); err != nil {
+		if err := validateKeywordSQLFlags(*printKeywordSQLKBID); err != nil {
 			slog.Error("invalid --print-keyword-sql invocation", "error", err)
 			os.Exit(2)
 		}
