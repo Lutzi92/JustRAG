@@ -526,6 +526,12 @@ export const translations = {
     verificationScoreLabel: { de: 'Konfidenz', en: 'Confidence' },
     verificationIssuesLabel: { de: 'Anmerkungen', en: 'Notes' },
 
+    // Conflicting-sources badge (Wave 5 conflict surfacing)
+    conflictsBadge: { de: 'Widersprüchliche Quellen', en: 'Conflicting sources' },
+    conflictKindContradiction: { de: 'Widerspruch', en: 'Contradiction' },
+    conflictKindSuperseded: { de: 'überholt', en: 'superseded' },
+    conflictNewerPrefix: { de: 'neuer', en: 'newer' },
+
     // Sources
     sourcesLabel: { de: 'Quellen:', en: 'Sources:' },
     sourceCount: { de: 'Quelle', en: 'Source' },

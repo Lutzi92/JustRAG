@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import type { Message, MessageSource, MessageVerification, StructuredTable, KnowledgeBase, FileEntry, ChatEntry, TrajectoryEvent, ComparisonFinding } from '../types';
+import type { Message, MessageSource, MessageVerification, StructuredTable, KnowledgeBase, FileEntry, ChatEntry, TrajectoryEvent, ComparisonFinding, MessageConflict } from '../types';
 import { API_BASE_URL, authFetch } from '../api';
 import { HAPTIC_PATTERNS, triggerHaptic } from '../utils/haptics';
 import {
@@ -347,6 +347,11 @@ export function useChatStream({
           if (event.comparisonFindings) {
             setMessageTree(prev => updateMessageInTree(prev, currentAiTempIdRef.current, {
               comparisonFindings: event.comparisonFindings as ComparisonFinding[],
+            }));
+          }
+          if (event.conflicts) {
+            setMessageTree(prev => updateMessageInTree(prev, currentAiTempIdRef.current, {
+              conflicts: event.conflicts as MessageConflict[],
             }));
           }
         },

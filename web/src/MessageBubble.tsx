@@ -1,7 +1,7 @@
 import { memo, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { FileText, ChevronDown, Check, ArrowRight, Network, Users, Bot } from 'lucide-react';
-import type { Message, BranchInfo, MessageVerification, MessageSource } from './types';
+import { FileText, ChevronDown, Check, ArrowRight, Network, Users, Bot, AlertTriangle } from 'lucide-react';
+import type { Message, BranchInfo, MessageVerification, MessageSource, MessageConflict } from './types';
 import { flaggedClaimsFor } from './utils/verification';
 import { useReducedMotion, getMotionProps } from './hooks/useReducedMotion';
 import { BranchIndicator } from './components/BranchIndicator';
@@ -43,6 +43,7 @@ interface MessageBubbleProps {
     reasoningOpen?: boolean;
     sourcesOpen?: boolean;
     confidenceOpen?: boolean;
+    conflictsOpen?: boolean;
     onToggleSection?: (messageId: string, section: MessageSection) => void;
     // Resolves an AI message's teamId/agentId to a display name for the
     // attribution chip. Returns undefined on a lookup miss (e.g. the team or
@@ -183,7 +184,59 @@ function ConfidenceDetails({ verification, t }: ConfidenceProps) {
     );
 }
 
-function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showFollowUps, branchInfo, onSwitchBranch, onEdit, onFork, onCompare, onRegenerate, onFeedback, isEditing, onEditCancel, onPreviewSource, onViewGraph, animationDelay, kbId, questionText, resolveAttribution, reasoningOpen = false, sourcesOpen = false, confidenceOpen = false, onToggleSection }: MessageBubbleProps) {
+// ConflictsChip is the "Widersprüchliche Quellen" / "Conflicting sources"
+// answer-footer badge (Wave 5 conflict surfacing), shown next to the
+// confidence chip whenever the turn's report found at least one conflict
+// among the cited sources. Click toggles ConflictsDetails — same
+// caller-owned-open-state pattern as ConfidenceChip (see useMessageSections;
+// the state has to live above the virtualized message list).
+function ConflictsChip({ count, t, open, onToggle }: { count: number; t: (key: string) => string; open: boolean; onToggle: () => void }) {
+    return (
+        <button
+            type="button"
+            className="conflict-badge"
+            onClick={(e) => { e.stopPropagation(); onToggle(); }}
+            aria-expanded={open}
+            aria-label={t('conflictsBadge')}
+        >
+            <AlertTriangle size={12} aria-hidden="true" />
+            <span>{t('conflictsBadge')} · {count}</span>
+            <ChevronDown size={12} aria-hidden="true" style={{ transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none' }} />
+        </button>
+    );
+}
+
+// CONFLICT_KIND_KEY maps the backend's closed `kind` enum to its translation
+// key: "contradiction" -> Widerspruch/Contradiction, "superseded" ->
+// überholt/superseded.
+const CONFLICT_KIND_KEY: Record<MessageConflict['kind'], string> = {
+    contradiction: 'conflictKindContradiction',
+    superseded: 'conflictKindSuperseded',
+};
+
+// ConflictsDetails lists every reported conflict: the claim, the two cited
+// files, the kind, and — only when `newer` is 'a' or 'b' (never 'unknown') —
+// which file is the more recent one. `newer` resolves against fileA/fileB by
+// the backend's fixed convention: 'a' -> fileA, 'b' -> fileB.
+function ConflictsDetails({ conflicts, t }: { conflicts: MessageConflict[]; t: (key: string) => string }) {
+    return (
+        <div className="conflict-details">
+            {conflicts.map((c, i) => {
+                const newerFile = c.newer === 'a' ? c.fileA : c.newer === 'b' ? c.fileB : undefined;
+                return (
+                    <div key={i} className="conflict-item">
+                        <div className="conflict-claim">{c.claim}</div>
+                        <div className="conflict-files">{c.fileA} vs. {c.fileB}</div>
+                        <div className="conflict-kind">{t(CONFLICT_KIND_KEY[c.kind])}</div>
+                        {newerFile && <div className="conflict-newer">{t('conflictNewerPrefix')}: {newerFile}</div>}
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showFollowUps, branchInfo, onSwitchBranch, onEdit, onFork, onCompare, onRegenerate, onFeedback, isEditing, onEditCancel, onPreviewSource, onViewGraph, animationDelay, kbId, questionText, resolveAttribution, reasoningOpen = false, sourcesOpen = false, confidenceOpen = false, conflictsOpen = false, onToggleSection }: MessageBubbleProps) {
     const { t, language } = useTheme();
     const isThinking = Boolean(isStreaming && message.reasoning && !message.content);
     const isMobile = useIsMobileContext();
@@ -195,6 +248,7 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
     // by message id, so it survives virtualization remounts (see the props).
     const confOpen = confidenceOpen;
     const sourcesExpanded = sourcesOpen;
+    const conflictsExpanded = conflictsOpen;
     const toggleSection = useCallback((section: MessageSection) => {
         if (message.id) onToggleSection?.(message.id, section);
     }, [message.id, onToggleSection]);
@@ -385,6 +439,14 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                                 onToggle={() => toggleSection('confidence')}
                             />
                         )}
+                        {message.conflicts != null && message.conflicts.length > 0 && (
+                            <ConflictsChip
+                                count={message.conflicts.length}
+                                t={t}
+                                open={conflictsExpanded}
+                                onToggle={() => toggleSection('conflicts')}
+                            />
+                        )}
                         {sourceGroups.length > 0 && (
                             <button
                                 type="button"
@@ -436,6 +498,10 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
 
                     {confOpen && message.verification != null && (
                         <ConfidenceDetails verification={message.verification} t={t} />
+                    )}
+
+                    {conflictsExpanded && message.conflicts != null && message.conflicts.length > 0 && (
+                        <ConflictsDetails conflicts={message.conflicts} t={t} />
                     )}
 
                     {sourcesExpanded && sourceGroups.length > 0 && (
