@@ -195,31 +195,33 @@ mid-cell `C1`) when this record was written, and both a judged run and the
 grid would contend for the same model server. This section will be filled in
 by 5b once the grid finishes.
 
-### `expected_points` curation (Task 5 / W4-R5)
+### `expected_points` curation (Task 5 / W4-R5) — see "Fix round 1" below for corrections
 
 Added to all 12 rows of `eval/golden/global-synthesis-de.jsonl` (gitignored;
 the file itself is not committed — this table is the reviewable record).
 Points were authored **only** from the cited source documents' chunk text
 (`document_chunks_4096` in the dev vector DB, `justrag-vectordb-1`), read via
 read-only `psql` against `justrag-db-1` (file-id resolution by name) and
-`justrag-vectordb-1` (chunk content), never from a model answer. 45 points
-total across 12 questions (3–5 per question, all within the loader's 2–6
-range; longest point well under the 300-rune cap).
+`justrag-vectordb-1` (chunk content), never from a model answer. **67 points
+total across 12 questions** (4–6 per question, all within the loader's 2–6
+range; longest point 305→trimmed to ≤300 runes — see Fix round 1). The
+original first pass (45 points, 3–5 per question) is superseded by the
+corrected/broadened set below; this table lists the corrected state only.
 
-| Q | Points | Source files verified against (name, as in `must_cite_file_names`) |
+| Q | Points | Source files consulted (name, as in `must_cite_file_names` unless noted) |
 |---|---|---|
-| G01 | 5 | SAP - Migration auf S4HANA - Go4S4.md; Windows 10-Ablösung.md; Außerbetriebnahme altes IMAP-E-Mail-System (Dovecot).md; Migration KEMP-Loadbalancer zu VMware AVI.md; Folio Einführung des cloudbasierten Bibliothekssystems und Ablösung LBS.md |
-| G02 | 4 | Smarte Administration mit KI.md; KI-HUB für innovative Forschung.md; KI-Infrastruktur und KI-Plattformen Konzeption zentral abgestimmter Planung, Beschaffung und Auslast.md; Weiterentwicklung der zentralen JLU-KI-Services (HAWKI, HRZ-API-Service und weitere Schnittstellen; .md |
-| G03 | 4 | Datenträgerverschlüsselung.md; MFA für Admins Multifaktorauthentifizierung für IT-Admins.md; LAPS-Upgrade.md; Informationssicherheit - wann ist der ISB zu beteiligen.md; Aktualisierung Sicherheitskonzept HRZ.md; Informationssicherheits-Richtlinien Überarbeitung und Visualisierung (PoliciesVis).md |
-| G04 | 4 | JLU Future Data Center - Teil 1.md; Migration Datacenter Netzwerk Optimierung Firewall, Router und Switche.md; Austausch USV 1 & 2 Erneuerung unterbrechungsfreie Stromversorgung Serverräume 1 & 2.md; Machbarkeitsstudie eines Herstellerwechsels im Bereich WLAN.md |
-| G05 | 3 | ILIAS - Stud.IP Schnittstelle.md; HISinOne MoveON Schnittstelle.md; ILIAS-Update.md; Stud.IP-Update.md |
-| G06 | 3 | Workshop Agenda und Inhalte.md (comment thread); Raumübersicht Workshop.md; Infos für Human Digitals Orga Workshop am 25.11.2025.md; Save the Date und E-Mailverteiler für Einladung.md; Orga Verwaltungsworkshop 15.04.2026.md |
-| G07 | 4 | Zusammenfassung Ergebnisse Workshop.md; Thementisch 2 Kulturwandel & Qualifikationsbedarfe für KI an der JLU.md; Thementisch 8 Kulturwandel & Qualifikationsbedarfe für KI an der JLU.md; Thementisch 4 Ethik & Gesellschaft.md; Thementisch 7 Ethik & Gesellschaft.md |
-| G08 | 4 | RWTH Aachen.md; Universität Hamburg.md; Stanford University.md; ETH Zürich.md |
-| G09 | 4 | Moderne AuthN-Infrastruktur Sicherere und zeitgemäße Authentifizierung von Nutzenden.md; Moderne AuthN-Infrastruktur Aufbau einer Produktivumgebung.md; Umstellung der Authentifizierung von LDAP auf Shibboleth für Stud.IP und ILIAS.md; Erneuerung OpenLDAP-Server Infrastruktur der zentralen Authentifizierung.md |
-| G10 | 4 | Digitalisierung der Aktenführung in der Rechtsabteilung (B1) - Einführung der Kanzleisoftware AnNo.md; Digitales Anforderungsformular Beschaffung FB11.md; Einführung ESS (Employee Self Service) in SAP-HCM.md; Pilotierung Workflowmanagement FormCycle.md |
-| G11 | 4 | Prozess der DigITal-Projektentwicklung Welche Status durchläuft ein Projekt.md; Rollendefinition Projektleitung und Projektkoordination.md; Priorisierungs-Methodik im Digital-PPM.md; Must-Have vs. Entscheidbar Einordnung von Projekten.md |
-| G12 | 4 | Client-Management-Rollout Softwaremanagement durch Baramundi.md; Windows 10-Ablösung.md; M365-Planung.md; Software Asset Management.md |
+| G01 | 5 | SAP - Migration auf S4HANA - Go4S4.md; Windows 10-Ablösung.md; Außerbetriebnahme altes IMAP-E-Mail-System (Dovecot).md; Migration KEMP-Loadbalancer zu VMware AVI.md (incl. the E-Mail/ESA exclusion line); Folio Einführung des cloudbasierten Bibliothekssystems und Ablösung LBS.md |
+| G02 | 6 | Planungsprojekt Neue Wege mit KI.md; EP Vermerk Neue Wege mit KI.md; Projektablaufplan Neue Wege mit KI.md; Projektabschlussbericht Neue Wege mit KI.md; Projektkonzeption Themengebiet KI an der JLU.md; Smarte Administration mit KI.md; KI-HUB für innovative Forschung.md; KI-Infrastruktur und KI-Plattformen Konzeption zentral abgestimmter Planung, Beschaffung und Auslast.md; Weiterentwicklung der zentralen JLU-KI-Services (HAWKI, HRZ-API-Service und weitere Schnittstellen; .md; Roadmap KI-Services JLU 2026 mit Ausblick 2027.md; Support-Chatbot mit Websearch, RAG und Website-Widget Bereitstellung des Systems.md; JLU KI Wissensdatenbanken Vorprojekt.md. Not consulted for a point (near-empty/directory chunks): Website KI an der JLU.md; Kerngeschäftsfähigkeiten mit KI.md |
+| G03 | 6 | Datenträgerverschlüsselung.md; MFA für Admins Multifaktorauthentifizierung für IT-Admins.md; LAPS-Upgrade.md; Zentraler Log-Server.md; Microsoft-Unternehmenszugriffsmodell Sicherere Administration von Active Directory und M365.md; Aktualisierung Sicherheitskonzept HRZ.md; Informationssicherheits-Richtlinien Überarbeitung und Visualisierung (PoliciesVis).md; Informationssicherheit Policies & Visualisations 2026 (PoliciesVis 2026).md; Informationssicherheits-Audits 2026.md; Aktualisierung der Wiederanlaufpläne inkl. Disaster Recovery.md; Informationssicherheit - wann ist der ISB zu beteiligen.md. Not consulted (left out): Ausbau IT-Sicherheit.md; Passwortverwaltung in der zentralen IT Evaluation.md |
+| G04 | 6 | JLU Future Data Center - Teil 1.md; JLU Future Data Center - Teil 2 (Plan und Bedarfsanmeldung Bau).md; Migration Datacenter Netzwerk Optimierung Firewall, Router und Switche.md; Austausch USV 1 & 2 Erneuerung unterbrechungsfreie Stromversorgung Serverräume 1 & 2.md; Erneuerung PDUs (Power Distribution UnitsStromverteilereinheiten Serverräume HRZ).md; Erneuerung Netzwerk-Standortverteiler Phil II.md; Gebäudeanbindung Unizentrum (Ertüchtigung und Modernisierung Glasfaser- und Kupfernetz).md; Kanalsanierung LWL  Kabel (Teilstrecke Glasfaserring).md; Erkundung LWL.md; Machbarkeitsstudie eines Herstellerwechsels im Bereich WLAN.md; WLAN LFE WLAN-Versorgung landwirtschaftlicher Lehr- und Forschungseinrichtungen.md; Umzug TK-Standort VetMed.md |
+| G05 | 6 | CaMS  zentralfinanziertes Anschlussvorhaben (zfAV) (für HISinOne) zum Nationalen Once-Only-Technica.md; CaMS  Teilprojekt MVV - Einführung eines Modul- und Veranstaltungsverzeichnisses.md; CaMS  Projekt IDANOOTS+DSC.md; CaMS  Alumni Service - Alumni-Management Einführung von HIS-ALU.md; CaMS  Teilprojekt Langfristige Strategie für das Campusmanagement.md; Stud.IP-Raumverwaltung anpassen.md; Eventmanagement mit Stud.IP.md; Auswertung von Lehrraumbelegungen in Stud.IP.md; Stud.IP-Update.md; ILIAS-Update.md; **ILIAS-Update (V10).md**; ILIAS - Stud.IP Schnittstelle.md; HISinOne MoveON Schnittstelle.md; Weiterentwicklung MoveON.md; European Student Card Initiative (ESCI).md — all 15 must-cite files now represented (the 5-file CaMS cluster, previously absent, is point 1) |
+| G06 | 4 | Workshop Agenda und Inhalte.md (comment thread); Raumübersicht Workshop.md; Infos für Human Digitals Orga Workshop am 25.11.2025.md; Save the Date und E-Mailverteiler für Einladung.md; Orga Verwaltungsworkshop 15.04.2026.md; 2025-11-14 Update Workshopplanung.md; Checkliste & Ablaufplan WS.md |
+| G07 | 6 | Zusammenfassung Ergebnisse Workshop.md; Thementisch 2 Kulturwandel & Qualifikationsbedarfe für KI an der JLU.md; Thementisch 8 Kulturwandel & Qualifikationsbedarfe für KI an der JLU.md; Thementisch 4 Ethik & Gesellschaft.md; Thementisch 7 Ethik & Gesellschaft.md; Thementisch 1 Implementierung Konkret. Bereits begonnen.md; Thementisch 3 Abläufe und Strukturen.md; Thementisch 5 Technische Voraussetzungen.md; Thementisch 6 Ökosystem & Partnerschaften.md. Not independently cited (support/transcription docs): Thementische Implementierung und Abläufe & Strukturen.md; Transkription aus dem Workshop Übersicht.md; Transkription aus dem Workshop techn. Voraussetzungen, Ökosystem & Partnerschaften, Ethik und Gesel.md; Workshop-Bericht.md |
+| G08 | 6 | RWTH Aachen.md; Universität Hamburg.md; Universität Heidelberg.md; **TU München.md**; Stanford University.md (corrected — see Fix round 1); ETH Zürich.md; UC Berkeley.md; University of Oxford.md; Uni Bonn.md; HU Berlin.md; Universität Tübingen.md; Universität Marburg.md; FU Berlin.md — 13 of 14 must-cite files now represented; Sammlung Best Practices KI und Hochschulen.md is a Confluence dashboard macro with no institution content of its own and is not cited |
+| G09 | 6 | Moderne AuthN-Infrastruktur Sicherere und zeitgemäße Authentifizierung von Nutzenden.md; Moderne AuthN-Infrastruktur Aufbau einer Produktivumgebung.md; Umstellung der Authentifizierung von LDAP auf Shibboleth für Stud.IP und ILIAS.md; Erneuerung OpenLDAP-Server Infrastruktur der zentralen Authentifizierung.md; Erneuerung AD-Domaincontroller (u.a. Authentifizierungs-Server).md; AD-Kompartmentkonzept.md; IAM Erweiterungen Compliance, Prozessoptimierung und Self Services.md; Implementierung Account-Lifecycle-Prozesse für UKGM-administrierte Landesbedienstete.md; Implementierung Beschäftigten-Lifecycle-Prozesse für die Servicestelle Arbeitsmedizin.md; Benutzeranlage und -pflege in SAP durch IAM.md (title-level); MFA für Admins Multifaktorauthentifizierung für IT-Admins.md; Schnittstelle CAFM-IAM.md — all 12 must-cite files now represented |
+| G10 | 6 | Digitalisierung der Aktenführung in der Rechtsabteilung (B1) - Einführung der Kanzleisoftware AnNo.md; Digitales Anforderungsformular Beschaffung FB11.md; Einführung der elektronischen Ausgangsrechnung.md; Einführung ESS (Employee Self Service) in SAP-HCM.md; Vorprojekt Einführung Workflowmanagementsystem Formcycle.md; Pilotierung Workflowmanagement FormCycle.md; Elektronische Signatur an der JLU - Einführung und Pilotierung.md; Elektronische Signatur an der JLU - Pilotprozesse und Rollout Zentralverwaltung.md; DMS  Aktenplanstruktur für das DMS.md; DMS  Elektronische Studierendenakte.md; DMS  Einführung digitales Vertragsmanagement.md; DMS  Einführung einer digitalen dokumentengestützten Vorgangsbearbeitung im hessischen Verbund.md (title/id-level only); Projekt Onlinezugangsgesetz.md (title-level only) — all 13 must-cite files now represented |
+| G11 | 6 | Prozess der DigITal-Projektentwicklung Welche Status durchläuft ein Projekt.md (corrected to 6 statuses incl. 60-pausiert — see Fix round 1); Rollendefinition Projektleitung und Projektkoordination.md; Priorisierungs-Methodik im Digital-PPM.md; Must-Have vs. Entscheidbar Einordnung von Projekten.md; Dashboard JLU-Digitalprojekt-Portfoliomanagement.md; Umgang mit Projektsteckbriefen und Informationen im Digitalprojekt-Portfolio.md. Not consulted (near-empty/index pages): Kurzanleitung Erstellung Projektsteckbrief.md; Muster-Steckbrief mit Links zu Anleitungsartikeln.md; Steckbriefe JLU-Digitalprojekte.md; Steckbriefe HRZ.md; Projektportfolio - Steckbriefe.md; Präsidiumsentscheidungen.md (explicitly says its content doesn't exist yet) |
+| G12 | 4 | Client-Management-Rollout Softwaremanagement durch Baramundi.md; Windows 10-Ablösung.md; M365-Planung.md; Software Asset Management.md (corrected — see Fix round 1) |
 
 Full point text is not reproduced here since the golden set stays gitignored
 and untracked; this table exists so the curation choices (which facts, from
@@ -232,15 +234,14 @@ without a filled-in value): exact `Projektende` dates for several rows in the
 G01/G04 clusters (the Confluence "Steckbrief" template's `Projektende`
 field is frequently edited via changelog entries rather than a stable final
 value — e.g. Windows 10-Ablösung's own changelog revises its end date five
-times), named `Projektleitung` persons (present in some files but not
-central to what a *synthesis* answer needs to state, and inconsistent in
-format across files), and G03's/G09's remaining cluster members beyond the
-ones cited (Passwortverwaltung-Evaluation, Zentraler Log-Server, Wiederanlaufpläne,
-IAM-Erweiterungen, AD-Kompartmentkonzept, Schnittstelle CAFM-IAM, Benutzeranlage
-SAP-IAM, Account-/Beschäftigten-Lifecycle-Prozesse) — each cluster's 3–5
-points already cover the question's ask (technical-vs-organizational split
-for G03; abolished-vs-newly-built for G09) without exhaustively re-stating
-every file in `must_cite_file_names`, per the brief's "2–6 points" ceiling.
+times); named `Projektleitung` persons; G03's Ausbau IT-Sicherheit.md and
+Passwortverwaltung in der zentralen IT Evaluation.md (their content was not
+independently distinguishing enough to add a further point within the
+6-point cap once the other 11 files were merged into 6 points); G07's four
+transcription/support documents (already represented via the summary point);
+G08's Sammlung Best Practices KI und Hochschulen.md (a Confluence dashboard
+macro, not an institution profile); G11's index/near-empty pages (Kurzanleitung,
+Muster-Steckbrief, three Steckbriefe-listing pages, Präsidiumsentscheidungen).
 
 ### Loader validation smoke (Step 1)
 
@@ -262,3 +263,86 @@ this smoke — the point is that `ParseGoldenSetContent`/the loader accepted
 every row, G01's `expected_points` included, without a validation error).
 Exit code 0 (`eval-exit=0`). No `--judge`, so the coverage judge itself did
 not run in this smoke; that is Step 2 in dispatch 5b.
+
+### Fix round 1 (curation review corrections)
+
+A curation review verified four questions against the chunk text directly
+and found four defects, all fixed in place (base commit `24bd17d`):
+
+1. **G08 point 3 misattributed content.** The original point attributed
+   "Microsoft Copilot und Grammarly sowie ein Chatbot zu Lehrveranstaltungen"
+   to Stanford. Re-reading both files' chunk text: that content is verbatim
+   in `TU München.md` (the "TUMtutor" course chatbot, fed by lecturers,
+   answers with sources, plus Copilot/Grammarly). `Stanford University.md`'s
+   only chunk mentions "AI Playground", "Responsible AI" (a UIT governance
+   page) and "AI News" — no chatbot. Fixed: split into two correct,
+   contrasting points (TU München's TUMtutor+Copilot/Grammarly vs. Stanford's
+   AI Playground/Responsible AI — point 2 in the corrected G08 set), and
+   `TU München.md` is now in the source table.
+2. **G12 point 4 read as a live initiative.** "Software Asset Management.md"
+   was cited for a still-active SAM rollout. Its own changelog shows Status
+   changed to "Red50-abgebrochen" on 13.07.2026 with the note "Umsetzung über
+   organisatorische Alternativlösungen" (per ALB decision). Fixed: the point
+   now states the abandonment and the organisational-alternative outcome
+   instead of an ongoing rollout.
+3. **G01 point 4 overclaimed "vollständig".** "Migration KEMP-Loadbalancer zu
+   VMware AVI.md" states the goal is full retirement of the central KEMP
+   instance by end-2027, but explicitly excludes E-Mail/ESA: "Eine Ablösung
+   des KEMP-LB für E-Mail/ESA ist derzeit nicht geplant." Fixed: dropped
+   "vollständig" and added the exclusion clause.
+4. **Cluster-coverage rule (controller ruling, new).** For every question
+   phrased "alle …", `expected_points` must cover every major cluster in
+   `must_cite_file_names` (one point per cluster, up to the 6-point cap,
+   small files merged into a shared point). G05 (15 files: the 5-file CaMS
+   sub-cluster was entirely absent) and G08 (14 institution files, only 4
+   represented) violated it outright. Re-checked G02, G03, G04, G06, G07,
+   G09, G10, G11 against the same rule and broadened all of them except G06
+   (already both-events-covered at 3 points; added a 4th, a genuinely new
+   fact — the ≥110-registration waitlist — rather than padding). G01 and G12
+   were left at their original point counts (not in the coordinator's
+   re-check list; only their flagged factual errors were fixed). Net effect:
+   total points went from 45 to 67; every "alle …" row except G01/G12 grew
+   from 3–5 points to 6 (the cap), and files-represented-per-row rose
+   sharply (e.g. G05 5→15 of 15 files, G09 4→12 of 12 files, G04 4→12 of 12
+   files) — see the corrected source-file table above.
+
+While re-verifying G11 for cluster coverage, a fifth, incidental error
+surfaced and was fixed too: the original point 1 listed five project
+statuses (10/20/30/40/50); `Prozess der DigITal-Projektentwicklung...md`'s
+own chunk text lists **six** — `60-pausiert` ("Projekt vorübergehend
+unterbrochen") was missing. Corrected in place.
+
+**Re-validation (loader):** a throwaway Go program
+(`go-backend/cmd/evalcheck-tmp5a/main.go`, created, run, and deleted — never
+committed) called `eval.LoadGoldenSet` directly on the corrected file. This
+needs neither a DB connection nor the LLM backend, so it ran regardless of
+the Task 6 grid's state:
+
+```
+OK: loaded 12 questions
+  G01: expected_points=5   G02: expected_points=6   G03: expected_points=6
+  G04: expected_points=6   G05: expected_points=6   G06: expected_points=4
+  G07: expected_points=6   G08: expected_points=6   G09: expected_points=6
+  G10: expected_points=6   G11: expected_points=6   G12: expected_points=4
+```
+
+**Re-validation (smoke):** `t6-grid.lock` still named a live pid at fix time
+(cell `C2` running per `t6-grid-resume.log`), so per the coordinator's rule
+one additional single-question, no-`--judge` smoke was run on a question
+this round actually changed:
+
+```bash
+bash .superpowers/sdd/2026-09-06-rag-sota-wave4/run-eval.sh \
+  --golden eval/golden/global-synthesis-de.jsonl --question-id G08 \
+  --production-context --longcontext on --longcontext-mode flat \
+  --output .superpowers/sdd/2026-09-06-rag-sota-wave4/t5a-fix1-smoke.json
+```
+
+Result: `errors = 0`, `orchestrator=longcontext`, `eval-exit=0`
+(`mean_recall=0.214 mrr=0.250 mean_ndcg=0.540` — retrieval-only, noisy at
+n=1, not the point of the smoke). The corrected file's `expected_points`
+(G08 now 6 points) loaded without a validation error.
+
+The corrected `eval/golden/global-synthesis-de.jsonl` was copied over the
+main checkout's copy (`/home/steffen/git/JustRAG/eval/golden/global-synthesis-de.jsonl`,
+also gitignored) so both working copies hold the same fixed fixture.
