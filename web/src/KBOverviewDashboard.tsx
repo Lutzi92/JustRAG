@@ -519,7 +519,11 @@ export default function KBOverviewDashboard() {
                                                             : c.key === 'staleShare'
                                                                 ? `${row.staleFileCount ?? 0}/${row.fileCount} > ${data?.staleDays ?? 180}d`
                                                                 : c.key === 'lastSyncAt'
-                                                                    ? row.lastSyncAt
+                                                                    // syncKinds is the missing half of "5 days ago":
+                                                                    // which source kinds that timestamp describes
+                                                                    // (rss / confluence / git).
+                                                                    ? [row.syncKinds?.length ? row.syncKinds.join(', ') : null, row.lastSyncAt]
+                                                                        .filter(Boolean).join(' · ') || undefined
                                                                     : undefined;
                                             return (
                                                 <td key={c.key} style={cellStyle} title={title}>

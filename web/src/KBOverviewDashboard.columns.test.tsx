@@ -105,6 +105,19 @@ describe('KBOverviewDashboard freshness columns', () => {
         expect(betaRow.querySelector('[data-testid="kb-sync-failing-badge"]')).not.toBeNull();
     });
 
+    it('surfaces syncKinds in the last-sync tooltip', async () => {
+        await openColumnsMenuAndEnableAll();
+
+        // Which source kinds a KB actually syncs is the missing half of
+        // "last sync 5 days ago" — without it an operator cannot tell whether
+        // that number describes an RSS feed, a Confluence space or a repo.
+        const alphaRow = screen.getAllByRole('row').find((r) => r.textContent?.includes('Alpha KB'))!;
+        const cells = Array.from(alphaRow.querySelectorAll('td'));
+        const syncCell = cells.find((c) => c.getAttribute('title')?.includes('2026-09-01'));
+        expect(syncCell).toBeTruthy();
+        expect(syncCell!.getAttribute('title')).toContain('rss');
+    });
+
     it('renders oldestFileAt as a relative time', async () => {
         await openColumnsMenuAndEnableAll();
 

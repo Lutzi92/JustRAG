@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -396,4 +397,33 @@ func ApplySpanVerification(
 		statuses[si].Reason = ""
 	}
 	return statuses
+}
+
+// citationStatusesAndGate applies the span-verification upgrade (applySpans is
+// nil when `chat_citation_spans_enabled` is off) and returns BOTH the statuses
+// to display/persist and the verifier cost-gate signal.
+//
+// The two deliberately disagree. W3-R1 lets a matched verbatim quote upgrade a
+// citation's DISPLAYED status to Verified — including one the deterministic
+// n-gram/semantic pass rejected as `no_overlap`. The gate that decides whether
+// the factuality verifier / Self-RAG / refine path runs must not see that
+// upgrade: reading the post-span statuses made a turn whose only suspect
+// citation was rescued by the span pass look clean, and silently skipped the
+// verifier on exactly the turns most likely to need it. So the gate is computed
+// from a snapshot of the deterministic verdicts taken BEFORE applySpans, which
+// mutates its input slice in place.
+func citationStatusesAndGate(det []CitationStatus, applySpans func([]CitationStatus) []CitationStatus) ([]CitationStatus, bool) {
+	preSpan := slices.Clone(det)
+	display := det
+	if applySpans != nil {
+		display = applySpans(det)
+	}
+	suspect := false
+	for _, c := range preSpan {
+		if !c.Verified {
+			suspect = true
+			break
+		}
+	}
+	return display, suspect
 }

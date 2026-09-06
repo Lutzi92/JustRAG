@@ -52,6 +52,13 @@ var longContextFindingsSpec = &StructuredSpec{
 // cannot blow up the reduce context.
 const maxLongContextQuoteRunes = 240
 
+// maxLongContextClaimRunes is the same defensive trim for the claim, which
+// was previously unbounded — the one part of a finding a model can run away
+// with. 600 matches the raw-chunk fallback finding's own budget
+// (longContextFallbackRunes in internal/chat), so a model-authored claim can
+// never cost more prompt than the fallback it replaces.
+const maxLongContextClaimRunes = 600
+
 // ExtractLongContextFindings runs one fast-tier structured call over a group
 // of numbered passages and returns the claims they support.
 //
@@ -73,7 +80,7 @@ func buildLongContextFindingsUserPrompt(question, groupText string) string {
 
 // parseLongContextFindings is tolerant of the json_object downgrade path:
 // prose-wrapped objects and a bare top-level array both parse. Entries with an
-// empty claim are dropped; claim and quote are trimmed and the quote capped.
+// empty claim are dropped; claim and quote are trimmed and both are capped.
 func parseLongContextFindings(text string) []LongContextFinding {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -109,6 +116,9 @@ func parseLongContextFindings(text string) []LongContextFinding {
 		claim := strings.TrimSpace(f.Claim)
 		if claim == "" {
 			continue
+		}
+		if r := []rune(claim); len(r) > maxLongContextClaimRunes {
+			claim = string(r[:maxLongContextClaimRunes])
 		}
 		quote := strings.TrimSpace(f.Quote)
 		if r := []rune(quote); len(r) > maxLongContextQuoteRunes {

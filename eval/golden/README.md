@@ -357,6 +357,15 @@ Judge calls use temperature 0 for determinism. All three metrics are
 optional and run independently — a single judge failure is captured in
 `judge.judge_errors` and does not abort the others.
 
+**Wave-3 comparability note:** since Wave 3, `ChatContextForQuestion` serves the
+dispatched orchestrator's OWN assembled context for every orchestrator branch,
+not just for long-context — before, orchestrator-branch questions missed that
+cache and the judge graded a generic content-based answer instead of the prompt
+the orchestrator actually built. Judge-mode numbers (faithfulness, context
+precision) are therefore **not comparable** with pre-Wave-3 judge runs; re-run
+the baseline if you need a delta. Retrieval metrics — and therefore `--baseline`
+recall/MRR/nDCG deltas — are unaffected.
+
 ```bash
 ./cmd/eval/eval --golden ../eval/golden/example.jsonl --judge --judge-model gpt-4o-mini
 ```

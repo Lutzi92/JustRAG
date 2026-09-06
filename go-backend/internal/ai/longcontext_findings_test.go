@@ -2,8 +2,11 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/justrag/go-backend/internal/prompts"
 )
@@ -64,6 +67,38 @@ func TestExtractLongContextFindings_LLMErrorBubbles(t *testing.T) {
 	r := stubCompletionError(t, errors.New("boom"))
 	if _, err := ExtractLongContextFindings(context.Background(), r, "q", "g", "kb", "en", ""); err == nil {
 		t.Fatalf("want the transport error to bubble so the group falls back")
+	}
+}
+
+// TestExtractLongContextFindings_CapsClaimAndQuote pins the reduce-prompt size
+// bound: the quote cap has always existed, but an unbounded claim let one
+// runaway group blow up the reduce context (the map stage runs up to ~250
+// groups at top-k 500 with group size 2). Both are now capped defensively.
+//
+// Mutation: drop the claim trim in parseLongContextFindings → this fails.
+func TestExtractLongContextFindings_CapsClaimAndQuote(t *testing.T) {
+	longClaim := strings.Repeat("ä", maxLongContextClaimRunes+500)
+	longQuote := strings.Repeat("ö", maxLongContextQuoteRunes+500)
+	payload, err := json.Marshal(map[string]any{
+		"findings": []map[string]any{{"source_idx": 1, "claim": longClaim, "quote": longQuote}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	r := stubCompletion(t, string(payload))
+	got, err := ExtractLongContextFindings(context.Background(), r, "q", "g", "kb", "de", "")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want one finding, got %#v", got)
+	}
+	if n := utf8.RuneCountInString(got[0].Claim); n != maxLongContextClaimRunes {
+		t.Errorf("claim runes = %d, want %d", n, maxLongContextClaimRunes)
+	}
+	if n := utf8.RuneCountInString(got[0].Quote); n != maxLongContextQuoteRunes {
+		t.Errorf("quote runes = %d, want %d", n, maxLongContextQuoteRunes)
 	}
 }
 

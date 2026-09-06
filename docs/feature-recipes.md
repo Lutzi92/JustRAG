@@ -459,6 +459,13 @@ the threshold. It is deliberately **not** a `kbConfigRegistry` key: it is global
 integer field in the admin Agent panel's observability section (next to `langfuse_base_url`). A
 non-integer or out-of-range value silently falls back to 180.
 
+**Run the migration before the new image** — on k8s that is a manual
+`kubectl run … /app/migrate` step (compose does it via the `migrate` one-shot service). New code
+on the pre-0071 schema breaks **all ingestion**, not just the freshness display: both `CreateFile`
+INSERTs name `published_at`, so uploads, RSS polls, Confluence and git syncs and the crawler each
+fail on the missing column. With `chat_recency_listing_enabled` (default ON) a recency-listing
+turn also answers 500, because the window-scoped search selects it too.
+
 **What it answers:** "is this KB's content stale, and is its ingestion still working?" — two
 questions the product previously had no data for, because nothing recorded whether a scheduled sync
 had ever *succeeded* (only when it last ran) and nothing carried a document's own publication date.
@@ -473,6 +480,11 @@ had ever *succeeded* (only when it last ran) and nothing carried a document's ow
   inside the persisted `messages.sources` JSONB.
 - **Documented gap:** the OpenAI-compat endpoint and the KB-as-MCP server build their own source
   projections and carry **no** dates. Wiring them is a small follow-up.
+
+**`published_at` is clamped at ingest.** The value is feed-controlled, and a future-dated RSS item
+would otherwise be permanently "the newest document in the KB" for the recency boost, the recency
+listing and every date window; an item dated after `now` is stored as `now` instead (past dates are
+left untouched — back-dating is legitimate). `clampPublishedAt` in `internal/worker/rsspoll.go`.
 
 **`lastSyncAt` is success-first, attempt-fallback.** `last_success_at` is stamped only when a sync
 actually completes (an RSS poll failure, a Confluence run with files still processing, and a failed

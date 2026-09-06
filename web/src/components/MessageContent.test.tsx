@@ -431,6 +431,28 @@ describe('MessageContent citation source popover', () => {
             expect(dialog.querySelector('mark.citation-span')).toHaveTextContent('ZIEL-SATZ');
         });
 
+        it('survives a source with no content at all', () => {
+            // MessageSource.content is optional on the wire; a span arriving
+            // alongside a content-less source must degrade to an empty snippet,
+            // never throw out of the render (Array.from(undefined) does).
+            const noContentSources = [
+                { index: 1, fileName: 'leer.pdf', fileId: 'f12', score: 0.9 } as (typeof spanSources)[number],
+            ];
+            const { container } = render(
+                <MessageContent
+                    content="Claim [1]."
+                    sources={noContentSources}
+                    citationSpans={new Map([[1, { start: 0, end: 5 }]])}
+                    onOpenSource={vi.fn()}
+                />,
+            );
+            fireEvent.click(firstPill(container));
+
+            const dialog = screen.getByRole('dialog');
+            expect(dialog).toHaveTextContent('leer.pdf');
+            expect(dialog.querySelector('mark.citation-span')).toBeNull();
+        });
+
         it('falls back to the plain snippet, with no <mark>, when the span is malformed', () => {
             // 29-char content, span end (5) < start (20): out of range / backwards.
             const shortContent = 'Ein kurzer Beispieltext hier.';

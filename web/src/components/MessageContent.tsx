@@ -108,10 +108,14 @@ function CitationPreview({ source, span, t, language, onOpenSource }: {
     // RSS-only, and when present is the more meaningful "freshness" date.
     const dateIso = source.publishedAt ?? source.createdAt;
     const dateLabel = dateIso ? formatDate(dateIso, language) : undefined;
-    const validSpan = span && isValidSpan(source.content, span) ? span : undefined;
+    // content is optional on the wire; one local fallback keeps every consumer
+    // below (isValidSpan / excerptAroundSpan both call Array.from, which throws
+    // on undefined) reading the same defined string.
+    const content = source.content ?? '';
+    const validSpan = span && isValidSpan(content, span) ? span : undefined;
     const snippetNode = validSpan
         ? (() => {
-            const { before, quote, after } = excerptAroundSpan(source.content, validSpan, 160);
+            const { before, quote, after } = excerptAroundSpan(content, validSpan, 160);
             return (
                 <>
                     {before}
@@ -120,7 +124,7 @@ function CitationPreview({ source, span, t, language, onOpenSource }: {
                 </>
             );
         })()
-        : (source.content && source.content.length > 320 ? `${source.content.slice(0, 320)}…` : source.content);
+        : (content.length > 320 ? `${content.slice(0, 320)}…` : content);
 
     return (
         <div style={{ padding: '10px 12px' }}>

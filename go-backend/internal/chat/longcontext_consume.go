@@ -15,6 +15,7 @@ import (
 	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/promptsafety"
 	"github.com/justrag/go-backend/internal/safego"
+	"github.com/justrag/go-backend/internal/splitter"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -280,13 +281,24 @@ func consumeLongContextWith(
 		return assembleFlatLongContext(pool, p, flatAddenda{}), nil
 	}
 
+	// The findings COUNT is unbounded by construction (a 500-chunk pool at
+	// group size 2 is 250 groups, each free to return several findings), so
+	// the reduce prompt gets the same token budget the chunk pool was
+	// truncated against. Dropping happens from the tail, in source order.
+	all, droppedFindings := truncateFindingsToFit(all, pool, p.Language, p.MaxTokens)
+	if droppedFindings > 0 {
+		logctx.From(ctx).Info("longcontext.reduce_findings_truncated",
+			"kept", len(all), "dropped", droppedFindings, "max_tokens", p.MaxTokens)
+	}
+
 	emitTrajectory(p.Emit, TrajectoryEvent{
 		Stage:    "longcontext_reduce",
 		Findings: len(all),
+		Dropped:  droppedFindings,
 	}, nil)
 	logctx.From(ctx).Info("rag.longcontext.map_reduce",
 		"groups", len(groups), "failed_groups", failedGroups,
-		"findings", len(all), "pool", len(pool))
+		"findings", len(all), "dropped_findings", droppedFindings, "pool", len(pool))
 
 	findingsText := renderFindingsContext(all, pool, p.Language)
 
@@ -415,6 +427,41 @@ func sanitizeFindingText(s, lang string) string {
 		return findingTextFilteredEN
 	}
 	return fenceRunRe.ReplaceAllString(s, "‵‵‵")
+}
+
+// findingLineOverheadTokens is the per-finding cost of the rendering itself:
+// the `[N] ` prefix, the „…“ quote wrapper and the trailing newline. Small and
+// deliberately generous — the budget check is a guardrail, not an accountant.
+const findingLineOverheadTokens = 6
+
+// truncateFindingsToFit bounds the reduce-stage CONTEXT against maxTokens (the
+// same chat_longcontext_max_tokens the chunk pool was truncated against), using
+// the same estimator TruncateChunksToFit uses. Findings stay in source order
+// and are dropped from the TAIL: earlier groups cover the highest-scoring
+// chunks, so a tail drop sheds the weakest evidence first.
+//
+// The SOURCES block (one header line per pool chunk) is fixed cost and is
+// reserved up front. At least one finding is always kept — an empty findings
+// block would be strictly worse than a short one, and the "no findings at all"
+// case is already handled earlier by the flat degrade path.
+//
+// Returns the kept findings and how many were dropped.
+func truncateFindingsToFit(findings []ai.LongContextFinding, pool []vector.SearchChunk, lang string, maxTokens int) ([]ai.LongContextFinding, int) {
+	if len(findings) == 0 || maxTokens <= 0 {
+		return findings, 0
+	}
+	budget := maxTokens - splitter.CountTokens(renderFindingsContext(nil, pool, lang))
+	used := 0
+	kept := 0
+	for _, f := range findings {
+		cost := splitter.CountTokens(f.Claim) + splitter.CountTokens(f.Quote) + findingLineOverheadTokens
+		if kept > 0 && used+cost > budget {
+			break
+		}
+		used += cost
+		kept++
+	}
+	return findings[:kept], len(findings) - kept
 }
 
 // renderFindingsContext builds the reduce-stage CONTEXT block: the findings

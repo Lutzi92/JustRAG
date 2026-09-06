@@ -44,6 +44,12 @@ one-step rollback** (`cmd/migrate` is up-only).
   `migrate` one-shot service; **Kubernetes does not** — run `/app/migrate` out
   of the release image before `kubectl apply`, per `docs/runbooks/release.md`.
   As with 0068, a release carrying a migration has **no one-step rollback**.
+  **Symptom of skipping it** (new image, old schema — the k8s case): *every*
+  file creation fails, because both `CreateFile` INSERTs name `published_at` —
+  uploads, RSS polls, Confluence and git syncs and the crawler all error out —
+  and, since `chat_recency_listing_enabled` defaults ON, a recency-listing chat
+  turn ("Welche neuen Meldungen gibt es?") returns a 500 as the window-scoped
+  search selects the missing column.
 - **No `published_at` backfill.** Every file ingested before 0071 keeps
   `published_at = NULL` and therefore keeps being aged by `created_at` (ingest
   time); RSS files pick the real publication date up on their next poll or
