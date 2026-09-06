@@ -453,3 +453,56 @@ describe('MessageContent citation source popover', () => {
         });
     });
 });
+
+// Wave-3 Task 6: source dates on the citation popover. createdAt/publishedAt
+// are both optional on the wire (old messages, non-RSS files), so the date
+// line must degrade to nothing rather than rendering "—" or "Invalid Date".
+describe('MessageContent citation popover source date', () => {
+    beforeEach(() => {
+        vi.resetAllMocks();
+        vi.mocked(ThemeContext.useTheme).mockReturnValue({
+            language: 'en',
+            t: (key: string) => key,
+        } as unknown as ReturnType<typeof ThemeContext.useTheme>);
+    });
+
+    const firstPill = (container: HTMLElement) => container.querySelector('sup.source-ref') as HTMLElement;
+
+    it('shows the date line, with the real t() label, when createdAt is set', () => {
+        const sources = [
+            { index: 1, fileName: 'doc.pdf', fileId: 'f1', content: 'Body.', score: 0.9, createdAt: '2026-01-05T00:00:00Z' },
+        ];
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.click(firstPill(container));
+
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toHaveTextContent('sourceDateLabel');
+        expect(dialog).toHaveTextContent('01/05/2026');
+    });
+
+    it('omits the date line entirely when neither createdAt nor publishedAt is set', () => {
+        const sources = [
+            { index: 1, fileName: 'doc.pdf', fileId: 'f1', content: 'Body.', score: 0.9 },
+        ];
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.click(firstPill(container));
+
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).not.toHaveTextContent('sourceDateLabel');
+    });
+
+    it('prefers publishedAt over createdAt when both are set', () => {
+        const sources = [
+            {
+                index: 1, fileName: 'feed-item.html', fileId: 'f1', content: 'Body.', score: 0.9,
+                createdAt: '2026-01-05T00:00:00Z', publishedAt: '2025-12-01T00:00:00Z',
+            },
+        ];
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.click(firstPill(container));
+
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toHaveTextContent('12/01/2025');
+        expect(dialog).not.toHaveTextContent('01/05/2026');
+    });
+});

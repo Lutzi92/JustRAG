@@ -530,6 +530,7 @@ export const translations = {
     sourcesLabel: { de: 'Quellen:', en: 'Sources:' },
     sourceCount: { de: 'Quelle', en: 'Source' },
     openInDocument: { de: 'Im Dokument öffnen', en: 'Open in document' },
+    sourceDateLabel: { de: 'Datum:', en: 'Date:' },
     answerSourcesToggle: { de: 'Quellen', en: 'Sources' },
     hitsLabel: { de: 'Treffer', en: 'hits' },
     followUpsLabel: { de: 'Weiterfragen', en: 'Ask a follow-up' },
@@ -965,6 +966,10 @@ export const translations = {
     colProcessing: { de: 'In Bearbeitung', en: 'Processing' },
     colChats: { de: 'Chats', en: 'Chats' },
     colCreated: { de: 'Erstellt', en: 'Created' },
+    colOldestContent: { de: 'Ältester Inhalt', en: 'Oldest content' },
+    colStaleShare: { de: 'Veraltet', en: 'Stale' },
+    colLastSync: { de: 'Letzte Synchronisierung', en: 'Last sync' },
+    kbSyncFailing: { de: 'Synchronisierung fehlerhaft', en: 'Sync failing' },
     // KB Overview — superadmin actions
     colActions: { de: 'Aktionen', en: 'Actions' },
     kbActionDelete: { de: 'KB löschen', en: 'Delete KB' },
@@ -1024,6 +1029,7 @@ export const translations = {
     kbMessagesChip: { de: '{n} Nachrichten', en: '{n} messages' },
     kbFailedChip: { de: '{n} fehlgeschlagen', en: '{n} failed' },
     kbProcessingChip: { de: '{n} in Bearbeitung', en: '{n} processing' },
+    kbFreshnessChip: { de: 'Ältester Inhalt {date}', en: 'Oldest content {date}' },
 
     // AI Configs Tab
     aiConfigurations: { de: 'KI-Konfigurationen', en: 'AI Configurations' },
@@ -1690,6 +1696,11 @@ export const translations = {
     langfuseBaseUrlHelp: {
         de: 'Wenn gesetzt, blendet JustRAG für Admins einen "Trace anzeigen"-Button neben jeder KI-Antwort ein, der direkt zur entsprechenden Langfuse-Trace führt. Beispiel: https://langfuse.example.local oder https://cloud.langfuse.com/project/abc123/traces',
         en: 'When set, JustRAG shows admins a "View trace" button next to each AI message linking to the matching Langfuse trace. Example: https://langfuse.example.local or https://cloud.langfuse.com/project/abc123/traces',
+    },
+    kbStaleDays: { de: 'Schwellenwert für veraltete Inhalte (Tage)', en: 'Stale-content threshold (days)' },
+    kbStaleDaysHelp: {
+        de: 'Alter in Tagen, ab dem eine Datei in der KB-Übersicht als veraltet zählt (Ältester Inhalt / Veraltet-Anteil). Global, nicht pro KB. Standard: 180.',
+        en: 'Age in days above which a file counts as stale in the KB-overview dashboard (oldest content / stale share). Global, not per-KB. Default: 180.',
     },
     viewTrace: { de: 'Trace anzeigen', en: 'View trace' },
     exportAnswer: { de: 'Antwort exportieren', en: 'Export answer' },

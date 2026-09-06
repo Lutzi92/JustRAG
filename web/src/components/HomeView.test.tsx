@@ -457,6 +457,28 @@ describe('KB card turn chip and freshness line', () => {
     // real read renders an "hour" unit — the fallback renders "day(s)".
     expect(screen.getByText(new RegExp(`${translations.kbLastActive.en}.*hour`, 'i'))).toBeInTheDocument();
   });
+
+  // Wave-3 Task 6: the freshness chip only appears when the KB actually
+  // reports an oldestFileAt (a KB with no files, or one Task 5 hasn't been
+  // enriched for yet, sends none) — and renders no chip row at all otherwise.
+  it('renders the freshness chip when oldestFileAt is present', async () => {
+    const monthsAgo = new Date('2026-01-01T00:00:00Z').toISOString();
+    renderHomeView({
+      kbs: [{
+        ...baseKb, id: 'kb-2', name: 'Alte KB', memberCount: 1, myRole: 'owner',
+        oldestFileAt: monthsAgo,
+      }],
+    });
+    expect(await screen.findByText(new RegExp(translations.kbFreshnessChip.en.split('{date}')[0], 'i'))).toBeInTheDocument();
+  });
+
+  it('renders no chips at all when the KB has no files, messages, or freshness data', async () => {
+    renderHomeView({
+      kbs: [{ ...baseKb, id: 'kb-3', name: 'Leere KB', memberCount: 1, myRole: 'owner' }],
+    });
+    await screen.findByText('Leere KB');
+    expect(screen.queryByText(new RegExp(translations.kbFreshnessChip.en.split('{date}')[0], 'i'))).toBeNull();
+  });
 });
 
 // The star on a Favoriten card is a favorites toggle and nothing else. It

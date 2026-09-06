@@ -7,6 +7,7 @@ import { Brain, Loader2, FileText, ArrowRight } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import type { MessageSource, TrajectoryEvent, FlaggedClaimStatus } from '../types';
 import { formatPageRanges } from '../utils/citations';
+import { formatDate } from '../utils/dates';
 import { excerptAroundSpan, isValidSpan } from '../utils/verification';
 import { AnchoredPopover } from './AnchoredPopover';
 import { TrajectoryPanel } from './TrajectoryPanel';
@@ -95,13 +96,18 @@ interface MessageContentProps {
  * validation (out of range, backwards, non-integer — a bad extraction),
  * it falls back to the flat 320-char content slice, unchanged.
  */
-function CitationPreview({ source, span, t, onOpenSource }: {
+function CitationPreview({ source, span, t, language, onOpenSource }: {
     source: MessageSource;
     span?: { start: number; end: number };
     t: (key: string) => string;
+    language: 'de' | 'en';
     onOpenSource?: (source: MessageSource) => void;
 }) {
     const pageLabel = source.pages && source.pages.length > 0 ? `S. ${formatPageRanges(source.pages)}` : '';
+    // publishedAt wins over createdAt (W3-R10/handoff): publishedAt is
+    // RSS-only, and when present is the more meaningful "freshness" date.
+    const dateIso = source.publishedAt ?? source.createdAt;
+    const dateLabel = dateIso ? formatDate(dateIso, language) : undefined;
     const validSpan = span && isValidSpan(source.content, span) ? span : undefined;
     const snippetNode = validSpan
         ? (() => {
@@ -124,6 +130,11 @@ function CitationPreview({ source, span, t, onOpenSource }: {
             </div>
             {pageLabel && (
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>{pageLabel}</div>
+            )}
+            {dateLabel && (
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    {t('sourceDateLabel')} {dateLabel}
+                </div>
             )}
             {source.content && (
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.45, maxHeight: '7.5em', overflow: 'hidden' }}>
@@ -588,6 +599,7 @@ const MessageContent = memo(({ content, reasoning, isThinking, sources, suspectC
                         source={openSource}
                         span={openSpan}
                         t={t}
+                        language={language}
                         // Keep the prop optional-aware: CitationPreview renders the
                         // open link only when a handler exists.
                         onOpenSource={onOpenSource ? openSourceAndDismiss : undefined}

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { RefreshCw, AlertTriangle, Loader2, ChevronDown, Hourglass, Play, XCircle, Trash2, UserCog, Globe } from 'lucide-react';
 import { getApiErrorMessage } from './utils/apiError';
+import { formatRelative } from './utils/dates';
 import { API_BASE_URL } from './api';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
@@ -33,17 +34,30 @@ interface KBRow {
     lastFileUploadAt?: string;
     lastTurnAt?: string;
     createdAt: string;
+    // Freshness (Wave-3 Task 5/6). All optional on the wire — a KB with no
+    // files, or no RSS/Confluence/git source, sends none of these.
+    oldestFileAt?: string;
+    staleFileCount?: number;
+    staleShare?: number;
+    lastSyncAt?: string;
+    syncSucceeded?: boolean;
+    syncFailing?: boolean;
+    syncKinds?: string[];
 }
 
 interface OverviewResponse {
     rows: KBRow[];
     queueSummary: Record<string, QueueStats>;
     timestamp: string;
+    // Threshold (days) behind staleFileCount/staleShare above — global
+    // kb_stale_days, default 180. Surfaced in the colStaleShare tooltip.
+    staleDays?: number;
 }
 
 type SortKey = keyof Pick<KBRow,
     'name' | 'ownerName' | 'fileCount' | 'totalSizeBytes' | 'failedFileCount' |
-    'processingFileCount' | 'chatCount' | 'createdAt'>
+    'processingFileCount' | 'chatCount' | 'createdAt' |
+    'oldestFileAt' | 'staleShare' | 'lastSyncAt'>
     | 'lastActivity' | 'activity';
 
 interface ColumnDef {
@@ -86,23 +100,6 @@ function formatBytes(bytes: number): string {
     return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-// Locale-aware relative time (improvement #5): drives "vor 2 Std." / "2 hr. ago"
-// from the active UI language instead of the old hand-rolled mixed-language strings.
-function formatRelative(iso: string | undefined, rtf: Intl.RelativeTimeFormat): string {
-    if (!iso) return '—';
-    const then = new Date(iso).getTime();
-    if (Number.isNaN(then)) return '—';
-    const diffMs = then - Date.now(); // negative => in the past
-    const sec = Math.round(diffMs / 1000);
-    const min = Math.round(diffMs / 60000);
-    const hr = Math.round(diffMs / 3600000);
-    const day = Math.round(diffMs / 86400000);
-    if (Math.abs(sec) < 60) return rtf.format(sec, 'second');
-    if (Math.abs(min) < 60) return rtf.format(min, 'minute');
-    if (Math.abs(hr) < 24) return rtf.format(hr, 'hour');
-    return rtf.format(day, 'day');
-}
-
 const QUEUE_NAMES = ['rag-quick', 'rag-heavy', 'rag-batch'];
 
 export default function KBOverviewDashboard() {
@@ -119,7 +116,6 @@ export default function KBOverviewDashboard() {
     const [transferTarget, setTransferTarget] = useState<KBRow | null>(null);
     const [actionBusy, setActionBusy] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
-    const rtf = useMemo(() => new Intl.RelativeTimeFormat(language, { numeric: 'auto' }), [language]);
     const [data, setData] = useState<OverviewResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -132,6 +128,9 @@ export default function KBOverviewDashboard() {
         processingFileCount: false,
         chatCount: false,
         createdAt: false,
+        oldestFileAt: false,
+        staleShare: false,
+        lastSyncAt: false,
     });
     const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
     const columnsMenuRef = useRef<HTMLDivElement | null>(null);
@@ -282,6 +281,9 @@ export default function KBOverviewDashboard() {
         { key: 'processingFileCount', label: t('colProcessing'), numeric: true, optional: true },
         { key: 'chatCount', label: t('colChats'), numeric: true, optional: true },
         { key: 'createdAt', label: t('colCreated'), optional: true },
+        { key: 'oldestFileAt', label: t('colOldestContent'), optional: true },
+        { key: 'staleShare', label: t('colStaleShare'), numeric: true, optional: true },
+        { key: 'lastSyncAt', label: t('colLastSync'), optional: true },
     ];
     const columns = ALL_COLUMNS.filter((c) => !c.optional || optionalVisible[c.key]);
     const optionalColumns = ALL_COLUMNS.filter((c) => c.optional);
@@ -331,9 +333,31 @@ export default function KBOverviewDashboard() {
             case 'chatCount':
                 return row.chatCount;
             case 'lastActivity':
-                return formatRelative(mergedActivityIso(row), rtf);
+                return formatRelative(mergedActivityIso(row), language);
             case 'createdAt':
-                return formatRelative(row.createdAt, rtf);
+                return formatRelative(row.createdAt, language);
+            case 'oldestFileAt':
+                return formatRelative(row.oldestFileAt, language);
+            case 'staleShare':
+                return row.staleShare != null ? `${Math.round(row.staleShare * 100)}%` : '—';
+            case 'lastSyncAt': {
+                if (!row.lastSyncAt) return '—';
+                // syncSucceeded=false means the shown time is only the last
+                // ATTEMPT (no success yet) — flag it the same way a currently
+                // failing streak (syncFailing) is flagged, so an operator does
+                // not read either as a healthy recent sync.
+                const failing = row.syncFailing || row.syncSucceeded === false;
+                return (
+                    <>
+                        {failing && (
+                            <span data-testid="kb-sync-failing-badge" title={t('kbSyncFailing')}>
+                                <AlertTriangle size={14} style={{ verticalAlign: 'middle', marginRight: 4, color: 'var(--error-text)' }} />
+                            </span>
+                        )}
+                        {formatRelative(row.lastSyncAt, language)}
+                    </>
+                );
+            }
             default:
                 return null;
         }
@@ -490,7 +514,13 @@ export default function KBOverviewDashboard() {
                                                     ? `Web: ${row.webTurns ?? 0} · API: ${row.apiTurns ?? 0}`
                                                     : c.key === 'createdAt'
                                                         ? row.createdAt
-                                                        : undefined;
+                                                        : c.key === 'oldestFileAt'
+                                                            ? row.oldestFileAt
+                                                            : c.key === 'staleShare'
+                                                                ? `${row.staleFileCount ?? 0}/${row.fileCount} > ${data?.staleDays ?? 180}d`
+                                                                : c.key === 'lastSyncAt'
+                                                                    ? row.lastSyncAt
+                                                                    : undefined;
                                             return (
                                                 <td key={c.key} style={cellStyle} title={title}>
                                                     {renderCell(row, c.key)}

@@ -6,6 +6,12 @@ export interface MessageSource {
     score: number;
     pages?: number[];
     nodeKind?: string;
+    // Freshness (Wave-3 Task 5/6): the underlying file's created_at, and — RSS
+    // origins only — its published_at. Both omitted on the wire when unset:
+    // old messages predate this enrichment, and non-RSS files have no
+    // publishedAt at all. Display publishedAt ?? createdAt.
+    createdAt?: string;
+    publishedAt?: string;
 }
 
 // CitationStatus is one entry in MessageVerification.citations — produced
@@ -272,6 +278,9 @@ export interface KnowledgeBase {
     processingFileCount?: number;
     turnCount?: number;
     lastActivityAt?: string | null;
+    // Oldest file's effective date (Wave-3 Task 5/6), omitted when the KB has
+    // no files. Backs the Home-card freshness chip.
+    oldestFileAt?: string;
     // Caller's own role + total member count — returned by the same list
     // endpoints (Task 8). myRole is undefined for an implicit viewer with no
     // kb_members row (e.g. a published global KB nobody explicitly joined).

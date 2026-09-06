@@ -14,6 +14,7 @@ import { useIsMobileContext } from './contexts/MobileContext';
 import { useTheme } from './contexts/ThemeContext';
 import { HAPTIC_PATTERNS, triggerHaptic } from './utils/haptics';
 import { extractCitedSourceIndices, formatPageRanges } from './utils/citations';
+import { formatDate } from './utils/dates';
 
 interface MessageBubbleProps {
     message: Message;
@@ -183,7 +184,7 @@ function ConfidenceDetails({ verification, t }: ConfidenceProps) {
 }
 
 function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showFollowUps, branchInfo, onSwitchBranch, onEdit, onFork, onCompare, onRegenerate, onFeedback, isEditing, onEditCancel, onPreviewSource, onViewGraph, animationDelay, kbId, questionText, resolveAttribution, reasoningOpen = false, sourcesOpen = false, confidenceOpen = false, onToggleSection }: MessageBubbleProps) {
-    const { t } = useTheme();
+    const { t, language } = useTheme();
     const isThinking = Boolean(isStreaming && message.reasoning && !message.content);
     const isMobile = useIsMobileContext();
     const reducedMotion = useReducedMotion();
@@ -247,18 +248,22 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
 
         if (visibleSources.length === 0) return [];
 
-        const grouped = new Map<string, { fileId?: string; pages: Set<number>; count: number }>();
+        const grouped = new Map<string, { fileId?: string; pages: Set<number>; count: number; dateIso?: string }>();
         for (const s of visibleSources) {
             if (!s.fileName) continue;
-            const entry = grouped.get(s.fileName) || { fileId: s.fileId, pages: new Set<number>(), count: 0 };
+            const entry = grouped.get(s.fileName) || { fileId: s.fileId, pages: new Set<number>(), count: 0, dateIso: undefined };
             if (s.pages) s.pages.forEach(p => entry.pages.add(p));
             if (s.fileId) entry.fileId = s.fileId;
+            // Same file's chunks share the same file-level dates; the first
+            // one found is as good as any. publishedAt wins over createdAt
+            // (RSS-only; see the citation popover's identical rule).
+            if (!entry.dateIso) entry.dateIso = s.publishedAt ?? s.createdAt;
             entry.count += 1;
             grouped.set(s.fileName, entry);
         }
 
-        return [...grouped.entries()].map(([name, { fileId, pages, count }]) => ({
-            name, fileId, pages: [...pages].sort((a, b) => a - b), count,
+        return [...grouped.entries()].map(([name, { fileId, pages, count, dateIso }]) => ({
+            name, fileId, pages: [...pages].sort((a, b) => a - b), count, dateIso,
         }));
     }, [message.sources, message.content]);
 
@@ -438,13 +443,14 @@ function MessageBubble({ message, isStreaming, onPdfOpen, onFollowUpClick, showF
                             {sourceGroups.map((g, i) => {
                                 const isPdf = g.name.toLowerCase().endsWith('.pdf');
                                 const pageLabel = g.pages.length ? `S. ${formatPageRanges(g.pages)} · ` : '';
+                                const dateLabel = g.dateIso ? `${formatDate(g.dateIso, language)} · ` : '';
                                 const canOpen = !!g.fileId && (isPdf ? !!onPdfOpen : !!onPreviewSource);
                                 return (
                                     <div key={`${g.name}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.6rem 0.75rem', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--shape-md)' }}>
                                         <FileText size={18} aria-hidden="true" style={{ flexShrink: 0, color: 'var(--accent-primary)' }} />
                                         <div style={{ minWidth: 0, flex: 1 }}>
                                             <div style={{ fontWeight: 500, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div>
-                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{pageLabel}{g.count} {t('hitsLabel')}</div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{dateLabel}{pageLabel}{g.count} {t('hitsLabel')}</div>
                                         </div>
                                         {canOpen && (
                                             <button
