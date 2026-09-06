@@ -361,6 +361,23 @@ Judge calls use temperature 0 for determinism. All metrics are optional and
 run independently — a single judge failure is captured in
 `judge.judge_errors` and does not abort the others.
 
+**Tolerant parsing + per-metric counts (Wave 4, W4-R1).** Judge responses are
+parsed leniently so a well-formed *verdict* in a slightly off-shape envelope
+is kept rather than discarded: a score emitted as a numeric string
+(`"score":"5"`) is accepted and clamped to 1–5, and a boolean list whose
+length differs from the contexts or points is truncated or padded, recorded
+as an entry in `judge.judge_warnings`. A sample is dropped only when the JSON
+cannot be parsed at all. Because a dropped sample used to shrink the
+denominator invisibly, the aggregate now carries `faithfulness_n`,
+`answer_relevance_n`, `context_precision_n` and `coverage_n` — how many
+questions actually contributed to each mean — and the human summary prints
+`(n=…)` next to every judge mean. `judged_count` keeps its old meaning
+(questions with a Judge block at all). **Comparability:** pre-Wave-4 judge
+numbers are unchanged for well-formed responses — the same response scores
+the same — but `n` may now be higher on a set where the model occasionally
+mis-shapes its reply, so compare `*_n` alongside the means when reading an
+old report against a new one.
+
 **Wave-3 comparability note:** since Wave 3, `ChatContextForQuestion` serves the
 dispatched orchestrator's OWN assembled context for every orchestrator branch,
 not just for long-context — before, orchestrator-branch questions missed that
@@ -731,7 +748,20 @@ group counts are trajectory events, not report fields — scrape them from the
 run log (`rag.longcontext.map_reduce` carries `groups`, `failed_groups`,
 `findings`, `pool`; `longcontext.map_group_failed` marks a degraded group).
 
-Results and the standing recommendation: `global-synthesis-de.acceptance.md`.
+Results and the standing recommendation: `global-synthesis-de.acceptance.md`
+— §1 for the Wave-3 three-run A/B above, §2 for the Wave-4 re-measurement.
+
+**Use the Wave-4 shape for any new attempt**, not the three-run one above:
+answer relevance saturates on this route, so curate `expected_points` per row
+(see "Coverage judge") and run **two** reports per mode — flat ×2 and
+map_reduce ×2 — then compare each cross pair with `--pairwise-a/--pairwise-b`
+plus one same-mode control pair. The control pair is what supplies both the
+coverage noise band and the judge's tie rate at this margin. Wave 4's verdict
+on that shape: `map_reduce` raised coverage in both cross pairs and took 16
+of 20 pooled decisive pairs, but the pre-registered per-pair Wilson rule
+missed on one pair at n=12 — grow the set to 24–36 questions, or re-register
+the rule on the pooled pairs *before* the next run, rather than pooling after
+seeing the result.
 
 ## CERT recency set (Wave 2 Task 8)
 

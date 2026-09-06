@@ -132,6 +132,8 @@ Citation validator: when `citation_validation_enabled` is true (default off), ev
 
 **Span verification (Wave 3, `chat_citation_spans_enabled`, default off).** The n-gram/semantic check answers "is this citation plausible?" but cannot point at *what* in the source supports it — the UI can only show the first few hundred characters of the cited chunk and let the reader hunt. The optional span pass closes that: after the deterministic validator, one fast-tier call copies **one verbatim quote** per still-eligible citation out of the cited source, and the backend then matches that quote against the source body itself — normalised (Unicode NFC, lower-cased, whitespace runs collapsed, quote characters and edge punctuation trimmed) but otherwise exact. Design point: the model supplies *text*, never offsets; the offsets are computed from the match, so a hallucinated or paraphrased quote simply fails to match and the entry keeps its previous `method` untouched. On a match the entry becomes `method: "span"` with `span: {start, end}` — **rune** offsets (code points, `end` exclusive) into `sources[n-1].content`, a different domain from `internal/chat/citation_spans.go`'s byte offsets of the `[N]` marker inside the *answer*. NFC is applied through `norm.Iter` segment-wise, so a decomposed `u`+U+0308 in OCR'd content still matches a precomposed `ü` in the quote and still maps back to the correct original rune range. Summary and `community_summary` sources are excluded (a RAPTOR or community summary is not verbatim source text). Fail-soft in every direction: timeout, transport error, unparseable reply or malformed span all leave the deterministic verdict in place, and the frontend falls back from the highlight to the plain snippet. Cost: one extra fast-tier call per answer with at least one eligible citation, bounded by `chat_citation_spans_timeout_ms` (8000 ms default) — post-response work is synchronous, which is why the budget exists. The pass runs *before* the attribution metrics, so `span` appears as its own `method` label on `rag_citation_attributions_total` rather than being folded into `none`. Enablement block: `docs/feature-recipes.md` §"Span-verified citations". `internal/chat/citation_spans_verify.go`.
 
+**Measuring answer-side quality.** The validator answers "is this citation grounded?", not "is this answer good?". For the latter, `cmd/eval --judge` grades faithfulness, answer relevance and context precision — and, since Wave 4, **coverage** against a golden row's optional `expected_points` (`mean_coverage` + `coverage_n`). On long-form synthesis answers the Likert answer-relevance judge saturates and is useless as a decision input; use coverage plus the offline **pairwise preference judge** (`--pairwise-a` / `--pairwise-b`, both orders, agreement required) instead, and always run a same-configuration control pair so the tie rate tells you the judge's discriminative power at that margin. Judge parsing is tolerant since Wave 4 (numeric-string scores clamped, mismatched boolean lists truncated/padded with a `judge_warnings` entry), so `n` per metric can be higher than in pre-Wave-4 runs even though well-formed responses score identically — the per-metric `*_n` counts in the aggregate are what make that visible. Both instruments are documented in `eval/golden/README.md` §§"Pairwise judge" and "Coverage judge".
+
 ## Contextual Retrieval (Anthropic-style)
 
 Contextual Retrieval (Anthropic-style): when `contextual_enrichment` is enabled (default), the ingestion pipeline asks an LLM to write a 1-sentence context prefix per chunk (e.g. *"This passage discusses §3 Kündigungsfrist of the Müller GmbH contract"*). Each per-chunk LLM call sends the **full source document** as the user-message prefix (truncated to ~8k cl100k_base tokens via `splitter.CountTokens`); the chunk goes last in `<chunk>...</chunk>` tags so OpenAI-compatible automatic prompt caching (OpenAI ≥1024-tok prefix, DeepSeek auto, vLLM with prefix caching, …) reuses the document prefix across every chunk of the same file — Anthropic's cookbook quotes ~90 % cost reduction at typical chunk counts. Document and chunk bodies are interpolated verbatim (not XML-escaped): escaping degraded the enrichment LLM's view of technical content (code, URLs, quoted strings), which poisoned the generated prefix and measurably hurt retrieval. The filename **is** escaped because it sits inside the `name="..."` attribute where a stray quote would actually break the wrapper. The system prompt explicitly instructs the LLM to mention named persons together with their role/title as stated in the document (e.g. "CIO Eberhard Kurz") and forbids inventing roles. This was added 2026-05-08 (Phase 2 of the post-Octen-8B roadmap) after a Q085 diagnostic against the dev KB showed only 2 of 20 chunks containing "Eberhard Kurz" had any role mention in the prefix; person-role lookup queries previously matched only the ~10% of chunks where the prefix happened to capture the role. Existing chunks keep their old prefixes until re-ingested.
@@ -296,8 +298,9 @@ Two consequences:
    and still useful: **at identical weights (1.0 / α 0.8), `bm25` costs −0.3 pp
    of `complex_reasoning` MRR on the standard path**, inside that route's
    1.2 pp band. Wave 2's causal story ("`rrf_weight_bm25` is off-scale for
-   `bm25`") is likewise **untested** rather than refuted, though it gains no
-   support here: down-weighting BM25 does not monotonically improve
+   `bm25`") is a mechanism no experiment has probed directly — the Wave-4
+   rerun below measures the *effect* on the plan-execute path, not the
+   mechanism — and it gains no support here: down-weighting BM25 does not monotonically improve
    complex_reasoning on the standard path (C1/C2/C4 +2.8 pp, C3/C5/C6 −0.3 pp,
    across all three weights). **Measured directly (Wave 4 Task 6, see
    "Dispatch-on rerun" below):** rerunning with
@@ -510,15 +513,23 @@ byte-identical package-local copy of the constant — `internal/mcp/builtin` imp
 drift test that fails if a bare `created_at` reappears in its SQL, and both tests pin the same
 literal, so changing one fails the other.
 
-`files.published_at` (migration 0071) is populated **only** for RSS items, from the feed entry's
-`PublishedParsed`; every other origin leaves it NULL and therefore keeps keying on ingest time.
-There is **no backfill**: RSS files ingested before 0071 stay NULL until re-polled or re-ingested.
-Consequence for the recency prior on an existing RSS KB: nothing changes until the feed next
-delivers, and then newer items start being aged by their own publication date rather than by when
-the poller happened to fetch them — which is what makes "re-uploading a file resets `created_at`"
-survivable for RSS corpora specifically. Confluence and git sources have no publication timestamp
-to read yet; wiring one is a roadmap item, and it needs no config change when it lands because the
-read side already goes through the shared expression.
+`files.published_at` (migration 0071) is populated by the three origins that carry a content date:
+RSS items, from the feed entry's `PublishedParsed`; Confluence **pages**, from the page's current
+version timestamp (Wave 4, W4-R10 — attachments keep NULL, because the REST shape carries no
+attachment date and the parent page's version date is the *page's* content date); and git files,
+from the HEAD commit's **committer** time, shared by every file of that shallow-clone sync (W4-R11
+— `Depth: 1` means there is no per-file history to read, so this is deliberately a repository-level
+date). All three write through the one clamp `files.ClampPublishedAt` (a future date becomes `now`;
+nil stays nil), so a skewed source clock cannot park a file permanently at the top of a recency
+window. Uploads, the crawler and every other origin leave it NULL and therefore keep keying on
+ingest time. There is **no backfill**: files ingested before 0071 — and Confluence/git files not
+re-synced since — stay NULL until re-polled, re-synced or re-ingested. Consequence for the recency
+prior on an existing RSS KB: nothing changes until the feed next delivers, and then newer items
+start being aged by their own publication date rather than by when the poller happened to fetch
+them — which is what makes "re-uploading a file resets `created_at`" survivable for RSS corpora
+specifically. Confluence has no update path (a changed page is deleted and re-created), and a git
+sync whose HEAD has not moved creates no files, so on those two origins a re-sync is what moves the
+date forward.
 
 The date-window semantics the chat layer exposes (`kb_search`'s `date_from`/`date_to`, the
 recency-listing window, `recent_documents`) are documented in `docs/feature-recipes.md`

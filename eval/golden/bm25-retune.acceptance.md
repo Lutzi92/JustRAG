@@ -175,9 +175,11 @@ nothing here justifies moving α.
 ### Caveats
 
 - One run per cell; the "noise band" is a single repeat of the baseline, not a
-  variance estimate. The enumeration route's 0.0 pp band is an artefact of one
-  repeat over 14 questions, not evidence of zero variance — treat the rule's
-  per-route recall/MRR guard on that route as approximate.
+  variance estimate. The enumeration route's 0.0 pp band is what one repeat
+  over 14 questions produces, not evidence of zero variance — treat the rule's
+  per-route recall/MRR guard on that route as approximate. (The Wave-4
+  dispatch-on rerun below therefore floors every per-route band at 1.0 pp and
+  runs 3 repeats per cell.)
 - The band (4.7 pp on lookup) is larger than most of the effects being
   measured, which is the honest summary of what this grid can and cannot say.
 - `rerank_blend_alpha_entity = 0.3` is a live per-route override that
