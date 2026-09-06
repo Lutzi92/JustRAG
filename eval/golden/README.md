@@ -473,6 +473,58 @@ disagreement excerpts, and the observation that the W4-R7 per-pair Wilson
 criterion is under-powered at 9–11 decisive pairs (one pair needed 9/11 wins
 and landed on 8/11).
 
+### Pooling two comparisons — `--pairwise-pool`
+
+One comparison of 12 questions decides 9–11 pairs, and a Wilson interval on
+that many pairs straddles 0.5 almost whatever the outcome — which is how
+Wave 4 ended up with both cross pairs pointing the same way and neither
+clearing the per-pair bar. `--pairwise-pool` sums two (or more) finished
+`--pairwise-out` JSONs into one tally and **recomputes** the win rate, the
+tie rate and the 95 % Wilson interval on the pooled counts:
+
+```bash
+./cmd/eval/eval --pairwise-out pooled-flat-vs-mapreduce.json \
+  --pairwise-pool pw-flat1-vs-mr1.json pw-flat2-vs-mr2.json
+```
+
+The first path is the flag value, the rest are positional — so **every other
+flag must come before them**. Go's flag parsing stops at the first positional
+argument, which would turn a trailing `--pairwise-out pooled.json` into two
+more "paths" while the real flag stayed empty; the command rejects that with
+an error naming the cause instead of failing later on a missing file.
+
+Recomputed, not averaged: averaging the two win rates would weight a pair with
+4 decisive verdicts the same as one with 16. Ties stay out of every denominator exactly
+as in `--pairwise-a/-b`, so pooling 3/1/8 and 1/3/8 gives 4 wins / 4 ties /
+16 losses = **20 decisive pairs**, side B taking 16 of them: 0.800 with a
+95 % Wilson of [0.584, 0.919]. (Folding those 4 ties into the denominator
+would read 16/24 = 0.667, [0.467, 0.820] — the same data failing the rule.)
+
+Output names the perspective on every line: the pooled counts are in side
+**A's** terms, because that is how each input result is expressed, and side
+**B's** win rate with its own Wilson interval is printed underneath, since a
+rule may be stated in either direction and the bounds do not merely swap when
+the perspective flips — they reflect (`low_B = 1 − high_A`). A per-input and
+a per-route pooled table follow.
+
+Two caveats. Pooling assumes **every input assigned the same configuration to
+side A**; a pairwise JSON carries no report paths, so the command cannot check
+that and prints a warning instead. And pooling is only honest when the rule
+was registered on the pooled statistic **before** the runs — pooling after
+seeing two per-pair results that each missed is exactly the analysis W4-R7 was
+supposed to prevent. This mode reads only files: no retrieval, no judge, no
+database. Exit 0 on a completed pooling, 2 on a usage error.
+
+**Ruling W5-R1 (registered 2026-09-06, pre-registered before the extended-set
+run).** The decision rule for `chat_longcontext_mode` is stated on the POOLED
+decisive cross pairs: over N ≥ 24 questions, two cross pairs (flat1 vs mr1,
+flat2 vs mr2), pooled `map_reduce` wins / (wins + losses) ≥ 0.60 with the
+pooled Wilson lower bound (z = 1.96) > 0.50, **and** pooled mean coverage of
+`map_reduce` not below flat's by more than the flat1-vs-flat2 coverage band.
+The flat1-vs-flat2 control must stay inside a [0.35, 0.65] win rate — outside
+it the judge is unstable and the run is inconclusive. Cost is reported, not a
+veto. This replaces W4-R7 for all future runs.
+
 ## Coverage judge — optional `expected_points`
 
 Faithfulness/answer-relevance/context-precision each grade some aspect of
@@ -771,6 +823,11 @@ of 20 pooled decisive pairs, but the pre-registered per-pair Wilson rule
 missed on one pair at n=12 — grow the set to 24–36 questions, or re-register
 the rule on the pooled pairs *before* the next run, rather than pooling after
 seeing the result.
+
+Wave 5 did both: the set grew to **24 questions** (G13–G24 authored under
+ruling W5-R2, curation record in `global-synthesis-de.acceptance.md` §3), and
+the rule was re-registered on the pooled pairs as **W5-R1** — see "Pooling two
+comparisons — `--pairwise-pool`" above for the rule text and the command.
 
 ## CERT recency set (Wave 2 Task 8)
 

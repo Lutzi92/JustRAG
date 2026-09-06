@@ -5,6 +5,7 @@
 //
 //	eval --golden ../eval/golden/example.jsonl [--top-k 10] [--output eval-report.json] [--concurrency 1] [--question-id <id>] [--baseline prev.json]
 //	eval --pairwise-a A.json --pairwise-b B.json [--judge-model <m>] [--pairwise-out pairwise.json]
+//	eval [--pairwise-out pooled.json] --pairwise-pool pw1.json pw2.json
 package main
 
 import (
@@ -83,7 +84,8 @@ func main() {
 	printKeywordSQLKBID := flag.String("kb-id", "", "KB id for --print-keyword-sql. Ignored in every other mode (the golden set carries its own kb_id per question).")
 	pairwiseA := flag.String("pairwise-a", "", `Offline pairwise preference mode (ruling W4-R4), side A: path to a judged eval report (a run made with --judge, so every question carries judge.answer). Requires --pairwise-b. Compares the two reports' persisted answers question by question with an LLM preference judge — every pair judged TWICE with the positions swapped, counting a win only when both orders agree (position debias); pairs the judge flips on are ties. Prints win/tie/loss counts, the win rate with a 95% Wilson interval, a per-route breakdown and a per-question table. Runs no retrieval and generates no answers; short-circuits before --golden and always exits 0 on a completed comparison (measurement, not a gate). --judge-model selects the judge.`)
 	pairwiseB := flag.String("pairwise-b", "", "Pairwise preference mode, side B: the report compared against --pairwise-a. The reported win rate is A's — a win rate below 0.5 means B produced the better answers.")
-	pairwiseOut := flag.String("pairwise-out", "", "Optional path for the pairwise result as JSON (per-pair verdicts incl. both orders' reasoning, counts, Wilson interval, per-route breakdown). Empty = human-readable output only.")
+	pairwiseOut := flag.String("pairwise-out", "", "Optional path for the pairwise result as JSON (per-pair verdicts incl. both orders' reasoning, counts, Wilson interval, per-route breakdown). Empty = human-readable output only. Also the output path of --pairwise-pool (the pooled report).")
+	pairwisePool := flag.String("pairwise-pool", "", `Wave-5 ruling W5-R1: pool two or more finished --pairwise-out JSONs into ONE win/tie/loss tally, with the win rate, the tie rate and the 95% Wilson interval RECOMPUTED on the pooled decisive pairs (never averaged across runs, which would weight a pair with 4 decisive verdicts like one with 16). Usage: --pairwise-out pooled.json --pairwise-pool a.json b.json — the first path is the flag value, the rest are positional, so EVERY other flag must come BEFORE them (Go's flag parsing stops at the first positional argument; a flag placed after the paths is rejected with an error rather than silently swallowed as a path). Ties stay out of every denominator, as in --pairwise-a/-b. Prints the pooled counts from BOTH sides' view (W5-R1 is stated from side B's) plus a per-input and a per-route pooled table. Reads only files: no retrieval, no judge, no database. Exits 0 on a completed pooling (measurement, not a gate), 2 on a usage error. Pooling assumes every input assigned the SAME configuration to side A — the pairwise JSON carries no report paths, so that cannot be verified here.`)
 	flag.Parse()
 
 	// Diagnostic mode short-circuits before --golden is required: it needs
@@ -97,6 +99,24 @@ func main() {
 			slog.Error("--print-keyword-sql failed", "error", err)
 			os.Exit(1)
 		}
+		return
+	}
+
+	// Pooling short-circuits before --golden and before --pairwise-a/-b:
+	// it reads finished pairwise JSONs and touches neither a golden set
+	// nor the database, so it must not be gated behind the config/DB
+	// setup the judging modes need.
+	if *pairwisePool != "" {
+		poolPaths := append([]string{*pairwisePool}, flag.Args()...)
+		if err := validatePairwisePoolFlags(poolPaths); err != nil {
+			slog.Error("invalid --pairwise-pool invocation", "error", err)
+			os.Exit(2)
+		}
+		if err := runPairwisePoolMode(poolPaths, *pairwiseOut, os.Stdout); err != nil {
+			slog.Error("--pairwise-pool failed", "error", err)
+			os.Exit(1)
+		}
+		// Exit 0 whichever side won: this mode measures, it does not gate.
 		return
 	}
 

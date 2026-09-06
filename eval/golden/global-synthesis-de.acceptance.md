@@ -657,3 +657,414 @@ n=1, not the point of the smoke). The corrected file's `expected_points`
 The corrected `eval/golden/global-synthesis-de.jsonl` was copied over the
 main checkout's copy (`/home/steffen/git/JustRAG/eval/golden/global-synthesis-de.jsonl`,
 also gitignored) so both working copies hold the same fixed fixture.
+
+## §3 Wave 5 curation (G13–G24) — 2026-09-07
+
+Ruling **W5-R2**: extend the set from 12 to ≥ 24 `global_synthesis` questions
+so the long-context decision can be taken on the *pooled* decisive pairs of
+two cross comparisons (ruling **W5-R1**, re-registered in
+`eval/golden/README.md` § "Pooling two comparisons — `--pairwise-pool`"
+*before* this set was authored and before any run on it).
+
+**Result: 12 new rows, G13–G24, 72 `expected_points`** (6 per question), on
+KB `83262307-3a1b-49bc-bd08-3b925a868a92` (PPM-Eval, 297 files). G01–G12 are
+**byte-identical** — the rows were appended, and the Wave-5 header comment was
+inserted *between* G12 and G13, so the first 27 504 bytes of the file compare
+equal to the pre-Wave-5 copy (`cmp` verified).
+
+### Method
+
+Same discipline as Wave 4, and the same hard rule: **no point comes from a
+model answer.** `t4-*.json` / `t5-*.json` reports were not opened during
+authoring. Every point was read out of the ingested chunk text:
+
+- file ids by name from `justrag-db-1` (`files`, read-only `SELECT`),
+- chunk bodies from `justrag-vectordb-1`
+  (`document_chunks_4096`, `node_kind='leaf'`, ordered by
+  `metadata->>'chunkIndex'`),
+- reassembled per file with the chunk overlap removed, then the informative
+  windows of the Confluence "Steckbrief" template (`Projektziele`,
+  `Projektumfang (Scope)`, `Status`, `## Änderungshistorie`) printed and the
+  template boilerplate stripped.
+
+Helper scripts (read-only, no DB writes):
+`.superpowers/sdd/2026-09-06-rag-sota-wave5/t9-files.sh`,
+`t9-chunks.sh`, `t9-brief.py`, `t9-collect.sh`, `t9-status.py`,
+`t9-append-rows.py` (the authored rows themselves — re-runnable, refuses to
+duplicate an id), `t9-validate.py`, `t9-classify-check.sh`.
+
+Each question carries **exactly one** documented German global-synthesis
+trigger verbatim (`globalSynthesisTriggersDE`, `internal/chat/longcontext.go`)
+and is multi-clause so the query-type classifier lands on
+`complex_reasoning` — both are the precondition for reaching `OrchLongContext`.
+Trigger distribution across the new rows: `fasse alle` ×3 (G13, G17, G22),
+`überblick über alle` ×3 (G14, G18, G24), `vergleiche alle` ×3 (G15, G19, G20),
+`gesamtbild` ×2 (G16, G21), `gemeinsame themen` ×1 (G23).
+
+Topics are new relative to G01–G12. Individual files do recur (a corpus of
+297 files has no 24 disjoint clusters), but no question repeats another's
+*subject*: G20 is defined by a status value rather than a theme, G21 is KI
+*governance* as against G02's inventory of KI projects and G11's PPM
+governance, G24 is the workshop's *channels and audiences* as against G06's
+*contradictions* in the same orga documents.
+
+**Four rows carry a smaller must-cite cluster than the 12–15 of G01–G12**
+(G17 and G18: 8, G19: 8, G20: 9). That is the corpus, not a shortcut: the
+remaining Studium/Lehre files are already G05's, and exactly seven Steckbriefe
+in the whole KB carry status `60-pausiert` plus one `50-abgebrochen`, which is
+the entire population G20 asks about. Each row's `notes` field says so.
+
+### Validation
+
+1. **Schema / caps** (`t9-validate.py`, all 24 rows): one documented DE
+   trigger present verbatim per question; every `must_cite_file_names` entry
+   exists verbatim in the KB's `files.name` (this caught
+   `KI an der JLU bündeln auf Webseite.md`, whose real name carries a
+   **NO-BREAK SPACE** (U+00A0) between `auf` and `Webseite`); ≤ 6 points per
+   row; ≤ 300 runes per point (longest new point: 299); no duplicate file
+   names. `FAILURES: 0`.
+2. **Loader + pure preconditions** (`t9-classify-check.sh`, throwaway
+   `cmd/t9check`, removed after the run): `eval.LoadGoldenSet` accepts all
+   **24** questions; `ai.HeuristicComplexity` returns `ComplexityComplex` (12
+   rows) or `ComplexityUnknown` (12 rows, deferred to the LLM classifier) and
+   **never** `ComplexitySimple` for any row; `chat.IsGlobalSynthesisQuery` is
+   `true` for all 24. `FAILURES: 0`.
+   Note in passing: `eval.ParseGoldenSetContent` (the DB/admin eval path)
+   rejects this file at the very first byte — it does not skip `#` comment
+   lines, which only `internal/eval/loader.go`'s JSONL path does. That is
+   pre-existing (the file has carried a comment header since Wave 3) and is
+   another reason this set is `cmd/eval`-only.
+3. **One eval smoke** (the only run in this task, single question, no
+   `--judge`):
+
+```bash
+bash .superpowers/sdd/2026-09-06-rag-sota-wave5/run-eval.sh \
+  --golden eval/golden/global-synthesis-de.jsonl --question-id G13 \
+  --production-context --longcontext on --longcontext-mode flat \
+  --output .superpowers/sdd/2026-09-06-rag-sota-wave5/t9-smoke.json
+```
+
+Result: `errors = 0`, `eval-exit=0`, wall time 10.2 s, and the report's
+`agent` block reads
+`{"orchestrator": "longcontext", "classified_query_type": "complex_reasoning",
+"dispatch_reason": "complex_reasoning_longcontext_gate"}` — the new row
+reaches the intended orchestrator. Retrieval metrics are not reported for
+this route and are not the point of the smoke.
+
+### Per-question curation record
+
+Column *Beleg* quotes the chunk fragment the point was verified against; the
+file named is the one the fragment came from.
+
+#### G13 — trigger `fasse alle` — Unified Communication / Kollaboration
+
+> Fasse alle Vorhaben rund um Kommunikations- und Kollaborationsdienste
+> zusammen und beschreibe, welche Systeme dabei abgelöst, neu aufgebaut oder
+> pausiert wurden.
+
+Must-cite (10): JLU UC-Strategie Kommunikations- und Kollaborationslösungen ·
+Betriebskonzept Rainbow als Unified Communication-Lösung · JLU-weites
+Confluence · Sympa-Refresh · Greenlight-UpdateWechsel zu Pilos Verwaltungsportal
+für BBB-Räume · Erneuerung Video Streaming · Neues Servicedesign für
+Veranstaltungsaufzeichnungen · JLUcontact · Außerbetriebnahme altes
+IMAP-E-Mail-System (Dovecot) · M365-Planung
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | UC-Strategie zielt auf Präsidiums-Entscheidung über ein UC-Konzept, abgeschlossen | *JLU UC-Strategie…*: „Ziel ist eine Präsidiums-Entscheidung über ein Unified Communications-Konzept, um nächste Schritte für die Modernisierung … der JLU-weiten Sprachkommunikations-Infrastruktur zu planen (\"Arbeitsplatz der Zukunft\")“; `Status Green40-abgeschlossen` |
+| 2 | Rainbow pausiert, wartet auf UC-Strategie | *Betriebskonzept Rainbow…*: `Status trueYellow60-pausiert`; Änderungshistorie „18.02.25: Statusänderung zu \"pausiert\" (wartet auf Projekt UC-Strategie) nach ALB 17.02.25“ |
+| 3 | Greenlight → Pilos statt GL3 | *Greenlight-Update…*: „Das Verwaltungsportal Greenlight (GL) wird in der aktuellen Version 2 nicht mehr unterstützt. Stattdessen soll Pilos zum Einsatz kommen (statt eines zunächst beabsichtigten Update auf GL Version 3).“ |
+| 4 | Opencast löst Upload-Tool ab; Abschaltung nicht im Scope | *Erneuerung Video Streaming*: „Ablösung des alten Upload-Tools durch Opencast … das Abschalten des alten Streaming-Servers ist nicht Bestandteil des Projekts und muss neu projektiert werden.“ |
+| 5 | Veranstaltungsaufzeichnungen ab SoSe 2028 standardisiert, Altformat bis WiSe 2026/27 | *Neues Servicedesign für Veranstaltungsaufzeichnungen*: „Überführung … in ein standardisiertes und automatisiertes Servicemodell ab dem Sommersemester 2028 (Weiterbetrieb des bisherigen Serviceformats bis einschließlich Wintersemester 2026/27)“ |
+| 6 | Confluence auf 1.000 Lizenzen; Sympa-Server erneuert; JLUcontact aus OpenLDAP | *JLU-weites Confluence*: „Erhöhung der Lizenz-Anzahl auf 1.000“ · *Sympa-Refresh*: „Erneuerung des Servers für Mailinglisten“ · *JLUcontact*: „Bereitstellung einer zentralen webbasierten Kontaktauskunft auf Basis von Daten aus OpenLDAP.“ |
+
+#### G14 — trigger `überblick über alle` — Web-Auftritt / Sichtbarkeit
+
+> Gib mir einen Überblick über alle Vorhaben zum Web-Auftritt und zur
+> digitalen Sichtbarkeit der JLU und erkläre, wie sie inhaltlich und zeitlich
+> zusammenhängen.
+
+Must-cite (12): Webrelaunch · HRZ-Webseiten Vereinheitlichung und Verschlankung ·
+Webstatistik mit Matomo … · Bilddatenbank (JLU-weit) · Forschungsinformationssystem
+(FIS) Integration in JLU-Webseite · Forschungsdatenrepositorium Vernetzung mit
+FIS … · Barrierefreie IT umsetzen · Website KI an der JLU · KI an der JLU
+bündeln auf&nbsp;Webseite · Projekt-Website im BfD-Bereich · Arbeitspaket
+Sichtbarkeit - Website · 2025-11-13 Brainstorming Große KI Webseite
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Web-Auftritt bis 2029 neu; Continuous Relaunch; externe Agentur | *Webrelaunch*: „Die JLU gestaltet bis 2029 ihren Web-Auftritt mit dem Fokus Exzellenzstrategie und Studierendenmarketing grundlegend neu … Implementierung eines Prozesses für den Regelbetrieb \"Continuous Relaunch\" … Umstellung des Betriebsmodells auf eine externe Agentur“ |
+| 2 | HRZ-Seiten als Basis für den Relaunch, ca. 50 % weniger Seiten | *HRZ-Webseiten…*: „Ansprechender und zeitgemäßer Webauftritt als Basis für das anstehende Relaunch-Projekt … die Gesamtzahl der Seiten deutlich reduziert werden (ca. 50%) und die Navigationsebenen minimiert“ |
+| 3 | Bilddatenbank nur avisiert; Rechtemanagement; Bezug zum Relaunch | *Bilddatenbank (JLU-weit)*: `Status 10-AVISIERT`; „Insbesondere mit Blick auf den Webrelaunch wird der JLU-weite Zugriff auf rechtlich einwandfreies JLU-Bildmaterial (Urheber- und Nutzungsrechte geklärt) wichtig … Ein Rechtemanagement regelt dabei den Zugriff“ |
+| 4 | Matomo ausgerollt, dezentrales Nutzungsmodell, abgeschlossen | *Webstatistik mit Matomo…*: „Ausrollen des Tools (Aufsetzen der Anwendung, Konfiguration, erste Tests und Implementierung eines Modells für die dezentrale Nutzung des Dienstes)“; `Status Green40-abgeschlossen` |
+| 5 | FIS-Stufe 1 = Publikationslisten; zweites Vorhaben speist JLUdocs/JLUdata ins FIS | *FIS Integration in JLU-Webseite*: „Erste Stufe der Nutzung der FIS-Daten auf der Webseite der JLU: Publikationsliste der ProfessorInnen.“ · *Forschungsdatenrepositorium…*: „Die Metainformationen über die in JLUdocs und JLUdata abgelegten Publikationen werden ins FIS übertragen“ |
+| 6 | Barrierefreiheit gesetzlich vorgegeben; auch Relaunch-Anforderung | *Barrierefreie IT umsetzen*: „Gesetzliche Grundlagen dazu sind: … HessBGG … BITV HE 2019 … HHG, im Sozialgesetzbuch IX (SGB IX), in der UN-Behindertenrechtskonvention (UN-BRK) und … im Barrierefreiheitsstärkungsgesetz (BFSG)“ · *Webrelaunch*: „dies beinhaltet u.a. eine hohe Barrierefreiheit“ |
+
+#### G15 — trigger `vergleiche alle` — Gebäude / Energie / Liegenschaften
+
+> Vergleiche alle Vorhaben rund um Gebäude-, Energie- und
+> Liegenschaftsmanagement miteinander und arbeite heraus, welche auf
+> Verbrauchssenkung und welche auf Betriebssicherheit zielen.
+
+Must-cite (10): Energiemanagement (Gesetzesvorgabe) · Digitale Thermostate … ·
+Zählerstrukturen Verbrauchsmedien in Gebäuden … · Parkraummanagement … ·
+Schnittstelle CAFM-SAP · Schnittstelle CAFM-IAM · Gerätedatenbank zur
+Überwachung von Lebenszykluskosten · Erneuerung EMA - HRZ (Einbruchmeldeanlage) ·
+Erneuerung ELA - UB Durchsageanlage der Unibibliothek · Intrakey Workflow  App …
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Zertifizierungsfähiges Energiemanagementsystem nach DIN 50001, Ziele auf drei Ebenen | *Energiemanagement (Gesetzesvorgabe)*: „Einführung eines vollständigen und zertifizierungsfähigen Energiemanagementsystems nach DIN 50001 … definiert die JLU … konkrete Energieziele auf System-, Gebäude- und Prozessebene.“ (Quelle schreibt DIN, nicht ISO — wörtlich übernommen) |
+| 2 | Thermostate: geringe Kosten, bedarfsgerechte Regelung, Wärmeeinsparung | *Digitale Thermostate…*: „mit relativ geringen Investitionskosten und geringem Installationsaufwand eine bedarfsgerechte Regelung der Heizung zu realisieren und damit Wärmeenergie einzusparen.“ |
+| 3 | Flächendeckende Zählerinfrastruktur als Grundlage des Energiemonitorings | *Zählerstrukturen…*: „Installation einer flächendeckenden Zählerinfrastruktur zur Erfassung des Energie- und Wasserverbrauchs der JLU-Gebäude. Dies stellt die Grundlage für ein funktionierendes Energiemonitoring dar.“ |
+| 4 | EMA (laufend) und ELA (pausiert, Dez. E / Notbeleuchtung) = Betriebssicherheit | *Erneuerung EMA - HRZ*: „Austausch Einbruchmeldeanlage (EMA) HRZ“, `Status 30-laufend` · *Erneuerung ELA - UB*: `Status 60-pausiert`; „30.06.25: Nach ALB Projekt pausiert (u.a. aufgrund ausstehender Klärungen mit Dez. E bzw. Abhängigkeiten mit weiteren technischen Anforderungen wie der Notbeleuchtung)“ |
+| 5 | Zwei CAFM-Schnittstellen: Rechnungsdaten < 10.000 € aus EVER/SAP, Identitäten aus IAM | *Schnittstelle CAFM-SAP*: „Übertragung von Rechnungsdaten zu Bauaufträgen und Bestellungen unter 10.000 € aus EVER/SAP in das CAFM-System“ · *Schnittstelle CAFM-IAM*: „Für die CAFM-Module zur Schlüssel- und zur Fuhrparkverwaltung werden Daten zu den Identitäten der JLU benötigt. Diese werden aktuell wöchentlich … aus SAP exportiert, manuell in einem Excel-Tool aufbereitet“ |
+| 6 | Gerätedatenbank (Lebenszykluskosten), Parkraum (bargeldlos), Intrakey pausiert | *Gerätedatenbank…*: „Softwarelösung zur Überwachung von Lebenszykluskosten … insbesondere zur Wirtschaftlichkeitsermittlung von Wartungs- und Reparaturkosten“ · *Parkraummanagement…*: „Digitale und bargeldlose Zahlungsmöglichkeiten spielen dabei eine zentrale Rolle“ · *Intrakey…*: `Status 60-pausiert` |
+
+#### G16 — trigger `gesamtbild` — IT-Betrieb / Servicemanagement
+
+> Zeichne das Gesamtbild des zentralen IT-Betriebs- und Servicemanagements am
+> HRZ und erkläre, wie Monitoring, Ticketsystem und Servicepunkt aufeinander
+> aufbauen.
+
+Must-cite (10): Zentrales Systemmonitoring Phase 1 · … Erweiterung (Stufe 2) ·
+… Erweiterung (Stufe 3) · KIX-Funktionserweiterung … · Zentraler HRZ-Servicepunkt … ·
+Zentraler Log-Server · DNA-Center · Client-Management-Rollout Softwaremanagement
+durch Baramundi · Verbesserung der Ausfallsicherheit in der Servervirtualisierung ·
+Gerätedatenbank zur Überwachung von Lebenszykluskosten
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Phase 1 abgeschlossen: 1500–1800 Systeme in Checkmk, Schwellwerte, Key-User geschult | *Zentrales Systemmonitoring Phase 1*: „Alle HRZ-Systeme (ca. 1500-1800) sind im einheitlichen System Checkmk mit den Basis-Checks abgebildet Die Schwellwerte sind korrekt gesetzt … Die Key-User in den Abteilungen sind geschult“; `Status Green40-abgeschlossen` |
+| 2 | Stufe 2 (laufend): Plugins/aktive Checks, Dashboards, NetApp/vCenter/Appliances, E-Mail-Alarmierung | *… Erweiterung (Stufe 2)*: „Einbringung von individuellen Funktionserweiterungen … in Form von Plugins und/oder aktiven Checks. Erstellung von aussagekräftigen Dashboards … Anbindung weiterer Systeme (z.B.: NetApp, vCenter-Cluster, Appliances …) Ausbau Alarmierung (Email)“; `Status 30-laufend` |
+| 3 | Stufe 3 avisiert: Abhängigkeiten, Gesamtsicht, externe Überwachung, weitere Fachbereiche | *… Erweiterung (Stufe 3)*: „Ergänzung von Abhängigkeiten und einer bereichsübergreifenden logischen Gesamtsicht Weitere Optimierungen (ext. Überwachung) Anbindung weiterer Fachbereiche.“; `Status 10-AVISIERT` |
+| 4 | KIX-18: SSP, CMDB, Asset Management, Rollenkonzept, Baramundi-Integration | *KIX-Funktionserweiterung…*: „1. Self-Service-Portal (SSP) 2. Configuration Management Database (CMDB) … 3. Asset Management (HRZ-Shop) 4. Rechte- und Rollenkonzept … 5. Integration mit Baramundi“ |
+| 5 | Servicepunkt (avisiert): Räume 50–55, gemeinsame Theke | *Zentraler HRZ-Servicepunkt…*: „Die Gruppen **Service** und **Arbeitsplatzbetreuung** werden räumlich im Bereich der **Räume 50 bis 55** zusammengeführt, um Servicedesk und HRZ-Shop an einer gemeinsamen Theke als zentralen Anlaufpunkt zu bündeln.“; `Status 10-AVISIERT` |
+| 6 | Log-Server neu konzipiert; DNA-Center-Teststellung betriebsbereit | *Zentraler Log-Server*: „Neu-Konzeption zentraler Log-Server (Produktauswahl, Implementierung, ggf. Migration und Außerbetriebnahme Altsystem)“ · *DNA-Center*: „Teststellung DNA-Center betriebsbereit“ |
+
+#### G17 — trigger `fasse alle` — Studium / Lehre / Prüfungen
+
+> Fasse alle Vorhaben zusammen, die Studium, Lehre und Prüfungen betreffen,
+> und nenne jeweils das eingesetzte System sowie die betroffene Zielgruppe.
+
+Must-cite (8): AKKREDICOLLAB … · Erneuerung Scanner-Klausuren Wechsel der
+Prüfungsaufgabendatenbank · ILIAS Optimierung Lade- und Bearbeitungszeiten ·
+Digitales Buchungssystem für die Deutschkurse des AAA · EUPeace Joint Digital
+Campus · Vorprojekt Promovierendenverwaltung · JupyterHub als zentraler
+Service · Neues Servicedesign für Virtuelle Desktops
+(kleinerer Cluster als G01–G12: die Campusmanagement-/LMS-Kernsysteme gehören
+bereits zu G05, hier stehen nur die dort nicht genannten Vorhaben.)
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | AKKREDICOLLAB: QM-System, interne Akkreditierung | *AKKREDICOLLAB…*: „Aufbau eines Qualitätsmanagementsystem für den Bereich Studium und Lehre, sodass die JLU ihre Studiengänge zukünftig intern – und damit eigenverantwortlich, effizienter sowie zielgerichteter akkreditieren kann.“ |
+| 2 | Scanner-Klausuren: Fred → Frieda wegen Oracle Java, abgeschlossen | *Erneuerung Scanner-Klausuren…*: „Wechsel auf eine neue Aufgabendatenbank (von Fred zu Frieda) … die lokale Variante benutzt noch Oracle Java, was nicht mehr eingesetzt werden soll“; `Status Green40-abgeschlossen` |
+| 3 | ILIAS-Optimierung abgeschlossen: Startseite und objektreiche Seiten | *ILIAS Optimierung…*: „Verbesserung der Lade- und Bearbeitungszeiten von ILIAS-Seiten, insb. der Startseite und Seiten, die viele unterschiedliche Objekte beinhalten.“; `Status Green40-abgeschlossen` |
+| 4 | Deutschkurse AAA: Automatisierung, E-Payment, AAA/Finanzdezernat entlastet | *Digitales Buchungssystem…*: „einfache Buchung … Möglichkeiten des E-Payments … automatisierte Buchungen (Entlastung für Fachabteilungen: AAA, Finanzdezernat und andere) - Möglichkeit, für internationale Studierende und Gäste, sich niedrigschwellig im System anzumelden“ |
+| 5 | EUPeace: 9 Partnerhochschulen, Vorlesungsverzeichnisse, LMS-Zugang, Mobilität | *EUPeace Joint Digital Campus*: „IT-Systeme der an EUPeace beteiligten 9 Partnerhochschulen \"verbinden\" - Vorlesungsverzeichnisse der EUPeace Allianzpartner verfügbar machen - Zugang zu den Learning Management Systemen aufbauen - Vereinfachung von Zulassung und Auslandsmobilität von Studierenden und Personal“ |
+| 6 | JupyterHub: CPU-Notebooks mit SSO; TUD-Alternative evaluiert | *JupyterHub als zentraler Service*: „Bereitstellung von ressourcenlimitierten Notebook-Umgebungen mit zentraler Authentifizierung (SSO), die auf reinen CPU-Ressourcen laufen“; „Alternativ wird die Nutzung eines JupyterHub einer anderen Univserität (TUD) evaluiert.“ |
+
+#### G18 — trigger `überblick über alle` — Speicher / Datensicherung / Archivierung
+
+> Gib einen Überblick über alle Vorhaben zu Speicher, Datensicherung und
+> Archivierung und ordne sie danach, ob sie den laufenden Betrieb absichern
+> oder eine langfristige Aufbewahrung ermöglichen.
+
+Must-cite (8): DaSi Backup2disc … · Daten-Archivierung als zentraler Service ·
+Günstiger Massenspeicher … · LaVaH Langzeitverfügbarkeit an hessischen
+Hochschulen · Forschungsdatenrepositorium Vernetzung mit FIS … · Verbesserung
+der Ausfallsicherheit in der Servervirtualisierung · Aktualisierung der
+Wiederanlaufpläne inkl. Disaster Recovery · H^3 (Digitalpakt Hessen)
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | DaSi: Redundanz + Storage-Modernisierung für TSM, Must-Have, abgeschlossen | *DaSi Backup2disc…*: „Redundanzaufbau und Storage-Modernisierung für TSM-Datensicherung (Backup-to-disk)“; `RedMust-Have`; `Status Green40-abgeschlossen` |
+| 2 | Archivierung auf IBM Storage Protect (TSM); Anbindung zu sichernder Systeme out of scope | *Daten-Archivierung als zentraler Service*: „Bedarfsprüfung und vom Ergebnis abhängiger Aufbau eines Angebots zur längerfristigen Archivierung von Daten auf Basis von IBM Storage Protect (TSM)“; „Die Anbindung zu sichernder IT-Systeme ist nicht Teil des Projekts.“ |
+| 3 | data1 von NetApp auf STOR3 (EONstor, Infortrend, 1 PB); NetApp überprovisioniert | *Günstiger Massenspeicher…*: „Bestehender Service data1 soll vom \"teuren\" Speicher der NetApp auf den günstigen Speicher STOR3 (EONstor; Infortrend 1PB) migriert werden.“; „data1 liegt z.zT. … auf der wesentlich teureren Netapp und ist somit … nicht gegenfinanziert und … deutlich überprovisioniert.“ |
+| 4 | LaVaH: zwei Phasen 2019–2021 / 2022–2025; hebis; Dauerbetrieb nötig | *LaVaH…*: „In zwei Projektphasen (2019-2021 und 2022-2025) wurde schrittweise eine Infrastruktur für die Langzeitverfügbarkeit digitaler Objekte aufgebaut … Die Verantwortung für die Validierung und Archivierung der Daten sowie für das Risikomanagement liegt beim Hessischen Bibliotheksinformationssystem hebis. Der LaVaH Dienst muss in einen Dauerbetrieb überführt werden“ |
+| 5 | FIS-Vernetzung: Erstimport in „zur Validierung durch UB“, danach nächtlich | *Forschungsdatenrepositorium…*: „Einmaliger vollständiger Erstimport - Übertragung zunächst in den Status \"zur Validierung durch UB\" … Danach: Nächtliche Übertragung der neuen/geänderten Informationen“ |
+| 6 | Laufender Betrieb: Standort-Redundanz (Stretched Cluster / DR), Wiederanlaufpläne | *Verbesserung der Ausfallsicherheit…*: „Verbesserung der Ausfallsicherheit in der Servervirtualisierung mittels geeigneter Maßnahmen (z.B. Aufbau Standort-Redundanz mittels Stretched Cluster oder Desaster Recovery), ggf. mit Kapazitätserweiterung“ · Titel *Aktualisierung der Wiederanlaufpläne inkl. Disaster Recovery* |
+
+#### G19 — trigger `vergleiche alle` — Virtualisierung / Container / Cloud
+
+> Vergleiche alle Vorhaben zu Virtualisierung, Containern und Cloud-Nutzung
+> miteinander und beschreibe, welche Plattformen dabei jeweils gesetzt und
+> welche erst evaluiert werden.
+
+Must-cite (8): Evaluierung alternativer Virtualisierungs-Plattformen ·
+Containerbasierte Bereitstellung von Anwendungen · Cloud Computing Ressourcen
+via OCRE … · Neues Servicedesign für Virtuelle Desktops · Verbesserung der
+Ausfallsicherheit in der Servervirtualisierung · vPAW-Konzept · JupyterHub als
+zentraler Service · H^3 (Digitalpakt Hessen)
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Marktsichtung VMware-Alternativen; digitale Souveränität; Ergebnisse 05/2026 | *Evaluierung alternativer Virtualisierungs-Plattformen*: „Marktsichtung technisch vergleichbarer Alternativen zu HCI-Lösungen mit VMware, Ziel: Digitale Souveränität von US-Anbietern, Kostenstabilisierung bzw. -senkung“; „Vorstellung der Ergebnisse (05/2026)“ |
+| 2 | Container auf VMware Tanzu + NSX | *Containerbasierte Bereitstellung von Anwendungen*: „Implementierung einer containerbasierten Bereitstellung von Anwendungen auf Basis von VMware Tanzu unter Nutzung der vorhandenen Compute- und Storage-Ressourcen … sowie Einbindung von NSX als Netzwerk- und Security-Lösung im Containerumfeld.“ |
+| 3 | OCRE: nur Governance; Betrieb, Support und Einkauf out of scope | *Cloud Computing Ressourcen via OCRE…*: „Kernbestandteile sind die Definition von technischen und organisatorischen Leitplanken, die Ausarbeitung einer Kommunikationsstrategie sowie der Entwurf eines vereinfachten Bereitstellungsprozesses. Nicht Teil des Projekts ist der anschließende operative Betrieb sowie der laufende Support … oder der eigentliche Einkauf der Cloud-Kontingente“ |
+| 4 | Virtuelle Desktops: Cloud nur prüfen, Windows 11; Vollumstieg out of scope | *Neues Servicedesign für Virtuelle Desktops*: „Einsatz cloudbasierter Lösungen für virtuelle Desktops prüfen - PC-Arbeitsplätze mit Windows 11 bereitstellen“; „**Out of Scope:** - Vollständiger Umstieg auf cloudbasierte Lösungen“ |
+| 5 | vPAW abgeschlossen: Hyper-V-Härtung, AD-OUs und Gruppenrichtlinien | *vPAW-Konzept*: „die notwendigen Anpassungen in der AD (neue Organisationseinheiten und Gruppenrichtlinien zur Domänen und vPAW Härtung), die Einrichtung und Härtung der Hyper-V Virtualisierungpsplattform auf der vPAW Hardware“; `Status Green40-abgeschlossen` |
+| 6 | JupyterHub: CPU + SSO gesetzt, GitLab-Integration nur evaluiert | *JupyterHub als zentraler Service*: „Eine mögliche Gitlab-Integration zur Versionierung und zum Austausch von Notebooks wird als Teil des Konzepts evaluiert.“ |
+
+#### G20 — trigger `vergleiche alle` — Status `pausiert` / `abgebrochen`
+
+> Vergleiche alle Vorhaben, die derzeit pausiert oder abgebrochen sind,
+> miteinander und nenne jeweils den dokumentierten Grund für die
+> Unterbrechung.
+
+Must-cite (9): Betriebskonzept Rainbow … · DMS  Einführung digitales
+Vertragsmanagement · Erneuerung ELA - UB Durchsageanlage der Unibibliothek ·
+HISinOne MoveON Schnittstelle · Intrakey Workflow  App … · MFA für Admins … ·
+Passwortverwaltung in der zentralen IT Evaluation · Software Asset Management ·
+Prozess der DigITal-Projektentwicklung Welche Status durchläuft ein Projekt
+
+Cluster size is the population, not a shortcut: a status sweep over all 297
+files (`t9-status.py`) found exactly **7** Steckbriefe with `60-pausiert` and
+**1** with `50-abgebrochen`.
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | SAM einziges abgebrochenes Vorhaben, 13.07.2026, organisatorische Alternativen | *Software Asset Management*: „13.07.2026: Nach ALB 13.07.2026 Status \"abgebrochen\" - Umsetzung über organisatorische Alternativlösungen.“; `Status Red50-abgebrochen` |
+| 2 | Rainbow pausiert 18.02.2025, wartet auf UC-Strategie | *Betriebskonzept Rainbow…*: „18.02.25: Statusänderung zu \"pausiert\" (wartet auf Projekt UC-Strategie) nach ALB 17.02.25“ |
+| 3 | MFA für Admins: pausiert 18.02.2025 (ISB), im Oktober 2025 weiter wartend auf M365 | *MFA für Admins…*: „18.02.25: Statusänderung zu \"pausiert\" (weitere Klärungen u.a. mit ISB) nach ALB 17.02.25“; „07.10.2025: Datum angepasst (weiterhin wartend auf M365).“ |
+| 4 | Passwortverwaltung: Personalengpässe Basisdienste, Wiederaufnahme nach Onboarding neuer GL | *Passwortverwaltung…*: „30.06.2025: … (depriorisiert aufgrund von Personalengpässen Basisdienste)“; „17.11.25: Nach ALB Projektstatus geändert auf \"pausiert\". Wiederaufnahme nach Onboarding neuer GL.“ |
+| 5 | ELA UB: 30.06.2025, Klärungen mit Dez. E, Notbeleuchtung | *Erneuerung ELA - UB…*: „30.06.25: Nach ALB Projekt pausiert (u.a. aufgrund ausstehender Klärungen mit Dez. E bzw. Abhängigkeiten mit weiteren technischen Anforderungen wie der Notbeleuchtung).“ |
+| 6 | Intrakey nur mit Datum, DMS-Vertragsmanagement und HISinOne-MoveON ohne Grund | *Intrakey…*: „30.06.25: Nach ALB Projektende geändert auf 31.10.25, Projekt pausiert.“ (kein Grund genannt) · *DMS  Einführung digitales Vertragsmanagement* und *HISinOne MoveON Schnittstelle*: `Status 60-pausiert`, Änderungshistorie enthält **keinen** Statuswechsel-Eintrag |
+
+#### G21 — trigger `gesamtbild` — KI-Governance / Beschlussvorschläge
+
+> Erkläre das Gesamtbild der strategischen Verankerung von KI an der JLU und
+> beschreibe, welche Beschlussvorschläge dem Präsidium vorgelegt wurden und
+> welche Zuständigkeiten daraus folgen.
+
+Must-cite (12): Beschlussvorschläge Arbeitsbereich Strategie und
+Strukturbildung · Schärfung Beschlussvorschlag 2 · P-Vorlage Projektabschluss ·
+Entwurf Präsidiumsvermerk Neue Wege mit KI · Entwurf Bearbeitung des Themas KI
+an der JLU · Entwurf Planungsprojekt KI an der JLU · Kommunikation Präsidium ·
+Kommunikation Projektabschluss Neue Wege mit KI · 2026-01-28 Ergebnisprotokoll ·
+2026-02-10 P-Vorlage weiteres Vorgehen · Geschäftsfähigkeit - was ist das ·
+Präsidiumsentscheidungen
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Auftrag aus dem Entwicklungsplan, Zielhorizont 2027 | *Entwurf Bearbeitung des Themas KI an der JLU*: „Auftrag aus der aktuellen Version des Entwicklungsplans: Die JLU verfügt bis 2027 über eine klare Zielsetzung auf dem Gebiet der KI und entwickelt wettbewerbsdifferenzierende Fähigkeiten gezielt weiter.“ |
+| 2 | Commitment-Beschluss + Gremienvorstellung; geschärfte Fassung | *Beschlussvorschläge Arbeitsbereich…*: „Das Präsidium beschließt ein klares Committment zur Nutzung von KI innerhalb zu etablierender Rahmenbedingungen und fordert VPW/CIO/BfD auf, die Projektergebnisse … in folgenden Gremien vorzustellen: Senat, EP, SK und AG Fachbereichsmanagement“ · *Schärfung Beschlussvorschlag 2*: „neu: Das Präsidium beschließt ein klares Commitment zur Nutzung von KI in Forschung, Lehre und Verwaltung“ |
+| 3 | „KI-Säule“ im BfD mit vier Daueraufgaben | *Beschlussvorschläge Arbeitsbereich…*: „Etablierung einer \"KI-Säule\" im BfD … - KI wird analog zu / als Teilgebiet von Digitalisierung betrachtet - inhaltliche Anfragen koordinieren (nicht technisch) - Pflege und Aktualisierung zentrale KI-Website - Etablierung und Organisation von bestimmten Austauschformaten - KI Austausch im hessischen Hochschulverbund“ |
+| 4 | Leitplanken aus der Zielvereinbarung; 31.12.2026 Lehre, 31.03.2027 Forschung | *Beschlussvorschläge Arbeitsbereich…*: „\"Bis 2028 sind strategische Leitplanken für den verantwortungsvollen Einsatz von Künstlicher Intelligenz in Forschung und Lehre verabschiedet und intern kommuniziert\". Es fordert die entsprechenden Abteilungen (VPF, StF; VPL, StL) auf, diese Leitplanken bis zum 31.12.2026 für den Bereich Lehre und bis zum 31.3.2027 für den Bereich Forschung zu erarbeiten.“ |
+| 5 | Compliance-Beschluss am 10.02.2026 aus der P-Vorlage herausgelöst | *2026-02-10 P-Vorlage weiteres Vorgehen*: „Der Beschlussvorschlag zu Comliance wird aus der P-Vorlage herausgelöst - die Thematik soll außerhalb dieser Vorlage angegangen werden“ |
+| 6 | Start September 2025 unter CIO/BfD; Ende mit Präsidiumsvorstellung am 24.02.2026 | *P-Vorlage Projektabschluss*: „Im September 2025 wurde das Projekt \"Neue Wege mit KI\" unter Leitung von CIO und BfD gestartet“; „Mit der Vorstellung der Projektergebnisse im Präsidium am 24.02.2026 wird das Planungsprojekt \"Neue Wege mit KI\" beendet, alle weiteren Maßnahmen und Aufgaben werden mit entsprechenden Zuständigkeiten versehen.“ |
+
+#### G22 — trigger `fasse alle` — Besprechungsnotizen / Projektverlauf
+
+> Fasse alle Besprechungsnotizen des Projekts "Neue Wege mit KI"
+> chronologisch zusammen und beschreibe, wie sich Projektauftrag,
+> Workshop-Planung und Abschlussvorbereitung über die Termine hinweg
+> entwickelt haben.
+
+Must-cite (15): die 13 datierten Protokollseiten 2025-07-14 … 2026-04-21 plus
+Übersicht Besprechungsnotizen und Aufgaben und Projektstrukturplan. These 13
+minutes pages are addressed by no other question in the set.
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | 14.07.2025: Scope / Organisation / Arbeitspakete; Rollen benannt | *2025-07-14 Workshop 14.07.2025*: „14.00 – 14.50 Uhr Teil 1: Projekt Scope 15.00 – 15.50 Uhr Teil 2: Projektorganisation 16.00 – 17.00 Uhr Teil 3: Arbeitspakete“; „Projektleitung: Marcus Enger & Eberhard Kurz - Projektkoordination: Johanna Daus - Projektmitarbeit: Sten Seegel, Christina Koch“ |
+| 2 | 22.08.2025: P-Vorlage, Ziel 16.9. im Präsidium | *2025-08-22 Projekttreffen Vorbereitung P-Vorlage*: „Vorbereitung der P-Vorlage - Ziel: 16.9. im Präsidium“ |
+| 3 | 19.09.2025: Struktur-/Ablaufplan, Aula gebucht, Moderation angefragt | *2025-09-19 Projekttreffen Projektstrukturplan*: „Vorstellung Projektstrukturplan und Projektablaufplan“; „Aula buchen 25.11.2025“; „Anfrage Moderation Human Digitals oder andere 25. November“ |
+| 4 | 02.12.2025: Projekt endet mit Präsidiumsvorstellung; Leitplanken als neues Teilprojekt | *2025-12-02 Projekt-Jour Fixe*: „Projekt endet mit Vorstellung der Projektergebnisse im Präsidium 28.02.2026 - Die dort vorgeschlagenen Maßnahmen sind nicht Teil des Planungsprojekt“; „TOP 3: Strategische Leitplanken entwickeln - neues Teilprojekt“ |
+| 5 | 17.12.2025: Zusatzaufgabe Verwaltungsworkshop; Aufteilung CIO-/BfD-Team | *2025-12-17 Projektbesprechung und Zusatzaufgabe…*: „Zusatzaufgabe Workshop KI in der Verwaltung“; „Nächste Schritte CIO-Team 1. Zwei Seiten \"Summary\" zu Best Practices und Bedarfe … 2. Entwurf von Entscheidungsvorschlägen … Nächste Schritte BfD-Team 1. Summary Workshopergebnisse … 2. Fertigstellung Website 3. Entwurf von Entscheidungsvorschlägen“ |
+| 6 | 21.04.2026: Gremien, Projektwebsite, Roadmap-Veröffentlichung, Mail an TN | *2026-04-21 Projektabschluss*: „Vorstellung Projektergebnisse in Gremien … Aktualisierung Projektwebsite: Projektabschluss … Veröffentlichung der Roadmap auf der Projektseite … Anschließend (Wunsch von VPW): Mail zu Ergebnissen an WS-Teilnehmende mit Verweis auf Website“ |
+
+Deliberately **not** asserted: a single project start/end date. The corpus
+disagrees with itself (`2025-12-02` says the Präsidium date is 28.02.2026,
+*P-Vorlage Projektabschluss* says 24.02.2026, *Kommunikation Projektabschluss*
+says the project "wurde im März beendet"), so each dated claim is attributed
+to the document it comes from (point 4 and G21 point 6) instead of merged.
+
+#### G23 — trigger `gemeinsame themen` — KI-Bedarfserhebung / Anwendungsfälle
+
+> Nenne gemeinsame Themen, die sich durch die Bedarfserhebung zu KI und die
+> Best-Practice-Recherche ziehen, und ordne jedem Thema die vorgeschlagene
+> Maßnahme zu.
+
+Phrased without an article so the trigger appears verbatim *and* the German
+is grammatical — same device as G07.
+
+Must-cite (14): Zusammenfassung Bedarfe und Best Practice · KI Top-Bedarfe,
+Bewertung und Priorisierung · Arbeitsbereich Bedarfe und Best Practice ·
+Sammlung User Stories  Anwendungsfälle KI an der JLU · User Stories
+Anwendungsfälle Bedarfsbündelung und wer macht was - Entwurf · Infos zu User
+Stories · Anwendungsfälle · Fragen zum KI-Einsatz · Was tun wir schon an der
+JLU · Sammlung Best Practices KI in der Hochschulverwaltung · die drei
+KI-Austausch-Protokolle (2025-07-23, 2025-09-22, 2025-11-10) · Ideen
+Quellensammlung
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Fünf Erhebungsquellen | *Zusammenfassung Bedarfe und Best Practice*: „Stakeholder-Meetings: … zwischen Juli und November 2025 drei Stakeholder-Austausche … - KI-Workshop-Ergebnisse … - Studierendenbefragung 2025 … - ZAD-Arbeitstreffen-Ergebnisse: Erkenntnisse aus zwei World Cafés … - KI-Team HRZ … - Umfeld und Best Practices“ |
+| 2 | „Make or Buy“ mit fünf Kriterien | *ebd.*: „Für den gesamten Technologie-Stack gilt die \"Make or Buy\"-Frage: Eigenbetrieb, wo nötig und sinnvoll, andernfalls externe (Cloud-)Lösung. Bekannte Kriterien … sind Fachlichkeit (inkl. Sicherheit), Wirtschaftlichkeit, Nachhaltigkeit, Digitale Souveränität, Zeit (Time to Market).“ |
+| 3 | Infrastruktur fragmentiert; GPU-as-a-Service; CIO-Steuerung + OCRE bis Q3/2026 | *ebd.*: „Die aktuelle IT-Basis ist oft fragmentiert und nicht optimal ausgelastet.“; „Ein zentral verwalteter GPU-Pool (\"GPU-as-a-Service\") kann die Auslastung optimieren“; „Es beauftragt den CIO dazu, diese … beginnend in Q2/2026 abzustimmen. Ein zugehöriges Konzeptionsprojekt soll bis Ende Q3/2026 abgeschlossen sein. - Außerdem werden CIO/HRZ ein Projekt zur Konzeption zur Nutzung von Cloud Computing Ressourcen via Open Clouds for Research Environments (OCRE-Rahmenverträge des DFN) initiieren“ |
+| 4 | Drei „Treppenstufen“ der Anwendungsfälle; Support-Chatbot als Maßnahme | *ebd.*: „##### KI am eigenen Arbeitsplatz (1. Treppenstufe) … ##### Arbeitsplatznahe KI-Integration (2. Treppenstufe) … ##### KI in Fachanwendungen (3. Treppenstufe) … KI-Komponenten in bestehender oder neuer Fach-Software (z.B. Bewerbermanagementsystem, CAFM), KI-Agenten“; „Das HRZ initiiert ein \"Support-Chatbot\"-Projekt zur Bereitstellung eines Systems für Website-Widgets“ |
+| 5 | Compliance: „Schatten-KI“; Ampelsystem; erste Iteration Sommer 2026 | *ebd.*: „Lange und aufwändige Prüfungsprozesse riskieren allerdings das Entstehen von \"Schatten-KI\" … Vorgeschlagen wird daher ein Optimierungskonzept, in dem … eine vereinfachte Entscheidungsbasis nach Risikobewertung (z.B. Ampelsystem) entwickelt werden sollen … Ziel ist es, eine erste Iteration zum Sommer 2026 zu erarbeiten“ |
+| 6 | KI-Hub als Toolbox mit SSO; Website bündelt Strategisches | *ebd.*: „Geplant ist ein \"KI-Hub\" ist als zentrale, technisch-anwendungsorientierte Toolbox für KI-Angebote der JLU … Der KI-Hub zielt … auf ein zentrales Portal für alle Anwendungen ab (Single Sign-On …), während die zentrale KI-Website primär strategische und vernetzende Aktivitäten bündelt“ |
+
+#### G24 — trigger `überblick über alle` — Workshop-Kommunikation
+
+> Gib mir einen Überblick über alle Kommunikations- und Einladungsmaßnahmen
+> rund um den KI-Workshop und erkläre, welche Zielgruppen über welchen Kanal
+> angesprochen wurden.
+
+Distinct from G06: that question asks for *contradictions* in the orga
+documents, this one for *channels and audiences*.
+
+Must-cite (13): Kommunikation Workshop · Save the Date und E-Mailverteiler für
+Einladung · Einladungstext · Verteiler · Anmeldung über Eveeno · Programm-Flyer ·
+Mail zur Versendung an TN nach dem WS · Kommunikation Präsidium · Kommunikation
+Projektabschluss Neue Wege mit KI · Entwurf Kommunikation C1 · Kommunikation
+Personalentwicklung (PE) oder auch C5 · Arbeitspaket Sichtbarkeit - Website ·
+Einführung von Eveeno - digitales Teilnehmendenmanagement
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Feste Reihenfolge: Save the Date → Einladung mit Agenda → DB-Bericht → Eveeno | *Kommunikation Workshop*: „Save the Date versenden … Text verfassen und abstimmen … breiten Mailverteiler erstellen … Einladung mit Agenda versenden … Bericht zu Workshop in der DB … Eveeno für Anmeldung“ |
+| 2 | Save the Date am 07.10.2025 über ki@uni-giessen.de; Termin/Ort | *Verteiler*: „Save the Date Versendung am 07.10.2025 ki@uni-giessen.de“ · *Save the Date und E-Mailverteiler…*: „wann: 25. November 2025 09:00 - 16:00 Uhr wo: Aula im Hauptgebäude der JLU“ |
+| 3 | Verteiler für persönliche Ansprache; Statusgruppen einzeln; AG FBM; ILIAS-Plugin | *Einladungstext*: „über verschiedene Verteiler versenden um \"persönliche Ansprache\" zu gewährleisten … Statusgruppen einzeln anschreiben … AG Fachbereichsmanagement über Jessica … ILIAS-Plugin über Mirco Hilbert“ |
+| 4 | Eveeno erhebt die Gruppenzuordnung (fünf Gruppen) | *Anmeldung über Eveeno*: „Welchen Bereichen ordnen Sie sich zu? O Professorinnen und Professoren aller Fachbereiche O Mitarbeitende aus der Lehre O Mitarbeitende aus der Forschung O Mitarbeitende aus Verwaltung und Technik O Studierende“ |
+| 5 | Dankes-Mail nach dem WS mit Website, Keynotes, 7 Einblicken, World Café | *Mail zur Versendung an TN nach dem WS*: „Die inspirierenden Keynotes von Christine Serrette (ITZBund) und Prof. Dr. Irene Bertschek sowie die sieben praxisnahen Einblicke in KI-Projekte an der JLU haben wichtige Impulse gesetzt. Besonders gewinnbringend waren die intensiven und konstruktiven Diskussionen an den Thementischen des World Cafés“ |
+| 6 | Gremienkommunikation: Präsidiumsvermerk/-berichtspunkt, Senat, EP, AG FBM, SK Studiengänge | *Kommunikation Präsidium*: „# Präsidiumsvermerk für … # Präsidiumsberichtspunkt“ · *Kommunikation Projektabschluss Neue Wege mit KI*: „- Senat - EP TOP-Anmeldung … - AG Fachbereichsmanagement - Senatskommission Studiengänge … Senatsberichtspunkt erstellen für VPW“ |
+
+### Points deliberately left out (not verifiable within scope)
+
+- **Project start/end dates as a single fact** — see the G22 note above; the
+  corpus contradicts itself, so dates are only stated with their source.
+- **Whether Christine Serrette actually spoke** was almost stated from
+  `2025-10-08 Projektbesprechung` ("Absage Frau Serrette"), which the later
+  `2025-10-24` note ("Eberhard übernimmt die Kommunikation mit Frau Serette")
+  and the post-workshop mail contradict. Only the post-workshop mail's
+  statement is used (G24 point 5), and the cancellation is not asserted.
+- **`Projektende` dates from the Steckbrief template** — same reason as
+  Wave 4: the field is revised through changelog entries rather than holding
+  a stable value (Containerbasierte Bereitstellung alone moves twice in 2026).
+- **Named `Projektleitung` persons** outside the "Neue Wege mit KI" project,
+  where they are stated in prose rather than in an `@mention` template field.
+- **`Funktionspostfach.md`, `Raumbuchung.md`, `Programm-Flyer.md`,
+  `Übersicht Besprechungsnotizen und Aufgaben.md`, `Projektorganisation.md`,
+  `Arbeitsbereich Bedarfe und Best Practice.md`** are near-empty task lists,
+  screenshots or Confluence macros; they appear in `must_cite_file_names`
+  where a curator would expect them but carry no point of their own.
+- **Status for the non-Steckbrief pages** (`Barrierefreie IT umsetzen`,
+  `Website KI an der JLU`, …) — those pages use a different template with no
+  status field; no status was asserted for them.
+
+### Artifacts
+
+- `eval/golden/global-synthesis-de.jsonl` — 24 rows (gitignored, never
+  `git add`ed); copied to the main checkout at
+  `/home/steffen/git/JustRAG/eval/golden/global-synthesis-de.jsonl` so both
+  working copies hold the same fixture.
+- `.superpowers/sdd/2026-09-06-rag-sota-wave5/t9-smoke.json`, `t9-smoke.log` —
+  the single G13 smoke.
+- `.superpowers/sdd/2026-09-06-rag-sota-wave5/t9-files.txt`, `t9-status.txt` —
+  the read-only corpus listings the curation was done against.
+- `.superpowers/sdd/2026-09-06-rag-sota-wave5/t9-append-rows.py` — the authored
+  rows in source form, so the gitignored jsonl is reproducible from a tracked
+  worktree artifact.
