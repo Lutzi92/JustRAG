@@ -167,6 +167,85 @@ func TestOverview_StaleShareIsZeroWithoutFiles(t *testing.T) {
 	}
 }
 
+// TestOverview_AggregateSyncSucceededRequiresEveryKind is the regression test
+// for W4-R9: a KB with a healthy RSS feed AND a git source that has NEVER
+// succeeded must not report an aggregate SyncSucceeded=true just because one
+// kind is fine. Mutation: change allSyncKindsSucceeded back to "at least one
+// kind succeeded" (the pre-W4-R9 ANY semantics) → this fails.
+func TestOverview_AggregateSyncSucceededRequiresEveryKind(t *testing.T) {
+	store := &fakeStore{
+		kbs: []KBBase{{ID: "kb-1", Name: "Alpha", CreatedAt: "2026-01-01T00:00:00Z"}},
+		syncStats: map[string]SyncStats{
+			"kb-1": {
+				LastSuccessAt: strptr("2026-09-05T01:00:00Z"),
+				LastAttemptAt: strptr("2026-09-06T02:00:00Z"),
+				Failing:       true,
+				Kinds:         []string{"rss", "git"},
+				ByKind: []SyncKindStatus{
+					{Kind: "rss", LastSyncAt: strptr("2026-09-05T01:00:00Z"), SyncSucceeded: true, SourceCount: 1},
+					{Kind: "git", LastSyncAt: strptr("2026-09-06T02:00:00Z"), SyncSucceeded: false, SyncFailing: true, SourceCount: 1},
+				},
+			},
+		},
+	}
+	svc := NewService(store, nil)
+	resp, err := svc.Overview(context.Background())
+	if err != nil {
+		t.Fatalf("Overview: %v", err)
+	}
+	row := resp.Rows[0]
+	if row.SyncSucceeded {
+		t.Error("aggregate syncSucceeded must be false — the git kind has never succeeded")
+	}
+	if len(row.SyncByKind) != 2 {
+		t.Fatalf("syncByKind = %+v, want two entries", row.SyncByKind)
+	}
+	var gitStatus *SyncKindStatus
+	for i := range row.SyncByKind {
+		if row.SyncByKind[i].Kind == "git" {
+			gitStatus = &row.SyncByKind[i]
+		}
+	}
+	if gitStatus == nil {
+		t.Fatal("no git entry in syncByKind")
+	}
+	if gitStatus.SyncSucceeded {
+		t.Error("git kind syncSucceeded must be false")
+	}
+}
+
+// TestAllSyncKindsSucceeded exercises the helper directly, including the
+// empty-input edge case (a KB with no sources has no aggregate row at all,
+// but the helper itself must not read "nothing to check" as "all succeeded").
+func TestAllSyncKindsSucceeded(t *testing.T) {
+	cases := []struct {
+		name   string
+		byKind []SyncKindStatus
+		want   bool
+	}{
+		{"no kinds", nil, false},
+		{"single succeeded kind", []SyncKindStatus{{Kind: "rss", SyncSucceeded: true}}, true},
+		{"single never-succeeded kind", []SyncKindStatus{{Kind: "git", SyncSucceeded: false}}, false},
+		{
+			"one succeeded, one never-succeeded",
+			[]SyncKindStatus{{Kind: "rss", SyncSucceeded: true}, {Kind: "git", SyncSucceeded: false}},
+			false,
+		},
+		{
+			"all succeeded",
+			[]SyncKindStatus{{Kind: "rss", SyncSucceeded: true}, {Kind: "confluence", SyncSucceeded: true}},
+			true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := allSyncKindsSucceeded(c.byKind); got != c.want {
+				t.Errorf("allSyncKindsSucceeded(%+v) = %v, want %v", c.byKind, got, c.want)
+			}
+		})
+	}
+}
+
 func TestOverview_SyncStatsErrorPropagates(t *testing.T) {
 	svc := NewService(&fakeStore{syncErr: errors.New("sync stats db down")}, &fakeInspector{})
 	if _, err := svc.Overview(context.Background()); err == nil {
@@ -180,7 +259,13 @@ func TestOverviewHandler_FreshnessJSONShape(t *testing.T) {
 		kbs:     []KBBase{{ID: "kb-1", Name: "Alpha", CreatedAt: "2026-01-01T00:00:00Z"}},
 		fileMap: map[string]FileStats{"kb-1": {FileCount: 4, StaleFileCount: 1, OldestFileAt: strptr("2020-01-01T00:00:00Z")}},
 		syncStats: map[string]SyncStats{
-			"kb-1": {LastSuccessAt: strptr("2026-09-05T01:00:00Z"), Kinds: []string{"rss"}},
+			"kb-1": {
+				LastSuccessAt: strptr("2026-09-05T01:00:00Z"),
+				Kinds:         []string{"rss"},
+				ByKind: []SyncKindStatus{
+					{Kind: "rss", LastSyncAt: strptr("2026-09-05T01:00:00Z"), SyncSucceeded: true, SourceCount: 1},
+				},
+			},
 		},
 	}
 	h := NewHandler(NewService(store, nil))
@@ -194,13 +279,14 @@ func TestOverviewHandler_FreshnessJSONShape(t *testing.T) {
 	var payload struct {
 		StaleDays int `json:"staleDays"`
 		Rows      []struct {
-			OldestFileAt   *string  `json:"oldestFileAt"`
-			StaleFileCount int      `json:"staleFileCount"`
-			StaleShare     float64  `json:"staleShare"`
-			LastSyncAt     *string  `json:"lastSyncAt"`
-			SyncFailing    bool     `json:"syncFailing"`
-			SyncSucceeded  bool     `json:"syncSucceeded"`
-			SyncKinds      []string `json:"syncKinds"`
+			OldestFileAt   *string          `json:"oldestFileAt"`
+			StaleFileCount int              `json:"staleFileCount"`
+			StaleShare     float64          `json:"staleShare"`
+			LastSyncAt     *string          `json:"lastSyncAt"`
+			SyncFailing    bool             `json:"syncFailing"`
+			SyncSucceeded  bool             `json:"syncSucceeded"`
+			SyncKinds      []string         `json:"syncKinds"`
+			SyncByKind     []SyncKindStatus `json:"syncByKind"`
 		} `json:"rows"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
@@ -221,5 +307,8 @@ func TestOverviewHandler_FreshnessJSONShape(t *testing.T) {
 	}
 	if len(row.SyncKinds) != 1 || row.SyncKinds[0] != "rss" {
 		t.Errorf("syncKinds wrong: %+v", row.SyncKinds)
+	}
+	if len(row.SyncByKind) != 1 || row.SyncByKind[0].Kind != "rss" || !row.SyncByKind[0].SyncSucceeded {
+		t.Errorf("syncByKind wrong: %+v", row.SyncByKind)
 	}
 }

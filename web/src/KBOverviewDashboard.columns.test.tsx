@@ -148,3 +148,67 @@ describe('KBOverviewDashboard freshness columns', () => {
         expect(row.textContent).toContain('—');
     });
 });
+
+// Per-kind sync status (Wave-4 Task 7 / W4-R9): a KB whose RSS feed has
+// succeeded but whose git source has NEVER succeeded must show the git
+// status — not the healthy RSS one — so a single good source can no longer
+// mask a source that has never synced at all.
+const perKindOverview = {
+    rows: [
+        {
+            id: 'kb-4', name: 'Delta KB', ownerName: 'Dana', ownerId: 'user-4', ownerUsername: 'dana',
+            isGlobal: false, isPublished: true, fileCount: 3, totalSizeBytes: 300,
+            failedFileCount: 0, processingFileCount: 0, webTurns: 0, apiTurns: 0, chatCount: 0, createdAt: '2026-01-01T00:00:00Z',
+            lastSyncAt: '2026-09-01T00:00:00Z', syncSucceeded: false, syncFailing: false, syncKinds: ['rss', 'git'],
+            syncByKind: [
+                { kind: 'rss', lastSyncAt: '2026-09-01T00:00:00Z', syncSucceeded: true, syncFailing: false, sourceCount: 1 },
+                { kind: 'git', lastSyncAt: '2026-09-06T02:00:00Z', syncSucceeded: false, syncFailing: false, sourceCount: 1 },
+            ],
+        },
+    ],
+    queueSummary: {},
+    timestamp: '2026-09-06T12:00:00Z',
+    staleDays: 180,
+};
+
+describe('KBOverviewDashboard per-kind sync status (Wave-4 Task 7)', () => {
+    beforeEach(() => {
+        installMemoryStorage();
+        mockedAxios.get = vi.fn().mockResolvedValue({ data: perKindOverview });
+        mockedAxios.delete = vi.fn().mockResolvedValue({});
+        mockedAxios.patch = vi.fn().mockResolvedValue({ data: {} });
+        mockedAxios.post = vi.fn().mockResolvedValue({ status: 204 });
+    });
+
+    it('shows the worst kind (never-succeeded beats a healthy kind) in the cell', async () => {
+        await openColumnsMenuAndEnableAll('Delta KB');
+
+        const row = screen.getByRole('row', { name: /Delta KB/ });
+        // rss succeeded; git never has. The cell must surface git — the
+        // worse of the two — not the healthy rss kind.
+        expect(row.textContent).toContain('syncKindLabel_git');
+        expect(row.textContent).not.toContain('syncKindLabel_rss');
+
+        const badge = row.querySelector('[data-testid="kb-sync-failing-badge"]');
+        expect(badge).not.toBeNull();
+        // The never-succeeded badge is distinct from the generic "currently
+        // failing" one — an operator must be able to tell "has not run yet /
+        // has never worked" apart from "was fine, is failing now".
+        expect(badge?.getAttribute('title')).toBe('syncNeverSucceeded');
+    });
+
+    it('lists every kind with its own last-sync time in the tooltip', async () => {
+        await openColumnsMenuAndEnableAll('Delta KB');
+
+        const row = screen.getByRole('row', { name: /Delta KB/ });
+        const cells = Array.from(row.querySelectorAll('td'));
+        const syncCell = cells.find((c) => c.getAttribute('title')?.includes('syncKindLabel_rss'));
+        expect(syncCell).toBeTruthy();
+
+        const title = syncCell!.getAttribute('title')!;
+        expect(title).toContain('2026-09-01');
+        expect(title).toContain('syncKindLabel_git');
+        expect(title).toContain('2026-09-06');
+        expect(title).toContain('syncNeverSucceeded');
+    });
+});

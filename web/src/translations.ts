@@ -970,6 +970,14 @@ export const translations = {
     colStaleShare: { de: 'Veraltet', en: 'Stale' },
     colLastSync: { de: 'Letzte Synchronisierung', en: 'Last sync' },
     kbSyncFailing: { de: 'Synchronisierung fehlerhaft', en: 'Sync failing' },
+    // Per-kind sync status (Wave-4 Task 7 / W4-R9): a KB with several source
+    // kinds shows the worst one in the lastSync cell and lists all of them
+    // in its tooltip, so one healthy RSS feed cannot mask a git/Confluence
+    // source that has never synced.
+    syncNeverSucceeded: { de: 'Noch nie erfolgreich synchronisiert', en: 'Never succeeded' },
+    syncKindLabel_rss: { de: 'RSS', en: 'RSS' },
+    syncKindLabel_confluence: { de: 'Confluence', en: 'Confluence' },
+    syncKindLabel_git: { de: 'Git-Repository', en: 'Git repository' },
     // KB Overview — superadmin actions
     colActions: { de: 'Aktionen', en: 'Actions' },
     kbActionDelete: { de: 'KB löschen', en: 'Delete KB' },

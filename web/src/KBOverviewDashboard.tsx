@@ -16,6 +16,17 @@ interface QueueStats {
     failed: number;
 }
 
+// Per-source-kind sync status (Wave-4 Task 7 / W4-R9). One entry per kind
+// ("rss" | "confluence" | "git") the KB actually has sources of — a healthy
+// RSS feed must not hide a git source that has never succeeded.
+interface SyncKindStatus {
+    kind: string;
+    lastSyncAt?: string;
+    syncSucceeded: boolean;
+    syncFailing: boolean;
+    sourceCount: number;
+}
+
 interface KBRow {
     id: string;
     name: string;
@@ -43,6 +54,9 @@ interface KBRow {
     syncSucceeded?: boolean;
     syncFailing?: boolean;
     syncKinds?: string[];
+    // Per-kind breakdown (Wave-4 Task 7). Empty/absent for a KB with no
+    // external sources, same as syncKinds above.
+    syncByKind?: SyncKindStatus[];
 }
 
 interface OverviewResponse {
@@ -85,6 +99,44 @@ function mergedActivityIso(row: KBRow): string | undefined {
     if (Number.isNaN(a)) return row.lastTurnAt;
     if (Number.isNaN(b)) return row.lastFileUploadAt;
     return a >= b ? row.lastFileUploadAt : row.lastTurnAt;
+}
+
+// syncKindRank orders a per-kind sync status from worst to best: a kind that
+// has never succeeded is worse than one that is currently failing but has
+// succeeded before, which is worse than a healthy kind (W4-R9 — the whole
+// point is that a single healthy kind must not mask a worse one).
+function syncKindRank(k: SyncKindStatus): number {
+    if (!k.syncSucceeded) return 0;
+    if (k.syncFailing) return 1;
+    return 2;
+}
+
+// The worst-ranked entry in row.syncByKind, or undefined for a KB with no
+// per-kind breakdown (no external sources, or an older backend response).
+function worstSyncKind(row: KBRow): SyncKindStatus | undefined {
+    if (!row.syncByKind || row.syncByKind.length === 0) return undefined;
+    return [...row.syncByKind].sort((a, b) => syncKindRank(a) - syncKindRank(b))[0];
+}
+
+// Tooltip text listing EVERY sync kind with its own last-sync time (raw ISO,
+// matching the other columns' title convention) — the cell above shows only
+// the worst kind, this is where an operator finds the other ones. Falls back
+// to the pre-Wave-4 syncKinds + single lastSyncAt tooltip when no per-kind
+// breakdown is present.
+function syncTooltip(row: KBRow, t: (key: string) => string): string | undefined {
+    if (row.syncByKind && row.syncByKind.length > 0) {
+        return row.syncByKind
+            .map((k) => {
+                const label = t(`syncKindLabel_${k.kind}`);
+                const when = k.lastSyncAt ?? '—';
+                return k.syncSucceeded ? `${label}: ${when}` : `${label}: ${when} (${t('syncNeverSucceeded')})`;
+            })
+            .join(' · ');
+    }
+    // syncKinds is the missing half of "5 days ago": which source kinds
+    // that timestamp describes (rss / confluence / git).
+    return [row.syncKinds?.length ? row.syncKinds.join(', ') : null, row.lastSyncAt]
+        .filter(Boolean).join(' · ') || undefined;
 }
 
 // Aktivität = every accepted turn on every surface. One combined column
@@ -341,6 +393,29 @@ export default function KBOverviewDashboard() {
             case 'staleShare':
                 return row.staleShare != null ? `${Math.round(row.staleShare * 100)}%` : '—';
             case 'lastSyncAt': {
+                // W4-R9: with a per-kind breakdown, show the WORST kind
+                // (never-succeeded beats currently-failing beats healthy) so
+                // one healthy RSS feed cannot hide a git/Confluence source
+                // that has never synced. Falls back to the pre-Wave-4
+                // aggregate-only rendering when no breakdown is present.
+                const worst = worstSyncKind(row);
+                if (worst) {
+                    const neverSucceeded = !worst.syncSucceeded;
+                    const badge = neverSucceeded || worst.syncFailing;
+                    return (
+                        <>
+                            {badge && (
+                                <span
+                                    data-testid="kb-sync-failing-badge"
+                                    title={neverSucceeded ? t('syncNeverSucceeded') : t('kbSyncFailing')}
+                                >
+                                    <AlertTriangle size={14} style={{ verticalAlign: 'middle', marginRight: 4, color: 'var(--error-text)' }} />
+                                </span>
+                            )}
+                            {t(`syncKindLabel_${worst.kind}`)}: {worst.lastSyncAt ? formatRelative(worst.lastSyncAt, language) : '—'}
+                        </>
+                    );
+                }
                 if (!row.lastSyncAt) return '—';
                 // syncSucceeded=false means the shown time is only the last
                 // ATTEMPT (no success yet) — flag it the same way a currently
@@ -519,11 +594,7 @@ export default function KBOverviewDashboard() {
                                                             : c.key === 'staleShare'
                                                                 ? `${row.staleFileCount ?? 0}/${row.fileCount} > ${data?.staleDays ?? 180}d`
                                                                 : c.key === 'lastSyncAt'
-                                                                    // syncKinds is the missing half of "5 days ago":
-                                                                    // which source kinds that timestamp describes
-                                                                    // (rss / confluence / git).
-                                                                    ? [row.syncKinds?.length ? row.syncKinds.join(', ') : null, row.lastSyncAt]
-                                                                        .filter(Boolean).join(' · ') || undefined
+                                                                    ? syncTooltip(row, t)
                                                                     : undefined;
                                             return (
                                                 <td key={c.key} style={cellStyle} title={title}>
