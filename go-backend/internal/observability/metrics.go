@@ -2707,3 +2707,46 @@ func RecordConflictSurfacing(outcome string) {
 func ConflictSurfacingTotalForTest() *prometheus.CounterVec {
 	return conflictSurfacingTotal
 }
+
+// --- Ingest prompt-injection screening (W5-R8) -----------------------------
+
+var ingestInjectionFlagTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_ingest_injection_flag_total",
+		Help: "Files flagged by the ingest-time prompt-injection screen, " +
+			"labelled by the file's origin (rss, confluence, git, crawl — " +
+			"user uploads are never screened). The screen is advisory: a " +
+			"flag never blocks ingestion, changes chunking, or alters " +
+			"retrieval, so this counter measures how much instruction-" +
+			"shaped text an external corpus is absorbing, not how much was " +
+			"rejected.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"origin"},
+)
+
+// ingestInjectionKnownOrigins bounds the label cardinality: origin comes
+// from a files row, so an unexpected value must not mint a new series.
+var ingestInjectionKnownOrigins = map[string]bool{
+	"rss":        true,
+	"confluence": true,
+	"git":        true,
+	"crawl":      true,
+}
+
+// RecordIngestInjectionFlag increments the per-origin counter for one file
+// the ingest screen flagged. An origin outside the screened set is dropped
+// rather than recorded: only those four are ever screened, so a value here
+// that is not in the map means the caller's origin gate has drifted.
+func RecordIngestInjectionFlag(origin string) {
+	if !ingestInjectionKnownOrigins[origin] {
+		return
+	}
+	ingestInjectionFlagTotal.WithLabelValues(origin).Inc()
+}
+
+// IngestInjectionFlagTotalForTest exposes the screening counter to other
+// test packages (internal/processor). Mirrors AgenticDecisionTotalForTest.
+func IngestInjectionFlagTotalForTest() *prometheus.CounterVec {
+	return ingestInjectionFlagTotal
+}

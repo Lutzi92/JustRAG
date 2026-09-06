@@ -401,3 +401,50 @@ describe('KBOverviewDashboard unknown sync kind (F5)', () => {
         expect(row.textContent).toContain('syncKindLabel_git');
     });
 });
+
+// Wave-5 Task 6: the ingest prompt-injection screening count. It rides the
+// always-visible files column's tooltip rather than a column of its own — a
+// flag is advisory, so it must not cost table width.
+describe('KBOverviewDashboard injection screening count', () => {
+    const injectionOverview = {
+        ...overview,
+        rows: [
+            { ...overview.rows[0], injectionFlagged: 3 },
+            // kb-2 omits the field entirely, as a pod on the previous image
+            // would: the tooltip must read 0, not "undefined".
+            overview.rows[1],
+        ],
+    };
+
+    beforeEach(() => {
+        installMemoryStorage();
+        mockedAxios.get = vi.fn().mockResolvedValue({ data: injectionOverview });
+        mockedAxios.delete = vi.fn().mockResolvedValue({});
+        mockedAxios.patch = vi.fn().mockResolvedValue({ data: {} });
+        mockedAxios.post = vi.fn().mockResolvedValue({ status: 204 });
+    });
+
+    it('puts the flagged count in the files column tooltip', async () => {
+        render(<KBOverviewDashboard />);
+        await waitFor(() => expect(screen.getByText('Alpha KB')).toBeTruthy());
+
+        const rows = screen.getAllByRole('row').slice(1);
+        const alphaRow = rows.find((r) => r.textContent?.includes('Alpha KB'))!;
+        const alphaFilesCell = Array.from(alphaRow.querySelectorAll('td'))
+            .find((td) => td.getAttribute('title')?.startsWith('colInjectionFlagged'))!;
+        expect(alphaFilesCell.getAttribute('title')).toBe('colInjectionFlagged: 3');
+        // The cell still shows the file count itself — the tooltip is additive.
+        expect(alphaFilesCell.textContent).toBe('10');
+    });
+
+    it('reads 0 for a row that sends no injectionFlagged field', async () => {
+        render(<KBOverviewDashboard />);
+        await waitFor(() => expect(screen.getByText('Beta KB')).toBeTruthy());
+
+        const rows = screen.getAllByRole('row').slice(1);
+        const betaRow = rows.find((r) => r.textContent?.includes('Beta KB'))!;
+        const betaFilesCell = Array.from(betaRow.querySelectorAll('td'))
+            .find((td) => td.getAttribute('title')?.startsWith('colInjectionFlagged'))!;
+        expect(betaFilesCell.getAttribute('title')).toBe('colInjectionFlagged: 0');
+    });
+});

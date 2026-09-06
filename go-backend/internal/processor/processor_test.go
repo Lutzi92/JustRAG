@@ -42,6 +42,14 @@ type mockStore struct {
 	stages          map[string]stageInfo
 	parseReports    map[string][]byte
 	lastStageDetail map[string]string
+
+	// Ingest prompt-injection screening (W5-R8). origins is the seeded
+	// files.origin per file id (default "upload" for an unseeded id, the
+	// production default); the rest record what screenIfExternal did.
+	origins          map[string]string
+	originCalls      int
+	injectionDetails map[string][]byte
+	injectionCleared []string
 }
 
 func (m *mockStore) UpdateFileStatus(_ context.Context, _ string, status string) error {
@@ -89,6 +97,27 @@ func (m *mockStore) UpdateFileStageDetail(_ context.Context, fileID, detail stri
 	return nil
 }
 
+func (m *mockStore) GetFileOrigin(_ context.Context, fileID string) (string, error) {
+	m.originCalls++
+	if o, ok := m.origins[fileID]; ok {
+		return o, nil
+	}
+	return "upload", nil
+}
+
+func (m *mockStore) SetInjectionFlag(_ context.Context, fileID string, detail []byte) error {
+	if m.injectionDetails == nil {
+		m.injectionDetails = make(map[string][]byte)
+	}
+	m.injectionDetails[fileID] = detail
+	return nil
+}
+
+func (m *mockStore) ClearInjectionFlag(_ context.Context, fileID string) error {
+	m.injectionCleared = append(m.injectionCleared, fileID)
+	return nil
+}
+
 type contextCapturingStore struct {
 	statusCtxErrs []error
 }
@@ -120,6 +149,18 @@ func (s *contextCapturingStore) SetFileParseReport(context.Context, string, []by
 }
 
 func (s *contextCapturingStore) UpdateFileStageDetail(context.Context, string, string) error {
+	return nil
+}
+
+func (s *contextCapturingStore) GetFileOrigin(context.Context, string) (string, error) {
+	return "upload", nil
+}
+
+func (s *contextCapturingStore) SetInjectionFlag(context.Context, string, []byte) error {
+	return nil
+}
+
+func (s *contextCapturingStore) ClearInjectionFlag(context.Context, string) error {
 	return nil
 }
 
@@ -925,6 +966,14 @@ func (s *gateTestStore) ClearFileStage(_ context.Context, fileID string) error {
 	return nil
 }
 func (s *gateTestStore) SetFileParseReport(context.Context, string, []byte) error { return nil }
+
+// The large-file gate test only ingests spreadsheets, which never reach the
+// screening hook — these three exist to satisfy ProcessorStore.
+func (s *gateTestStore) GetFileOrigin(context.Context, string) (string, error) {
+	return "upload", nil
+}
+func (s *gateTestStore) SetInjectionFlag(context.Context, string, []byte) error { return nil }
+func (s *gateTestStore) ClearInjectionFlag(context.Context, string) error       { return nil }
 
 func (s *gateTestStore) UpdateFileStageDetail(_ context.Context, fileID, detail string) error {
 	s.mu.Lock()

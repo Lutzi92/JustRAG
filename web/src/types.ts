@@ -357,6 +357,23 @@ export interface FileEntry {
     stageIndex?: number;
     stageTotal?: number;
     stageDetail?: string;
+    // Ingest prompt-injection screening verdict (migration 0072, W5-R8).
+    // Advisory only: a flagged file was ingested, chunked and is retrieved
+    // exactly like any other — the flag says the document carries
+    // instruction-shaped text, nothing more. Only files from external
+    // sources (rss/confluence/git/crawl) are ever screened; own uploads
+    // never are, so injectionFlag is always false for them.
+    injectionFlag?: boolean;
+    // Snake_case field names verbatim from the Go Finding struct's JSON
+    // tags (go-backend/internal/promptsafety/screen.go) — do not camelCase
+    // them. snippet is untrusted, document-derived text: render it as data
+    // (a tooltip), never as markup and never back into a prompt.
+    injectionDetail?: {
+        rule?: string;
+        position?: number;
+        snippet?: string;
+        screened_at?: string;
+    };
 }
 
 // Tabular file detail (Phase 4) — mirrors tabular.FileTabularDTO / TableDTO /

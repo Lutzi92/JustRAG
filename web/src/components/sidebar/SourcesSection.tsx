@@ -1,7 +1,7 @@
 import React, { memo } from 'react';
 import {
     Link, Globe, Bot, FileText, Download, Trash2,
-    Rss, RefreshCw, Pause, Play, Eye, BookOpen, GitBranch, Table as TableIcon
+    Rss, RefreshCw, Pause, Play, Eye, BookOpen, GitBranch, Table as TableIcon, ShieldAlert
 } from 'lucide-react';
 import type { FileEntry, RssFeed, ConfluenceSource, GitRepoSource, SyncSchedule } from '../../types';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -69,6 +69,18 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
     const rssFeedFiles = (feedId: string) => files.filter(f => f.rssFeedId === feedId);
 
     const failedCount = files.filter(f => f.status === 'error').length;
+    // The ingest prompt-injection screen only ever runs on external origins
+    // (rss/confluence/git/crawl), and three of those four are NOT in
+    // nonRssFiles below — their files are folded into the feed/source rows.
+    // So the per-file badge alone would be invisible for exactly the sources
+    // that get screened; this header count is what makes them visible.
+    const injectionFlaggedCount = files.filter(f => f.injectionFlag).length;
+    // Untrusted, document-derived text: it goes into title/aria-label as a
+    // plain string and is never rendered as markup.
+    const injectionLabel = (file: FileEntry) => {
+        const snippet = file.injectionDetail?.snippet;
+        return snippet ? `${t('fileInjectionFlagged')}: ${snippet}` : t('fileInjectionFlagged');
+    };
     const errorLabel = (file: FileEntry) => {
         if (file.errorStage && ERROR_STAGE_KEYS[file.errorStage]) return t(ERROR_STAGE_KEYS[file.errorStage]);
         return file.errorMessage || t('fileErrorUnknown');
@@ -86,6 +98,16 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                     >
                         <RefreshCw size={12} aria-hidden="true" /> {t('retryAllFailed')} ({failedCount})
                     </button>
+                )}
+                {injectionFlaggedCount > 0 && (
+                    <span
+                        className="sidebar-left__injection-summary"
+                        title={t('fileInjectionFlaggedHelp')}
+                        aria-label={`${t('fileInjectionFlagged')} (${injectionFlaggedCount})`}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', color: 'var(--warning-text, var(--text-secondary))', fontSize: '0.75rem' }}
+                    >
+                        <ShieldAlert size={12} aria-hidden="true" /> {injectionFlaggedCount}
+                    </span>
                 )}
             </div>
 
@@ -163,6 +185,16 @@ const SourcesSectionComp: React.FC<SourcesSectionProps> = ({
                                         title={file.errorMessage || undefined}
                                     >
                                         {errorLabel(file)}
+                                    </div>
+                                )}
+                                {file.injectionFlag && (
+                                    <div
+                                        className="sidebar-left__file-injection"
+                                        title={injectionLabel(file)}
+                                        aria-label={injectionLabel(file)}
+                                        style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: 'var(--warning-text, var(--text-secondary))', fontSize: '0.75rem' }}
+                                    >
+                                        <ShieldAlert size={12} aria-hidden="true" /> {t('fileInjectionFlagged')}
                                     </div>
                                 )}
                                 {file.currentStage && (

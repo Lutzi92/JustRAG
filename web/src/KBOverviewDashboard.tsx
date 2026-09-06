@@ -61,6 +61,10 @@ interface KBRow {
     // RAGAS 24h sample stats (Wave-5 Task 2). Absent for a KB with no
     // samples in the trailing 24h window — distinct from a zeroed block.
     ragas?: RagasStats;
+    // Files the ingest prompt-injection screen flagged (Wave-5 Task 6).
+    // Always sent, 0 for a KB with no external sources — optional here only
+    // so a pod serving the previous image does not break the column.
+    injectionFlagged?: number;
 }
 
 interface RagasStats {
@@ -675,7 +679,13 @@ export default function KBOverviewDashboard() {
                                                 cellStyle.whiteSpace = 'normal';
                                                 cellStyle.minWidth = '14rem';
                                             }
-                                            const title = c.key === 'lastActivity'
+                                            // The files column doubles as the screening
+                            // surface: a flagged file is advisory, so it gets
+                            // a tooltip on a count that is already there
+                            // rather than a column of its own.
+                            const title = c.key === 'fileCount'
+                                ? `${t('colInjectionFlagged')}: ${row.injectionFlagged ?? 0}`
+                                : c.key === 'lastActivity'
                                                 ? mergedActivityIso(row)
                                                 : c.key === 'activity'
                                                     ? `Web: ${row.webTurns ?? 0} · API: ${row.apiTurns ?? 0}`

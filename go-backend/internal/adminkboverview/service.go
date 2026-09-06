@@ -48,6 +48,11 @@ type FileStats struct {
 	// StaleFileCount counts files whose effective date is older than the
 	// kb_stale_days threshold the service passes into the query.
 	StaleFileCount int
+	// InjectionFlagged counts files the ingest prompt-injection screen
+	// flagged (files.injection_flag, W5-R8). Advisory: it says how much
+	// instruction-shaped text this corpus absorbed from external sources,
+	// not that anything was blocked.
+	InjectionFlagged int
 }
 
 // SyncStats are the per-KB source-sync aggregates, unioned over the three
@@ -193,6 +198,10 @@ type KBRow struct {
 	OldestFileAt   *string `json:"oldestFileAt,omitempty"`
 	StaleFileCount int     `json:"staleFileCount"`
 	StaleShare     float64 `json:"staleShare"`
+	// InjectionFlagged is how many of this KB's files the ingest
+	// prompt-injection screen flagged (Wave-5 Task 6). Always present, 0
+	// for a KB with no external sources or with screening switched off.
+	InjectionFlagged int `json:"injectionFlagged"`
 	// LastSyncAt is the newest successful source sync, falling back to the
 	// newest attempt when no success is recorded yet. SyncFailing flags a
 	// source with consecutive failures; SyncKinds names the source kinds
@@ -316,6 +325,7 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 			row.LastFileUploadAt = fs.LastFileUploadAt
 			row.OldestFileAt = fs.OldestFileAt
 			row.StaleFileCount = fs.StaleFileCount
+			row.InjectionFlagged = fs.InjectionFlagged
 			// Guard the division: a KB with no files has no stale share,
 			// and float64(0)/float64(0) is NaN — which encoding/json
 			// refuses to marshal, i.e. one empty KB would 500 the whole

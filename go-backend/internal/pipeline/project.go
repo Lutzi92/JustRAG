@@ -262,6 +262,14 @@ var defaultOn = map[string]bool{
 	"citation_validation_enabled":          true,
 	"chat_corpus_table_router_llm_enabled": true,
 	"chat_tabular_router_enabled":          true,
+	// ingest_screening_enabled is an ingest-time kill switch (Wave-5 Task
+	// 6, processor/screening.go's resolveScreeningEnabled). No node
+	// activates on it and it is in no preset bundle, so guardedBoolKeys()
+	// does not check it; the entry is here because boolVal consults this
+	// map for EVERY key the projection is ever asked about, and reporting
+	// a default-ON key as off is the one drift this table exists to
+	// prevent.
+	"ingest_screening_enabled": true,
 	// factcheck_in_chat is the actual master toggle for post-response
 	// factchecking (readBool default true, siteconfig.go:224) and is
 	// NodeFactuality's Keys[0]. Missing this entry would report

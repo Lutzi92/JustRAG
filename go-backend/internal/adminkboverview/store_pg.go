@@ -64,6 +64,7 @@ type fileStatRow struct {
 	LastFileUploadAt    *string `db:"last_file_upload_at"`
 	OldestFileAt        *string `db:"oldest_file_at"`
 	StaleFileCount      int     `db:"stale_file_count"`
+	InjectionFlagged    int     `db:"injection_flagged"`
 }
 
 // FileStatsByKB returns per-KB file aggregates keyed by kb_id (text).
@@ -89,7 +90,8 @@ func (s *PGStore) FileStatsByKB(ctx context.Context, staleDays int) (map[string]
 		       to_char(MIN(COALESCE(published_at, created_at)) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS oldest_file_at,
 		       COUNT(*) FILTER (
 		           WHERE COALESCE(published_at, created_at) < NOW() - make_interval(days => $1)
-		       )::int                                                               AS stale_file_count
+		       )::int                                                               AS stale_file_count,
+		       COUNT(*) FILTER (WHERE injection_flag)::int                          AS injection_flagged
 		FROM files
 		GROUP BY kb_id`
 	rows, err := pgxutil.QueryRows[fileStatRow](ctx, s.pool, sql, staleDays)
@@ -106,6 +108,7 @@ func (s *PGStore) FileStatsByKB(ctx context.Context, staleDays int) (map[string]
 			LastFileUploadAt:    r.LastFileUploadAt,
 			OldestFileAt:        r.OldestFileAt,
 			StaleFileCount:      r.StaleFileCount,
+			InjectionFlagged:    r.InjectionFlagged,
 		}
 	}
 	return out, nil
