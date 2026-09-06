@@ -22,9 +22,13 @@ const recentDocumentsMaxDefault = 50
 // the tool's own text rendering but consumed by chat's recency-listing
 // path (retrieval scoping by file ID).
 type RecentDocRow struct {
-	ID        string
-	Name      string
-	Origin    string
+	ID     string
+	Name   string
+	Origin string
+	// CreatedAt is the file's EFFECTIVE date (effectiveDateExpr): the
+	// document's own publication date when it has one, the ingest
+	// timestamp otherwise. Name kept for compatibility with the chat
+	// recency-listing adapter that consumes it.
 	CreatedAt time.Time
 }
 
@@ -129,8 +133,16 @@ func recentDocumentsHandler(store RecentDocsStore, enabled func(ctx context.Cont
 	}
 }
 
+// effectiveDateExpr is the SQL expression for a file's effective date:
+// its own publication date when the origin carries one (RSS today), the
+// ingest timestamp otherwise. Must stay identical to
+// vector.effectiveDateExpr — the retrieval window filter and this listing
+// have to select the same files, or a "what is new" answer cites documents
+// the listing never mentioned.
+const effectiveDateExpr = "COALESCE(published_at, created_at)"
+
 // PgxRecentDocsStore is the production RecentDocsStore backed by the main
-// DB pool. Keyed on files.created_at (the effective document date).
+// DB pool. Keyed on the effective document date (effectiveDateExpr).
 type PgxRecentDocsStore struct {
 	pool *pgxpool.Pool
 }
@@ -146,10 +158,10 @@ func (s *PgxRecentDocsStore) RecentDocuments(ctx context.Context, kbID string, a
 		return nil, fmt.Errorf("recent_documents: no db pool")
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT id::text, name, origin, created_at
+		`SELECT id::text, name, origin, `+effectiveDateExpr+`
 		   FROM files
-		  WHERE kb_id = $1::uuid AND created_at >= $2 AND created_at <= $3
-		  ORDER BY created_at DESC
+		  WHERE kb_id = $1::uuid AND `+effectiveDateExpr+` >= $2 AND `+effectiveDateExpr+` <= $3
+		  ORDER BY `+effectiveDateExpr+` DESC
 		  LIMIT $4`,
 		kbID, after, before, limit)
 	if err != nil {
@@ -170,10 +182,10 @@ func (s *PgxRecentDocsStore) NameMarkerDocuments(ctx context.Context, kbID, name
 		return nil, fmt.Errorf("recent_documents: no db pool")
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT id::text, name, origin, created_at
+		`SELECT id::text, name, origin, `+effectiveDateExpr+`
 		   FROM files
 		  WHERE kb_id = $1::uuid AND name ~* $2
-		  ORDER BY created_at DESC
+		  ORDER BY `+effectiveDateExpr+` DESC
 		  LIMIT $3`,
 		kbID, nameRegex, limit)
 	if err != nil {

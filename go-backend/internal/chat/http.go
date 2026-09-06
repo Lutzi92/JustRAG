@@ -49,6 +49,7 @@ type Handler struct {
 	tabularCatalog     TabularCatalogSummariser // optional, Phase-3 tabular-guidance gate
 	recencyLister      RecencyLister            // optional, deterministic recency-listing path
 	tabularRouter      *TabularRouter           // optional, deterministic spreadsheet SQL path
+	fileDates          FileDateLookup           // optional, per-turn source freshness dates
 	// raptorDescendants is the Phase F bridge that resolves a set of
 	// RAPTOR summary chunk ids to their transitive leaf descendants.
 	// Used by runPostResponseTasks to feed the citation validator's

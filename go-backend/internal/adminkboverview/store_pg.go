@@ -59,20 +59,37 @@ type fileStatRow struct {
 	FailedFileCount     int     `db:"failed_file_count"`
 	ProcessingFileCount int     `db:"processing_file_count"`
 	LastFileUploadAt    *string `db:"last_file_upload_at"`
+	OldestFileAt        *string `db:"oldest_file_at"`
+	StaleFileCount      int     `db:"stale_file_count"`
 }
 
 // FileStatsByKB returns per-KB file aggregates keyed by kb_id (text).
-func (s *PGStore) FileStatsByKB(ctx context.Context) (map[string]FileStats, error) {
+//
+// staleDays is the caller-resolved kb_stale_days threshold (already clamped);
+// it is passed as a parameter rather than interpolated so the interval cannot
+// become an injection site, and make_interval takes it as a named argument
+// because `NOW() - $1 * INTERVAL '1 day'` needs a cast dance pgx would have to
+// guess at.
+//
+// The staleness and oldest-file columns both key on
+// COALESCE(published_at, created_at) — the same effective-date expression the
+// retrieval date-window filter uses, so "old" here means the same thing it
+// means to the search pipeline.
+func (s *PGStore) FileStatsByKB(ctx context.Context, staleDays int) (map[string]FileStats, error) {
 	const sql = `
 		SELECT kb_id::text                                                          AS kb_id,
 		       COUNT(*)::int                                                        AS file_count,
 		       COALESCE(SUM(size), 0)::bigint                                       AS total_size_bytes,
 		       COUNT(*) FILTER (WHERE status IN ('error','partial'))::int          AS failed_file_count,
 		       COUNT(*) FILTER (WHERE status IN ('pending','processing'))::int      AS processing_file_count,
-		       to_char(MAX(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_file_upload_at
+		       to_char(MAX(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_file_upload_at,
+		       to_char(MIN(COALESCE(published_at, created_at)) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS oldest_file_at,
+		       COUNT(*) FILTER (
+		           WHERE COALESCE(published_at, created_at) < NOW() - make_interval(days => $1)
+		       )::int                                                               AS stale_file_count
 		FROM files
 		GROUP BY kb_id`
-	rows, err := pgxutil.QueryRows[fileStatRow](ctx, s.pool, sql)
+	rows, err := pgxutil.QueryRows[fileStatRow](ctx, s.pool, sql, staleDays)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +101,61 @@ func (s *PGStore) FileStatsByKB(ctx context.Context) (map[string]FileStats, erro
 			FailedFileCount:     r.FailedFileCount,
 			ProcessingFileCount: r.ProcessingFileCount,
 			LastFileUploadAt:    r.LastFileUploadAt,
+			OldestFileAt:        r.OldestFileAt,
+			StaleFileCount:      r.StaleFileCount,
+		}
+	}
+	return out, nil
+}
+
+// syncStatRow scans the source-sync aggregate.
+type syncStatRow struct {
+	KbID          string   `db:"kb_id"`
+	LastSuccessAt *string  `db:"last_success_at"`
+	LastAttemptAt *string  `db:"last_attempt_at"`
+	Failing       bool     `db:"failing"`
+	Kinds         []string `db:"kinds"`
+}
+
+// SyncStatsByKB returns per-KB source-sync aggregates over the three source
+// tables. last_success_at (migration 0071) moves only on a success; the
+// last-attempt column of each table is carried alongside as the display
+// fallback for sources that have not succeeded since the column landed
+// (W3-R10). A KB with no external sources simply has no row.
+func (s *PGStore) SyncStatsByKB(ctx context.Context) (map[string]SyncStats, error) {
+	const sql = `
+		WITH src AS (
+		    SELECT kb_id, 'rss'::text AS kind, last_success_at,
+		           last_polled_at AS last_attempt_at, consecutive_failures
+		      FROM rss_feeds
+		    UNION ALL
+		    SELECT kb_id, 'confluence'::text, last_success_at,
+		           last_synced_at, consecutive_failures
+		      FROM confluence_sources
+		    UNION ALL
+		    SELECT kb_id, 'git'::text, last_success_at,
+		           last_synced_at, consecutive_failures
+		      FROM git_repo_sources
+		)
+		SELECT kb_id::text AS kb_id,
+		       to_char(MAX(last_success_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_success_at,
+		       to_char(MAX(last_attempt_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_attempt_at,
+		       BOOL_OR(COALESCE(consecutive_failures, 0) > 0)                        AS failing,
+		       array_agg(DISTINCT kind)                                              AS kinds
+		FROM src
+		WHERE kb_id IS NOT NULL
+		GROUP BY kb_id`
+	rows, err := pgxutil.QueryRows[syncStatRow](ctx, s.pool, sql)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]SyncStats, len(rows))
+	for _, r := range rows {
+		out[r.KbID] = SyncStats{
+			LastSuccessAt: r.LastSuccessAt,
+			LastAttemptAt: r.LastAttemptAt,
+			Failing:       r.Failing,
+			Kinds:         r.Kinds,
 		}
 	}
 	return out, nil

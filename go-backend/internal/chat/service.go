@@ -117,6 +117,15 @@ type ChatSource struct {
 	NodeKind string `json:"nodeKind,omitempty"`
 	// TreeLevel is 0 for leaves, 1..N for RAPTOR summaries.
 	TreeLevel int `json:"treeLevel,omitempty"`
+	// CreatedAt / PublishedAt are the cited file's dates, filled by
+	// enrichSourceDates (source_dates.go) right before the sources are
+	// emitted and persisted. CreatedAt is the ingest timestamp;
+	// PublishedAt is the document's own publication date and is set only
+	// for origins that carry one (RSS today, W3-R9). Both are omitted
+	// from the JSON when unset, so a deployment without the lookup wired
+	// serialises exactly the same payload as before.
+	CreatedAt   *time.Time `json:"createdAt,omitempty"`
+	PublishedAt *time.Time `json:"publishedAt,omitempty"`
 	// DescendantContents is populated by the chat post-response path
 	// when NodeKind == "summary": the verbatim text of every
 	// transitive leaf descendant under this summary. The citation

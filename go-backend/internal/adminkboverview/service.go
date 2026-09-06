@@ -11,6 +11,8 @@ package adminkboverview
 import (
 	"context"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -40,6 +42,77 @@ type FileStats struct {
 	FailedFileCount     int
 	ProcessingFileCount int
 	LastFileUploadAt    *string
+	// OldestFileAt is MIN(effective date) over the KB's files — how far back
+	// the corpus reaches. Effective date = COALESCE(published_at, created_at).
+	OldestFileAt *string
+	// StaleFileCount counts files whose effective date is older than the
+	// kb_stale_days threshold the service passes into the query.
+	StaleFileCount int
+}
+
+// SyncStats are the per-KB source-sync aggregates, unioned over the three
+// source tables (RSS feeds, Confluence spaces, git repositories).
+type SyncStats struct {
+	// LastSuccessAt is the newest verified success across the KB's sources
+	// (migration 0071). Nil for a KB whose sources have not succeeded since
+	// the column was added — no backfill was possible, so "unknown" is the
+	// honest value.
+	LastSuccessAt *string
+	// LastAttemptAt is the newest ATTEMPT (last_polled_at / last_synced_at),
+	// which a failing sync also refreshes. Used only as the display fallback
+	// when LastSuccessAt is nil (W3-R10).
+	LastAttemptAt *string
+	// Failing is true when any of the KB's sources has consecutive_failures > 0.
+	Failing bool
+	// Kinds lists the source kinds the KB actually has ("rss", "confluence",
+	// "git") so the UI can label the timestamp.
+	Kinds []string
+}
+
+// SiteConfigReader reads one global site_config value. This package needs
+// exactly one key — kb_stale_days, which is global-only: no per-KB registry
+// entry and no overlay (W3-R12).
+type SiteConfigReader interface {
+	GetSiteConfigValue(ctx context.Context, key string) (*string, error)
+}
+
+// Staleness threshold bounds. The clamp exists because a zero or negative
+// value would silently mark every file stale (NOW() - 0 days) and an
+// unbounded one would silently mark nothing stale.
+const (
+	staleDaysKey     = "kb_stale_days"
+	defaultStaleDays = 180
+	minStaleDays     = 1
+	maxStaleDays     = 3650
+)
+
+// resolveStaleDays reads kb_stale_days, falling back to the default on a nil
+// reader, a missing or blank value, an unparseable one, or a read error — an
+// admin panel must still render when site_configs is unreachable.
+func resolveStaleDays(ctx context.Context, cfg SiteConfigReader) int {
+	if cfg == nil {
+		return defaultStaleDays
+	}
+	raw, err := cfg.GetSiteConfigValue(ctx, staleDaysKey)
+	if err != nil {
+		slog.Debug("kboverview: kb_stale_days read failed; using default", "error", err)
+		return defaultStaleDays
+	}
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return defaultStaleDays
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(*raw))
+	if err != nil {
+		slog.Warn("kboverview: kb_stale_days is not an integer; using default", "value", *raw)
+		return defaultStaleDays
+	}
+	if n < minStaleDays {
+		return minStaleDays
+	}
+	if n > maxStaleDays {
+		return maxStaleDays
+	}
+	return n
 }
 
 // ChatStats is the per-KB chat aggregate. Message counts moved to the usage
@@ -83,6 +156,23 @@ type KBRow struct {
 	LastFileUploadAt    *string `json:"lastFileUploadAt,omitempty"`
 	LastTurnAt          *string `json:"lastTurnAt,omitempty"`
 	CreatedAt           string  `json:"createdAt"`
+
+	// Freshness columns (Wave 3 / Task 5). OldestFileAt is the age of the
+	// corpus, StaleFileCount/StaleShare how much of it is older than
+	// kb_stale_days (StaleShare is a 0..1 fraction, 0 for an empty KB).
+	OldestFileAt   *string `json:"oldestFileAt,omitempty"`
+	StaleFileCount int     `json:"staleFileCount"`
+	StaleShare     float64 `json:"staleShare"`
+	// LastSyncAt is the newest successful source sync, falling back to the
+	// newest attempt when no success is recorded yet — SyncSucceeded says
+	// which of the two it is, so a fallback timestamp cannot be mistaken for
+	// a healthy sync. SyncFailing flags a source with consecutive failures;
+	// SyncKinds names the source kinds this KB has (empty for a KB with no
+	// external sources, where LastSyncAt is nil).
+	LastSyncAt    *string  `json:"lastSyncAt,omitempty"`
+	SyncSucceeded bool     `json:"syncSucceeded"`
+	SyncFailing   bool     `json:"syncFailing"`
+	SyncKinds     []string `json:"syncKinds,omitempty"`
 }
 
 // OverviewResponse is the JSON returned by GET /api/admin/kb-overview.
@@ -90,14 +180,19 @@ type OverviewResponse struct {
 	Rows         []KBRow               `json:"rows"`
 	QueueSummary map[string]QueueStats `json:"queueSummary"`
 	Timestamp    string                `json:"timestamp"`
+	// StaleDays is the threshold StaleFileCount/StaleShare were computed
+	// against, echoed so the UI can label the column instead of hardcoding
+	// a number that an operator may have changed.
+	StaleDays int `json:"staleDays"`
 }
 
 // Store is the data dependency. Each method is a single aggregate query.
 type Store interface {
 	ListKBs(ctx context.Context) ([]KBBase, error)
-	FileStatsByKB(ctx context.Context) (map[string]FileStats, error)
+	FileStatsByKB(ctx context.Context, staleDays int) (map[string]FileStats, error)
 	ChatStatsByKB(ctx context.Context) (map[string]ChatStats, error)
 	TurnStatsByKB(ctx context.Context) (map[string]TurnStats, error)
+	SyncStatsByKB(ctx context.Context) (map[string]SyncStats, error)
 }
 
 // queueInspector is the subset of *asynq.Inspector we use (for testability).
@@ -109,12 +204,17 @@ type queueInspector interface {
 type Service struct {
 	store     Store
 	inspector queueInspector
+	cfg       SiteConfigReader
 }
 
 // NewService creates a Service. inspector may be nil (queue summary degrades to zeros).
 func NewService(store Store, inspector queueInspector) *Service {
 	return &Service{store: store, inspector: inspector}
 }
+
+// SetSiteConfig injects the global site_config reader used for kb_stale_days.
+// Optional — without it the staleness threshold is the documented default.
+func (s *Service) SetSiteConfig(cfg SiteConfigReader) { s.cfg = cfg }
 
 // Overview computes the full payload: per-KB rows merged from three aggregates,
 // plus the global queue summary.
@@ -123,7 +223,8 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 	if err != nil {
 		return OverviewResponse{}, err
 	}
-	fileStats, err := s.store.FileStatsByKB(ctx)
+	staleDays := resolveStaleDays(ctx, s.cfg)
+	fileStats, err := s.store.FileStatsByKB(ctx, staleDays)
 	if err != nil {
 		return OverviewResponse{}, err
 	}
@@ -132,6 +233,10 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 		return OverviewResponse{}, err
 	}
 	turnStats, err := s.store.TurnStatsByKB(ctx)
+	if err != nil {
+		return OverviewResponse{}, err
+	}
+	syncStats, err := s.store.SyncStatsByKB(ctx)
 	if err != nil {
 		return OverviewResponse{}, err
 	}
@@ -154,6 +259,15 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 			row.FailedFileCount = fs.FailedFileCount
 			row.ProcessingFileCount = fs.ProcessingFileCount
 			row.LastFileUploadAt = fs.LastFileUploadAt
+			row.OldestFileAt = fs.OldestFileAt
+			row.StaleFileCount = fs.StaleFileCount
+			// Guard the division: a KB with no files has no stale share,
+			// and float64(0)/float64(0) is NaN — which encoding/json
+			// refuses to marshal, i.e. one empty KB would 500 the whole
+			// admin panel.
+			if fs.FileCount > 0 {
+				row.StaleShare = float64(fs.StaleFileCount) / float64(fs.FileCount)
+			}
 		}
 		if cs, ok := chatStats[kb.ID]; ok {
 			row.ChatCount = cs.ChatCount
@@ -163,6 +277,19 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 			row.APITurns = ts.APITurns
 			row.LastTurnAt = ts.LastTurnAt
 		}
+		if ss, ok := syncStats[kb.ID]; ok {
+			row.SyncFailing = ss.Failing
+			row.SyncKinds = ss.Kinds
+			// Prefer the verified success; fall back to the last attempt
+			// only when no success is recorded (pre-0071 rows, or a source
+			// that has never succeeded), and say so via SyncSucceeded.
+			if ss.LastSuccessAt != nil {
+				row.LastSyncAt = ss.LastSuccessAt
+				row.SyncSucceeded = true
+			} else {
+				row.LastSyncAt = ss.LastAttemptAt
+			}
+		}
 		rows = append(rows, row)
 	}
 
@@ -170,6 +297,7 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 		Rows:         rows,
 		QueueSummary: s.queueSummary(),
 		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		StaleDays:    staleDays,
 	}, nil
 }
 

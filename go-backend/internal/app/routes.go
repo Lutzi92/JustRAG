@@ -492,6 +492,9 @@ func registerAdminRoutes(rc *routeCtx) {
 
 	kbOverviewStore := adminkboverview.NewStore(rc.infra.db.Main)
 	kbOverviewSvc := adminkboverview.NewService(kbOverviewStore, rc.asynqInspector)
+	// kb_stale_days is global-only (W3-R12): read straight off the shared
+	// site_config reader, with no per-KB overlay and no registry entry.
+	kbOverviewSvc.SetSiteConfig(rc.chatStore)
 	kbOverviewHandler := adminkboverview.NewHandlerWithActions(kbOverviewSvc, kbOverviewStore, rc.cascadeDeleter)
 	rc.mux.Handle("GET /api/admin/kb-overview", rc.adminChain(kbOverviewHandler.Overview))
 	// Mutating KB actions are superadmin-only: the KB-Übersicht tab itself is
@@ -1141,6 +1144,10 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 		chat.WithTabularRouter(tabularRouter),
 		chat.WithTeamLoader(rc.agentTeamsStore),
 		chat.WithUsageRecorder(usage.NewRecorder(rc.infra.db.Main)),
+		// Freshness dates on the answer's sources: one batched
+		// created_at/published_at lookup per turn, stamped onto the
+		// sources before they are streamed and persisted.
+		chat.WithFileDates(&fileDatesAdapter{store: rc.filesStore}),
 	}
 	if rc.agentDecisionStore != nil {
 		chatOpts = append(chatOpts, chat.WithDecisionRecorder(&decisionRecorderAdapter{store: rc.agentDecisionStore}))
@@ -1368,6 +1375,7 @@ func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 	publicHandler := publicapi.NewHandler(&publicAPIDeps{PGStore: rc.chatStore, kbStore: rc.kbStore}, rc.aiResolver, rc.searchService)
 	publicHandler.SetResearchDeps(rc.chatStore, rc.infra.rdb.Client)
 	publicHandler.SetUsageRecorder(usage.NewRecorder(rc.infra.db.Main))
+	publicHandler.SetFileDates(&fileDatesAdapter{store: rc.filesStore})
 
 	rc.mux.Handle("GET /api/v1/kb", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(publicHandler.ListKBs))))
 	rc.mux.Handle("GET /api/v1/kb/{id}/chats", apiRL.Middleware(apiKeyAuth.Authenticate(
@@ -1555,6 +1563,30 @@ func (a *decisionRecorderAdapter) Record(ctx context.Context, kbID, mode, outcom
 		}
 	}
 	a.store.Record(ctx, kbID, mode, outcome, hops, rounds, latencyMs, entries, teamID, agentID)
+}
+
+// fileDatesAdapter implements chat.FileDateLookup over the main-DB files
+// store. It lives here (routes layer) for the same reason UploadLimits does:
+// internal/files must not import internal/chat, so the two identical little
+// date structs meet in one flat copy, and a drift between them is a
+// compile-time error at this single call site.
+type fileDatesAdapter struct {
+	store *files.PGStore
+}
+
+func (a *fileDatesAdapter) FileDatesByIDs(ctx context.Context, ids []string) (map[string]chat.FileDates, error) {
+	if a.store == nil {
+		return nil, nil
+	}
+	rows, err := a.store.FileDatesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]chat.FileDates, len(rows))
+	for id, d := range rows {
+		out[id] = chat.FileDates{CreatedAt: d.CreatedAt, PublishedAt: d.PublishedAt}
+	}
+	return out, nil
 }
 
 // kbRouterCandidateAdapter implements chat.KBRouterCandidateLister by

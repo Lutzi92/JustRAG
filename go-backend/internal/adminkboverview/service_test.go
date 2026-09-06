@@ -11,19 +11,26 @@ import (
 
 // fakeStore returns canned data without touching Postgres.
 type fakeStore struct {
-	kbs       []KBBase
-	fileMap   map[string]FileStats
-	chatMap   map[string]ChatStats
-	turnStats map[string]TurnStats
-	listErr   error
-	fileErr   error
-	chatErr   error
-	turnErr   error
+	kbs          []KBBase
+	fileMap      map[string]FileStats
+	chatMap      map[string]ChatStats
+	turnStats    map[string]TurnStats
+	syncStats    map[string]SyncStats
+	listErr      error
+	fileErr      error
+	chatErr      error
+	turnErr      error
+	syncErr      error
+	gotStaleDays int
 }
 
 func (f *fakeStore) ListKBs(context.Context) ([]KBBase, error) { return f.kbs, f.listErr }
-func (f *fakeStore) FileStatsByKB(context.Context) (map[string]FileStats, error) {
+func (f *fakeStore) FileStatsByKB(_ context.Context, staleDays int) (map[string]FileStats, error) {
+	f.gotStaleDays = staleDays
 	return f.fileMap, f.fileErr
+}
+func (f *fakeStore) SyncStatsByKB(context.Context) (map[string]SyncStats, error) {
+	return f.syncStats, f.syncErr
 }
 func (f *fakeStore) ChatStatsByKB(context.Context) (map[string]ChatStats, error) {
 	return f.chatMap, f.chatErr

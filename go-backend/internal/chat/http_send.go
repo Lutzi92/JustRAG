@@ -948,6 +948,12 @@ func (h *Handler) tryDeepChat(
 
 	// Deep chat succeeded — commit to SSE response.
 
+	// Freshness dates for the cited files (one batch query, fail-soft).
+	// Runs before the `sources` SSE frame below AND before the AddMessage
+	// that persists the same slice, so the stream and messages.sources
+	// carry identical dates.
+	enrichSourceDates(ctx, h.fileDates, chatCtx.Sources)
+
 	// Save user message.
 	enhancedQuery := chatCtx.EnhancedQuery
 	hasEnhanced := enhancedQuery != ""

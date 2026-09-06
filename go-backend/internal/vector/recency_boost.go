@@ -71,15 +71,18 @@ func (s *SearchService) applyRecencyPrior(ctx context.Context, kbID string, fuse
 	return len(times)
 }
 
-// fileCreatedTimes fetches created_at for the given file IDs from the main
-// DB in one query. Used by the recency boost (stage 10c); fail-open — the
-// caller treats an error as "no recency signal".
+// fileCreatedTimes fetches the effective date (effectiveDateExpr — the
+// publication date when the origin carries one, the ingest timestamp
+// otherwise) for the given file IDs from the main DB in one query. Used by
+// the recency boost (stage 10c); fail-open — the caller treats an error as
+// "no recency signal". Deliberately the same expression as the date-window
+// filter below, so a file that a window selects also decays by that date.
 func (s *SearchService) fileCreatedTimes(ctx context.Context, fileIDs []string) (map[string]time.Time, error) {
 	if len(fileIDs) == 0 || s.mainDB == nil {
 		return nil, nil
 	}
 	rows, err := s.mainDB.Query(ctx,
-		`SELECT id::text, created_at FROM files WHERE id::text = ANY($1)`, fileIDs)
+		`SELECT id::text, `+effectiveDateExpr+` FROM files WHERE id::text = ANY($1)`, fileIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -96,10 +99,18 @@ func (s *SearchService) fileCreatedTimes(ctx context.Context, fileIDs []string) 
 	return out, rows.Err()
 }
 
-// effectiveDateExpr is the SQL expression for a file's effective date used
-// by every date-window query. Phase 1: ingest time. Phase 2 (when a
-// published_at column lands) becomes COALESCE(published_at, created_at).
-const effectiveDateExpr = "created_at"
+// effectiveDateExpr is the SQL expression for a file's effective date used by
+// every date-window query and by the recency boost. Migration 0071 added
+// files.published_at (the document's own publication date, filled by the RSS
+// poller only — NULL everywhere else), so the effective date is the
+// publication date when there is one and the ingest timestamp otherwise.
+//
+// COALESCE and nothing more: a published_at far in the future or absurdly far
+// in the past is taken at face value here, exactly as a created_at would be.
+// Clamping would silently disagree with what the file-detail UI shows, and the
+// consumers already tolerate odd dates (the recency boost's exponential decay
+// saturates, the window filters just do not match).
+const effectiveDateExpr = "COALESCE(published_at, created_at)"
 
 // fileIDsInDateRange returns the IDs of files in kbID whose effective date
 // falls within [after, before] (either bound may be nil = unbounded).
