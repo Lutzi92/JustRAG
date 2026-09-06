@@ -3,6 +3,7 @@ package vector
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -154,20 +155,32 @@ func formatKeywordSQLArgs(args []any) []string {
 	return out
 }
 
+// placeholderPattern matches a pgx positional placeholder ($1, $2, … $11).
+var placeholderPattern = regexp.MustCompile(`\$(\d+)`)
+
 // inlineKeywordSQLArgs substitutes every $N placeholder with its quoted SQL
 // literal so the statement can be handed to EXPLAIN in psql.
 //
-// Placeholders are substituted from the HIGHEST index down, so "$1" can never
-// eat the "$1" prefix of "$11". Diagnostics-only: the inputs are an operator's
-// own query text and their KB id, and the result is printed, never executed by
-// this process — but the literals are still escaped properly (single quotes
-// doubled) so a query containing an apostrophe produces a runnable statement
-// rather than a truncated one.
+// ONE left-to-right pass over the original text, never a sequence of
+// ReplaceAll calls: "$1" must not eat the "$1" prefix of "$11", and an
+// already-substituted literal must not be re-scanned (a query text containing
+// "$3" would otherwise be corrupted when placeholder 3's turn came round).
+// An out-of-range index is left as-is rather than silently dropped — a
+// visibly unsubstituted statement beats a plausible wrong one.
+//
+// Diagnostics-only: the inputs are an operator's own query text and their KB
+// id, and the result is printed, never executed by this process — but the
+// literals are still escaped properly (single quotes doubled) so a query
+// containing an apostrophe produces a runnable statement rather than a
+// truncated one.
 func inlineKeywordSQLArgs(sqlText string, args []any) string {
-	for i := len(args); i >= 1; i-- {
-		sqlText = strings.ReplaceAll(sqlText, "$"+strconv.Itoa(i), sqlLiteral(args[i-1]))
-	}
-	return sqlText
+	return placeholderPattern.ReplaceAllStringFunc(sqlText, func(m string) string {
+		n, err := strconv.Atoi(m[1:])
+		if err != nil || n < 1 || n > len(args) {
+			return m
+		}
+		return sqlLiteral(args[n-1])
+	})
 }
 
 // sqlLiteral renders one bound argument as a SQL literal. The keyword builder

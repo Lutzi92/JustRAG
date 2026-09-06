@@ -102,15 +102,16 @@ func TestRenderKeywordArmSQLModes_EmptyQueryIsNotOK(t *testing.T) {
 	}
 }
 
-// TestInlineKeywordSQLArgs_SubstitutesHighestPlaceholderFirst pins the two
+// TestInlineKeywordSQLArgs_HandlesMultiDigitPlaceholders pins the two
 // properties EXPLAIN-ability depends on: every placeholder is replaced (a
 // leftover $N is not runnable in psql), and $1 must not eat the "$1" prefix
 // of "$11".
 //
-// Mutation this test catches: iterating placeholders in ascending order
-// (which turns "$11" into "'kb'1"), or skipping the quote-escaping so a
-// literal containing an apostrophe silently truncates the statement.
-func TestInlineKeywordSQLArgs_SubstitutesHighestPlaceholderFirst(t *testing.T) {
+// Mutation this test catches: substituting placeholders with a loop of
+// strings.ReplaceAll in ascending index order (which turns "$11" into
+// "'kb'1"), or skipping the quote-escaping so a literal containing an
+// apostrophe silently truncates the statement.
+func TestInlineKeywordSQLArgs_HandlesMultiDigitPlaceholders(t *testing.T) {
 	sqlText := "SELECT $1::uuid, $11, $2, $10"
 	args := make([]any, 11)
 	for i := range args {
@@ -128,6 +129,36 @@ func TestInlineKeywordSQLArgs_SubstitutesHighestPlaceholderFirst(t *testing.T) {
 	}
 	if strings.Contains(got, "$") {
 		t.Errorf("executable SQL still carries a placeholder: %q", got)
+	}
+}
+
+// TestInlineKeywordSQLArgs_DoesNotRescanSubstitutedLiterals pins the
+// single-pass property: an argument whose own text looks like a placeholder
+// must survive verbatim. A user question really can contain "$3" (a price, a
+// shell snippet), and it is bound as query text into the keyword SQL.
+//
+// Mutation this test catches: implementing the substitution as a loop of
+// strings.ReplaceAll over the whole statement — the "$3" inside argument 1's
+// literal would then be replaced when placeholder 3's turn came round,
+// producing a statement that is plausible and wrong.
+func TestInlineKeywordSQLArgs_DoesNotRescanSubstitutedLiterals(t *testing.T) {
+	got := inlineKeywordSQLArgs("SELECT $1, $3", []any{"kostet $3 pro Monat", "unused", "third"})
+	want := "SELECT 'kostet $3 pro Monat', 'third'"
+	if got != want {
+		t.Errorf("inlineKeywordSQLArgs:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestInlineKeywordSQLArgs_LeavesOutOfRangePlaceholder pins the fail-visible
+// choice for a placeholder with no argument.
+//
+// Mutation this test catches: substituting an empty SQL literal for an
+// out-of-range index, which yields a runnable but silently wrong statement.
+func TestInlineKeywordSQLArgs_LeavesOutOfRangePlaceholder(t *testing.T) {
+	got := inlineKeywordSQLArgs("SELECT $1, $9", []any{"a"})
+	want := "SELECT 'a', $9"
+	if got != want {
+		t.Errorf("inlineKeywordSQLArgs:\n got %q\nwant %q", got, want)
 	}
 }
 
