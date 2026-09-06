@@ -128,6 +128,13 @@ type CreateConfluenceFileData struct {
 	StoragePath        string
 	ConfluenceSourceID string
 	ConfluencePageID   string
+	// PublishedAt is the document's OWN content date, as opposed to
+	// created_at (the ingest timestamp). Page files carry the page's
+	// current version timestamp (W4-R10), clamped at now like every other
+	// source-supplied date; attachments leave it nil — a Confluence
+	// attachment has no version-date semantics of its own in the REST
+	// shape this client reads, so their effective date stays created_at.
+	PublishedAt *time.Time
 }
 
 // ConfluenceFileRow is a file record with confluence-specific fields.
@@ -181,12 +188,12 @@ func (h *Handler) dropTablesForSource(ctx context.Context, sourceID string) {
 	if h.tableDropper == nil {
 		return
 	}
-	files, err := h.store.GetFilesByConfluenceSourceID(ctx, sourceID)
+	srcFiles, err := h.store.GetFilesByConfluenceSourceID(ctx, sourceID)
 	if err != nil {
 		logctx.From(ctx).Warn("tabular: list files for confluence source delete failed", "sourceId", sourceID, "error", err)
 		return
 	}
-	for _, f := range files {
+	for _, f := range srcFiles {
 		if err := h.tableDropper.DropTablesForFile(ctx, f.ID); err != nil {
 			logctx.From(ctx).Warn("tabular: drop tables for deleted confluence file failed", "fileId", f.ID, "error", err)
 		}

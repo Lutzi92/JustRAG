@@ -455,14 +455,14 @@ func toConfluenceFileRow(r confluenceFileDBRow) ConfluenceFileRow {
 func (s *PGStore) CreateConfluenceFile(ctx context.Context, data CreateConfluenceFileData) (*ConfluenceFileRow, error) {
 	const sql = `
 		INSERT INTO files (kb_id, name, type, size, status, origin, storage_path,
-		                   confluence_source_id, confluence_page_id)
-		VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
+		                   confluence_source_id, confluence_page_id, published_at)
+		VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
 		RETURNING id, kb_id, name, type, size, status, origin, storage_path,
 		          confluence_source_id, confluence_page_id, created_at`
 
 	rows, err := pgxutil.QueryRows[confluenceFileDBRow](ctx, s.pool, sql,
 		data.KbID, data.Name, data.Type, data.Size, data.Origin, data.StoragePath,
-		data.ConfluenceSourceID, data.ConfluencePageID,
+		data.ConfluenceSourceID, data.ConfluencePageID, data.PublishedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("CreateConfluenceFile: %w", err)

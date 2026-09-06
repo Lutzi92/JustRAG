@@ -17,6 +17,16 @@ type Source struct {
 	FileID   string  `json:"file_id"`
 	FileName string  `json:"file_name"`
 	Score    float64 `json:"score"`
+	// CreatedAt / PublishedAt are the cited file's dates, RFC 3339 in UTC
+	// (W4-R12). CreatedAt is the ingest timestamp; PublishedAt is the
+	// document's own publication date, set only for origins that carry one
+	// (RSS, Confluence pages, git). Both are omitted when unset.
+	//
+	// They matter more here than on a human-facing surface: an MCP client
+	// is a model, and without a date it cannot tell a current advisory
+	// from a superseded one in the same answer.
+	CreatedAt   string `json:"createdAt,omitempty"`
+	PublishedAt string `json:"publishedAt,omitempty"`
 }
 
 // AnswerResult is what the production pipeline returns for one question.

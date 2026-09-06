@@ -199,6 +199,30 @@ type ConfluencePage struct {
 	WebUILink string // _links.webui
 }
 
+// VersionWhen parses Version.When — Confluence's timestamp for the page's
+// current version — into the document's own content date, or nil when the
+// API did not return one (an older REST shape, a listing that omitted the
+// version expansion) or returned something unparseable.
+//
+// Nil rather than "now" on failure is deliberate: published_at is
+// COALESCE'd with created_at at every read site, so a nil simply falls back
+// to the ingest timestamp, whereas a guessed date would be indistinguishable
+// from a real one.
+//
+// Confluence sends RFC 3339 with milliseconds and a numeric offset
+// ("2026-08-01T10:11:12.345+02:00"); time.RFC3339 accepts the fractional
+// part, and the "Z" form Confluence Cloud sometimes uses, unchanged.
+func (p ConfluencePage) VersionWhen() *time.Time {
+	if p.Version.When == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, p.Version.When)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
 // ConfluencePageWithPath augments ConfluencePage with the ordered list of
 // ancestor titles (root → direct parent), used by the import-modal search
 // flow to render breadcrumbs without a per-page round-trip.

@@ -46,6 +46,21 @@ func EnrichSourceDates(ctx context.Context, l FileDateLookup, sources []ChatSour
 	enrichSourceDates(ctx, l, sources)
 }
 
+// FormatSourceDate renders one source date for an API projection that speaks
+// JSON strings rather than Go times: RFC 3339 in UTC, or "" when the date is
+// absent so the caller's `omitempty` drops the key entirely (W4-R12).
+//
+// UTC, not the server's local zone: the OpenAI-compat and MCP surfaces are
+// consumed by machines across timezones, and two surfaces rendering the same
+// instant differently is the kind of drift that only shows up in a client bug
+// report. One function so those surfaces cannot diverge.
+func FormatSourceDate(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
 // enrichSourceDates fills CreatedAt/PublishedAt on the given sources in
 // place, using one batch query for the distinct file ids present (W3-R11).
 //

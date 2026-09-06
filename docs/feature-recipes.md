@@ -440,7 +440,7 @@ Parameters: `date_from` (required, ISO `YYYY-MM-DD`) and `date_to` (optional, IS
 
 **Name-marker arm (`chat_recency_listing_name_match_enabled`, default ON):** some corpora label new items in the file NAME — CERT-Bund advisories carry "NEU" vs "UPDATE" in the title — so "neue Meldungen" can target the labeled subset rather than ingest recency. When the query literally mentions "neu"/"new" (any inflection; purely temporal phrasings like "aktuelle Warnungen" or "zuletzt hinzugefügt" do not trigger it), files whose name matches the word-boundary regex `\m(neu|new)\M` are fetched regardless of window, merged into the listing (out-of-window matches annotated with their date and label provenance), and — when safe (no user file selection to respect, window listing not truncated) — retrieval switches from the `CreatedAfter` window to an explicit `FileIDs` union so the labeled files' chunks stay citable. The addendum also instructs the model to consider name status labels when the question targets them. A marker-lookup error keeps the window arm (fail-open).
 
-**Date column:** date windows key on the effective date `COALESCE(published_at, created_at)` — one `effectiveDateExpr` constant in `internal/vector/recency_boost.go`, mirrored byte-identically in `internal/mcp/builtin/recent_documents.go` (each package has a source-text drift test pinning the literal). `files.published_at` arrived with migration 0071 (Wave 3) and is **RSS-only**, taken from the feed item's `PublishedParsed`; every other origin leaves it NULL and therefore keys on `created_at` (ingest time) exactly as before. There is **no backfill** — existing RSS files keep a NULL `published_at` until they are re-polled or re-ingested. No config change is involved either way. See the "Freshness surface" recipe below.
+**Date column:** date windows key on the effective date `COALESCE(published_at, created_at)` — one `effectiveDateExpr` constant in `internal/vector/recency_boost.go`, mirrored byte-identically in `internal/mcp/builtin/recent_documents.go` (each package has a source-text drift test pinning the literal). `files.published_at` arrived with migration 0071 (Wave 3) and is filled by the three origins that carry a content date: RSS (the item's `PublishedParsed`), Confluence **pages** (the page's version timestamp; attachments keep NULL) and git (the HEAD commit's committer time, shared by every file of that sync). Uploads, the crawler and every other origin leave it NULL and therefore key on `created_at` (ingest time) exactly as before. There is **no backfill** — existing files keep a NULL `published_at` until they are re-polled, re-synced or re-ingested. No config change is involved either way. See the "Freshness surface" recipe below.
 
 **Golden-set coverage (Wave 2, Task 8):** `eval/golden/cert-recency-de.jsonl` (25 questions; synthetic, fictional German CERT-advisory corpus, `eval/fixtures/cert-advisories/*.md` + `manifest.tsv`, both committed) exercises both `chat_recency_listing_enabled` and `recency_boost_enabled` (see the "Recency prior" recipe above for the boost numbers) against 12 fictional products / 26 fictional WID-SEC advisories (14 NEU→UPDATE pairs, 12 single-issue). Seed with `eval/fixtures/seed-cert.sh` (creates/reuses KB "CERT Fixtures", ingests via `POST /api/kb/{id}/text`, verifies every file landed under its expected name, backdates `files.created_at` per the manifest, writes the gitignored `eval/golden/cert-recency-de.local.jsonl` with `kb_id` resolved; `--restamp --kb-id <uuid>` re-runs just the backdating against an already-seeded KB). Confirmed live: the recency-listing classifier resolves explicit windows (3/6/7/14 days) and the name-marker arm ("neu"/"Neues" → all NEU-labeled files regardless of window) correctly, logs `rag.recency_listing.fired`, and window-scopes retrieval as documented — but only fires when the question actually reaches the standard path; under production-like orchestrator dispatch, an LLM misclassification of a recency-listing-shaped question as `complex_reasoning` routes it to `plan_execute` instead, where the lister never runs — a real, pre-existing production interaction, not a fixture defect. See `eval/golden/README.md` §"CERT recency set" and `eval/golden/cert-recency-de.acceptance.md` for the full per-question tables.
 
@@ -478,13 +478,37 @@ had ever *succeeded* (only when it last ran) and nothing carried a document's ow
 - `GET /api/kb` and `GET /api/kb/global` gain `oldestFileAt`.
 - Chat and public-API sources gain `createdAt` and `publishedAt` (RFC3339, both `omitempty`), also
   inside the persisted `messages.sources` JSONB.
-- **Documented gap:** the OpenAI-compat endpoint and the KB-as-MCP server build their own source
-  projections and carry **no** dates. Wiring them is a small follow-up.
+- **OpenAI-compat** (`POST /openai/v1/chat/completions`): the Azure-shaped
+  `message.context.citations[]` entries gain `created_at` / `published_at` (RFC 3339 **in UTC**,
+  both `omitempty`, so an absent date means an absent key). The OpenAI `file_citation`
+  **annotation** shape has no date slot and deliberately carries none — inventing a field there
+  would break clients that parse annotations against the spec. On the streaming path the dates ride
+  the opening chunk with the rest of the citations, before the first token exists.
+- **KB-as-MCP-server** (`ask_kb`): each `Source` gains `createdAt` / `publishedAt`, same RFC 3339
+  UTC strings, same `omitempty`. This matters more here than on a human surface: the caller is a
+  model, and without a date it cannot tell a current advisory from a superseded one.
+- Both surfaces run the same batched, fail-soft `chat.EnrichSourceDates` the web chat and public
+  API use (one query per turn; a failure leaves the sources dateless and never fails the turn), and
+  both render through the single `chat.FormatSourceDate` so they cannot drift.
 
-**`published_at` is clamped at ingest.** The value is feed-controlled, and a future-dated RSS item
-would otherwise be permanently "the newest document in the KB" for the recency boost, the recency
-listing and every date window; an item dated after `now` is stored as `now` instead (past dates are
-left untouched — back-dating is legitimate). `clampPublishedAt` in `internal/worker/rsspoll.go`.
+**Which origins fill `published_at`** (Wave 4 widened this beyond RSS):
+
+| Origin | `published_at` | Notes |
+|---|---|---|
+| RSS | the item's `PublishedParsed` | W3-R9; requires the feed to supply one |
+| Confluence **page** | the page's current version timestamp (`version.when`) | W4-R10. A sync has no update path — a changed page is deleted and re-created — so a re-sync is what moves the date forward. A page fetched without a version expansion, or with an unparseable timestamp, keeps NULL rather than a guessed date. |
+| Confluence **attachment** | none (NULL) | The REST shape carries no attachment date, and the parent page's version timestamp is the PAGE's content date: a decade-old PDF attached to a page edited yesterday must not read as brand new. |
+| git | the HEAD commit's **committer** time, for every file of that sync | W4-R11. The clone is shallow (`Depth: 1`), so no per-file history exists — this is a *repository* content date, deliberately coarse. Committer, not author, time: a rebased or cherry-picked commit keeps a years-old author date. A sync that finds HEAD unchanged creates no files and therefore rewrites nothing. |
+| upload, crawler, everything else | none (NULL) | Effective date stays `created_at`. |
+
+**`published_at` is clamped at ingest, on every origin.** The value is source-controlled, and a
+future-dated item — an RSS `<pubDate>`, a Confluence server with a skewed clock, a mirrored repo
+whose committer date is ahead — would otherwise be permanently "the newest document in the KB" for
+the recency boost, the recency listing and every date window; anything after `now` is stored as
+`now` instead (past dates are left untouched — back-dating is legitimate, and nil stays nil so
+`COALESCE(published_at, created_at)` still falls back). One shared helper,
+`files.ClampPublishedAt` in `internal/files/published_at.go`, called by all three ingest paths —
+a per-package copy is how one source ends up skipping the bound.
 
 **`lastSyncAt` is success-first, attempt-fallback.** `last_success_at` is stamped only when a sync
 actually completes (an RSS poll failure, a Confluence run with files still processing, and a failed
@@ -520,8 +544,16 @@ therefore keeps keying on `created_at`; every source shows its last *attempt* wi
 the UI rather than hidden, and both heal on the next ingest / sync. Do not hand-write either
 column to "fix" the display.
 
+**Re-syncing is what fills the new columns.** Confluence and git dates are written on file
+CREATE only, and both syncs re-create rather than update a changed file, so an existing KB shows
+`published_at = NULL` for its Confluence and git files until the next sync touches them. A git
+source whose HEAD has not moved is a no-op sync and creates nothing: force a re-sync only if you
+want the dates now, and expect the whole repository to share one date.
+
 `internal/adminkboverview`, `internal/chat/source_dates.go`,
-`internal/observability/source_sync_age.go`, `internal/files/store_pg.go`.
+`internal/observability/source_sync_age.go`, `internal/files/store_pg.go`,
+`internal/files/published_at.go`, `internal/confluence/sync.go`, `internal/gitrepo/clone.go`,
+`internal/openaicompat/citations.go`, `internal/mcpserver/pipeline.go`.
 
 ## Image captioning + better tables (Docling)
 

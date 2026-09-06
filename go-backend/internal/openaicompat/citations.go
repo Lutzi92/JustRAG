@@ -36,6 +36,18 @@ type citation struct {
 	ChunkID  string  `json:"chunk_id,omitempty"`
 	Score    float64 `json:"score"`
 	Pages    []int   `json:"pages,omitempty"`
+	// CreatedAt / PublishedAt are the cited file's dates, RFC 3339 in UTC
+	// (W4-R12). CreatedAt is the ingest timestamp; PublishedAt is the
+	// document's own publication date and is set only for origins that
+	// carry one (RSS, Confluence pages, git). Both are omitted when unset,
+	// so a deployment without the date lookup wired serialises exactly the
+	// payload this endpoint produced before.
+	//
+	// Only the Azure-shaped context citation carries them: OpenAI's
+	// file_citation annotation has no date slot, and inventing one there
+	// would break the clients that parse annotations against the spec.
+	CreatedAt   string `json:"created_at,omitempty"`
+	PublishedAt string `json:"published_at,omitempty"`
 }
 
 // messageContext carries the retrieved chunk bodies alongside the answer.
@@ -116,6 +128,9 @@ func buildCitations(sources []chat.ChatSource) []citation {
 			ChunkID:  s.ChunkID,
 			Score:    s.Score,
 			Pages:    s.Pages,
+
+			CreatedAt:   chat.FormatSourceDate(s.CreatedAt),
+			PublishedAt: chat.FormatSourceDate(s.PublishedAt),
 		})
 	}
 	return out

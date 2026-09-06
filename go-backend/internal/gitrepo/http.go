@@ -47,12 +47,12 @@ func (h *Handler) dropTablesForSource(ctx context.Context, sourceID string) {
 	if h.tableDropper == nil {
 		return
 	}
-	files, err := h.store.ListGitRepoFiles(ctx, sourceID)
+	srcFiles, err := h.store.ListGitRepoFiles(ctx, sourceID)
 	if err != nil {
 		logctx.From(ctx).Warn("tabular: list files for git repo source delete failed", "sourceId", sourceID, "error", err)
 		return
 	}
-	for _, f := range files {
+	for _, f := range srcFiles {
 		if err := h.tableDropper.DropTablesForFile(ctx, f.FileID); err != nil {
 			logctx.From(ctx).Warn("tabular: drop tables for deleted git repo file failed", "fileId", f.FileID, "error", err)
 		}

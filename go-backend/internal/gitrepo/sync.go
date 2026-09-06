@@ -15,6 +15,7 @@ import (
 	"github.com/hibiken/asynq"
 
 	"github.com/justrag/go-backend/internal/confluence"
+	"github.com/justrag/go-backend/internal/files"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/storage"
 )
@@ -159,6 +160,20 @@ func syncGitRepoSource(ctx context.Context, deps SyncDeps, sourceID string) erro
 		}
 	}
 
+	// The repository's content date, computed once for the whole sync
+	// (W4-R11): the clone is shallow, so the HEAD commit's committer time is
+	// the only date the working tree carries and every file of this sync
+	// shares it. Clamped like every other source-supplied date — a commit
+	// dated in the future (a skewed committer clock is common enough in
+	// mirrored repos) would otherwise make the whole repository permanently
+	// the KB's newest content. A repository with no usable commit time
+	// leaves published_at NULL, so the read sites COALESCE back to
+	// created_at.
+	var publishedAt *time.Time
+	if !res.HeadCommitAt.IsZero() {
+		publishedAt = files.ClampPublishedAt(&res.HeadCommitAt, time.Now())
+	}
+
 	// Create + enqueue ingest for new/changed files.
 	created := 0
 	for _, f := range toCreate {
@@ -178,6 +193,7 @@ func syncGitRepoSource(ctx context.Context, deps SyncDeps, sourceID string) erro
 			KbID: src.KbID, Name: f.Path, Type: f.MimeType, Size: f.Size,
 			StoragePath: storagePath, GitRepoSourceID: sourceID,
 			GitFilePath: f.Path, GitBlobSHA: f.BlobSHA,
+			PublishedAt: publishedAt,
 		})
 		if err != nil {
 			slog.Warn("create git file row failed", "path", f.Path, "error", err)
