@@ -47,3 +47,92 @@ func TestLegacySearchAdapterPropagatesFileName(t *testing.T) {
 		t.Errorf("FileID = %q, want %q", got[0].FileID, "file-uuid")
 	}
 }
+
+// stubChatSiteCfg is the inner reader the chat overlay wraps: it stands in
+// for the live site_configs table.
+type stubChatSiteCfg struct{ values map[string]string }
+
+func (s *stubChatSiteCfg) GetSiteConfigValue(_ context.Context, key string) (*string, error) {
+	if v, ok := s.values[key]; ok {
+		return &v, nil
+	}
+	return nil, nil
+}
+
+// TestChatOverlayReader_LongContextEnabledOverride asserts the --longcontext
+// on|off overlay: the overlaid key is served from the run's map and every
+// other key still delegates to the live reader. Without the delegation arm
+// the overlay would blank the whole chat config for the run (every unset key
+// reads as "unset"), which silently disables CRAG, the date line and the
+// tabular router — a wrong A/B rather than a crash.
+// Mutation A: returning the overlay for every key fails the delegation
+// assertions. Mutation B: dropping chat_longcontext_enabled from the overlay
+// map fails the first assertion.
+func TestChatOverlayReader_LongContextEnabledOverride(t *testing.T) {
+	inner := &stubChatSiteCfg{values: map[string]string{
+		"chat_longcontext_enabled": "false",
+		"crag_enabled":             "true",
+	}}
+	w := &chatOverlayReader{
+		inner: inner,
+		overlays: map[string]string{
+			"chat_longcontext_enabled": "true",
+			"chat_longcontext_mode":    "map_reduce",
+		},
+	}
+	ctx := context.Background()
+
+	got, err := w.GetSiteConfigValue(ctx, "chat_longcontext_enabled")
+	if err != nil {
+		t.Fatalf("GetSiteConfigValue: %v", err)
+	}
+	if got == nil || *got != "true" {
+		t.Fatalf("chat_longcontext_enabled = %v, want overlay value \"true\"", got)
+	}
+
+	got, err = w.GetSiteConfigValue(ctx, "chat_longcontext_mode")
+	if err != nil {
+		t.Fatalf("GetSiteConfigValue: %v", err)
+	}
+	if got == nil || *got != "map_reduce" {
+		t.Fatalf("chat_longcontext_mode = %v, want overlay value \"map_reduce\"", got)
+	}
+
+	// Delegation: a key outside the overlay must still read live.
+	got, err = w.GetSiteConfigValue(ctx, "crag_enabled")
+	if err != nil {
+		t.Fatalf("GetSiteConfigValue: %v", err)
+	}
+	if got == nil || *got != "true" {
+		t.Fatalf("crag_enabled = %v, want live value \"true\"", got)
+	}
+
+	// A key neither overlaid nor set stays unset (nil), not "".
+	got, err = w.GetSiteConfigValue(ctx, "chat_supervisor_enabled")
+	if err != nil {
+		t.Fatalf("GetSiteConfigValue: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("chat_supervisor_enabled = %q, want nil (unset)", *got)
+	}
+}
+
+// TestBuildChatOverlays_EmptyFlagsLeaveOverlayEmpty asserts that an unset
+// --longcontext / --longcontext-mode adds nothing to the overlay, so a run
+// without those flags reads the live site_config exactly as before the flags
+// existed. Mutation: writing "" or "false" into the map for an empty flag
+// fails this test (an empty overlay entry would pin the key to the zero
+// value instead of delegating).
+func TestBuildChatOverlays_EmptyFlagsLeaveOverlayEmpty(t *testing.T) {
+	if got := buildChatOverlays("", ""); len(got) != 0 {
+		t.Fatalf("buildChatOverlays(\"\", \"\") = %v, want empty map", got)
+	}
+	got := buildChatOverlays("on", "")
+	if len(got) != 1 || got["chat_longcontext_enabled"] != "true" {
+		t.Fatalf("buildChatOverlays(\"on\", \"\") = %v, want only chat_longcontext_enabled=true", got)
+	}
+	got = buildChatOverlays("off", "flat")
+	if got["chat_longcontext_enabled"] != "false" || got["chat_longcontext_mode"] != "flat" {
+		t.Fatalf("buildChatOverlays(\"off\", \"flat\") = %v", got)
+	}
+}
