@@ -7,7 +7,7 @@ import { Brain, Loader2, FileText, ArrowRight } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import type { MessageSource, TrajectoryEvent, FlaggedClaimStatus } from '../types';
 import { formatPageRanges } from '../utils/citations';
-import { excerptAroundSpan } from '../utils/verification';
+import { excerptAroundSpan, isValidSpan } from '../utils/verification';
 import { AnchoredPopover } from './AnchoredPopover';
 import { TrajectoryPanel } from './TrajectoryPanel';
 import { MarkdownTable } from './MarkdownTable';
@@ -87,11 +87,13 @@ interface MessageContentProps {
  * users with no way to preview a source at all — a tap went straight into the
  * document instead.
  *
- * When `span` is present (the Wave-3 span verifier matched this citation to
- * an exact passage), the snippet becomes a windowed excerpt around that span
- * — up to 160 runes of context each side, ellipsis when truncated — with the
- * quoted passage itself wrapped in `<mark class="citation-span">`. Without a
- * span it falls back to the flat 320-char content slice, unchanged.
+ * When `span` is present AND passes `isValidSpan` (the Wave-3 span verifier
+ * matched this citation to an exact passage), the snippet becomes a windowed
+ * excerpt around that span — up to 160 runes of context each side, ellipsis
+ * when truncated — with the quoted passage itself wrapped in
+ * `<mark class="citation-span">`. Without a span, or with one that fails
+ * validation (out of range, backwards, non-integer — a bad extraction),
+ * it falls back to the flat 320-char content slice, unchanged.
  */
 function CitationPreview({ source, span, t, onOpenSource }: {
     source: MessageSource;
@@ -100,9 +102,10 @@ function CitationPreview({ source, span, t, onOpenSource }: {
     onOpenSource?: (source: MessageSource) => void;
 }) {
     const pageLabel = source.pages && source.pages.length > 0 ? `S. ${formatPageRanges(source.pages)}` : '';
-    const snippetNode = span
+    const validSpan = span && isValidSpan(source.content, span) ? span : undefined;
+    const snippetNode = validSpan
         ? (() => {
-            const { before, quote, after } = excerptAroundSpan(source.content, span, 160);
+            const { before, quote, after } = excerptAroundSpan(source.content, validSpan, 160);
             return (
                 <>
                     {before}

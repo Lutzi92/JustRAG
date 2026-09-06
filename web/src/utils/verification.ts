@@ -27,6 +27,28 @@ export function citationSpanFor(
     return undefined;
 }
 
+// isValidSpan checks a citation span against `content` before it is trusted
+// to drive the highlighted-excerpt rendering: both offsets must be
+// non-negative integers, `end` must be strictly after `start`, and `end`
+// must not exceed the content's RUNE length (Array.from, not content.length
+// — an astral character before the span means the UTF-16 length is larger
+// than the rune length, so checking content.length would let an
+// out-of-range end slip through). A span failing this check must fall back
+// to the plain snippet, never render a `<mark>` — an out-of-range or
+// backwards span (e.g. a bad extraction from the span verifier) would
+// otherwise slice to an empty or garbled quote instead of degrading
+// visibly to today's behaviour.
+export function isValidSpan(
+    content: string,
+    span: { start: number; end: number } | null | undefined,
+): span is { start: number; end: number } {
+    if (!span) return false;
+    const { start, end } = span;
+    if (!Number.isInteger(start) || !Number.isInteger(end)) return false;
+    if (start < 0 || end <= start) return false;
+    return end <= Array.from(content).length;
+}
+
 // SpanExcerpt is the windowed-context view of a citation span: up to
 // `radius` runes of context before and after the quoted passage, each
 // prefixed/suffixed with an ellipsis when the source content was truncated

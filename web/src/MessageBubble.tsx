@@ -2,7 +2,7 @@ import { memo, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { FileText, ChevronDown, Check, ArrowRight, Network, Users, Bot } from 'lucide-react';
 import type { Message, BranchInfo, MessageVerification, MessageSource } from './types';
-import { flaggedClaimsFor, citationSpanFor } from './utils/verification';
+import { flaggedClaimsFor } from './utils/verification';
 import { useReducedMotion, getMotionProps } from './hooks/useReducedMotion';
 import { BranchIndicator } from './components/BranchIndicator';
 import { MessageActions } from './components/MessageActions';
@@ -120,8 +120,7 @@ function citationSpanMap(v: MessageVerification | null | undefined): Map<number,
     if (!v?.citations?.length) return undefined;
     const out = new Map<number, { start: number; end: number }>();
     for (const c of v.citations) {
-        const span = citationSpanFor(v, c.n);
-        if (span) out.set(c.n, span);
+        if (c.verified && c.span) out.set(c.n, c.span);
     }
     return out.size > 0 ? out : undefined;
 }

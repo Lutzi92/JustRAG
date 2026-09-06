@@ -430,5 +430,26 @@ describe('MessageContent citation source popover', () => {
             expect(dialog).toHaveTextContent(`${'y'.repeat(160)}…`);
             expect(dialog.querySelector('mark.citation-span')).toHaveTextContent('ZIEL-SATZ');
         });
+
+        it('falls back to the plain snippet, with no <mark>, when the span is malformed', () => {
+            // 29-char content, span end (5) < start (20): out of range / backwards.
+            const shortContent = 'Ein kurzer Beispieltext hier.';
+            const shortSources = [
+                { index: 1, fileName: 'kurz.pdf', fileId: 'f11', content: shortContent, score: 0.9 },
+            ];
+            const { container } = render(
+                <MessageContent
+                    content="Claim [1]."
+                    sources={shortSources}
+                    citationSpans={new Map([[1, { start: 20, end: 5 }]])}
+                    onOpenSource={vi.fn()}
+                />,
+            );
+            fireEvent.click(firstPill(container));
+
+            const dialog = screen.getByRole('dialog');
+            expect(dialog).toHaveTextContent(shortContent);
+            expect(dialog.querySelector('mark.citation-span')).toBeNull();
+        });
     });
 });

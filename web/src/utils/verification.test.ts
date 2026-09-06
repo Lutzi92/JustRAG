@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { flaggedClaimsFor, citationSpanFor, excerptAroundSpan } from './verification';
+import { flaggedClaimsFor, citationSpanFor, excerptAroundSpan, isValidSpan } from './verification';
 import type { MessageVerification, FlaggedClaimStatus } from '../types';
 
 const claim = (text: string): FlaggedClaimStatus => ({ claim_text: text, reason: 'unsupported' });
@@ -77,6 +77,49 @@ describe('citationSpanFor', () => {
         expect(citationSpanFor(null, 1)).toBeUndefined();
         expect(citationSpanFor(undefined, 1)).toBeUndefined();
         expect(citationSpanFor({ verified: true, score: 0, issues: [] } as MessageVerification, 1)).toBeUndefined();
+    });
+});
+
+describe('isValidSpan', () => {
+    const content = 'Der zitierte Absatz.'; // 21 runes, ASCII-only
+
+    it('accepts a well-formed span within bounds', () => {
+        expect(isValidSpan(content, { start: 4, end: 12 })).toBe(true);
+    });
+
+    it('rejects when start > end', () => {
+        expect(isValidSpan(content, { start: 20, end: 5 })).toBe(false);
+    });
+
+    it('rejects when start === end (empty span)', () => {
+        expect(isValidSpan(content, { start: 5, end: 5 })).toBe(false);
+    });
+
+    it('rejects a negative start', () => {
+        expect(isValidSpan(content, { start: -1, end: 5 })).toBe(false);
+    });
+
+    it('rejects non-integer offsets', () => {
+        expect(isValidSpan(content, { start: 1.5, end: 5 })).toBe(false);
+        expect(isValidSpan(content, { start: 1, end: 5.5 })).toBe(false);
+    });
+
+    it('rejects null/undefined spans', () => {
+        expect(isValidSpan(content, null)).toBe(false);
+        expect(isValidSpan(content, undefined)).toBe(false);
+    });
+
+    // Mutation target: checking `end <= content.length` (UTF-16 units)
+    // instead of the rune length would let this through — the leading
+    // astral character makes the UTF-16 length (5) one longer than the
+    // rune length (4), so an end of 5 is in-range by UTF-16 length but
+    // one past the last valid rune index.
+    it('rejects end past the RUNE length even when it is within the UTF-16 length', () => {
+        const astral = '😀abc';
+        expect(astral.length).toBe(5); // UTF-16 code units
+        expect(Array.from(astral).length).toBe(4); // runes
+        expect(isValidSpan(astral, { start: 0, end: 5 })).toBe(false);
+        expect(isValidSpan(astral, { start: 0, end: 4 })).toBe(true);
     });
 });
 
