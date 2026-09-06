@@ -218,9 +218,13 @@ func (s *PGStore) FileDatesByIDs(ctx context.Context, ids []string) (map[string]
 	if len(ids) == 0 {
 		return map[string]FileDates{}, nil
 	}
+	// `id = ANY($1::uuid[])`, never `id::text = ANY($1)`: casting the COLUMN
+	// makes the primary-key index unusable and Postgres falls back to a Seq
+	// Scan over files — which this query would then do on every chat turn.
+	// Casting the PARAMETER instead keeps it an index scan.
 	const sql = `SELECT id::text AS id, created_at, published_at
 	               FROM files
-	              WHERE id::text = ANY($1)`
+	              WHERE id = ANY($1::uuid[])`
 	rows, err := pgxutil.QueryRows[fileDatesRow](ctx, s.pool, sql, ids)
 	if err != nil {
 		return nil, fmt.Errorf("FileDatesByIDs: %w", err)

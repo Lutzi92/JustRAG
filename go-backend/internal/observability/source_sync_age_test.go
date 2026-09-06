@@ -8,8 +8,7 @@ import (
 )
 
 func TestSetSourceSyncAge_EmitsPerKindPerKB(t *testing.T) {
-	SourceSyncAgeForTest().Reset()
-	resetSourceSyncAgeCapForTest()
+	ResetSourceSyncAge()
 
 	SetSourceSyncAge("rss", "kb-1", 3600)
 	SetSourceSyncAge("confluence", "kb-1", 60)
@@ -29,12 +28,35 @@ func TestSetSourceSyncAge_EmitsPerKindPerKB(t *testing.T) {
 	}
 }
 
+// Mutation: make ResetSourceSyncAge a no-op → the first snapshot's series
+// survive the second one and this fails. A Set-only refresh is exactly how a
+// deleted source's age alert becomes unresolvable.
+func TestResetSourceSyncAge_DropsStaleSeries(t *testing.T) {
+	ResetSourceSyncAge()
+
+	SetSourceSyncAge("rss", "kb-gone", 3600)
+	SetSourceSyncAge("rss", "kb-stays", 60)
+	if n := testutil.CollectAndCount(SourceSyncAgeForTest()); n != 2 {
+		t.Fatalf("series after the first snapshot = %d, want 2", n)
+	}
+
+	// Second snapshot: kb-gone no longer has a source.
+	ResetSourceSyncAge()
+	SetSourceSyncAge("rss", "kb-stays", 120)
+
+	if n := testutil.CollectAndCount(SourceSyncAgeForTest()); n != 1 {
+		t.Errorf("series after the second snapshot = %d, want 1 (the removed source's series must be gone)", n)
+	}
+	if got := testutil.ToFloat64(SourceSyncAgeForTest().WithLabelValues("rss", "kb-stays")); got != 120 {
+		t.Errorf("surviving series = %v, want the refreshed 120", got)
+	}
+}
+
 // Mutation: drop the kind allow-list → an unknown kind emits its own series
 // and this fails. `kind` is a closed enum by design; the whole point of
 // folding it is that a typo at a call site cannot grow cardinality.
 func TestSetSourceSyncAge_UnknownKindFoldsToOther(t *testing.T) {
-	SourceSyncAgeForTest().Reset()
-	resetSourceSyncAgeCapForTest()
+	ResetSourceSyncAge()
 
 	SetSourceSyncAge("sharepoint", "kb-1", 42)
 
@@ -51,8 +73,7 @@ func TestSetSourceSyncAge_UnknownKindFoldsToOther(t *testing.T) {
 // on a gauge refreshed every maintenance tick is the cardinality bomb the
 // cap exists to defuse.
 func TestSetSourceSyncAge_CapsKBCardinality(t *testing.T) {
-	SourceSyncAgeForTest().Reset()
-	resetSourceSyncAgeCapForTest()
+	ResetSourceSyncAge()
 
 	for i := 0; i < sourceSyncAgeMaxKBs+50; i++ {
 		SetSourceSyncAge("rss", fmt.Sprintf("kb-%d", i), float64(i))

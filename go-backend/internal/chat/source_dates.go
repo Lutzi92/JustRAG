@@ -84,8 +84,17 @@ func enrichSourceDates(ctx context.Context, l FileDateLookup, sources []ChatSour
 		if !ok {
 			continue
 		}
+		// Both dates are copied per source rather than aliased: two sources
+		// citing the same file would otherwise share one *time.Time (the
+		// map's), so a later mutation through one of them — a caller
+		// normalising a timezone, say — would silently change the other.
 		created := d.CreatedAt
 		sources[i].CreatedAt = &created
-		sources[i].PublishedAt = d.PublishedAt
+		if d.PublishedAt != nil {
+			published := *d.PublishedAt
+			sources[i].PublishedAt = &published
+		} else {
+			sources[i].PublishedAt = nil
+		}
 	}
 }

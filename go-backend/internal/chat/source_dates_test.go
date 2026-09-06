@@ -80,6 +80,31 @@ func TestEnrichSourceDates_FillsKnownIDsAndLeavesUnknownNil(t *testing.T) {
 	}
 }
 
+// Mutation: assign d.PublishedAt (or &d.CreatedAt) straight through instead
+// of copying → two sources citing the same file share one pointer and this
+// fails.
+func TestEnrichSourceDates_DoesNotAliasDatePointers(t *testing.T) {
+	created := mustTime(t, "2026-01-02T03:04:05Z")
+	published := mustTime(t, "2025-12-24T00:00:00Z")
+	lookup := &fakeFileDates{rows: map[string]FileDates{
+		"same": {CreatedAt: created, PublishedAt: &published},
+	}}
+	sources := []ChatSource{{Index: 1, FileID: "same"}, {Index: 2, FileID: "same"}}
+
+	enrichSourceDates(context.Background(), lookup, sources)
+
+	if sources[0].CreatedAt == sources[1].CreatedAt {
+		t.Error("createdAt pointers are shared between two sources of the same file")
+	}
+	if sources[0].PublishedAt == sources[1].PublishedAt {
+		t.Error("publishedAt pointers are shared between two sources of the same file")
+	}
+	// …and the values must still be right.
+	if !sources[1].CreatedAt.Equal(created) || !sources[1].PublishedAt.Equal(published) {
+		t.Errorf("second source got wrong values: %+v", sources[1])
+	}
+}
+
 func TestEnrichSourceDates_DeduplicatesFileIDs(t *testing.T) {
 	lookup := &fakeFileDates{rows: map[string]FileDates{}}
 	sources := []ChatSource{

@@ -9,9 +9,11 @@ import (
 )
 
 // sourceSyncAge reports how long ago each KB source last synced
-// SUCCESSFULLY (files.last_success_at, migration 0071), falling back to the
-// last attempt for a source that has not succeeded since that column landed.
-// Refreshed once per maintenance tick from the worker.
+// SUCCESSFULLY — from the last_success_at column migration 0071 added to
+// rss_feeds, confluence_sources and git_repo_sources — falling back to that
+// table's last-attempt column (last_polled_at / last_synced_at) for a source
+// that has not succeeded since. Refreshed once per maintenance tick from the
+// worker, as a full snapshot: see ResetSourceSyncAge.
 //
 // Alert shape: a feed whose age climbs past its schedule interval is stale
 // even while its last_polled_at keeps moving — that gap is exactly what this
@@ -21,7 +23,8 @@ var sourceSyncAge = promauto.NewGaugeVec(
 	prometheus.GaugeOpts{
 		Name: "rag_source_sync_age_seconds",
 		Help: "Seconds since a KB source last synced successfully " +
-			"(last_success_at, falling back to the last attempt when the " +
+			"(rss_feeds/confluence_sources/git_repo_sources.last_success_at, " +
+			"falling back to that table's last-attempt column when the " +
 			"source has never succeeded). Labels: kind (rss/confluence/" +
 			"git/other), kb (capped, see the overflow label).",
 		ConstLabels: commonLabels,
@@ -66,15 +69,24 @@ func SetSourceSyncAge(kind, kbID string, seconds float64) {
 	sourceSyncAge.WithLabelValues(kind, kbID).Set(seconds)
 }
 
-// SourceSyncAgeForTest exposes the gauge for test assertions.
-func SourceSyncAgeForTest() *prometheus.GaugeVec { return sourceSyncAge }
-
-// resetSourceSyncAgeCapForTest clears the seen-KB set so cap tests start from
-// a known state. Test-only; the production path never resets the cap.
-func resetSourceSyncAgeCapForTest() {
+// ResetSourceSyncAge drops every series of the gauge (and the cardinality-cap
+// bookkeeping that goes with them). The refresher MUST call this before
+// republishing, because this gauge is a full snapshot of "the sources that
+// exist right now": a plain Set-only refresh leaves the series of a deleted
+// feed, repository or knowledge base frozen at its last value forever, so an
+// age alert raised by a source that has since been removed can never resolve.
+//
+// The cap bookkeeping is cleared with it deliberately: SetSourceSyncAge is
+// only ever called from that snapshot refresh, so recounting per tick keeps
+// the cap bounding live KBs rather than every KB ever seen since boot.
+func ResetSourceSyncAge() {
+	sourceSyncAge.Reset()
 	sourceSyncAgeKBSeen.Range(func(k, _ any) bool {
 		sourceSyncAgeKBSeen.Delete(k)
 		return true
 	})
 	sourceSyncAgeKBCount.Store(0)
 }
+
+// SourceSyncAgeForTest exposes the gauge for test assertions.
+func SourceSyncAgeForTest() *prometheus.GaugeVec { return sourceSyncAge }

@@ -457,9 +457,15 @@ const sourceSyncAgeSQL = `
 	 GROUP BY kb_id, kind`
 
 // refreshSourceSyncAge republishes the rag_source_sync_age_seconds gauge from
-// the three source tables. Best effort: a query failure logs and leaves the
-// previous values in place — a stale gauge is better than a chat-affecting
-// error, and the maintenance tick will retry in a few minutes.
+// the three source tables as a full SNAPSHOT: the vector is reset once the
+// query has succeeded, so a source (or a whole KB) that has since been
+// deleted loses its series instead of keeping a frozen age that no future
+// tick can ever lower — which would leave an age alert permanently firing for
+// something that no longer exists.
+//
+// The reset deliberately happens AFTER the query returns, not before it: a
+// query failure must leave the previous snapshot intact (a slightly stale
+// gauge beats a blank one), and the maintenance tick retries in minutes.
 func refreshSourceSyncAge(ctx context.Context, mainDB *pgxpool.Pool) {
 	if mainDB == nil {
 		return
@@ -470,6 +476,7 @@ func refreshSourceSyncAge(ctx context.Context, mainDB *pgxpool.Pool) {
 		return
 	}
 	defer rows.Close()
+	observability.ResetSourceSyncAge()
 	n := 0
 	for rows.Next() {
 		var kbID, kind string

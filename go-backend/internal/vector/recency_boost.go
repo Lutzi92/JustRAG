@@ -81,8 +81,11 @@ func (s *SearchService) fileCreatedTimes(ctx context.Context, fileIDs []string) 
 	if len(fileIDs) == 0 || s.mainDB == nil {
 		return nil, nil
 	}
+	// Parameter cast, not column cast: `id::text = ANY($1)` cannot use the
+	// primary-key index and degrades to a Seq Scan over files. Same shape as
+	// files.PGStore.FileDatesByIDs.
 	rows, err := s.mainDB.Query(ctx,
-		`SELECT id::text, `+effectiveDateExpr+` FROM files WHERE id::text = ANY($1)`, fileIDs)
+		`SELECT id::text, `+effectiveDateExpr+` FROM files WHERE id = ANY($1::uuid[])`, fileIDs)
 	if err != nil {
 		return nil, err
 	}
