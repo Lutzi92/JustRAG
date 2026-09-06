@@ -76,7 +76,23 @@ func main() {
 	longContextEnabled := flag.String("longcontext", "", `Wave-3 ruling W3-R5: per-run override for chat_longcontext_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext-mode. "on" puts OrchLongContext at the top of the eval orchestrator ladder for questions the global-synthesis classifier accepts, so a global-synthesis golden set can be measured without mutating site_configs.`)
 	goldenQueryType := flag.Bool("golden-query-type", false, `Forward each golden row's curated "query_type" label into the retrieval pipeline (chat.ChatContextParams.QueryType) instead of letting the pipeline classify the question. Default false so existing --production-context reports keep their historical shape. Does NOT affect orchestrator dispatch, which classifies independently — if a question does not reach the intended orchestrator, rewrite the question, not the label.`)
 	recencyBoostOverride := flag.String("recency-boost", "", `Wave 2 Task 8: per-run override for recency_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-tiered-boost (a vector-layer key, applied via the searchReader overlay, not the chat-level siteReader). Lets the CERT recency fixture A/B the recency prior without a site_configs mutation.`)
+	printKeywordSQL := flag.String("print-keyword-sql", "", `Diagnostic mode (Wave-3 Task 7): print the keyword arm's SQL for this query — for BOTH scoring modes (ts_rank and bm25), with the KB's real resolved settings (chunk table, text-search config, simple arm, tiered boost, k1/b, dim-keyed stats tables) — as one JSON document on stdout, then exit 0. Requires --kb-id. Runs no search, no LLM call, and needs no golden set; --top-k sets the statement's LIMIT (pass 50 to match the legacy pre-rerank candidate depth the keyword arm actually runs with at top-k 10 with a reranker; a non-positive value falls back to 50). Each mode carries both the parameterised SQL and an "executable_sql" with the placeholders inlined, so it can be handed straight to EXPLAIN (ANALYZE, BUFFERS).`)
+	printKeywordSQLKBID := flag.String("kb-id", "", "KB id for --print-keyword-sql. Ignored in every other mode (the golden set carries its own kb_id per question).")
 	flag.Parse()
+
+	// Diagnostic mode short-circuits before --golden is required: it needs
+	// only a KB and a query.
+	if *printKeywordSQL != "" {
+		if err := validateKeywordSQLFlags(*printKeywordSQL, *printKeywordSQLKBID); err != nil {
+			slog.Error("invalid --print-keyword-sql invocation", "error", err)
+			os.Exit(2)
+		}
+		if err := runPrintKeywordSQL(*printKeywordSQL, *printKeywordSQLKBID, *topK, os.Stdout); err != nil {
+			slog.Error("--print-keyword-sql failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	var baseline *eval.Report
 	if *baselinePath != "" {
