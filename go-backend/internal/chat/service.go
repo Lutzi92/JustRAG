@@ -93,6 +93,15 @@ type ChatContextParams struct {
 	// (gated on chat_condense_keep_raw_enabled) and forwarded verbatim
 	// into vector.SearchOptions.RawQuery.
 	RawQuery string
+	// FileDates resolves the cited files' published_at/created_at in one
+	// batch query. PrepareChatContext needs it for the W5-R7 conflict pass,
+	// which decides supersession direction from those dates — the
+	// enrichSourceDates call that fills ChatSource.CreatedAt runs LATER, in
+	// the HTTP layer, so the dates are not on `sources` yet at that point.
+	// Nil disables the date lines (conflicts can then only be reported as
+	// contradictions, never as supersession) — public API / OpenAI-compat /
+	// mcpserver callers leave it unset.
+	FileDates FileDateLookup
 }
 
 // ChatSource represents a single source document surfaced in a chat response.
@@ -189,6 +198,12 @@ type ChatContext struct {
 	// logging and the eval harness read it, nothing in the answer path
 	// depends on it.
 	TabularTrace *TabularTrace
+	// Conflicts is the W5-R7 conflict / supersession report over this
+	// turn's assembled source set: which cited sources disagree and which
+	// of a disagreeing pair is newer. nil when the pass is off, found
+	// nothing, or failed (it is fail-soft). The HTTP layer emits it as a
+	// {"conflicts": …} SSE frame and persists it on the AI message.
+	Conflicts *ConflictReport
 }
 
 // ---------------------------------------------------------------------------
@@ -1255,7 +1270,25 @@ func PrepareChatContext(
 	// assembleFlatFromParts (longcontext_consume.go) so the OrchLongContext
 	// orchestrator's flat mode and this path cannot drift; the three addenda
 	// below are the parts only PrepareChatContext can compute.
-	add := flatAddenda{Abstain: abstain, Tabular: tabularAddendum}
+	// W5-R7 conflict / supersession pass. Runs on the FINAL source set (post
+	// CRAG, post truncation, post sandwich order) because the [N] numbers it
+	// reports have to be the ones the answer prompt uses. Gated + fail-soft
+	// inside DetectConflicts; nil report ⇒ empty addendum.
+	conflicts := DetectConflicts(ctx, aiResolver, ConflictInput{
+		KbID:      params.KbID,
+		Question:  params.SearchQuery,
+		Language:  params.Language,
+		Sources:   sources,
+		Config:    ResolveConflictConfig(ctx, siteConfig),
+		FileDates: params.FileDates,
+		Emit:      params.Emit,
+	})
+
+	add := flatAddenda{
+		Abstain:   abstain,
+		Tabular:   tabularAddendum,
+		Conflicts: ConflictAddendumText(params.Language, conflicts),
+	}
 	if runEnumeration {
 		// Inject the verified-matches addendum even when the list is empty —
 		// the prose LLM should then tell the user "no matches" rather than
@@ -1277,6 +1310,7 @@ func PrepareChatContext(
 	}, add)
 	chatCtx.EnhancedQuery = result.EnhancedQuery
 	chatCtx.TabularTrace = tabularTrace
+	chatCtx.Conflicts = conflicts
 	return chatCtx, nil
 }
 

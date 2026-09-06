@@ -638,6 +638,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		"chatId":        p.chatID,
 		"userMessageId": p.userMsgID,
 	})
+	writeConflictsFrame(ctx, w, p.chatCtx.Conflicts)
 
 	// Replay any trajectory events that were buffered during
 	// PrepareChatContext (CRAG branch decisions, etc.) so the
@@ -767,6 +768,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		Sources:         sources,
 		Reasoning:       reasoningPtr,
 		ParentMessageID: &p.userMsgID,
+		Conflicts:       p.chatCtx.Conflicts,
 	})
 	if err != nil {
 		logctx.From(ctx).Error("chat.send: save AI message (stream)", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
@@ -867,6 +869,7 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 		Sources:         sources,
 		Reasoning:       reasoningPtr,
 		ParentMessageID: &p.userMsgID,
+		Conflicts:       p.chatCtx.Conflicts,
 	})
 	if err != nil {
 		logctx.From(ctx).Error("chat.send: save AI message", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
@@ -889,7 +892,7 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 		answerForClient = refinedAnswer
 	}
 
-	httputil.WriteJSONCtx(ctx, w, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"answer":            answerForClient,
 		"reasoning":         result.Reasoning,
 		"sources":           sources,
@@ -899,5 +902,12 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 		"aiMessageId":       aiMsg.ID,
 		"followUpQuestions": followUps,
 		"verification":      verification,
-	})
+	}
+	// Added only when there is something to report, so a client that never
+	// sees a conflict sees byte-identical JSON to before this existed —
+	// same rule the SSE frame follows.
+	if cs := conflictsForWire(p.chatCtx.Conflicts); cs != nil {
+		payload["conflicts"] = cs
+	}
+	httputil.WriteJSONCtx(ctx, w, http.StatusOK, payload)
 }

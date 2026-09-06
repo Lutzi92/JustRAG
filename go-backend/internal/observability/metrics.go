@@ -2662,3 +2662,48 @@ func TabularIngestTotalForTest() *prometheus.CounterVec {
 func TabularIngestRowsForTest() *prometheus.CounterVec {
 	return tabularIngestRows
 }
+
+// --- Conflict / supersession surfacing (W5-R7) ----------------------------
+
+var conflictSurfacingTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_conflict_surfacing_total",
+		Help: "Per-outcome counter for the conflict / supersession pass " +
+			"(one fast-tier call per turn on a KB with " +
+			"chat_conflict_surfacing_enabled). Outcome values: found " +
+			"(at least one conflict pair surfaced onto the answer), none " +
+			"(the call succeeded and reported no conflict — the " +
+			"denominator for the flag rate), skipped_single_file (fewer " +
+			"than 2 distinct files in the assembled set, so no call was " +
+			"made), timeout (chat_conflict_timeout_ms expired), error " +
+			"(the call or its parse failed). timeout+error are fail-soft: " +
+			"the turn answers without an addendum or a badge.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"outcome"},
+)
+
+// conflictSurfacingKnownOutcomes bounds the label cardinality: an
+// unrecognised value records as "error" rather than minting a new series.
+var conflictSurfacingKnownOutcomes = map[string]bool{
+	"found":               true,
+	"none":                true,
+	"skipped_single_file": true,
+	"timeout":             true,
+	"error":               true,
+}
+
+// RecordConflictSurfacing increments the per-outcome counter for one
+// conflict-surfacing decision.
+func RecordConflictSurfacing(outcome string) {
+	if !conflictSurfacingKnownOutcomes[outcome] {
+		outcome = "error"
+	}
+	conflictSurfacingTotal.WithLabelValues(outcome).Inc()
+}
+
+// ConflictSurfacingTotalForTest exposes the conflict-surfacing counter to
+// other test packages (internal/chat). Mirrors AgenticDecisionTotalForTest.
+func ConflictSurfacingTotalForTest() *prometheus.CounterVec {
+	return conflictSurfacingTotal
+}

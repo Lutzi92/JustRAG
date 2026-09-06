@@ -35,6 +35,9 @@ const trajectoryChunkPreview = 5
 //	longcontext_reduce — W3-R6: map stage done; Findings is the total handed to
 //	                   the synthesis prompt, Dropped how many the token budget
 //	                   cut from the tail
+//	conflict_surfacing — W5-R7: the conflict / supersession pass finished;
+//	                   Reason carries the outcome (found | none | timeout |
+//	                   error) and Findings the conflict count
 type TrajectoryEvent struct {
 	Stage    string         `json:"stage"`
 	Step     int            `json:"step,omitempty"`

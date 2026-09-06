@@ -207,6 +207,13 @@ var snapshotConfigKeys = []string{
 	"chat_citation_spans_model",
 	"chat_citation_spans_max_sources",
 	"chat_citation_spans_timeout_ms",
+	// Wave-5 Task 3 conflict / supersession surfacing. _model is not a
+	// registry key (model selection, same rationale as the entries above)
+	// but is snapshotted so an eval re-run after changing it isn't stale.
+	"chat_conflict_surfacing_enabled",
+	"chat_conflict_model",
+	"chat_conflict_max_chunks",
+	"chat_conflict_timeout_ms",
 	// Retrieval/orchestrator registry keys (kb-workflow-editor Phase 2
 	// Task 3; cross-checked by snapshot_registry_test.go like the blocks
 	// above).

@@ -1819,3 +1819,51 @@ func RawQueryForRetrieval(enabled bool, raw, condensed string) string {
 	}
 	return r
 }
+
+// --- Conflict / supersession surfacing (W5-R7) -----------------------------
+
+// defaultConflictMaxChunks / defaultConflictTimeoutMs are the compiled-in
+// defaults, named so conflicts.go can fall back to them without re-reading
+// site_config on a zero-valued config (an eval or public-API caller that
+// built a ConflictConfig by hand).
+const (
+	defaultConflictMaxChunks = 12
+	defaultConflictTimeoutMs = 6000
+)
+
+// ChatConflictSurfacingEnabled gates the W5-R7 conflict / supersession
+// pass: one structured fast-tier call over the already-assembled chunk set
+// asking which of the cited sources disagree with each other and which of a
+// disagreeing pair is newer. The result becomes a system-prompt addendum, a
+// persisted `conflicts` blob on the AI message and an SSE frame the
+// frontend renders as a badge. Default: OFF — it costs one extra fast-tier
+// call on every turn of a KB that opts in, and its value depends on the
+// corpus actually containing superseding documents (CERT advisories,
+// versioned policies). Tunable via "chat_conflict_surfacing_enabled".
+func ChatConflictSurfacingEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_conflict_surfacing_enabled", false)
+}
+
+// ChatConflictModel resolves the detector's model through the fast-tier
+// chain (per-task key → `model_tier_fast` → empty, i.e. the KB's chat
+// model). Tunable via "chat_conflict_model".
+func ChatConflictModel(ctx context.Context, reader SiteConfigReader) string {
+	return ResolveFastTierModel(ctx, reader, "chat_conflict_model")
+}
+
+// ChatConflictMaxChunks caps how many of the turn's sources are compared in
+// the single detector call (top-scoring first). Range [2, 30]; default 12.
+// Below 2 there is nothing to compare; the upper bound keeps the prompt —
+// and therefore the added latency — bounded on a wide retrieval set.
+// Tunable via "chat_conflict_max_chunks".
+func ChatConflictMaxChunks(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_conflict_max_chunks", defaultConflictMaxChunks, 2, 30)
+}
+
+// ChatConflictTimeoutMs is the wall-clock budget for the detector call. On
+// expiry the turn continues with no addendum and no badge (fail-soft).
+// Range [1000, 30000]; default 6000. Tunable via
+// "chat_conflict_timeout_ms".
+func ChatConflictTimeoutMs(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_conflict_timeout_ms", defaultConflictTimeoutMs, 1000, 30000)
+}

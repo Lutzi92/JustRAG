@@ -71,6 +71,18 @@ type SupervisorChatParams struct {
 	// lane; empty = off. Forwarded into agents.Input.RawQuery, which
 	// both specialists fold into their SearchOptions.
 	RawQuery string
+	// ConflictConfig carries the W5-R7 conflict / supersession knobs,
+	// resolved by the caller from the reader in force for THIS KB — same
+	// pre-resolved-flag pattern as SufficientContextEnabled and
+	// TabularRouterConfig, since the supervisor has no SiteConfigReader.
+	// The zero value (Enabled false) skips the pass.
+	ConflictConfig ConflictConfig
+	// FileDates resolves the cited files' dates for the conflict pass's
+	// supersession direction. Nil leaves every date line "unknown".
+	FileDates FileDateLookup
+	// conflictDetect is the in-package test seam for the conflict pass; nil
+	// (every production caller) uses the real ai.DetectSourceConflicts.
+	conflictDetect detectSourceConflictsFn
 }
 
 // RunSupervisorChat is the production entry point. It routes the query
@@ -213,6 +225,20 @@ func runSupervisorChatTestable(
 		}
 	}
 
+	// W5-R7 conflict / supersession pass, mirroring the standard path's
+	// wiring in PrepareChatContext: same gate, same fail-soft contract, run
+	// on the final source set so its [N] numbers match the answer prompt's.
+	conflicts := DetectConflicts(ctx, aiResolver, ConflictInput{
+		KbID:      params.KbID,
+		Question:  params.Query,
+		Language:  params.Language,
+		Sources:   sources,
+		Config:    params.ConflictConfig,
+		FileDates: params.FileDates,
+		Emit:      emit,
+		detect:    params.conflictDetect,
+	})
+
 	var sb strings.Builder
 	if params.KbSystemPrompt != "" {
 		sb.WriteString(params.KbSystemPrompt)
@@ -231,6 +257,11 @@ func runSupervisorChatTestable(
 		sb.WriteString("\n\n")
 		sb.WriteString(tabularAddendum)
 	}
+	if a := ConflictAddendumText(params.Language, conflicts); a != "" {
+		// After the tabular rows, still before AGENT NOTES and CONTEXT —
+		// same ordering as the flat assembler's flatAddenda.Conflicts.
+		sb.WriteString(a)
+	}
 	if res.Notes != "" {
 		sb.WriteString("\n\nAGENT NOTES:\n")
 		sb.WriteString(res.Notes)
@@ -245,5 +276,6 @@ func runSupervisorChatTestable(
 		FinalChunks:  accumulated,
 		Abstain:      abstain,
 		TabularTrace: tabularTrace,
+		Conflicts:    conflicts,
 	}, nil
 }

@@ -330,6 +330,14 @@ var ignoredKeys = map[string]string{
 	"tabular_max_file_bytes":         "ingest/upload sizing knob, not a chat-pipeline node",
 	"tabular_large_file_bytes":       "ingest/upload sizing knob, not a chat-pipeline node",
 	"tabular_large_file_concurrency": "ingest/upload sizing knob, not a chat-pipeline node",
+
+	// Conflict / supersession surfacing (Wave-5 Task 3, W5-R7): a post-
+	// assembly pass on the standard + supervisor paths — unrepresented in
+	// the phase-0/1 node vocabulary, like chat_tabular_router_* above.
+	"chat_conflict_surfacing_enabled": "conflict / supersession pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_tabular_router_*",
+	"chat_conflict_model":             "conflict / supersession pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_tabular_router_*",
+	"chat_conflict_max_chunks":        "conflict / supersession pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_tabular_router_*",
+	"chat_conflict_timeout_ms":        "conflict / supersession pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_tabular_router_*",
 }
 
 // TestEveryPipelineFlagIsDrawnOrIgnored is the anti-drift guard (spec §4.4).

@@ -156,9 +156,13 @@ type MessageRow struct {
 	Verification      *MessageVerification `json:"verification" db:"verification"`
 	TraceID           *string              `json:"traceId,omitempty" db:"trace_id"`
 	StructuredTable   *StructuredTable     `json:"structured_table,omitempty" db:"structured_table"`
-	TeamID            *string              `json:"teamId,omitempty" db:"team_id"`
-	AgentID           *string              `json:"agentId,omitempty" db:"agent_id"`
-	CreatedAt         time.Time            `json:"createdAt" db:"created_at"`
+	// Conflicts is the W5-R7 conflict / supersession report computed at
+	// answer time (unlike Verification, which is a post-response update),
+	// so it is written by AddMessage and never patched afterwards.
+	Conflicts *ConflictReport `json:"conflicts,omitempty" db:"conflicts"`
+	TeamID    *string         `json:"teamId,omitempty" db:"team_id"`
+	AgentID   *string         `json:"agentId,omitempty" db:"agent_id"`
+	CreatedAt time.Time       `json:"createdAt" db:"created_at"`
 }
 
 // DecodedSources returns Sources as typed chat sources for the few callers
@@ -192,6 +196,9 @@ type AddMessageParams struct {
 	Reasoning       *string
 	ParentMessageID *string
 	StructuredTable *StructuredTable
+	// Conflicts is the W5-R7 conflict report for this turn; nil (the common
+	// case) inserts SQL NULL.
+	Conflicts *ConflictReport
 	// TeamID / AgentID attribute an AI message to the user-created team or
 	// agent that produced it (nil on user messages and non-team turns).
 	TeamID  *string

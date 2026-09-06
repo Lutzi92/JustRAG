@@ -135,6 +135,20 @@ func writeSSE(ctx context.Context, w http.ResponseWriter, data any) {
 	}
 }
 
+// writeConflictsFrame emits the W5-R7 `{"conflicts": […]}` frame, and only
+// when the turn actually has conflicts to report — a turn without them
+// streams exactly the frames it streamed before this existed, so an old
+// client cannot be confused by an empty array it does not know.
+//
+// Emitted directly AFTER the `sources` frame on every path that produced a
+// ChatContext: the entries reference sources by their [N] index, so a client
+// that renders the badge already holds the list it has to join against.
+func writeConflictsFrame(ctx context.Context, w http.ResponseWriter, report *ConflictReport) {
+	if cs := conflictsForWire(report); cs != nil {
+		writeSSE(ctx, w, map[string]any{"conflicts": cs})
+	}
+}
+
 // writeSSEDone writes the SSE stream terminator and flushes. Write errors
 // are observed at debug level — see writeSSE for the rationale.
 func writeSSEDone(ctx context.Context, w http.ResponseWriter) {
@@ -387,6 +401,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		RecencyLister:         h.recencyLister,
 		TabularRouter:         h.tabularRouter,
 		RawQuery:              rawQuery,
+		FileDates:             h.fileDates,
 	}
 
 	// AP-C4 trajectory event (standard path): the decision was computed
@@ -860,6 +875,8 @@ func (h *Handler) tryDeepChat(
 			TabularRouterConfig:      tabularCfg,
 			SufficientContextEnabled: ChatSufficientContextEnabled(ctx, h.siteConfigReader),
 			SufficientContextModel:   ResolveFastTierModel(ctx, h.siteConfigReader, "chat_sufficient_context_model"),
+			ConflictConfig:           ResolveConflictConfig(ctx, h.siteConfigReader),
+			FileDates:                h.fileDates,
 		}
 		chatCtx, err = RunSupervisorChat(ctx, h.aiResolver, h.searchService, supervisorParams, collectEmit)
 
@@ -997,6 +1014,7 @@ func (h *Handler) tryDeepChat(
 		"chatId":        chatID,
 		"userMessageId": userMsg.ID,
 	})
+	writeConflictsFrame(ctx, w, chatCtx.Conflicts)
 
 	// Stream AI completion. When chat_answer_tools_enabled is on AND a
 	// tool dispatcher is wired, route through RunAnswerWithTools so the
@@ -1132,6 +1150,7 @@ func (h *Handler) tryDeepChat(
 		Reasoning:       reasoningPtr,
 		ParentMessageID: &userMsg.ID,
 		StructuredTable: chatCtx.StructuredTable,
+		Conflicts:       chatCtx.Conflicts,
 		TeamID:          decTeamID,
 		AgentID:         decAgentID,
 	})

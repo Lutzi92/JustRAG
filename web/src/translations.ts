@@ -1598,6 +1598,26 @@ export const translations = {
         de: 'Zeitbudget für den Fundstellen-Modellaufruf in Millisekunden. Bereich 1000–60000; Standard 8000. Läuft die Extraktion nicht rechtzeitig durch, bleibt die bisherige Zitatprüfung unverändert bestehen — die Post-Response-Verarbeitung wartet nicht länger.',
         en: 'Time budget for the span-extraction model call, in milliseconds. Range 1000–60000; default 8000. If extraction doesn\'t finish in time, the existing citation validation is left unchanged — post-response processing never waits longer.',
     },
+    chatConflictSurfacingEnabled: { de: 'Widersprüchliche Quellen erkennen', en: 'Surface conflicting sources' },
+    chatConflictSurfacingEnabledHelp: {
+        de: 'Wenn aktiviert: nachdem die Quellen für eine Antwort feststehen, vergleicht ein Fast-Tier-Modell sie in EINEM Aufruf darauf, ob zwei Quellen sich widersprechen oder ob eine eine andere ersetzt (neuere Fassung). Gefundene Widersprüche werden dem Antwortprompt als Vorgabe mitgegeben („nenne den Widerspruch, stelle die neuere Fassung dar“), auf der Nachricht gespeichert und im Chat als Hinweis angezeigt. Läuft nur, wenn mindestens zwei verschiedene Dateien im Kontext stehen; welche Quelle neuer ist, wird ausschließlich aus published_at/created_at abgeleitet. Bei Fehler oder Timeout wird die Antwort unverändert erzeugt. Standard: aus.',
+        en: 'When on: once the sources for an answer are fixed, a fast-tier model compares them in ONE call for pairs that contradict each other or supersede one another (newer version). Findings are injected into the answer prompt as a requirement ("state the disagreement, present the newer version"), stored on the message and shown in the chat as a badge. Only runs when at least two distinct files are in context; which source is newer is derived from published_at/created_at alone. On error or timeout the answer is produced unchanged. Default: off.',
+    },
+    chatConflictModel: { de: 'Widersprüche: Modell', en: 'Conflicts: model' },
+    chatConflictModelHelp: {
+        de: 'Fast-Tier-Modell für den Vergleichsaufruf. Leer lassen, um model_tier_fast zu verwenden (und ersatzweise das Chat-Modell der Wissensdatenbank).',
+        en: 'Fast-tier model for the comparison call. Leave empty to use model_tier_fast (falling back to the knowledge base\'s chat model).',
+    },
+    chatConflictMaxChunks: { de: 'Widersprüche: max. Quellen', en: 'Conflicts: max sources' },
+    chatConflictMaxChunksHelp: {
+        de: 'Obergrenze für Quellen, die pro Antwort in einem Aufruf verglichen werden (die am besten bewerteten zuerst). Bereich 2–30; Standard 12. Höhere Werte decken mehr Quellenpaare ab, verlängern aber den Prompt und damit die Latenz des Aufrufs.',
+        en: 'Upper bound on sources compared per response in the single call (top-scoring first). Range 2–30; default 12. Higher values cover more pairs but lengthen the prompt and the call\'s latency.',
+    },
+    chatConflictTimeoutMs: { de: 'Widersprüche: Timeout (ms)', en: 'Conflicts: timeout (ms)' },
+    chatConflictTimeoutMsHelp: {
+        de: 'Zeitbudget für den Vergleichsaufruf in Millisekunden. Bereich 1000–30000; Standard 6000. Läuft der Vergleich nicht rechtzeitig durch, wird die Antwort ohne Widerspruchshinweis erzeugt — die Antwort wartet nie länger.',
+        en: 'Time budget for the comparison call, in milliseconds. Range 1000–30000; default 6000. If it doesn\'t finish in time, the answer is produced with no conflict addendum and no badge — the answer never waits longer.',
+    },
     chatAgenticEnabled: { de: 'Agentischer Chat-Loop (Multi-Hop Suche)', en: 'Agentic chat loop (multi-hop search)' },
     chatAgenticEnabledHelp: {
         de: 'Wenn aktiviert: für Anfragen, die der Query-Klassifikator als komplex einstuft (Vergleichs- / Synthese-Fragen, mehrteilig), führt der Chat-Handler statt der bestehenden 2-Schritt-Recherche eine adaptive Multi-Hop-Schleife aus. Pro Hop nach dem ersten fragt ein LLM-Richter, ob die bisherigen Quellen die Frage vollständig beantworten — falls nein, schlägt er eine fokussierte Folgeanfrage vor. Stops früh wenn (a) der Richter sagt "genug", (b) keine neuen Chunks dazukommen, oder (c) das Hop-Budget aufgebraucht ist. Standard: aus. Kosten: 1-2 zusätzliche LLM-Aufrufe (kleines Modell), 1-2 zusätzliche Suchen pro betroffener Anfrage. Wirkt nur im Streaming-Modus auf complex_reasoning-Anfragen ohne explizites Enhance — andere Anfragen behalten den bestehenden Pfad.',
