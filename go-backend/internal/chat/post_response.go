@@ -295,6 +295,39 @@ func (h *Handler) runPostResponseTasks(
 					Threshold: CitationValidationSemanticThreshold(ctx, h.siteConfigReader),
 				}
 				verRes.citationStatuses = RunCitationValidation(ctx, aiResponse, sources, sem)
+
+				// W3-R1..R3: span verification. Runs after the n-gram/
+				// semantic pass so it only spends its one extra model call
+				// on citations that pass could not already resolve into a
+				// still-eligible verdict (collectQuoteRequests skips
+				// out_of_range and summary sources on its own). Guarded on
+				// the citation validator itself being enabled — span
+				// verification has no independent value without it, since
+				// it only ever upgrades an existing CitationStatus.
+				if ChatCitationSpansEnabled(ctx, h.siteConfigReader) {
+					spanStart := time.Now()
+					reqCount := len(collectQuoteRequests(aiResponse, sources, verRes.citationStatuses, ChatCitationSpansMaxSources(ctx, h.siteConfigReader)))
+					if reqCount > 0 {
+						spanCfg := SpanConfig{
+							Model:      ChatCitationSpansModel(ctx, h.siteConfigReader),
+							MaxSources: ChatCitationSpansMaxSources(ctx, h.siteConfigReader),
+							Timeout:    time.Duration(ChatCitationSpansTimeoutMs(ctx, h.siteConfigReader)) * time.Millisecond,
+							Lang:       lang,
+							KbID:       kbID,
+						}
+						verRes.citationStatuses = ApplySpanVerification(ctx, h.aiResolver, spanCfg, aiResponse, sources, verRes.citationStatuses)
+						matched := 0
+						for _, c := range verRes.citationStatuses {
+							if c.Method == "span" {
+								matched++
+							}
+						}
+						logctx.From(ctx).Info("citation.spans", "kbId", kbID,
+							"requested", reqCount, "matched", matched,
+							"ms", time.Since(spanStart).Milliseconds())
+					}
+				}
+
 				for _, c := range verRes.citationStatuses {
 					// Per-marker attribution telemetry: verified/(verified+
 					// unverified) over a window is the attribution rate. Record

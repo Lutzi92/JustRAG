@@ -456,19 +456,25 @@ func TestRecordCorpusTable(t *testing.T) {
 func TestRecordCitationAttribution_ByResultAndMethod(t *testing.T) {
 	beforeV := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("verified", "ngram"))
 	beforeU := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("unverified", "none"))
+	beforeSpan := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("verified", "span"))
 
 	RecordCitationAttribution(true, "ngram")
 	RecordCitationAttribution(false, "")        // unknown method -> "none"
 	RecordCitationAttribution(false, "garbage") // unknown method -> "none"
+	RecordCitationAttribution(true, "span")     // W3-R1..R3: span verification stays its own label
 
 	afterV := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("verified", "ngram"))
 	afterU := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("unverified", "none"))
+	afterSpan := testutil.ToFloat64(citationAttributionsTotal.WithLabelValues("verified", "span"))
 
 	if afterV-beforeV != 1 {
 		t.Errorf("verified/ngram: expected +1, got %v", afterV-beforeV)
 	}
 	if afterU-beforeU != 2 {
 		t.Errorf("unverified/none: expected +2 (empty + garbage normalize to none), got %v", afterU-beforeU)
+	}
+	if afterSpan-beforeSpan != 1 {
+		t.Errorf("verified/span: expected +1 (not folded into none), got %v", afterSpan-beforeSpan)
 	}
 }
 

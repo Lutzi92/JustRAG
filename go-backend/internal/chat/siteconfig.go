@@ -275,6 +275,46 @@ func CitationValidationSemanticThreshold(ctx context.Context, reader SiteConfigR
 	return readFloat(ctx, reader, "citation_validation_semantic_threshold", 0.85, 0.0, 1.0)
 }
 
+// ChatCitationSpansEnabled reports whether the W3-R1..R3 span-verification
+// pass should run after the n-gram/semantic citation validator. When true,
+// runPostResponseTasks asks a fast-tier model to copy one verbatim quote
+// per still-unresolved-or-eligible citation, matches it exactly (mod
+// normalisation) against the cited source, and — on a match — upgrades the
+// status to Method="span" with an exact rune-offset Span the frontend can
+// highlight. One extra model call per answer that has at least one
+// eligible citation. Default off — only citation_validation_enabled
+// (the pass this extends) is on by default. Tunable via site_configs key
+// "chat_citation_spans_enabled".
+func ChatCitationSpansEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_citation_spans_enabled", false)
+}
+
+// ChatCitationSpansModel resolves the fast-tier model for the span
+// extractor: per-task override ("chat_citation_spans_model") →
+// model_tier_fast → "" (caller falls back to the KB's chat model).
+func ChatCitationSpansModel(ctx context.Context, reader SiteConfigReader) string {
+	return ResolveFastTierModel(ctx, reader, "chat_citation_spans_model")
+}
+
+// ChatCitationSpansMaxSources returns the cap on distinct cited sources
+// sent to the span extractor in one answer's extraction call (W3-R1).
+// Default 12, valid range [1, 50]; out-of-range or unparseable values fall
+// back to 12. Tunable via site_configs key
+// "chat_citation_spans_max_sources".
+func ChatCitationSpansMaxSources(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_citation_spans_max_sources", 12, 1, 50)
+}
+
+// ChatCitationSpansTimeoutMs returns the time budget, in milliseconds, for
+// the span-extraction call. Post-response processing is synchronous, so
+// this bounds how long a slow/hung fast-tier model can delay persisting
+// the message verification. Default 8000, valid range [1000, 60000];
+// out-of-range or unparseable values fall back to 8000. Tunable via
+// site_configs key "chat_citation_spans_timeout_ms".
+func ChatCitationSpansTimeoutMs(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_citation_spans_timeout_ms", 8000, 1000, 60000)
+}
+
 // ChatAgenticEnabled reports whether the Phase 3 §F agentic chat loop should
 // fire on complex_reasoning queries in streaming mode. When true, tryDeepChat
 // dispatches to RunAgenticChat (multi-hop with LLM critique gating) instead

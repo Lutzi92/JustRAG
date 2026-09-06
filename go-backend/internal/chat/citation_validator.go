@@ -23,6 +23,10 @@ type CitationStatus struct {
 	//   "ngram"    — content-token n-gram overlap (default fast path)
 	//   "semantic" — cosine similarity of sentence window vs source chunk
 	//                (>= site_config citation_validation_semantic_threshold)
+	//   "span"     — an LLM-extracted verbatim quote matched the cited
+	//                source exactly, modulo W3-R3 normalisation (see
+	//                ApplySpanVerification, citation_spans_verify.go);
+	//                Span below carries the matched offsets
 	//   ""         — Verified=false (see Reason)
 	Method string `json:"method,omitempty"`
 	// Reason explains a non-verified result. Stable string keys for
@@ -32,6 +36,30 @@ type CitationStatus struct {
 	//                     semantic fallback either was disabled or did not
 	//                     pass threshold)
 	Reason string `json:"reason,omitempty"`
+	// Span is the matched quote's location inside the cited source's
+	// Content, present only when Method=="span". Populated by
+	// ApplySpanVerification when chat_citation_spans_enabled is on; nil
+	// otherwise (including when span verification ran but found nothing
+	// to improve — the entry then keeps its n-gram/semantic verdict
+	// unchanged). The frontend's source popover uses it to highlight the
+	// exact supporting passage instead of the whole chunk.
+	Span *CitationSpanRef `json:"span,omitempty"`
+}
+
+// CitationSpanRef pinpoints a verbatim quote match inside a cited source.
+// Start/End are RUNE offsets into ChatSource.Content (Content itself, NOT
+// the "Context: ..."-prefixed prompt rendering — see ChatSource.Content's
+// doc comment in service.go), End exclusive, so
+// []rune(source.Content)[Start:End] recovers the matched text (modulo the
+// W3-R3 normalisation MatchQuoteSpan applied to find it: case, whitespace
+// runs, and quote characters may differ from the LLM's copied quote).
+//
+// This is a different domain from CitationSpan in citation_spans.go, which
+// carries BYTE offsets into the ANSWER (the "[3]" marker's own position) —
+// do not conflate the two when consuming either type.
+type CitationSpanRef struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
 }
 
 // citationMarkerRe captures both single ([3]) and multi-cite ([1, 2, 5])

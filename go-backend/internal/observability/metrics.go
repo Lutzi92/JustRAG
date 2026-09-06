@@ -1486,7 +1486,7 @@ var citationAttributionsTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "rag_citation_attributions_total",
 		Help: "Per-citation-marker validator outcomes. result=verified|unverified; " +
-			"method=ngram|semantic|none. verified/(verified+unverified) over a " +
+			"method=ngram|semantic|span|none. verified/(verified+unverified) over a " +
 			"window is the attribution rate.",
 		ConstLabels: commonLabels,
 	},
@@ -1502,7 +1502,7 @@ func RecordCitationAttribution(verified bool, method string) {
 		result = "verified"
 	}
 	switch method {
-	case "ngram", "semantic":
+	case "ngram", "semantic", "span":
 	default:
 		method = "none"
 	}

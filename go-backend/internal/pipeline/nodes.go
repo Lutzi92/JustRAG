@@ -361,8 +361,11 @@ var nodes = []NodeSpec{
 	},
 	{
 		ID: NodeCitationCheck, Label: "Zitatprüfung", Group: "Prüfung",
-		Help:     "Prüft jede Quellenangabe gegen den zitierten Text und markiert unbelegte Zitate. Ein Verdachtsfall löst die vertiefte Aussagenprüfung aus.",
-		Keys:     []string{"citation_validation_enabled", "citation_validation_semantic_threshold"},
+		Help: "Prüft jede Quellenangabe gegen den zitierten Text und markiert unbelegte Zitate. Ein Verdachtsfall löst die vertiefte Aussagenprüfung aus. Optional: eine Fundstellen-Extraktion (chat_citation_spans_enabled) zitiert wortgenau die stützende Textstelle.",
+		Keys: []string{
+			"citation_validation_enabled", "citation_validation_semantic_threshold",
+			"chat_citation_spans_enabled", "chat_citation_spans_max_sources", "chat_citation_spans_timeout_ms",
+		},
 		LLMCalls: 0, LatencyMs: 120,
 	},
 	{

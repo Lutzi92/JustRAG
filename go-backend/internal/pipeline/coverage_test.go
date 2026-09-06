@@ -183,6 +183,7 @@ var ignoredKeys = map[string]string{
 	"hype_model":                     "model selection",
 	"chat_longmem_conflict_model":    "model selection",
 	"chat_factuality_verifier_model": "model selection",
+	"chat_citation_spans_model":      "model selection",
 	"chat_plan_execute_model":        "model selection",
 	"agent_team_router_model":        "model selection",
 	"describe_image_model":           "model selection",
