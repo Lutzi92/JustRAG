@@ -242,9 +242,13 @@ var ignoredKeys = map[string]string{
 
 	"chat_session_memory_enabled": "session-scoped chat memory subsystem, unrepresented in the phase-0/1 node vocabulary",
 
-	"chat_longcontext_enabled":    "System-2 long-context routing for global-synthesis queries, unrepresented in the phase-0/1 node vocabulary",
-	"chat_longcontext_max_tokens": "tuning knob for the out-of-scope long-context routing subsystem",
-	"chat_longcontext_top_k":      "tuning knob for the out-of-scope long-context routing subsystem; belongs to the longcontext node, not per-KB",
+	"chat_longcontext_enabled":         "System-2 long-context routing for global-synthesis queries, unrepresented in the phase-0/1 node vocabulary",
+	"chat_longcontext_max_tokens":      "tuning knob for the out-of-scope long-context routing subsystem",
+	"chat_longcontext_top_k":           "tuning knob for the out-of-scope long-context routing subsystem; belongs to the longcontext node, not per-KB",
+	"chat_longcontext_mode":            "selects the long-context CONSUMER (flat | map_reduce) inside the out-of-scope long-context route, not a step of the standard pipeline",
+	"chat_longcontext_map_group_size":  "tuning knob for the out-of-scope long-context map-reduce consumer",
+	"chat_longcontext_map_concurrency": "tuning knob for the out-of-scope long-context map-reduce consumer",
+	"chat_longcontext_map_model":       "model selection",
 
 	"chat_community_search_enabled": "community-primed global search variant, unrepresented in the phase-0/1 node vocabulary",
 	"chat_community_search_top_k":   "tuning knob for the out-of-scope community-search variant",

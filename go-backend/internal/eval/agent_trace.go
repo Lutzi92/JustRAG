@@ -57,6 +57,7 @@ type PlanShape struct {
 }
 
 const (
+	OrchestratorLongContext    = "longcontext"
 	OrchestratorSupervisor     = "supervisor"
 	OrchestratorPlanExecute    = "plan_execute"
 	OrchestratorPlanExecuteDAG = "plan_execute_dag"

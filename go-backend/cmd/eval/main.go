@@ -72,6 +72,7 @@ func main() {
 	refreshBM25Stats := flag.Bool("refresh-bm25-stats", false, "Before running, recompute BM25 statistics (vector.BM25StatsRefresher.RefreshKB) for every KB referenced by the golden set, across every dim table that has rows for that KB, so an A/B never runs against missing/stale stats.")
 	bm25ModeOverride := flag.String("bm25-mode", "", `Wave-2 Task 6 / ruling W2-R10: per-run override for bm25_scoring_mode ("ts_rank" | "bm25"). Empty = read the live site_config. Applied the same way as --rerank-blend-alpha (wraps the vector-layer site-config reader; no site_configs mutation) — combine with --refresh-bm25-stats when testing "bm25" against a golden set whose KBs haven't had a stats refresh yet.`)
 	bm25TieredBoostOverride := flag.String("bm25-tiered-boost", "", `Per-run override for bm25_tiered_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-mode.`)
+	longContextModeOverride := flag.String("longcontext-mode", "", `Wave-3 ruling W3-R6: per-run override for chat_longcontext_mode ("flat" | "map_reduce") — which consumer the OrchLongContext orchestrator uses. Empty = read the live site_config. This is a CHAT-layer key, so it wraps siteReader like --crag (not the vector-layer overlay). Only has an effect when chat_longcontext_enabled is on and the question trips the global-synthesis classifier.`)
 	recencyBoostOverride := flag.String("recency-boost", "", `Wave 2 Task 8: per-run override for recency_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-tiered-boost (a vector-layer key, applied via the searchReader overlay, not the chat-level siteReader). Lets the CERT recency fixture A/B the recency prior without a site_configs mutation.`)
 	flag.Parse()
 
@@ -122,6 +123,10 @@ func main() {
 
 	if *bm25ModeOverride != "" && *bm25ModeOverride != "ts_rank" && *bm25ModeOverride != "bm25" {
 		slog.Error("invalid --bm25-mode value", "value", *bm25ModeOverride)
+		os.Exit(2)
+	}
+	if *longContextModeOverride != "" && *longContextModeOverride != "flat" && *longContextModeOverride != "map_reduce" {
+		slog.Error("invalid --longcontext-mode value", "value", *longContextModeOverride)
 		os.Exit(2)
 	}
 	if *bm25TieredBoostOverride != "" && *bm25TieredBoostOverride != "on" && *bm25TieredBoostOverride != "off" {
@@ -286,6 +291,17 @@ func main() {
 	var siteReader chat.SiteConfigReader = chatStore
 	if *cragOverride != "" {
 		siteReader = &cragOverrideReader{inner: chatStore, override: *cragOverride}
+	}
+	// chat_longcontext_mode is a CHAT-layer key (chat.ChatLongContextMode), so
+	// it wraps siteReader rather than the vector-layer overlay above. Chained
+	// after the CRAG wrapper so both overrides compose.
+	if *longContextModeOverride != "" {
+		siteReader = &chatOverlayReader{
+			inner:    siteReader,
+			overlays: map[string]string{"chat_longcontext_mode": *longContextModeOverride},
+		}
+		slog.Info("eval: applying chat site_config overlay for this run",
+			"chat_longcontext_mode", *longContextModeOverride)
 	}
 
 	type evalAdapter interface {
@@ -747,6 +763,20 @@ func (a *legacySearchAdapter) ContentsForQuestion(questionID string, k int) (con
 // GetSiteConfigValue intercepts the "crag_enabled" key and returns
 // "true"/"false" respectively. All other keys delegate to the inner
 // reader.
+// chatOverlayReader overlays chat-layer site_config keys for one run without
+// mutating site_configs — the chat-side twin of overlaySiteConfig.
+type chatOverlayReader struct {
+	inner    chat.SiteConfigReader
+	overlays map[string]string
+}
+
+func (w *chatOverlayReader) GetSiteConfigValue(ctx context.Context, key string) (*string, error) {
+	if v, ok := w.overlays[key]; ok {
+		return &v, nil
+	}
+	return w.inner.GetSiteConfigValue(ctx, key)
+}
+
 type cragOverrideReader struct {
 	inner    chat.SiteConfigReader
 	override string // "on" | "off"

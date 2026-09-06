@@ -920,6 +920,7 @@ func PrepareChatContext(
 	// long-context budget can be raised independently of the
 	// general pipeline ceiling.
 	longContextRoute := ShouldRouteLongContext(ctx, siteConfig, params.QueryType, params.SearchQuery)
+	longContextMode := ""
 	if longContextRoute {
 		opts.LongContextMode = true
 		opts.LongContextTopK = ChatLongContextTopK(ctx, siteConfig)
@@ -928,20 +929,30 @@ func PrepareChatContext(
 		// operators can raise the long-context window independently
 		// of the general pipeline ceiling.
 		maxTokens = ChatLongContextMaxTokens(ctx, siteConfig)
-		observability.RecordLongContextRoute("fired")
+		longContextMode = ChatLongContextMode(ctx, siteConfig)
+		observability.RecordLongContextRoute("fired", longContextMode)
 		logctx.From(ctx).Info("rag.longcontext.fired",
 			"query", params.SearchQuery,
+			"mode", longContextMode,
 			"max_tokens", maxTokens,
 			"top_k", opts.LongContextTopK,
 		)
-		if params.Emit != nil {
-			params.Emit(map[string]any{
-				"type":       "longcontext_route",
-				"query":      params.SearchQuery,
-				"max_tokens": maxTokens,
-				"top_k":      opts.LongContextTopK,
-			})
-		}
+		emitTrajectory(params.Emit, TrajectoryEvent{
+			Stage: "longcontext_route",
+			Mode:  longContextMode,
+			Query: params.SearchQuery,
+		}, map[string]any{
+			// Legacy raw-map shape, kept for one release alongside the
+			// unified agentTrajectory envelope.
+			"type":       "longcontext_route",
+			"query":      params.SearchQuery,
+			"max_tokens": maxTokens,
+			"top_k":      opts.LongContextTopK,
+		})
+	} else if ChatLongContextEnabled(ctx, siteConfig) {
+		// The operator gate is on but the classifier did not fire on this
+		// query — the denominator operators need to audit the firing rate.
+		observability.RecordLongContextRoute("considered", "")
 	}
 
 	// Community-primed global search: for gated global-synthesis
@@ -1060,6 +1071,38 @@ func PrepareChatContext(
 	}
 
 	chunks := TruncateChunksToFit(result.Chunks, maxTokens)
+
+	// Wave-3 W3-R5: the long-context CONSUMER is shared with the
+	// OrchLongContext orchestrator. In map_reduce mode it owns prompt
+	// assembly entirely (findings instead of raw bodies), so it takes over
+	// here — before SandwichOrder, because the map stage groups in score
+	// order. Flat mode falls through to the historical tail below, which is
+	// itself the same assembler (assembleFlatFromParts).
+	//
+	// Skipped on abstain: the abstain notice belongs to the flat tail and
+	// there is nothing to synthesise. A consumer error degrades to flat,
+	// matching the fail-soft rule for every other optional stage.
+	if longContextRoute && !abstain && longContextMode == LongContextModeMapReduce {
+		lcCtx, lcErr := consumeLongContext(ctx, aiResolver, siteConfig, LongContextParams{
+			KbID:            params.KbID,
+			Query:           params.SearchQuery,
+			Language:        params.Language,
+			KbSystemPrompt:  params.KbSystemPrompt,
+			CurrentDateLine: params.CurrentDateLine,
+			FileIDs:         params.FileIDs,
+			RawQuery:        params.RawQuery,
+			Mode:            LongContextModeMapReduce,
+			MaxTokens:       maxTokens,
+			Emit:            params.Emit,
+		}, chunks)
+		if lcErr == nil {
+			lcCtx.EnhancedQuery = result.EnhancedQuery
+			lcCtx.TabularTrace = tabularTrace
+			return lcCtx, nil
+		}
+		logctx.From(ctx).Warn("longcontext: map_reduce consumer failed; falling back to flat assembly", "error", lcErr)
+	}
+
 	chunks = SandwichOrder(chunks)
 
 	// T2-3 ECoRAG evidentiality compression: when the chunk pool is
@@ -1194,50 +1237,33 @@ func PrepareChatContext(
 		)
 	}
 
-	// Build system prompt.
-	var sb strings.Builder
-	if params.KbSystemPrompt != "" {
-		sb.WriteString(params.KbSystemPrompt)
-		sb.WriteString("\n\n")
-	}
-	sb.WriteString(prompts.ChatSystemPromptWithDate(params.Language, params.CurrentDateLine))
-	switch {
-	case abstain:
-		sb.WriteString(prompts.ChatAbstainNotice(params.Language))
-	case IsLowConfidence(chunks):
-		sb.WriteString(prompts.ChatLowConfidenceNotice(params.Language))
-	}
+	// Build system prompt. The assembly itself lives in
+	// assembleFlatFromParts (longcontext_consume.go) so the OrchLongContext
+	// orchestrator's flat mode and this path cannot drift; the three addenda
+	// below are the parts only PrepareChatContext can compute.
+	add := flatAddenda{Abstain: abstain, Tabular: tabularAddendum}
 	if runEnumeration {
 		// Inject the verified-matches addendum even when the list is empty —
 		// the prose LLM should then tell the user "no matches" rather than
 		// improvising from the raw chunks.
 		matchesJSON := ai.FormatEnumerationMatchesJSON(enumerationMatches)
-		sb.WriteString(prompts.EnumerationVerifiedMatchesAddendum(params.Language, matchesJSON))
+		add.Enumeration = prompts.EnumerationVerifiedMatchesAddendum(params.Language, matchesJSON)
 	}
 	if recency.fired {
 		// Injected even when empty: the model should answer "nothing new
 		// was added since <date>" instead of presenting older context
 		// content as new.
-		sb.WriteString(prompts.RecencyListingAddendum(params.Language, recency.entries, recency.sinceISO, recency.truncated))
+		add.Recency = prompts.RecencyListingAddendum(params.Language, recency.entries, recency.sinceISO, recency.truncated)
 	}
-	if tabularAddendum != "" {
-		// Must precede the CONTEXT block: the executed rows are ground
-		// truth the answer LLM should prefer over the retrieved prose.
-		sb.WriteString("\n\n")
-		sb.WriteString(tabularAddendum)
-	}
-	sb.WriteString("\n\nCONTEXT:\n")
-	sb.WriteString(contextText)
 
-	return &ChatContext{
-		EnhancedQuery: result.EnhancedQuery,
-		SystemPrompt:  sb.String(),
-		Sources:       sources,
-		Context:       contextText,
-		FinalChunks:   chunks,
-		Abstain:       abstain,
-		TabularTrace:  tabularTrace,
-	}, nil
+	chatCtx := assembleFlatFromParts(chunks, sources, contextText, LongContextParams{
+		Language:        params.Language,
+		KbSystemPrompt:  params.KbSystemPrompt,
+		CurrentDateLine: params.CurrentDateLine,
+	}, add)
+	chatCtx.EnhancedQuery = result.EnhancedQuery
+	chatCtx.TabularTrace = tabularTrace
+	return chatCtx, nil
 }
 
 // ---------------------------------------------------------------------------

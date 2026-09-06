@@ -680,6 +680,51 @@ func ChatLongContextTopK(ctx context.Context, reader SiteConfigReader) int {
 	return readInt(ctx, reader, "chat_longcontext_top_k", 200, 50, 500)
 }
 
+// ChatLongContextMode selects how the OrchLongContext consumer turns the
+// wide chunk pool into an answer prompt:
+//
+//   - "flat" (default) hands the whole token-budgeted pool to the answer LLM
+//     raw — byte-identical to the pre-Wave-3 behaviour.
+//   - "map_reduce" first extracts per-group findings (claim + verbatim quote,
+//     tagged with the source's `[N]`) with one fast-tier call per chunk group,
+//     then hands the answer LLM only those findings plus the source headers.
+//     Trades N/GroupSize cheap calls for a far shorter answer prompt and much
+//     less position bias across a 200-chunk pool.
+//
+// Unknown values normalise to "flat" so a typo never changes behaviour.
+// Tunable via "chat_longcontext_mode".
+func ChatLongContextMode(ctx context.Context, reader SiteConfigReader) string {
+	v := strings.ToLower(strings.TrimSpace(readString(ctx, reader, "chat_longcontext_mode")))
+	if v == LongContextModeMapReduce {
+		return LongContextModeMapReduce
+	}
+	return LongContextModeFlat
+}
+
+// ChatLongContextMapGroupSize is how many chunks one map-stage extraction call
+// sees (W3-R6). Default 8, range [2, 32]. Smaller groups mean more calls but
+// less per-call position bias; larger groups are cheaper but re-create the
+// crowding the map stage exists to avoid. Only read in map_reduce mode.
+// Tunable via "chat_longcontext_map_group_size".
+func ChatLongContextMapGroupSize(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_longcontext_map_group_size", 8, 2, 32)
+}
+
+// ChatLongContextMapConcurrency caps simultaneous map-stage extraction calls.
+// Default 6, range [1, 32]. This is a per-turn cap; the deployment-wide
+// ceiling is AI_MAX_CONCURRENT_REQUESTS. Tunable via
+// "chat_longcontext_map_concurrency".
+func ChatLongContextMapConcurrency(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_longcontext_map_concurrency", 6, 1, 32)
+}
+
+// ChatLongContextMapModel is the model for the map-stage findings extractor.
+// Fast-tier chain: per-task key → model_tier_fast → empty (caller then uses
+// the KB chat model). Tunable via "chat_longcontext_map_model".
+func ChatLongContextMapModel(ctx context.Context, reader SiteConfigReader) string {
+	return ResolveFastTierModel(ctx, reader, "chat_longcontext_map_model")
+}
+
 // ChatCommunitySearchEnabled gates community-primed global search: inject KG
 // community summaries into the answer pool for global-synthesis queries. Default off.
 func ChatCommunitySearchEnabled(ctx context.Context, reader SiteConfigReader) bool {

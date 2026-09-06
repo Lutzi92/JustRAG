@@ -21,6 +21,7 @@ func complexBase() OrchestratorInputs {
 		CorpusRouterLLMOn:     false,
 		DriftEnabled:          true,
 		IsGlobalSynthesis:     true,
+		LongContextEnabled:    true,
 		SupervisorEnabled:     true,
 		PlanExecuteEnabled:    true,
 		AgenticEnabled:        true,
@@ -45,6 +46,19 @@ func TestSelectOrchestratorPrecedence(t *testing.T) {
 		{"drift wins when corpus query does not match", func(in *OrchestratorInputs) {
 			in.ComparisonReady, in.TeamSelected, in.IsCorpusQuery = false, false, false
 		}, OrchDrift},
+		// W3-R5: long-context sits directly below DRIFT and above the
+		// supervisor. Mutation that this pins: swapping the drift and
+		// longcontext arms of the ladder in SelectOrchestrator makes the
+		// "drift wins when corpus query does not match" row above return
+		// OrchLongContext and fail.
+		{"long-context wins when drift is off", func(in *OrchestratorInputs) {
+			in.ComparisonReady, in.TeamSelected, in.IsCorpusQuery = false, false, false
+			in.DriftEnabled = false
+		}, OrchLongContext},
+		{"supervisor wins when long-context is off too", func(in *OrchestratorInputs) {
+			in.ComparisonReady, in.TeamSelected, in.IsCorpusQuery = false, false, false
+			in.DriftEnabled, in.LongContextEnabled = false, false
+		}, OrchSupervisor},
 		{"supervisor wins when not a global synthesis query", func(in *OrchestratorInputs) {
 			in.ComparisonReady, in.TeamSelected, in.IsCorpusQuery = false, false, false
 			in.IsGlobalSynthesis = false

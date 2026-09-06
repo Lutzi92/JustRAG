@@ -154,6 +154,11 @@ var snapshotConfigKeys = []string{
 	"chat_longcontext_enabled",
 	"chat_longcontext_max_tokens",
 	"chat_longcontext_top_k",
+	// W3-R5/R6 long-context orchestrator + map-reduce consumer.
+	"chat_longcontext_mode",
+	"chat_longcontext_map_group_size",
+	"chat_longcontext_map_concurrency",
+	"chat_longcontext_map_model",
 	// Plan-1 per-KB registry keys (cross-checked by snapshot_registry_test.go).
 	// These keys are per-KB-overridable via the registry in internal/siteconfig;
 	// without them here an eval run would silently not exercise a KB's override.

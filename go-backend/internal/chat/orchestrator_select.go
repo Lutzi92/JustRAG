@@ -15,6 +15,7 @@ const (
 	OrchTeam        Orchestrator = "team"
 	OrchCorpusTable Orchestrator = "corpus_table"
 	OrchDrift       Orchestrator = "drift"
+	OrchLongContext Orchestrator = "longcontext"
 	OrchSupervisor  Orchestrator = "supervisor"
 	OrchPlanExecute Orchestrator = "plan_execute"
 	OrchAgentic     Orchestrator = "agentic"
@@ -50,6 +51,12 @@ type OrchestratorInputs struct {
 	DriftEnabled      bool
 	IsGlobalSynthesis bool
 
+	// LongContextEnabled mirrors chat_longcontext_enabled. Combined with
+	// IsGlobalSynthesis it selects OrchLongContext (W3-R5) — the same gate
+	// ShouldRouteLongContext applies inside PrepareChatContext, hoisted to
+	// the ladder so the streaming path reaches the route at all.
+	LongContextEnabled bool
+
 	SupervisorEnabled  bool
 	PlanExecuteEnabled bool
 	AgenticEnabled     bool
@@ -82,6 +89,12 @@ func SelectOrchestrator(in OrchestratorInputs, confirmCorpus func() bool) Orches
 	}
 	if in.DriftEnabled && in.complexAndUnenhanced() && in.IsGlobalSynthesis {
 		return OrchDrift
+	}
+	// W3-R5: long-context sits directly below DRIFT (which needs KG community
+	// summaries and is the more specific global-synthesis answer) and above
+	// the supervisor. Same narrow gate as drift, so it rarely intercepts.
+	if in.LongContextEnabled && in.complexAndUnenhanced() && in.IsGlobalSynthesis {
+		return OrchLongContext
 	}
 	if in.SupervisorEnabled && in.complexAndUnenhanced() {
 		return OrchSupervisor

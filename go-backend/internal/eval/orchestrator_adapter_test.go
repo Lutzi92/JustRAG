@@ -25,7 +25,7 @@ func (s *stubSiteCfg) GetSiteConfigValue(_ context.Context, key string) (*string
 
 func TestSelectOrchestrator_StandardWhenAllGatesOff(t *testing.T) {
 	cfg := &stubSiteCfg{values: map[string]string{}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning)
+	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
 	if got != OrchestratorStandard {
 		t.Fatalf("got %q, want %q", got, OrchestratorStandard)
 	}
@@ -40,7 +40,7 @@ func TestSelectOrchestrator_StandardWhenNotComplexReasoning(t *testing.T) {
 		"chat_plan_execute_enabled": "true",
 		"chat_agentic_enabled":      "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup)
+	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "Wie hoch war der Etat 2024?")
 	if got != OrchestratorStandard {
 		t.Fatalf("got %q, want %q", got, OrchestratorStandard)
 	}
@@ -55,7 +55,7 @@ func TestSelectOrchestrator_SupervisorWinsWhenEnabled(t *testing.T) {
 		"chat_plan_execute_enabled": "true",
 		"chat_agentic_enabled":      "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning)
+	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
 	if got != OrchestratorSupervisor {
 		t.Fatalf("got %q, want %q", got, OrchestratorSupervisor)
 	}
@@ -69,7 +69,7 @@ func TestSelectOrchestrator_PlanExecuteDAGWhenSupervisorOff(t *testing.T) {
 		"chat_plan_execute_enabled": "true",
 		"chat_plan_execute_dag":     "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning)
+	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
 	if got != OrchestratorPlanExecuteDAG {
 		t.Fatalf("got %q, want %q", got, OrchestratorPlanExecuteDAG)
 	}
@@ -82,7 +82,7 @@ func TestSelectOrchestrator_PlanExecuteFlatWhenDAGOff(t *testing.T) {
 	cfg := &stubSiteCfg{values: map[string]string{
 		"chat_plan_execute_enabled": "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning)
+	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
 	if got != OrchestratorPlanExecute {
 		t.Fatalf("got %q, want %q", got, OrchestratorPlanExecute)
 	}
@@ -95,12 +95,52 @@ func TestSelectOrchestrator_AgenticLast(t *testing.T) {
 	cfg := &stubSiteCfg{values: map[string]string{
 		"chat_agentic_enabled": "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning)
+	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
 	if got != OrchestratorAgentic {
 		t.Fatalf("got %q, want %q", got, OrchestratorAgentic)
 	}
 	if reason != "complex_reasoning_agentic_gate" {
 		t.Fatalf("got reason %q", reason)
+	}
+}
+
+// The eval ladder must mirror the chat ladder's OrchLongContext arm (W3-R5):
+// on a global-synthesis question the long-context gate beats the supervisor.
+// MUTATION: move the longcontext arm below the supervisor arm in
+// SelectOrchestrator and this test returns "supervisor".
+func TestSelectOrchestrator_LongContextBeatsSupervisor(t *testing.T) {
+	cfg := &stubSiteCfg{values: map[string]string{
+		"chat_longcontext_enabled": "true",
+		"chat_supervisor_enabled":  "true",
+	}}
+	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Fasse alle Befunde aus diesen Dokumenten zusammen")
+	if got != OrchestratorLongContext {
+		t.Fatalf("got %q, want %q", got, OrchestratorLongContext)
+	}
+	if reason != "complex_reasoning_longcontext_gate" {
+		t.Fatalf("got reason %q", reason)
+	}
+}
+
+// The classifier, not the flag alone, gates the route: a narrow complex
+// question with the flag on still goes to the supervisor.
+func TestSelectOrchestrator_LongContextNeedsGlobalSynthesisQuery(t *testing.T) {
+	cfg := &stubSiteCfg{values: map[string]string{
+		"chat_longcontext_enabled": "true",
+		"chat_supervisor_enabled":  "true",
+	}}
+	got, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
+	if got != OrchestratorSupervisor {
+		t.Fatalf("got %q, want %q", got, OrchestratorSupervisor)
+	}
+}
+
+// A lookup query never reaches the long-context gate.
+func TestSelectOrchestrator_LongContextRequiresComplexReasoning(t *testing.T) {
+	cfg := &stubSiteCfg{values: map[string]string{"chat_longcontext_enabled": "true"}}
+	got, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "Fasse alle Befunde zusammen")
+	if got != OrchestratorStandard {
+		t.Fatalf("got %q, want %q", got, OrchestratorStandard)
 	}
 }
 

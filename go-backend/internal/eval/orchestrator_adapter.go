@@ -56,9 +56,18 @@ func ClassifyQueryTypeForEval(ctx context.Context, resolver *ai.ConfigResolver, 
 // (internal/chat/http_send.go:816-823). Returns the orchestrator label
 // and a short human-readable dispatch reason. Eval has no Enhance
 // parameter so the `body.Enhance == ""` clause is implicitly true.
-func SelectOrchestrator(ctx context.Context, siteCfg chat.SiteConfigReader, queryType string) (string, string) {
+//
+// query is the question text: the long-context gate keys on the
+// global-synthesis keyword classifier, not on the query type alone.
+func SelectOrchestrator(ctx context.Context, siteCfg chat.SiteConfigReader, queryType, query string) (string, string) {
 	if queryType != vector.QueryTypeComplexReasoning {
 		return OrchestratorStandard, "fallback_query_type_" + queryType
+	}
+	// W3-R5: mirrors the chat ladder's OrchLongContext arm. DRIFT is not
+	// mirrored here (the eval adapter has never dispatched it), so
+	// long-context is the first gate on this lane.
+	if chat.ChatLongContextEnabled(ctx, siteCfg) && chat.IsGlobalSynthesisQuery(query) {
+		return OrchestratorLongContext, "complex_reasoning_longcontext_gate"
 	}
 	if chat.ChatSupervisorEnabled(ctx, siteCfg) {
 		return OrchestratorSupervisor, "complex_reasoning_supervisor_gate"
@@ -115,6 +124,10 @@ type OrchestratorDispatchAdapter struct {
 
 	traceCache map[string]*AgentTrace
 	chunkCache map[string][]vector.SearchChunk
+	// ctxCache holds the *chat.ChatContext an orchestrator branch produced, so
+	// judge mode grades the prompt the orchestrator actually built instead of
+	// falling through to the standard adapter's (which never ran).
+	ctxCache map[string]*chat.ChatContext
 
 	planExecuteMaxSubQueries int
 	planExecuteMaxIterations int
@@ -155,6 +168,7 @@ func NewOrchestratorDispatchAdapter(
 		kbSystemPrompt:           kbSystemPrompt,
 		traceCache:               map[string]*AgentTrace{},
 		chunkCache:               map[string][]vector.SearchChunk{},
+		ctxCache:                 map[string]*chat.ChatContext{},
 		planExecuteMaxSubQueries: chat.ChatPlanExecuteMaxSubQueries(bg, siteCfg),
 		planExecuteMaxIterations: chat.ChatPlanExecuteMaxIterations(bg, siteCfg),
 		planExecuteTokenBudget:   chat.ChatPlanExecuteTokenBudget(bg, siteCfg),
@@ -171,7 +185,7 @@ func NewOrchestratorDispatchAdapter(
 // returns retrieval-shaped chunks sorted by score for metric purposes.
 func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k int) ([]RetrievedChunk, error) {
 	queryType := ClassifyQueryTypeForEval(ctx, a.aiResolver, q.Question, q.KbID, q.Language)
-	orchestrator, dispatchReason := SelectOrchestrator(ctx, a.siteCfg, queryType)
+	orchestrator, dispatchReason := SelectOrchestrator(ctx, a.siteCfg, queryType, q.Question)
 
 	slog.Info("eval.orchestrator_dispatch",
 		"question_id", q.ID,
@@ -252,6 +266,14 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 			MaxDAGDepth:    a.planExecuteMaxDAGDepth,
 			MaxDAGNodes:    a.planExecuteMaxDAGNodes,
 		}, emit)
+	case OrchestratorLongContext:
+		chatCtx, err = chat.RunLongContextChat(ctx, a.aiResolver, a.searchService, a.siteCfg, chat.LongContextParams{
+			KbID:           q.KbID,
+			Query:          q.Question,
+			Language:       q.Language,
+			KbSystemPrompt: kbSystemPrompt,
+			Emit:           emit,
+		})
 	case OrchestratorAgentic:
 		chatCtx, err = chat.RunAgenticChat(ctx, a.aiResolver, a.searchService, chat.AgenticChatParams{
 			KbID:           q.KbID,
@@ -295,6 +317,7 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 	trace.Tabular = TabularEvalTraceFrom(chatCtx.TabularTrace)
 	a.traceCache[q.ID] = trace
 	a.chunkCache[q.ID] = chatCtx.FinalChunks
+	a.ctxCache[q.ID] = chatCtx
 
 	// FinalChunks is in sandwich order (best at 0 and N-1). For retrieval
 	// metrics we need top-k by score, so re-sort. The cached chunks are
@@ -348,11 +371,18 @@ func (a *OrchestratorDispatchAdapter) ContentsForQuestion(questionID string, k i
 	return a.prod.ContentsForQuestion(questionID, k)
 }
 
-// ChatContextForQuestion delegates to the embedded ProductionContextAdapter.
-// For orchestrator-branch questions, no full ChatContext is constructed
-// (we have only the raw chunks), so judge-mode answer generation for
-// those returns (nil, false) and the caller falls through to a generic
-// content-based answer path.
+// ChatContextForQuestion returns the ChatContext an orchestrator branch
+// produced, falling back to the embedded ProductionContextAdapter for
+// standard-branch questions.
+//
+// Before Wave 3 this delegated unconditionally, so every orchestrator-branch
+// question missed in judge mode and the judge graded a generic content-based
+// answer rather than the prompt the orchestrator actually assembled. That
+// matters most for OrchLongContext's map_reduce mode, whose whole point is
+// that the prompt carries findings instead of raw chunk bodies.
 func (a *OrchestratorDispatchAdapter) ChatContextForQuestion(questionID string) (*chat.ChatContext, bool) {
+	if cc, hit := a.ctxCache[questionID]; hit && cc != nil {
+		return cc, true
+	}
 	return a.prod.ChatContextForQuestion(questionID)
 }

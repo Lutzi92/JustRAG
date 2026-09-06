@@ -28,6 +28,12 @@ const trajectoryChunkPreview = 5
 //	                   "Korrigiert nach Faktencheck" indicator while the call runs
 //	refine_complete  — AP-A2: refine LLM finished; carries the word-level diff
 //	                   and the v2 verifier verdict
+//	longcontext_route — W3-R5: the long-context (System 2) route won this turn;
+//	                   Mode carries the consumer (flat | map_reduce)
+//	longcontext_map   — W3-R6: one map-stage chunk group finished; Step is the
+//	                   1-based group, Findings the kept count, Chunks a preview
+//	longcontext_reduce — W3-R6: map stage done; Findings is the total handed to
+//	                   the synthesis prompt
 type TrajectoryEvent struct {
 	Stage        string         `json:"stage"`
 	Step         int            `json:"step,omitempty"`
@@ -37,7 +43,7 @@ type TrajectoryEvent struct {
 	Decision     string         `json:"decision,omitempty"`
 	Reason       string         `json:"reason,omitempty"`
 	Findings     int            `json:"findings,omitempty"`
-	Mode         string         `json:"mode,omitempty"`          // refine_start: surgical|holistic
+	Mode         string         `json:"mode,omitempty"`          // refine_start: surgical|holistic; longcontext_route: flat|map_reduce
 	Diff         []DiffChunk    `json:"diff,omitempty"`          // refine_complete: word-level diff
 	ClaimsBefore int            `json:"claims_before,omitempty"` // refine_*: trigger count
 	ClaimsAfter  int            `json:"claims_after,omitempty"`  // refine_complete: residual count

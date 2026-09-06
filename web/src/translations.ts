@@ -2185,6 +2185,23 @@ export const translations = {
         de: 'Token-Budget-Obergrenze, die die Chat-Schicht auf den Long-Context-Chunk-Pool vor der Prompt-Assemblierung anwendet. Bereich [10.000, 500.000]; Default 100.000. 100k erlaubt ~200 Chunks à ~500 Token aber bleibt deutlich unter den meisten Produktionsmodell-Kontextfenstern (1M auf neueren Gemini/Claude-Tieren, 200k auf Sonnet).',
         en: 'Token-budget ceiling the chat layer applies to the long-context chunk pool before prompt assembly. Range [10,000, 500,000]; default 100,000. 100 k accommodates ~200 chunks at ~500 tokens each but stays well under most production model context windows (1 M on the latest Gemini/Claude tiers, 200 k on Sonnet).',
     },
+    chatLongcontextMode: { de: 'Long-Context: Verarbeitung', en: 'Long-context: consumer' },
+    chatLongcontextModeFlat: { de: 'flat — kompletter Chunk-Pool roh an das Antwortmodell', en: 'flat — whole chunk pool raw to the answer model' },
+    chatLongcontextModeMapReduce: { de: 'map_reduce — erst Befunde je Chunk-Gruppe extrahieren', en: 'map_reduce — extract findings per chunk group first' },
+    chatLongcontextModeHelp: {
+        de: 'Wie der breite Chunk-Pool (bis ~200 Chunks) zur Antwort wird. flat = bisheriges Verhalten: der komplette, aufs Token-Budget gekürzte Pool geht roh an das Antwortmodell. map_reduce = pro Chunk-Gruppe zuerst ein günstiger Fast-Tier-Aufruf, der je Quelle eine Aussage plus wörtliches Zitat extrahiert; das Antwortmodell sieht dann nur diese Befunde und die Quellenüberschriften, nicht die Rohtexte. Vorteil: deutlich kürzerer Antwort-Prompt und weniger Positionsbias über 200 Chunks. Kosten: ein zusätzlicher Fast-Tier-Aufruf je Gruppe. Achtung: eine Quelle, zu der kein Befund extrahiert wurde, kann in der Antwort nicht mehr zitiert werden. Scheitert eine Gruppe, gehen deren Rohtexte (erste 600 Zeichen je Chunk) als Ersatz-Befunde in den Prompt — Belege gehen nie still verloren. Wirkt nur, wenn Long-Context aktiv ist. Standard: flat.',
+        en: 'How the wide chunk pool (up to ~200 chunks) becomes an answer. flat = today\'s behaviour: the whole token-budgeted pool goes to the answer model raw. map_reduce = one cheap fast-tier call per chunk group first, extracting one claim plus a verbatim quote per source; the answer model then sees only those findings and the source headers, not the raw bodies. Upside: a much shorter answer prompt and less position bias across 200 chunks. Cost: one extra fast-tier call per group. Caveat: a source no finding surfaced can no longer be cited in the answer. If a group fails, its raw text (first 600 characters per chunk) enters the prompt as fallback findings — evidence is never silently dropped. Only has an effect when long-context is on. Default: flat.',
+    },
+    chatLongcontextMapGroupSize: { de: 'Long-Context: Chunks je Gruppe', en: 'Long-context: chunks per group' },
+    chatLongcontextMapGroupSizeHelp: {
+        de: 'Wie viele Chunks ein Extraktionsaufruf im map_reduce-Modus sieht. Bereich [2, 32]; Default 8. Kleinere Gruppen bedeuten mehr Aufrufe, aber weniger Positionsbias innerhalb eines Aufrufs; größere Gruppen sind billiger, erzeugen aber wieder genau die Verdrängung, gegen die die Map-Stufe existiert. Nur im Modus map_reduce wirksam.',
+        en: 'How many chunks one extraction call sees in map_reduce mode. Range [2, 32]; default 8. Smaller groups mean more calls but less within-call position bias; larger groups are cheaper but re-create exactly the crowding the map stage exists to avoid. Only effective in map_reduce mode.',
+    },
+    chatLongcontextMapConcurrency: { de: 'Long-Context: parallele Extraktionen', en: 'Long-context: map concurrency' },
+    chatLongcontextMapConcurrencyHelp: {
+        de: 'Obergrenze gleichzeitiger Extraktionsaufrufe der Map-Stufe pro Chat-Turn. Bereich [1, 32]; Default 6. Dies ist eine Grenze pro Turn — die deploymentweite Obergrenze ist AI_MAX_CONCURRENT_REQUESTS. Nur im Modus map_reduce wirksam.',
+        en: 'Upper bound on simultaneous map-stage extraction calls per chat turn. Range [1, 32]; default 6. This is a per-turn cap — the deployment-wide ceiling is AI_MAX_CONCURRENT_REQUESTS. Only effective in map_reduce mode.',
+    },
 
     // My Memory (GDPR)
     myMemory: { de: 'Mein Gedächtnis', en: 'My Memory' },

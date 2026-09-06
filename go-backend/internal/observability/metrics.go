@@ -720,18 +720,23 @@ func RecordRawQueryList(outcome string) {
 var longContextRouteTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name:        "rag_longcontext_route_total",
-		Help:        "Per-outcome counter for the T2-1 long-context (System 2) routing. Outcomes: fired (the keyword classifier matched and SearchOptions.LongContextMode was set), considered (the operator gate is on but the classifier did not match this query — useful to audit firing rate against typical traffic), skipped_disabled (the operator gate is off — only emitted from the per-turn audit path when explicitly enabled). Production deployments expect `fired ≪ considered` at chat_longcontext_enabled=true.",
+		Help:        "Per-outcome counter for the long-context (System 2) route. Outcomes: fired (the keyword classifier matched and the route ran), considered (the operator gate is on but the classifier did not match this query — useful to audit firing rate against typical traffic), map_empty (map_reduce ran but every group came back empty, so the consumer degraded to flat), skipped_disabled (the operator gate is off — only emitted from the per-turn audit path when explicitly enabled). The mode label carries the consumer that ran or would have run (flat | map_reduce); it is `n_a` for outcomes where no consumer is selected. Production deployments expect `fired ≪ considered` at chat_longcontext_enabled=true.",
 		ConstLabels: commonLabels,
 	},
-	[]string{"outcome"},
+	[]string{"outcome", "mode"},
 )
 
-// RecordLongContextRoute increments the per-outcome counter.
-func RecordLongContextRoute(outcome string) {
+// RecordLongContextRoute increments the per-outcome counter. mode is the
+// consumer shape (flat | map_reduce); pass "" when no consumer applies and it
+// normalises to n_a.
+func RecordLongContextRoute(outcome, mode string) {
 	if outcome == "" {
 		outcome = "skipped_disabled"
 	}
-	longContextRouteTotal.WithLabelValues(outcome).Inc()
+	if mode == "" {
+		mode = "n_a"
+	}
+	longContextRouteTotal.WithLabelValues(outcome, mode).Inc()
 }
 
 // --- Evidentiality compression (ECoRAG, T2-3) ------------------------------
