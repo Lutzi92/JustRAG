@@ -142,76 +142,105 @@ const (
 // normalizeForMatch NFC-normalises s, lower-cases it, collapses runs of
 // whitespace to a single space, and drops quote-mark characters. It
 // returns the resulting rune sequence plus, for each output rune, the RUNE
-// offset in the ORIGINAL s it corresponds to (idx[i] is the source of
-// out[i]) — MatchQuoteSpan uses idx to translate a match found in the
-// normalised text back to offsets into the caller's original string.
+// range [starts[i], ends[i]) in the ORIGINAL s that produced it —
+// MatchQuoteSpan uses these to translate a match found in the normalised
+// text back to offsets into the caller's original string.
 //
-// NFC is applied to the whole string first so a decomposed diacritic
-// (rare — mostly OCR output) matches its precomposed form. When that
-// changes the rune count (composition merged runes), the 1:1
-// correspondence this function relies on no longer holds, so
-// normalisation is skipped for that string and the original runes are
-// used instead — fail-soft per W3-R3: a quote that only differs by
-// normalization form in that rare case simply doesn't match, and keeps
-// its n-gram/semantic verdict.
-func normalizeForMatch(s string) (out []rune, idx []int) {
-	base := s
-	if nfc := norm.NFC.String(s); utf8.RuneCountInString(nfc) == utf8.RuneCountInString(s) {
-		base = nfc
+// NFC composition can merge several original runes into one output rune
+// (a decomposed diacritic — base rune + combining mark, mostly OCR output
+// — composes into one precomposed character), so there is no 1:1
+// correspondence between input and output runes to index by position.
+// Instead this walks s through norm.Iter, which segments it at
+// normalisation boundaries: each segment's normalised bytes are entirely
+// attributed to that segment's ORIGINAL rune range. When a segment
+// produces more than one output rune (composition wasn't complete), every
+// rune in it shares that same original range — the finest attribution
+// available without deeper analysis, and sufficient here since
+// MatchQuoteSpan only needs the START of the first matched rune and the
+// END of the last.
+func normalizeForMatch(s string) (out []rune, starts, ends []int) {
+	if s == "" {
+		return nil, nil, nil
 	}
-	runes := []rune(base)
-	out = make([]rune, 0, len(runes))
-	idx = make([]int, 0, len(runes))
+
+	var it norm.Iter
+	it.InitString(norm.NFC, s)
 	lastWasSpace := false
-	for i, r := range runes {
-		if citationSpanQuoteChars[r] {
-			continue
-		}
-		lr := unicode.ToLower(r)
-		if unicode.IsSpace(lr) {
-			if lastWasSpace {
+	for !it.Done() {
+		segStartByte := it.Pos()
+		seg := it.Next() // normalised bytes for this segment
+		segEndByte := it.Pos()
+
+		segStartRune := utf8.RuneCountInString(s[:segStartByte])
+		segEndRune := segStartRune + utf8.RuneCountInString(s[segStartByte:segEndByte])
+
+		for _, r := range string(seg) {
+			if citationSpanQuoteChars[r] {
 				continue
 			}
-			lastWasSpace = true
-			out = append(out, ' ')
-			idx = append(idx, i)
-			continue
+			lr := unicode.ToLower(r)
+			if unicode.IsSpace(lr) {
+				if lastWasSpace {
+					// Extend the run's end to cover this segment too —
+					// the run's END keeps moving; its START (recorded
+					// when the run began) stays put.
+					ends[len(ends)-1] = segEndRune
+					continue
+				}
+				lastWasSpace = true
+				out = append(out, ' ')
+				starts = append(starts, segStartRune)
+				ends = append(ends, segEndRune)
+				continue
+			}
+			lastWasSpace = false
+			out = append(out, lr)
+			starts = append(starts, segStartRune)
+			ends = append(ends, segEndRune)
 		}
-		lastWasSpace = false
-		out = append(out, lr)
-		idx = append(idx, i)
 	}
-	return out, idx
+	return out, starts, ends
 }
 
-// trimTrailingQuotePunct trims a run of trailing sentence punctuation (and
-// any whitespace baring it) from a normalised rune slice, so a quote
-// copied with its closing period/comma still matches source text whose
-// clause ends without one, and vice versa.
-func trimTrailingQuotePunct(r []rune) []rune {
+// trimQuoteEdges trims leading whitespace and a run of trailing sentence
+// punctuation (plus any whitespace baring it) from a normalised rune
+// slice, so a quote copied with surrounding whitespace or a closing
+// period/comma still matches source text whose clause has neither, and
+// vice versa.
+func trimQuoteEdges(r []rune) []rune {
 	end := len(r)
-	for end > 0 {
-		switch r[end-1] {
-		case '.', ',', ';', ':', '!', '?', ' ':
-			end--
-		default:
-			return r[:end]
-		}
+	for end > 0 && isTrailingTrimRune(r[end-1]) {
+		end--
 	}
-	return r[:end]
+	r = r[:end]
+
+	start := 0
+	for start < len(r) && r[start] == ' ' {
+		start++
+	}
+	return r[start:]
+}
+
+func isTrailingTrimRune(r rune) bool {
+	switch r {
+	case '.', ',', ';', ':', '!', '?', ' ':
+		return true
+	default:
+		return false
+	}
 }
 
 // MatchQuoteSpan locates quote inside content and returns its RUNE offsets
 // (domain: the caller's content string — for ApplySpanVerification that is
 // ChatSource.Content — End exclusive) after W3-R3 normalisation: NFC,
 // lower-case, whitespace-run collapse, quote-character strip, and a
-// trailing-punctuation trim applied to the quote only. Returns ok=false
-// when the normalised quote is shorter than 12 runes or longer than 240,
-// or when no normalised occurrence exists in content.
+// leading/trailing trim applied to the quote only. Returns ok=false when
+// the normalised quote is shorter than 12 runes or longer than 240, or
+// when no normalised occurrence exists in content.
 func MatchQuoteSpan(content, quote string) (CitationSpanRef, bool) {
-	normContent, idx := normalizeForMatch(content)
-	normQuote, _ := normalizeForMatch(quote)
-	normQuote = trimTrailingQuotePunct(normQuote)
+	normContent, starts, ends := normalizeForMatch(content)
+	normQuote, _, _ := normalizeForMatch(quote)
+	normQuote = trimQuoteEdges(normQuote)
 
 	if len(normQuote) < minQuoteRunes || len(normQuote) > maxQuoteRunes {
 		return CitationSpanRef{}, false
@@ -229,11 +258,11 @@ func MatchQuoteSpan(content, quote string) (CitationSpanRef, bool) {
 
 	startRune := utf8.RuneCountInString(contentStr[:bytePos])
 	endRune := startRune + len(normQuote)
-	if endRune > len(idx) {
+	if endRune > len(starts) {
 		return CitationSpanRef{}, false
 	}
 
-	return CitationSpanRef{Start: idx[startRune], End: idx[endRune-1] + 1}, true
+	return CitationSpanRef{Start: starts[startRune], End: ends[endRune-1]}, true
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/justrag/go-backend/internal/ai"
 )
 
@@ -87,6 +89,70 @@ func TestMatchQuoteSpan_ExactAndNormalised(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMatchQuoteSpan_NFCComposition exercises W3-R3's NFC step across a
+// rune-count change: composing a decomposed base+combining-mark sequence
+// ("u" + combining diaeresis U+0308, 2 runes) into one precomposed
+// character ("ü", 1 rune) changes the rune count. An earlier
+// implementation bailed out of NFC entirely whenever that happened —
+// exactly the case NFC exists for — so a decomposed source never matched
+// a precomposed quote (or vice versa). Both directions must match here.
+//
+// Mutation: reintroduce that "skip NFC when rune count changes" bail-out
+// in normalizeForMatch → the decomposed-content subtest fails (content's
+// raw, uncomposed "u"+combining-mark sequence never equals the quote's
+// precomposed "ü", so MatchQuoteSpan returns ok=false).
+func TestMatchQuoteSpan_NFCComposition(t *testing.T) {
+	t.Parallel()
+	const decomposedU = "u\u0308" // "ü" as base "u" + combining diaeresis U+0308 (2 runes)
+
+	t.Run("decomposed content, precomposed quote", func(t *testing.T) {
+		before := "Frau M"
+		after := "ller leitet"
+		content := before + decomposedU + after + " das Projekt"
+		quote := "Frau Müller leitet" // precomposed
+
+		wantStart := 0
+		wantEnd := utf8.RuneCountInString(before) + utf8.RuneCountInString(decomposedU) + utf8.RuneCountInString(after)
+
+		got, ok := MatchQuoteSpan(content, quote)
+		if !ok {
+			t.Fatalf("expected a match, got ok=false")
+		}
+		if got.Start != wantStart || got.End != wantEnd {
+			t.Errorf("got [%d,%d), want [%d,%d)", got.Start, got.End, wantStart, wantEnd)
+		}
+		extracted := string([]rune(content)[got.Start:got.End])
+		gotNFC := norm.NFC.String(strings.ToLower(extracted))
+		wantNFC := norm.NFC.String(strings.ToLower(quote))
+		if gotNFC != wantNFC {
+			t.Errorf("NFC'd extracted text = %q, want %q", gotNFC, wantNFC)
+		}
+	})
+
+	t.Run("precomposed content, decomposed quote", func(t *testing.T) {
+		matchText := "Frau Müller leitet" // precomposed
+		content := matchText + " das Projekt"
+		quote := "Frau M" + decomposedU + "ller leitet" // decomposed "ü"
+
+		wantStart := 0
+		wantEnd := utf8.RuneCountInString(matchText)
+
+		got, ok := MatchQuoteSpan(content, quote)
+		if !ok {
+			t.Fatalf("expected a match, got ok=false")
+		}
+		if got.Start != wantStart || got.End != wantEnd {
+			t.Errorf("got [%d,%d), want [%d,%d)", got.Start, got.End, wantStart, wantEnd)
+		}
+		extracted := string([]rune(content)[got.Start:got.End])
+		gotNFC := norm.NFC.String(strings.ToLower(extracted))
+		wantNFC := norm.NFC.String(strings.ToLower(quote))
+		if gotNFC != wantNFC {
+			t.Errorf("NFC'd extracted text = %q, want %q", gotNFC, wantNFC)
+		}
+	})
 }
 
 // fakeQuoteExtractor is a test double for extractQuotesFn: it records every
