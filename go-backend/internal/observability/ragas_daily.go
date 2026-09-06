@@ -25,7 +25,11 @@ var (
 				"prompt succeeded — a failed prompt is absent, never 0. " +
 				"Labels: metric (faithfulness/answer_relevance/" +
 				"context_precision, closed enum), kb (capped, see the " +
-				"overflow label).",
+				"overflow label). The overflow series' VALUE is not " +
+				"meaningful: every KB past the cap writes to that one " +
+				"series, so its mean is last-write-wins across them. Only " +
+				"the series' PRESENCE carries information (the cap bit); " +
+				"per-KB numbers for those KBs live in the admin KB overview.",
 			ConstLabels: commonLabels,
 		},
 		[]string{"kb", "metric"},

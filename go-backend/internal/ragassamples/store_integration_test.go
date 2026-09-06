@@ -201,11 +201,23 @@ func TestDailyStats_SkipsNullKB(t *testing.T) {
 	ctx := context.Background()
 	store := ragassamples.NewStore(pool)
 
-	if err := store.Insert(ctx, ragassamples.Sample{Faithfulness: f64(0.3)}); err != nil {
+	// This row has no KB, so the per-KB cleanup in insertKB cannot reach it and
+	// it has to clean up after itself — by PRIMARY KEY. A predicate over the
+	// score column would not do: faithfulness is `real`, so a `= 0.3` literal
+	// is a float8 that the widened float4 never equals, and the DELETE would
+	// silently match nothing, leaking one row into the shared dev DB per run.
+	// The marker is only how the id is located, never what is deleted.
+	const marker = "ragassamples-test-nullkb"
+	if err := store.Insert(ctx, ragassamples.Sample{Faithfulness: f64(0.3), JudgeModel: marker}); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
+	var id string
+	if err := pool.QueryRow(ctx,
+		`SELECT id::text FROM ragas_samples WHERE judge_model = $1`, marker).Scan(&id); err != nil {
+		t.Fatalf("locate the inserted row: %v", err)
+	}
 	t.Cleanup(func() {
-		pool.Exec(ctx, `DELETE FROM ragas_samples WHERE kb_id IS NULL AND faithfulness = 0.3`) //nolint:errcheck
+		pool.Exec(ctx, `DELETE FROM ragas_samples WHERE id = $1::uuid`, id) //nolint:errcheck
 	})
 
 	stats, err := store.DailyStats(ctx, time.Now().Add(-24*time.Hour))
