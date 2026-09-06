@@ -183,3 +183,82 @@ Under `.superpowers/sdd/2026-09-06-rag-sota-wave3/` (gitignored workspace):
 `rag.longcontext.map_reduce` group counts out of the logs), `t4-stats.py`
 (the noise table above) and `t4-validate-golden.py` (fixture validator:
 trigger verbatim-ness, file-name existence against the live KB, row shape).
+
+## §2 Wave 4 re-measurement (pending)
+
+**Status:** only Step 1 (author `expected_points` + validate the loader) is
+done as of this record. Steps 2–4 (judged flat×2 / map_reduce×2 runs,
+pairwise comparison, the W4-R7 decision) are a separate dispatch (5b),
+deliberately not started here — the Task 6 BM25 grid was still running on
+the same dev stack and LLM backend (`t6-grid.lock` pid live, `t6-grid-resume.log`
+mid-cell `C1`) when this record was written, and both a judged run and the
+grid would contend for the same model server. This section will be filled in
+by 5b once the grid finishes.
+
+### `expected_points` curation (Task 5 / W4-R5)
+
+Added to all 12 rows of `eval/golden/global-synthesis-de.jsonl` (gitignored;
+the file itself is not committed — this table is the reviewable record).
+Points were authored **only** from the cited source documents' chunk text
+(`document_chunks_4096` in the dev vector DB, `justrag-vectordb-1`), read via
+read-only `psql` against `justrag-db-1` (file-id resolution by name) and
+`justrag-vectordb-1` (chunk content), never from a model answer. 45 points
+total across 12 questions (3–5 per question, all within the loader's 2–6
+range; longest point well under the 300-rune cap).
+
+| Q | Points | Source files verified against (name, as in `must_cite_file_names`) |
+|---|---|---|
+| G01 | 5 | SAP - Migration auf S4HANA - Go4S4.md; Windows 10-Ablösung.md; Außerbetriebnahme altes IMAP-E-Mail-System (Dovecot).md; Migration KEMP-Loadbalancer zu VMware AVI.md; Folio Einführung des cloudbasierten Bibliothekssystems und Ablösung LBS.md |
+| G02 | 4 | Smarte Administration mit KI.md; KI-HUB für innovative Forschung.md; KI-Infrastruktur und KI-Plattformen Konzeption zentral abgestimmter Planung, Beschaffung und Auslast.md; Weiterentwicklung der zentralen JLU-KI-Services (HAWKI, HRZ-API-Service und weitere Schnittstellen; .md |
+| G03 | 4 | Datenträgerverschlüsselung.md; MFA für Admins Multifaktorauthentifizierung für IT-Admins.md; LAPS-Upgrade.md; Informationssicherheit - wann ist der ISB zu beteiligen.md; Aktualisierung Sicherheitskonzept HRZ.md; Informationssicherheits-Richtlinien Überarbeitung und Visualisierung (PoliciesVis).md |
+| G04 | 4 | JLU Future Data Center - Teil 1.md; Migration Datacenter Netzwerk Optimierung Firewall, Router und Switche.md; Austausch USV 1 & 2 Erneuerung unterbrechungsfreie Stromversorgung Serverräume 1 & 2.md; Machbarkeitsstudie eines Herstellerwechsels im Bereich WLAN.md |
+| G05 | 3 | ILIAS - Stud.IP Schnittstelle.md; HISinOne MoveON Schnittstelle.md; ILIAS-Update.md; Stud.IP-Update.md |
+| G06 | 3 | Workshop Agenda und Inhalte.md (comment thread); Raumübersicht Workshop.md; Infos für Human Digitals Orga Workshop am 25.11.2025.md; Save the Date und E-Mailverteiler für Einladung.md; Orga Verwaltungsworkshop 15.04.2026.md |
+| G07 | 4 | Zusammenfassung Ergebnisse Workshop.md; Thementisch 2 Kulturwandel & Qualifikationsbedarfe für KI an der JLU.md; Thementisch 8 Kulturwandel & Qualifikationsbedarfe für KI an der JLU.md; Thementisch 4 Ethik & Gesellschaft.md; Thementisch 7 Ethik & Gesellschaft.md |
+| G08 | 4 | RWTH Aachen.md; Universität Hamburg.md; Stanford University.md; ETH Zürich.md |
+| G09 | 4 | Moderne AuthN-Infrastruktur Sicherere und zeitgemäße Authentifizierung von Nutzenden.md; Moderne AuthN-Infrastruktur Aufbau einer Produktivumgebung.md; Umstellung der Authentifizierung von LDAP auf Shibboleth für Stud.IP und ILIAS.md; Erneuerung OpenLDAP-Server Infrastruktur der zentralen Authentifizierung.md |
+| G10 | 4 | Digitalisierung der Aktenführung in der Rechtsabteilung (B1) - Einführung der Kanzleisoftware AnNo.md; Digitales Anforderungsformular Beschaffung FB11.md; Einführung ESS (Employee Self Service) in SAP-HCM.md; Pilotierung Workflowmanagement FormCycle.md |
+| G11 | 4 | Prozess der DigITal-Projektentwicklung Welche Status durchläuft ein Projekt.md; Rollendefinition Projektleitung und Projektkoordination.md; Priorisierungs-Methodik im Digital-PPM.md; Must-Have vs. Entscheidbar Einordnung von Projekten.md |
+| G12 | 4 | Client-Management-Rollout Softwaremanagement durch Baramundi.md; Windows 10-Ablösung.md; M365-Planung.md; Software Asset Management.md |
+
+Full point text is not reproduced here since the golden set stays gitignored
+and untracked; this table exists so the curation choices (which facts, from
+which files) are reviewable without the jsonl. The full text lives in
+`eval/golden/global-synthesis-de.jsonl` locally.
+
+**Points deliberately left out** (no reliably verifiable fact found in the
+skimmed chunk text within task scope, or the field was template boilerplate
+without a filled-in value): exact `Projektende` dates for several rows in the
+G01/G04 clusters (the Confluence "Steckbrief" template's `Projektende`
+field is frequently edited via changelog entries rather than a stable final
+value — e.g. Windows 10-Ablösung's own changelog revises its end date five
+times), named `Projektleitung` persons (present in some files but not
+central to what a *synthesis* answer needs to state, and inconsistent in
+format across files), and G03's/G09's remaining cluster members beyond the
+ones cited (Passwortverwaltung-Evaluation, Zentraler Log-Server, Wiederanlaufpläne,
+IAM-Erweiterungen, AD-Kompartmentkonzept, Schnittstelle CAFM-IAM, Benutzeranlage
+SAP-IAM, Account-/Beschäftigten-Lifecycle-Prozesse) — each cluster's 3–5
+points already cover the question's ask (technical-vs-organizational split
+for G03; abolished-vs-newly-built for G09) without exhaustively re-stating
+every file in `must_cite_file_names`, per the brief's "2–6 points" ceiling.
+
+### Loader validation smoke (Step 1)
+
+```bash
+bash .superpowers/sdd/2026-09-06-rag-sota-wave4/run-eval.sh \
+  --golden eval/golden/global-synthesis-de.jsonl --question-id G01 \
+  --production-context --longcontext on --longcontext-mode flat \
+  --output .superpowers/sdd/2026-09-06-rag-sota-wave4/t5a-smoke.json
+```
+
+Ran once, single question, no `--judge` (retrieval + answer generation only —
+permitted alongside the Task 6 grid per the Task 5 hand-off, since it is one
+short run rather than a repeated/long measurement). Result: `errors = 0`,
+`eval.orchestrator_dispatch` shows `query_type=complex_reasoning`,
+`orchestrator=longcontext`; `rag.longcontext.fired mode=flat`; report written
+to `t5a-smoke.json` with `mean_recall=0.500 mrr=1.000 mean_ndcg=0.984`
+(retrieval-only numbers, expected to be noisy at n=1 and not the point of
+this smoke — the point is that `ParseGoldenSetContent`/the loader accepted
+every row, G01's `expected_points` included, without a validation error).
+Exit code 0 (`eval-exit=0`). No `--judge`, so the coverage judge itself did
+not run in this smoke; that is Step 2 in dispatch 5b.
