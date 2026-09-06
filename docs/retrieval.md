@@ -225,13 +225,157 @@ Per-alt-query BM25 (P4): when `rag_fusion_enabled` is on, every alternative-phra
 
 **Tiered boost interaction**: `bm25_tiered_boost_enabled` was designed as an IDF proxy for `ts_rank` (a coarse CASE-based multiplier approximating "rare term → bigger boost" without real corpus statistics). With real BM25 scoring already carrying an IDF term, the boost stacks on top rather than substituting for it — cell D (bm25 + boost) doesn't clearly beat cell C (bm25, no boost) on lookup MRR (0.913 vs 0.895) or complex_reasoning (both regress by the same ~7pp), and cell B (ts_rank + boost) regresses on every route relative to A (ts_rank, no boost) by more than the noise band, including a −3.5pp overall MRR regression. The boost's IDF-proxy rationale weakens once real IDF is available; it is not a clean win in either mode on this fixture.
 
+**`bm25_tiered_boost_enabled` is deprecated (2026-09, Wave 3 Task 7).** The A/B above is the whole case: under `ts_rank` it regressed every route beyond the noise band (cell B), and under `bm25` it added nothing the real IDF term doesn't already provide (cell D vs C). No deployment should turn it on, and the admin-UI help text now says so (`Veraltet — im 2026-09 A/B auf allen Routen negativ; Kandidat für Entfernung. Standardmäßig aus.`). The key, its `site_config` entry and `buildBoostExpr` **stay in place for now** — removal is its own release (a deployment that has it on would silently change ranking on upgrade, and `--bm25-tiered-boost on|off` is still the way to reproduce the measurement above). Treat it as frozen: no new tuning, no new call sites.
+
 **Decision**: the brief's literal rule — *the default stays `ts_rank` unless C or D beats A on lookup MRR by more than the noise band on that metric, without losing recall on any route by more than the noise band* — evaluates as follows. C's lookup-MRR delta (+2.3pp) equals the noise band exactly, not more than it, so **C does not clear the bar**. D's lookup-MRR delta (+4.1pp) exceeds the noise band (2.3pp), and D loses recall on no route (complex_reasoning +1.0pp, enumeration +0.0pp, lookup +5.4pp — all ≥0) — **by the letter of the rule, D clears the bar**.
 
 However, this recall-only guard misses a real and consistent side effect: both C and D regress `complex_reasoning` MRR by ~7.0pp — roughly 14× that route's own 0.5pp noise band, and more than double `cmd/eval`'s own default MRR regression threshold (3pp), tripping the regression gate (exit 3) on every C/D/B run. Recall is essentially unchanged on that route (+0.1pp / +1.0pp), so the right chunks are still retrieved — they just rank lower after CRAG's multi-round grading and the RRF fusion. The most likely cause is scale mismatch: `rrf_weight_bm25` (currently 1, tuned against `ts_rank`'s output range) is applied unchanged to `bm25`'s IDF·TF-saturation scores, which live on a different numeric scale, especially once multiple sub-query lists get fused for `complex_reasoning`'s plan-execute path.
 
-**This wave keeps the default at `ts_rank`** (no code or config change lands in this task, per the global constraints — Task 9 owns flipping any default). The literal per-metric rule favors flipping to `bm25` (uncapped, no tiered boost), but this doc recommends Task 9 treat that reading with the complex_reasoning caveat squarely in view rather than flip on the lookup-MRR number alone — either re-tune `rrf_weight_bm25` for the `bm25` scale range first, or land the flip with an explicit note that complex_reasoning ranking quality is accepted as a known regression pending that re-tune.
+**This wave keeps the default at `ts_rank`** (no code or config change lands in this task, per the global constraints — Task 9 owns flipping any default). The literal per-metric rule favors flipping to `bm25` (uncapped, no tiered boost), but this doc recommends Task 9 treat that reading with the complex_reasoning caveat squarely in view rather than flip on the lookup-MRR number alone — either re-tune `rrf_weight_bm25` for the `bm25` scale range first, or land the flip with an explicit note that complex_reasoning ranking quality is accepted as a known regression pending that re-tune. **Read this paragraph together with the Wave-3 retune grid below: the ~7 pp `complex_reasoning` MRR regression it reasons from did NOT reproduce on a fresh pair of runs (−0.3 pp at the same weights), so its scale-mismatch explanation is not supported by the later evidence.**
 
-**Follow-up** (not this wave): re-run the `rerank_blend_alpha` / `rrf_weight_*` α-grid under whichever mode ships as the default — the weights in `docs/retrieval.md`'s "Reranker score weighting" / "RAG-Fusion" sections were tuned against `ts_rank`'s score distribution and the complex_reasoning MRR regression above is consistent with them being off-scale for `bm25`.
+### Retune grid: `rrf_weight_bm25` × α under `bm25` (Wave 3 Task 7, 2026-09-06)
+
+The Wave-2 follow-up above — *"re-run the α-grid under the mode that ships as
+the default"* — ran as a full grid: baseline **A** (`ts_rank`, live weights),
+its same-flag repeat **A2**, then `bm25` × `rrf_weight_bm25` ∈ {0.5, 0.75, 1.0}
+× `rerank_blend_alpha` ∈ {0.6, 0.8}. Same fixture and settings as the Wave-2
+table (89 questions, k=10, `--production-context --orchestrator-dispatch=false`,
+`--refresh-bm25-stats` on every cell, no judge, no `site_configs` mutation —
+every knob is a `cmd/eval` overlay flag). Full record, including the
+per-cell evidence that `bm25` mode actually ran (93–96 searches per cell with
+`"keyword_mode":"bm25"`, zero `rag_bm25_mode_fallback_total` events):
+`eval/golden/bm25-retune.acceptance.md`.
+
+| Cell | Mode | w<sub>bm25</sub> | α | overall R/MRR/nDCG | lookup R/MRR/nDCG | enumeration R/MRR/nDCG | complex R/MRR/nDCG | wall |
+|---|---|---|---|---|---|---|---|---|
+| **A** (baseline) | ts_rank | 1.0 | 0.8 | 0.828/0.906/0.906 | 0.887/0.895/0.898 | 0.864/1.000/1.000 | 0.733/0.878/0.876 | 16m49s |
+| **A2** (noise repeat) | ts_rank | 1.0 | 0.8 | 0.806/0.888/0.888 | 0.841/0.849/0.852 | 0.864/1.000/1.000 | 0.733/0.891/0.887 | 17m39s |
+| C1 | bm25 | 0.5 | 0.6 | 0.856/0.916/0.918 | 0.909/0.895/0.904 | 0.899/1.000/1.000 | 0.765/0.906/0.902 | 16m29s |
+| C2 | bm25 | 0.5 | 0.8 | 0.850/0.916/0.919 | 0.909/0.895/0.904 | 0.899/1.000/1.000 | 0.749/0.906/0.902 | 16m38s |
+| C3 | bm25 | 0.75 | 0.6 | 0.828/0.899/0.900 | 0.886/0.884/0.890 | 0.903/1.000/0.993 | 0.718/0.875/0.872 | 16m18s |
+| C4 | bm25 | 0.75 | 0.8 | 0.844/0.904/0.908 | 0.886/0.872/0.881 | 0.899/1.000/1.000 | 0.764/0.906/0.902 | 16m44s |
+| C5 | bm25 | 1.0 | 0.6 | 0.846/0.904/0.907 | 0.909/0.895/0.904 | 0.899/1.000/1.000 | 0.738/0.875/0.869 | 16m34s |
+| C6 | bm25 | 1.0 | 0.8 | 0.843/0.899/0.900 | 0.886/0.884/0.890 | 0.935/1.000/0.994 | 0.744/0.875/0.871 | 16m44s |
+
+**Deltas vs A** (percentage points, recall / MRR):
+
+| Cell | overall ΔR | overall ΔMRR | lookup ΔR | lookup ΔMRR | enum ΔR | enum ΔMRR | complex ΔR | complex ΔMRR |
+|---|---|---|---|---|---|---|---|---|
+| A2 (**noise band**) | −2.2 | −1.8 | −4.7 | −4.7 | +0.0 | +0.0 | +0.0 | +1.2 |
+| C1 (0.5 / 0.6) | +2.8 | +1.0 | +2.2 | +0.0 | +3.6 | +0.0 | +3.2 | +2.8 |
+| C2 (0.5 / 0.8) | +2.2 | +1.0 | +2.2 | +0.0 | +3.6 | +0.0 | +1.6 | +2.8 |
+| C3 (0.75 / 0.6) | +0.0 | −0.7 | −0.1 | −1.2 | +3.9 | +0.0 | −1.5 | −0.3 |
+| C4 (0.75 / 0.8) | +1.6 | −0.1 | −0.1 | −2.3 | +3.6 | +0.0 | +3.1 | +2.8 |
+| C5 (1.0 / 0.6) | +1.8 | −0.1 | +2.2 | +0.0 | +3.6 | +0.0 | +0.5 | −0.3 |
+| C6 (1.0 / 0.8) | +1.5 | −0.7 | −0.1 | −1.2 | +7.1 | +0.0 | +1.1 | −0.3 |
+
+**Decision: no cell wins; the default stays `ts_rank` and no weight/α default
+changes.** W3-R13's rule is *"flip only if a cell beats the baseline on lookup
+MRR beyond the noise band **and** loses no route's recall or MRR beyond
+noise"*. The second half is satisfied by four of the six cells — but the first
+half fails everywhere, and not narrowly: **no `bm25` cell moved lookup MRR at
+all** (best delta +0.0 pp, worst −2.3 pp) against a lookup-MRR noise band of
+**4.7 pp**.
+
+**The noise band is the headline of this run.** A2 is a byte-identical repeat
+of A, and it came out 4.7 pp lower on lookup recall *and* lookup MRR — enough
+to trip `cmd/eval --baseline`'s own default gate (exit 3) on three route+metric
+pairs. Every one of the six `bm25` cells exited **0** against the same gate.
+Two consequences:
+
+1. **Wave 2's headline regression did not reproduce.** Cell C6 here is
+   Wave-2's cell C (`bm25`, weights at 1.0, α 0.8), which measured
+   complex_reasoning MRR −7.0 pp. This wave the same configuration measures
+   **−0.3 pp** on that route, inside its own 1.2 pp band. The −7 pp was a
+   single-run artefact, not a property of the mode. The Wave-2 table above
+   stands as recorded, but its causal story ("`rrf_weight_bm25` is off-scale
+   for `bm25`, especially on complex_reasoning") is **not supported** by this
+   grid: down-weighting BM25 does not monotonically improve complex_reasoning
+   (C1/C2/C4 +2.8 pp, C3/C5/C6 −0.3 pp, across all three weights).
+2. **This fixture cannot resolve effects below ~5 pp on `lookup` with one run
+   per cell.** CRAG is enabled on the PPM-Eval KB, so an LLM call sits inside
+   the retrieval path of every question — that, not the keyword arm, is the
+   most likely dominant variance source. Any future retune of these weights
+   needs repeated runs per cell (or CRAG forced off, `--crag off`) before a
+   3–5 pp effect means anything.
+
+**What the grid does show**, consistently and in the same direction across
+every cell, is that `bm25` **helps recall and never hurts it**: enumeration
+recall +3.6 to +7.1 pp in all six cells, overall recall +0.0 to +2.8 pp,
+lookup recall +2.2 pp in the three cells that move it. Ranking (MRR) is flat
+to slightly better. That is the same conclusion Wave 2 reached about recall,
+now without the complex_reasoning caveat attached to it.
+
+**Documented operating point** (for an operator who opts a KB into `bm25`, not
+a new default and explicitly **not** a change for `ts_rank` deployments, whose
+weights stay at 1.0/1.0 and α 0.8): **`rrf_weight_bm25 = 0.5`, α unchanged at
+`0.8`** — cell C2, the best-behaved cell that keeps the live α, with the
+largest overall MRR (+1.0 pp) and no route below baseline on either metric.
+C1 (the same weight at α 0.6) is equivalent within noise; nothing in this grid
+justifies moving α. Re-run `--refresh-bm25-stats` and bump
+`queryCacheSchemaVersion` when flipping the mode, per the mode's own note
+above, and read the cost check below first if the KB is large.
+
+### Cost at corpus scale (Wave 3 Task 7, 2026-09-06)
+
+Wave 2 measured no latency difference between the modes and flagged the
+`bm25` scoring CTEs' O(candidates × lexemes) shape as "worth re-checking at a
+KB an order of magnitude larger". It is real. A synthetic 99 825-chunk KB
+(ruling W3-R14: 55 salted copies of the PPM-Eval corpus in
+`document_chunks_768`, seeded and dropped by
+`eval/fixtures/bm25-scale/seed-scale-kb.sh`, stats written by the production
+refresher) was EXPLAINed with both builders' real SQL — rendered by the new
+`cmd/eval --print-keyword-sql "<q>" --kb-id <uuid>`, so the profiled
+statement cannot drift from the one the query path sends — at three query
+shapes, 3 runs each, LIMIT 50:
+
+| Query shape | Mode | Candidates 1.8k | Candidates 100k | Exec ms 1.8k | Exec ms 100k | Growth | Plan ms 1.8k | Plan ms 100k | GIN 1.8k | GIN 100k | Buffers 100k (shared hit) | cand CTE 100k |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| rare | `ts_rank` | 817 | 44935 | 7.7 | 206.8 | 27× | 1.6 | 1.4 | yes | no | 909,982 | — |
+| rare | `bm25` | 817 | 44935 | 52.3 | 2648.7 | 51× | 2.8 | 2.4 | yes | no | 1,207,096 | 6.3 MB (Memory) |
+| common | `ts_rank` | 1766 | 97130 | 18.2 | 282.0 | 16× | 1.7 | 1.7 | no | no | 1,344,949 | — |
+| common | `bm25` | 1766 | 97130 | 113.1 | 5623.2 | 50× | 2.8 | 2.9 | no | no | 2,653,993 | 17.2 MB (Memory) |
+| phrase | `ts_rank` | 64 | 3520 | 1.0 | 26.2 | 25× | 1.3 | 1.3 | yes | yes | 28,638 | — |
+| phrase | `bm25` | 64 | 3520 | 4.5 | 207.4 | 46× | 2.2 | 2.6 | yes | yes | 56,017 | 0.5 MB (Memory) |
+
+Reading it: the candidate set grows exactly 55× (the copy factor) on every
+shape, `ts_rank` execution grows 16–27×, `bm25` grows 46–51×. The
+`bm25`/`ts_rank` ratio therefore *widens* with corpus size — 6.8× → 12.8×
+(`rare`), 6.2× → 19.9× (`common`), 4.3× → 7.9× (`phrase`) — because the work
+that scales is per-candidate (`unnest` the candidate's tsvector, join it
+against the query lexemes, `LEFT JOIN bm25_term_stats_<dim>` per matched
+lexeme, once **per arm**; the simple arm doubles it). The worst case measured
+is one keyword arm taking **5.6 s** (`bm25`, the low-selectivity `common`
+shape, 97 130 candidates) against 282 ms for `ts_rank` on the identical
+candidate set — a whole turn's latency budget inside one of two retrieval
+arms, and the arm runs once more per alternative phrasing when
+multi-query/RAG-Fusion/sub-queries are on. At the 1815-chunk production
+fixture the same pair is 113 ms vs 18 ms, which is why the Wave-2
+measurement saw nothing.
+
+Memory: the materialised `cand` CTE reports `Storage: Memory` with a maximum
+of 471 kB / 6.3 MB / 17.2 MB (phrase / rare / common) at 100k; no sort spilled
+(`top-N heapsort`, 31 kB) and no plan in the set wrote a temp file. The
+footprint scales with the candidate count, not the corpus, and stays inside
+`work_mem` at this size — but it is per concurrent query.
+
+Index usage is identical in both modes (they share the candidate WHERE clause
+byte-for-byte): the GIN tsvector indexes are used for the selective `phrase`
+shape at both sizes; `rare` (45 % of the corpus matches, because the
+OR-token recall floor is deliberately generous) uses GIN at 1.8k and falls to
+a sequential scan at 100k; `common` (97 % match) never uses GIN. That is the
+planner behaving correctly, and it is a property of the shared candidate
+clause, not of the scoring mode.
+
+**Operational reading:** `bm25` is affordable at the KB sizes this
+deployment runs today and is not affordable, unchanged, at 100k chunks with
+unselective queries. Before enabling `bm25_scoring_mode = bm25` on a large
+KB, either bound the candidate set (the OR-token floor is the driver: a
+tighter floor is the single biggest lever) or accept seconds of keyword-arm
+latency on broad queries. Caveats — synthetic near-duplicate text, a KB that
+is the sole occupant of its dim table (so `kb_id` has no selectivity), dim
+768 rather than production's 4096, warm cache, single client — are recorded
+in `eval/golden/bm25-retune.acceptance.md`.
 
 ## Raw-query lane (rewrite ⊕ raw, multi-turn)
 

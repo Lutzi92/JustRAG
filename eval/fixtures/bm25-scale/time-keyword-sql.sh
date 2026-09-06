@@ -57,11 +57,15 @@ mkdir -p "$OUT_DIR"
 #   rare   — a low-document-frequency term: the GIN index should prune hard.
 #   common — a high-document-frequency German term: many candidates, so the
 #            per-candidate scoring work (the bm25 tf/sc CTEs) dominates.
-#   phrase — a quoted phrase: phraseto_tsquery, positional matching.
+#   phrase — a quoted phrase with no unquoted remainder: phraseto_tsquery and
+#            positional matching only, no websearch/OR-floor group (and, with
+#            no remainder, no tiered-boost CASE either).
+#
+# The defaults are PPM-Eval terms; override them for another corpus.
 SHAPES="rare common phrase"
-Q_rare='Stud.IP-Update Projektsteckbrief'
-Q_common='die Verwaltung der Daten und Systeme'
-Q_phrase='"Stud.IP" Zugriffsrechte'
+Q_rare="${Q_RARE:-Stud.IP-Update Projektsteckbrief}"
+Q_common="${Q_COMMON:-die Verwaltung der Daten und Systeme}"
+Q_phrase="${Q_PHRASE:-\"Stud.IP\"}"
 
 # The renderer opens its own DB connections (the psql steps go through docker
 # exec). Host/port/user/db default to the compose values; the secrets have no
@@ -82,7 +86,7 @@ trap 'rm -rf "$BIN_DIR"' EXIT
 ( cd "$REPO_ROOT/go-backend" && go build -o "$BIN_DIR/eval-print" ./cmd/eval )
 
 SUMMARY="$OUT_DIR/$LABEL-summary.tsv"
-printf 'label\tshape\tmode\trun\tplanning_ms\texecution_ms\tcandidate_rows\tgin_used\n' > "$SUMMARY"
+printf 'label\tshape\tmode\trun\tplanning_ms\texecution_ms\tcandidate_rows\tgin_used\tshared_hit\tshared_read\ttemp_written\tsort_disk\tcte_storage\tcte_storage_kb\n' > "$SUMMARY"
 
 for shape in $SHAPES; do
   qvar="Q_$shape"
@@ -123,18 +127,38 @@ planning = num(r"Planning Time: ([\d.]+) ms")
 execution = num(r"Execution Time: ([\d.]+) ms")
 
 # Rows entering the scoring step: for bm25 that is the `cand` CTE; for
-# ts_rank there is no CTE, so it is the rows the WHERE clause admitted,
-# i.e. the input to the top-level sort/limit.
+# ts_rank there is no CTE, so it is the rows the WHERE clause admitted, i.e.
+# the input to the top-level sort/limit. Read the ACTUAL row count (the one
+# inside the "actual time=..." parenthesis), never the planner's estimate.
+# rows= is PER LOOP, so a parallel plan (loops=N workers) has to be
+# multiplied out or the candidate count reads a third of the truth.
+ACTUAL = r"\(actual time=[\d.]+\.\.[\d.]+ rows=([\d.]+) loops=(\d+)"
 cand = ""
-m = re.search(r"CTE cand.*?actual time=[\d.]+\.\.[\d.]+ rows=(\d+)", plan, re.S)
+m = re.search(r"CTE cand\s*\n.*?" + ACTUAL, plan, re.S)
+if not m:
+    m = re.search(r"(?:Parallel Seq Scan|Bitmap Heap Scan|Seq Scan|Index Scan) on \"?document_chunks[_\d]*\"?[^\n]*?" + ACTUAL, plan)
 if m:
-    cand = m.group(1)
-else:
-    m = re.search(r"Bitmap Heap Scan on \"?document_chunks[_\d]*\"?.*?rows=(\d+)", plan, re.S)
-    if m:
-        cand = m.group(1)
-gin = "yes" if "Bitmap Index Scan on document_chunks" in plan or "vector_index_idx" in plan else "no"
-print("\t".join([label, shape, mode, run, planning, execution, cand, gin]))
+    cand = str(round(float(m.group(1)) * int(m.group(2))))
+
+# The GIN indexes are the two tsvector ones; the kb_id btree is not what this
+# question is about, so match the index names specifically.
+gin = "yes" if re.search(r"Index Scan on document_chunks[_\d]*_vector_index(_simple)?_idx", plan) else "no"
+
+# Root-node buffer counts + any spill to disk (the memory/temp-file footprint).
+mb = re.search(r"Buffers: shared hit=(\d+)(?: read=(\d+))?", plan)
+shared_hit = mb.group(1) if mb else ""
+shared_read = (mb.group(2) or "0") if mb else ""
+mt = re.search(r"temp read=\d+ written=(\d+)", plan)
+temp_written = mt.group(1) if mt else "0"
+sort_disk = "yes" if "Sort Method: external" in plan or "Disk:" in plan else "no"
+
+# The `cand` CTE is materialised; this is the working-set size the bm25
+# variant carries that ts_rank does not.
+ms = re.search(r"Storage: (Memory|Disk)\s+Maximum Storage: (\d+)kB", plan)
+cte_storage = ms.group(1) if ms else ""
+cte_storage_kb = ms.group(2) if ms else ""
+
+print("\t".join([label, shape, mode, run, planning, execution, cand, gin, shared_hit, shared_read, temp_written, sort_disk, cte_storage, cte_storage_kb]))
 PY
       n=$((n + 1))
     done

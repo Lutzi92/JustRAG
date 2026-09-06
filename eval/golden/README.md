@@ -314,8 +314,13 @@ historical reports.
 | `--longcontext on\|off` | Per-run override for `chat_longcontext_enabled`. `on` puts `OrchLongContext` at the top of the eval orchestrator ladder, so a global-synthesis set can be measured on a deployment where the flag is off. Empty = live site_config. |
 | `--longcontext-mode flat\|map_reduce` | Per-run override for `chat_longcontext_mode` — which consumer the long-context orchestrator uses. Only has an effect together with `--longcontext on` (or a live-on flag). Empty = live site_config. |
 | `--golden-query-type` | Forward each row's curated `query_type` into the retrieval pipeline instead of classifying the question. Default **off** so existing reports keep their historical shape. Does **not** affect orchestrator dispatch, which classifies independently — if a question fails to reach the intended orchestrator, rewrite the question, not the label. |
+| `--bm25-mode ts_rank\|bm25` | Per-run override for `bm25_scoring_mode`. Combine with `--refresh-bm25-stats` (recomputes the golden set's KBs' BM25 statistics first) whenever the KB hasn't had a recent refresh — without stats the arm silently falls back to `ts_rank` and the A/B measures nothing. |
+| `--bm25-tiered-boost on\|off` | Per-run override for `bm25_tiered_boost_enabled` (deprecated; see `docs/retrieval.md`). |
+| `--recency-boost on\|off` | Per-run override for `recency_boost_enabled`. |
+| `--rrf-weight-bm25 <f>` / `--rrf-weight-vector <f>` / `--rerank-blend-alpha <f>` | Per-run overrides for the fusion weights and the **global** reranker α. Per-route α overrides (`rerank_blend_alpha_lookup` etc.) are NOT overridden — set those in `site_configs` if you want to grid them. Used together with `--bm25-mode bm25` for the Wave-3 retune grid (`eval/golden/bm25-retune.acceptance.md`). |
+| `--keep-raw on\|off` | Multi-turn only: per-run override for `chat_condense_keep_raw_enabled`. |
 
-All three are per-run **overlays**: they wrap the site-config reader for that
+These are all per-run **overlays**: they wrap the site-config reader for that
 process only and never write `site_configs`. `--longcontext`/`--longcontext-mode`
 are chat-layer keys and share one overlay wrapper (`chatOverlayReader` in
 `cmd/eval/main.go`), chained after `--crag`; the vector-layer flags
@@ -760,3 +765,34 @@ standard path (it does not fire when orchestrator dispatch routes the
 same question elsewhere — a pre-existing production interaction, not a
 fixture defect). See `docs/retrieval.md`'s "Recency prior" section and
 `docs/feature-recipes.md`'s "Recency prior" / "Date-aware chat" recipes.
+
+## BM25 keyword-arm cost check (Wave 3 Task 7)
+
+`eval/fixtures/bm25-scale/` holds a throwaway, SQL-only fixture for profiling
+the keyword arm an order of magnitude above the production golden set:
+
+```bash
+# 1. Seed ~100k chunks (55 salted copies of the PPM-Eval corpus) into
+#    document_chunks_768 under an obviously synthetic KB, then refresh that
+#    KB's BM25 stats with the real refresher. Prints the KB id.
+DB_PASSWORD=… JWT_SECRET=… eval/fixtures/bm25-scale/seed-scale-kb.sh --copies 55
+
+# 2. EXPLAIN (ANALYZE, BUFFERS) both scoring builders x three query shapes.
+#    The statements come from `cmd/eval --print-keyword-sql`, so they are the
+#    real builders' output, not a hand-copy.
+DB_PASSWORD=… JWT_SECRET=… eval/fixtures/bm25-scale/time-keyword-sql.sh \
+  --kb-id 5ca1e000-0000-4000-8000-000000000001 --out /tmp/scale --label scale100k
+
+# 3. Always drop it — it is a synthetic corpus with no embeddings.
+eval/fixtures/bm25-scale/seed-scale-kb.sh --drop
+```
+
+`cmd/eval --print-keyword-sql "<query>" --kb-id <uuid> [--top-k 50]` is
+usable on its own: it prints one JSON document carrying the keyword arm's
+SQL for **both** scoring modes with the KB's real resolved settings (chunk
+table, text-search config, simple arm, tiered boost, k1/b, dim-keyed stats
+tables), including a placeholder-free `executable_sql` per mode. It runs no
+search and needs no golden set.
+
+Results and the measurement caveats: `eval/golden/bm25-retune.acceptance.md`
+and `docs/retrieval.md` §"Keyword arm scoring: ts_rank vs BM25".
