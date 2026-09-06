@@ -1272,17 +1272,27 @@ func PrepareChatContext(
 	// below are the parts only PrepareChatContext can compute.
 	// W5-R7 conflict / supersession pass. Runs on the FINAL source set (post
 	// CRAG, post truncation, post sandwich order) because the [N] numbers it
-	// reports have to be the ones the answer prompt uses. Gated + fail-soft
-	// inside DetectConflicts; nil report ⇒ empty addendum.
-	conflicts := DetectConflicts(ctx, aiResolver, ConflictInput{
-		KbID:      params.KbID,
-		Question:  params.SearchQuery,
-		Language:  params.Language,
-		Sources:   sources,
-		Config:    ResolveConflictConfig(ctx, siteConfig),
-		FileDates: params.FileDates,
-		Emit:      params.Emit,
-	})
+	// reports have to be the ones the answer prompt uses. Fail-soft inside
+	// DetectConflicts; nil report ⇒ empty addendum.
+	//
+	// Two short-circuits before the config is even resolved:
+	//   - the master flag, so the OFF path (every deployment by default)
+	//     costs one bool read rather than four config lookups per turn;
+	//   - abstain, because the answer is about to decline — there is nothing
+	//     to reconcile between sources, and a fast-tier call for it is pure
+	//     latency.
+	var conflicts *ConflictReport
+	if !abstain && ChatConflictSurfacingEnabled(ctx, siteConfig) {
+		conflicts = DetectConflicts(ctx, aiResolver, ConflictInput{
+			KbID:      params.KbID,
+			Question:  params.SearchQuery,
+			Language:  params.Language,
+			Sources:   sources,
+			Config:    ResolveConflictConfig(ctx, siteConfig),
+			FileDates: params.FileDates,
+			Emit:      params.Emit,
+		})
+	}
 
 	add := flatAddenda{
 		Abstain:   abstain,

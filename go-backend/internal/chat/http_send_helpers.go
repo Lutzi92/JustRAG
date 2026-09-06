@@ -632,13 +632,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		}
 	}()
 
-	writeSSE(ctx, w, map[string]any{
-		"sources":       sources,
-		"enhancedQuery": enhancedQuery,
-		"chatId":        p.chatID,
-		"userMessageId": p.userMsgID,
-	})
-	writeConflictsFrame(ctx, w, p.chatCtx.Conflicts)
+	writeOpeningFrames(ctx, w, sources, enhancedQuery, p.chatID, p.userMsgID, p.chatCtx.Conflicts)
 
 	// Replay any trajectory events that were buffered during
 	// PrepareChatContext (CRAG branch decisions, etc.) so the
@@ -768,7 +762,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		Sources:         sources,
 		Reasoning:       reasoningPtr,
 		ParentMessageID: &p.userMsgID,
-		Conflicts:       p.chatCtx.Conflicts,
+		Conflicts:       conflictsForWire(p.chatCtx.Conflicts),
 	})
 	if err != nil {
 		logctx.From(ctx).Error("chat.send: save AI message (stream)", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
@@ -869,7 +863,7 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 		Sources:         sources,
 		Reasoning:       reasoningPtr,
 		ParentMessageID: &p.userMsgID,
-		Conflicts:       p.chatCtx.Conflicts,
+		Conflicts:       conflictsForWire(p.chatCtx.Conflicts),
 	})
 	if err != nil {
 		logctx.From(ctx).Error("chat.send: save AI message", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)

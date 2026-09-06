@@ -83,7 +83,15 @@ type SupervisorChatParams struct {
 	// conflictDetect is the in-package test seam for the conflict pass; nil
 	// (every production caller) uses the real ai.DetectSourceConflicts.
 	conflictDetect detectSourceConflictsFn
+	// judgeSufficiency is the in-package test seam for the Q2 gate; nil
+	// (every production caller) uses the real ai.JudgeContextSufficiency,
+	// which fails OPEN and therefore cannot be driven to "abstain" from a
+	// test without a live model.
+	judgeSufficiency judgeSufficiencyFn
 }
+
+// judgeSufficiencyFn is the injectable seam for ai.JudgeContextSufficiency.
+type judgeSufficiencyFn func(ctx context.Context, resolver *ai.ConfigResolver, kbID, question, contextText, lang, modelOverride string) bool
 
 // RunSupervisorChat is the production entry point. It routes the query
 // to the supervisor's classifier and assembles a ChatContext from the
@@ -218,7 +226,11 @@ func runSupervisorChatTestable(
 	// insufficient. Fail-open inside JudgeContextSufficiency.
 	abstain := false
 	if params.SufficientContextEnabled {
-		if !ai.JudgeContextSufficiency(ctx, aiResolver, params.KbID, params.Query, contextText, params.Language, params.SufficientContextModel) {
+		judge := params.judgeSufficiency
+		if judge == nil {
+			judge = ai.JudgeContextSufficiency
+		}
+		if !judge(ctx, aiResolver, params.KbID, params.Query, contextText, params.Language, params.SufficientContextModel) {
 			abstain = true
 			logctx.From(ctx).Info("rag.sufficient_context.abstain",
 				"chunks_in_context", len(accumulated), "kb_id", params.KbID, "orchestrator", "supervisor")
@@ -227,17 +239,22 @@ func runSupervisorChatTestable(
 
 	// W5-R7 conflict / supersession pass, mirroring the standard path's
 	// wiring in PrepareChatContext: same gate, same fail-soft contract, run
-	// on the final source set so its [N] numbers match the answer prompt's.
-	conflicts := DetectConflicts(ctx, aiResolver, ConflictInput{
-		KbID:      params.KbID,
-		Question:  params.Query,
-		Language:  params.Language,
-		Sources:   sources,
-		Config:    params.ConflictConfig,
-		FileDates: params.FileDates,
-		Emit:      emit,
-		detect:    params.conflictDetect,
-	})
+	// on the final source set so its [N] numbers match the answer prompt's —
+	// including the abstain skip (no fast-tier call for an answer that is
+	// about to decline).
+	var conflicts *ConflictReport
+	if !abstain {
+		conflicts = DetectConflicts(ctx, aiResolver, ConflictInput{
+			KbID:      params.KbID,
+			Question:  params.Query,
+			Language:  params.Language,
+			Sources:   sources,
+			Config:    params.ConflictConfig,
+			FileDates: params.FileDates,
+			Emit:      emit,
+			detect:    params.conflictDetect,
+		})
+	}
 
 	var sb strings.Builder
 	if params.KbSystemPrompt != "" {

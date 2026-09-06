@@ -135,15 +135,24 @@ func writeSSE(ctx context.Context, w http.ResponseWriter, data any) {
 	}
 }
 
-// writeConflictsFrame emits the W5-R7 `{"conflicts": […]}` frame, and only
-// when the turn actually has conflicts to report — a turn without them
-// streams exactly the frames it streamed before this existed, so an old
-// client cannot be confused by an empty array it does not know.
+// writeOpeningFrames emits a turn's opening metadata frame and, when the
+// turn has conflicts, the W5-R7 `{"conflicts": […]}` frame directly after
+// it. One function so the two streaming paths (the standard path and the
+// orchestrator tail) cannot disagree about the ORDER: the conflict entries
+// reference sources by their [N] index, so a client must already hold the
+// source list by the time the badge arrives.
 //
-// Emitted directly AFTER the `sources` frame on every path that produced a
-// ChatContext: the entries reference sources by their [N] index, so a client
-// that renders the badge already holds the list it has to join against.
-func writeConflictsFrame(ctx context.Context, w http.ResponseWriter, report *ConflictReport) {
+// The conflicts frame is omitted entirely when there is nothing to report,
+// so a turn without conflicts streams exactly the frames it streamed before
+// this existed and an old client cannot be confused by an empty array it
+// does not know.
+func writeOpeningFrames(ctx context.Context, w http.ResponseWriter, sources []ChatSource, enhancedQuery, chatID, userMsgID string, report *ConflictReport) {
+	writeSSE(ctx, w, map[string]any{
+		"sources":       sources,
+		"enhancedQuery": enhancedQuery,
+		"chatId":        chatID,
+		"userMessageId": userMsgID,
+	})
 	if cs := conflictsForWire(report); cs != nil {
 		writeSSE(ctx, w, map[string]any{"conflicts": cs})
 	}
@@ -857,6 +866,14 @@ func (h *Handler) tryDeepChat(
 			cfg := ResolveTabularRouterConfig(ctx, h.siteConfigReader)
 			tabularCfg = &cfg
 		}
+		// Resolve the conflict knobs only behind the master flag: the OFF
+		// path (the default everywhere) then costs one bool read instead of
+		// four config lookups per Supervisor turn. The zero value skips the
+		// pass, which is exactly what an OFF flag means.
+		var conflictCfg ConflictConfig
+		if ChatConflictSurfacingEnabled(ctx, h.siteConfigReader) {
+			conflictCfg = ResolveConflictConfig(ctx, h.siteConfigReader)
+		}
 		supervisorParams := SupervisorChatParams{
 			KbID:            kbID,
 			Query:           searchQuery,
@@ -875,7 +892,7 @@ func (h *Handler) tryDeepChat(
 			TabularRouterConfig:      tabularCfg,
 			SufficientContextEnabled: ChatSufficientContextEnabled(ctx, h.siteConfigReader),
 			SufficientContextModel:   ResolveFastTierModel(ctx, h.siteConfigReader, "chat_sufficient_context_model"),
-			ConflictConfig:           ResolveConflictConfig(ctx, h.siteConfigReader),
+			ConflictConfig:           conflictCfg,
 			FileDates:                h.fileDates,
 		}
 		chatCtx, err = RunSupervisorChat(ctx, h.aiResolver, h.searchService, supervisorParams, collectEmit)
@@ -1008,13 +1025,7 @@ func (h *Handler) tryDeepChat(
 	}
 
 	// Send initial metadata.
-	writeSSE(ctx, w, map[string]any{
-		"sources":       chatCtx.Sources,
-		"enhancedQuery": enhancedQuery,
-		"chatId":        chatID,
-		"userMessageId": userMsg.ID,
-	})
-	writeConflictsFrame(ctx, w, chatCtx.Conflicts)
+	writeOpeningFrames(ctx, w, chatCtx.Sources, enhancedQuery, chatID, userMsg.ID, chatCtx.Conflicts)
 
 	// Stream AI completion. When chat_answer_tools_enabled is on AND a
 	// tool dispatcher is wired, route through RunAnswerWithTools so the
@@ -1150,7 +1161,7 @@ func (h *Handler) tryDeepChat(
 		Reasoning:       reasoningPtr,
 		ParentMessageID: &userMsg.ID,
 		StructuredTable: chatCtx.StructuredTable,
-		Conflicts:       chatCtx.Conflicts,
+		Conflicts:       conflictsForWire(chatCtx.Conflicts),
 		TeamID:          decTeamID,
 		AgentID:         decAgentID,
 	})

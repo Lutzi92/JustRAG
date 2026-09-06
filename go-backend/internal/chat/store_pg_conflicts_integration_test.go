@@ -9,6 +9,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -69,7 +70,7 @@ func TestPGStore_ConflictsRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	chatID := seedChat(t, pool, "roundtrip")
 
-	report := &ConflictReport{Conflicts: []MessageConflict{{
+	report := []MessageConflict{{
 		Claim:   "Beitragshöhe",
 		SourceA: 1,
 		SourceB: 3,
@@ -77,7 +78,7 @@ func TestPGStore_ConflictsRoundTrip(t *testing.T) {
 		Newer:   "b",
 		FileA:   "alt.md",
 		FileB:   "neu.md",
-	}}}
+	}}
 
 	msg, err := store.AddMessage(ctx, AddMessageParams{
 		ChatID:    chatID,
@@ -89,7 +90,7 @@ func TestPGStore_ConflictsRoundTrip(t *testing.T) {
 		t.Fatalf("AddMessage: %v", err)
 	}
 	// The INSERT ... RETURNING path decodes the column too.
-	if msg.Conflicts == nil || len(msg.Conflicts.Conflicts) != 1 {
+	if len(msg.Conflicts) != 1 {
 		t.Fatalf("AddMessage returned Conflicts = %+v, want one entry", msg.Conflicts)
 	}
 
@@ -101,11 +102,28 @@ func TestPGStore_ConflictsRoundTrip(t *testing.T) {
 		t.Fatalf("messages: got %d, want 1", len(rows))
 	}
 	got := rows[0].Conflicts
-	if got == nil || len(got.Conflicts) != 1 {
+	if len(got) != 1 {
 		t.Fatalf("Conflicts = %+v, want one entry", got)
 	}
-	if got.Conflicts[0] != report.Conflicts[0] {
-		t.Errorf("round-trip mismatch:\n got %+v\nwant %+v", got.Conflicts[0], report.Conflicts[0])
+	if got[0] != report[0] {
+		t.Errorf("round-trip mismatch:\n got %+v\nwant %+v", got[0], report[0])
+	}
+
+	// ONE wire shape: what GET .../messages serialises must be the bare
+	// array, so the frontend reads message.conflicts[0].claim — identical to
+	// the live SSE frame.
+	blob, err := json.Marshal(rows[0])
+	if err != nil {
+		t.Fatalf("marshal message row: %v", err)
+	}
+	var wire struct {
+		Conflicts []map[string]any `json:"conflicts"`
+	}
+	if err := json.Unmarshal(blob, &wire); err != nil {
+		t.Fatalf("conflicts is not a bare array on the wire: %v\n%s", err, blob)
+	}
+	if len(wire.Conflicts) != 1 || wire.Conflicts[0]["claim"] != "Beitragshöhe" {
+		t.Fatalf("message.conflicts[0].claim is not readable: %s", blob)
 	}
 
 	// The ancestor walk reads the same column list.
@@ -113,7 +131,7 @@ func TestPGStore_ConflictsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMessageAncestors: %v", err)
 	}
-	if len(anc) != 1 || anc[0].Conflicts == nil {
+	if len(anc) != 1 || len(anc[0].Conflicts) != 1 {
 		t.Fatalf("GetMessageAncestors dropped conflicts: %+v", anc)
 	}
 }
@@ -130,8 +148,8 @@ func TestPGStore_ConflictsNilIsNull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddMessage: %v", err)
 	}
-	if msg.Conflicts != nil {
-		t.Errorf("Conflicts = %+v, want nil", msg.Conflicts)
+	if len(msg.Conflicts) != 0 {
+		t.Errorf("Conflicts = %+v, want empty", msg.Conflicts)
 	}
 	var isNull bool
 	if err := pool.QueryRow(ctx, `SELECT conflicts IS NULL FROM messages WHERE id = $1::uuid`, msg.ID).Scan(&isNull); err != nil {

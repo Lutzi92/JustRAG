@@ -72,6 +72,32 @@ func TestDetectConflicts_SingleFileMakesNoCall(t *testing.T) {
 	}
 }
 
+// The gate must short-circuit BEFORE any downstream work — no date lookup,
+// no LLM call — with MaxChunks ≥ len(sources), i.e. where the cap itself
+// changes nothing. Pins that the single distinct-files check is placed
+// ahead of conflictSourceDates and not merely ahead of the model call.
+func TestDetectConflicts_GateShortCircuitsBeforeDateLookup(t *testing.T) {
+	sources := []ChatSource{
+		{Index: 1, FileID: "f1", FileName: "only.md", Content: "a", Score: 0.9},
+		{Index: 2, FileID: "f1", FileName: "only.md", Content: "b", Score: 0.8},
+	}
+	lookup := &fakeFileDates{rows: map[string]FileDates{}}
+	calls := 0
+	got := detectConflictsWith(context.Background(),
+		stubDetect(&calls, &ai.ConflictFindings{}, nil), nil,
+		ConflictInput{
+			Sources:   sources,
+			Config:    ConflictConfig{Enabled: true, MaxChunks: 30, Timeout: time.Second},
+			FileDates: lookup,
+		})
+	if got != nil || calls != 0 {
+		t.Errorf("report=%+v calls=%d; want nil/0", got, calls)
+	}
+	if lookup.calls != 0 {
+		t.Errorf("date lookup calls: got %d, want 0 — the gate must return before any downstream work", lookup.calls)
+	}
+}
+
 // The cap can turn a multi-file set into a single-file one, and it is the
 // capped list the detector actually sees.
 func TestDetectConflicts_CapCollapsingToOneFileMakesNoCall(t *testing.T) {

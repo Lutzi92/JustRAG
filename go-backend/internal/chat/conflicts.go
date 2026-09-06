@@ -121,14 +121,12 @@ func detectConflictsWith(ctx context.Context, detect detectSourceConflictsFn, re
 	if !in.Config.Enabled {
 		return nil
 	}
-	if distinctFileCount(in.Sources) < 2 {
-		observability.RecordConflictSurfacing("skipped_single_file")
-		return nil
-	}
-
-	// Re-check AFTER the cap: the full set can span two files while the
-	// top-scoring MaxChunks of it all come from one, and it is the capped
-	// list the model actually sees.
+	// The ≥ 2-distinct-files gate is applied to the CAPPED list, not the
+	// full source set, and only once: the capped list is what the model
+	// actually sees, and it is strictly the smaller set (a full set spanning
+	// two files can cap down to one, never the other way round). A second,
+	// earlier check on in.Sources would be unreachable — it can only reject
+	// inputs this one also rejects — so there is deliberately just this one.
 	picked := pickConflictSources(in.Sources, in.Config.MaxChunks)
 	if distinctFileCount(picked) < 2 {
 		observability.RecordConflictSurfacing("skipped_single_file")
@@ -324,16 +322,15 @@ func renderConflictDateLine(lang string, d FileDates) string {
 	return "unknown"
 }
 
-// conflictsForWire projects a report onto the value the `conflicts` SSE
-// frame and the non-streaming JSON response carry: the bare array, so a
-// client reads `event.conflicts[i].fileA` and not a doubly-nested
-// `conflicts.conflicts`. Returns nil when there is nothing to report, which
-// is what keeps the key absent on the overwhelming majority of turns.
+// conflictsForWire flattens a report to the ONE shape every surface carries:
+// the bare array. The SSE frame, the non-streaming response body and
+// messages.conflicts (and therefore a reloaded message) all serialise this
+// same value, so a client reads `conflicts[0].claim` everywhere and the
+// surfaces cannot drift apart.
 //
-// Note the deliberate asymmetry with the PERSISTED shape: messages.conflicts
-// stores the whole ConflictReport object (`{"conflicts": [...]}`), because a
-// JSONB blob that is a bare array cannot grow a sibling field later without
-// a migration.
+// Returns nil when there is nothing to report, which is what keeps the key
+// absent on the overwhelming majority of turns and lets "absent means not
+// run" hold on every surface, including the DB column.
 func conflictsForWire(report *ConflictReport) []MessageConflict {
 	if report == nil || len(report.Conflicts) == 0 {
 		return nil

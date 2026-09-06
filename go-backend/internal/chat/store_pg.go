@@ -150,11 +150,13 @@ func toMessageRow(r messageDBRow) (MessageRow, error) {
 		out.StructuredTable = &t
 	}
 	if len(r.Conflicts) > 0 && !isJSONNull(r.Conflicts) {
-		var c ConflictReport
+		// The column holds the bare array — the same shape the SSE frame and
+		// the response body carry (W5 "one wire shape" ruling).
+		var c []MessageConflict
 		if err := json.Unmarshal(r.Conflicts, &c); err != nil {
 			return MessageRow{}, fmt.Errorf("decode conflicts for message %s: %w", r.ID, err)
 		}
-		out.Conflicts = &c
+		out.Conflicts = c
 	}
 	return out, nil
 }
@@ -322,7 +324,7 @@ func (s *PGStore) AddMessage(ctx context.Context, p AddMessageParams) (*MessageR
 	}
 
 	var conflictsJSON []byte
-	if p.Conflicts != nil {
+	if len(p.Conflicts) > 0 {
 		var err error
 		conflictsJSON, err = json.Marshal(p.Conflicts)
 		if err != nil {

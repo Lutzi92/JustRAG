@@ -156,13 +156,19 @@ type MessageRow struct {
 	Verification      *MessageVerification `json:"verification" db:"verification"`
 	TraceID           *string              `json:"traceId,omitempty" db:"trace_id"`
 	StructuredTable   *StructuredTable     `json:"structured_table,omitempty" db:"structured_table"`
-	// Conflicts is the W5-R7 conflict / supersession report computed at
+	// Conflicts is the W5-R7 conflict / supersession list, computed at
 	// answer time (unlike Verification, which is a post-response update),
 	// so it is written by AddMessage and never patched afterwards.
-	Conflicts *ConflictReport `json:"conflicts,omitempty" db:"conflicts"`
-	TeamID    *string         `json:"teamId,omitempty" db:"team_id"`
-	AgentID   *string         `json:"agentId,omitempty" db:"agent_id"`
-	CreatedAt time.Time       `json:"createdAt" db:"created_at"`
+	//
+	// The BARE ARRAY, deliberately: the SSE frame, the non-streaming
+	// response body and a reloaded message all carry the same shape, so a
+	// client reads `conflicts[0].claim` on every surface and cannot drift.
+	// `omitempty` keeps the key absent for the overwhelming majority of
+	// turns, which is what makes "absent means not run" hold.
+	Conflicts []MessageConflict `json:"conflicts,omitempty" db:"conflicts"`
+	TeamID    *string           `json:"teamId,omitempty" db:"team_id"`
+	AgentID   *string           `json:"agentId,omitempty" db:"agent_id"`
+	CreatedAt time.Time         `json:"createdAt" db:"created_at"`
 }
 
 // DecodedSources returns Sources as typed chat sources for the few callers
@@ -196,9 +202,10 @@ type AddMessageParams struct {
 	Reasoning       *string
 	ParentMessageID *string
 	StructuredTable *StructuredTable
-	// Conflicts is the W5-R7 conflict report for this turn; nil (the common
-	// case) inserts SQL NULL.
-	Conflicts *ConflictReport
+	// Conflicts is the W5-R7 conflict list for this turn; empty (the common
+	// case) inserts SQL NULL rather than an empty array, so "absent means
+	// not run" survives the round trip.
+	Conflicts []MessageConflict
 	// TeamID / AgentID attribute an AI message to the user-created team or
 	// agent that produced it (nil on user messages and non-team turns).
 	TeamID  *string

@@ -76,6 +76,49 @@ func TestRunSupervisorChat_ConflictAddendumAndReport(t *testing.T) {
 	}
 }
 
+// An abstaining turn is about to decline; there is nothing to reconcile
+// between its sources, so it must not pay for the fast-tier call.
+func TestRunSupervisorChat_ConflictSkippedOnAbstain(t *testing.T) {
+	calls := 0
+	detect := func(_ context.Context, _ *ai.ConfigResolver, _, _ string, _ []ai.ConflictSource, _, _ string) (*ai.ConflictFindings, error) {
+		calls++
+		return &ai.ConflictFindings{Conflicts: []ai.Conflict{
+			{Claim: "Frist", SourceA: 1, SourceB: 2, Kind: "superseded", Newer: "b"},
+		}}, nil
+	}
+	ctxOut, err := runSupervisorChatTestable(
+		context.Background(), nil, conflictSupSearcher{},
+		func(_, _ string) bool { return false },
+		SupervisorChatParams{
+			KbID:     "kb1",
+			Query:    "Welche Frist gilt?",
+			Language: "de",
+			// Drive the Q2 gate to "insufficient" through its test seam —
+			// the real ai.JudgeContextSufficiency fails OPEN, so it can
+			// never produce an abstain without a live model.
+			SufficientContextEnabled: true,
+			judgeSufficiency: func(context.Context, *ai.ConfigResolver, string, string, string, string, string) bool {
+				return false
+			},
+			ConflictConfig: ConflictConfig{Enabled: true, MaxChunks: 12, Timeout: time.Second},
+			conflictDetect: detect,
+		},
+		func(map[string]any) {},
+	)
+	if err != nil {
+		t.Fatalf("runSupervisorChatTestable: %v", err)
+	}
+	if !ctxOut.Abstain {
+		t.Fatal("the sufficient-context seam did not produce an abstaining turn")
+	}
+	if calls != 0 {
+		t.Errorf("conflict detector calls: got %d, want 0 on an abstaining turn", calls)
+	}
+	if ctxOut.Conflicts != nil {
+		t.Errorf("ChatContext.Conflicts = %+v, want nil on an abstaining turn", ctxOut.Conflicts)
+	}
+}
+
 // The default (zero) ConflictConfig must leave the Supervisor byte-identical
 // to before the feature existed.
 func TestRunSupervisorChat_ConflictDisabledByDefault(t *testing.T) {
