@@ -139,7 +139,12 @@ type JudgeMetrics struct {
 	AnswerRelevance  *float64 `json:"answer_relevance,omitempty"`
 	ContextPrecision *float64 `json:"context_precision,omitempty"`
 	JudgeErrors      []string `json:"judge_errors,omitempty"`
-	Answer           string   `json:"answer,omitempty"`
+	// JudgeWarnings records non-fatal tolerance events (e.g. a
+	// context_precision boolean-count mismatch that was truncated/padded
+	// rather than dropped). Unlike JudgeErrors, a warning does not leave
+	// the corresponding metric pointer nil.
+	JudgeWarnings []string `json:"judge_warnings,omitempty"`
+	Answer        string   `json:"answer,omitempty"`
 }
 
 // QuestionReport is the per-question row in the final report.
@@ -187,6 +192,14 @@ type AggregateMetrics struct {
 	MeanAnswerRelevance  *float64 `json:"mean_answer_relevance,omitempty"`
 	MeanContextPrecision *float64 `json:"mean_context_precision,omitempty"`
 	JudgedCount          int      `json:"judged_count,omitempty"`
+	// Per-metric judged counts: how many questions actually contributed a
+	// non-nil value to the corresponding mean above. JudgedCount alone
+	// hides a metric-specific drop (e.g. an unparseable answer-relevance
+	// response that left faithfulness/precision intact for the same
+	// question) — see W4-R2.
+	FaithfulnessN     int `json:"faithfulness_n,omitempty"`
+	AnswerRelevanceN  int `json:"answer_relevance_n,omitempty"`
+	ContextPrecisionN int `json:"context_precision_n,omitempty"`
 }
 
 // Report is the full result of an evaluation run.

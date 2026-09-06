@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 
 	"github.com/justrag/go-backend/internal/prompts"
 )
@@ -44,10 +46,11 @@ func (j *Judge) Evaluate(ctx context.Context, q Question, answer string, chunks 
 
 	if len(contents) == 0 {
 		// skip context precision
-	} else if p, err := j.contextPrecision(ctx, q, contents); err != nil {
+	} else if p, warnings, err := j.contextPrecision(ctx, q, contents); err != nil {
 		out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("context_precision: %v", err))
 	} else {
 		out.ContextPrecision = &p
+		out.JudgeWarnings = append(out.JudgeWarnings, warnings...)
 	}
 
 	return out
@@ -89,41 +92,86 @@ func (j *Judge) answerRelevance(ctx context.Context, q Question, answer string) 
 		return 0, err
 	}
 	var parsed struct {
-		Score     int    `json:"score"`
-		Reasoning string `json:"reasoning"`
+		Score     json.RawMessage `json:"score"`
+		Reasoning string          `json:"reasoning"`
 	}
 	if err := unmarshalStrict(resp, &parsed); err != nil {
 		return 0, err
 	}
-	if parsed.Score < 1 || parsed.Score > 5 {
-		return 0, fmt.Errorf("score out of range: %d", parsed.Score)
+	score, err := parseJudgeScore(parsed.Score)
+	if err != nil {
+		return 0, fmt.Errorf("score: %w", err)
 	}
-	return float64(parsed.Score-1) / 4.0, nil
+	return float64(score-1) / 4.0, nil
 }
 
-func (j *Judge) contextPrecision(ctx context.Context, q Question, contents []string) (float64, error) {
+// parseJudgeScore parses a judge-emitted "score" field that may arrive as a
+// JSON number (5, 4.0) or, tolerated because some models emit it that way,
+// a numeric JSON string ("5", "4.0"). The result is rounded to the nearest
+// integer and clamped to the 1..5 Likert range. An error is returned only
+// when raw is neither a number nor a numeric string.
+func parseJudgeScore(raw json.RawMessage) (int, error) {
+	var f float64
+	if err := json.Unmarshal(raw, &f); err == nil {
+		return clampScore(f), nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return clampScore(f), nil
+		}
+	}
+	return 0, fmt.Errorf("not a number or numeric string: %q", string(raw))
+}
+
+func clampScore(f float64) int {
+	r := int(math.Round(f))
+	if r < 1 {
+		return 1
+	}
+	if r > 5 {
+		return 5
+	}
+	return r
+}
+
+// contextPrecision returns the precision score plus any tolerance warnings
+// (non-fatal — recorded in JudgeMetrics.JudgeWarnings by the caller). An
+// error is returned only when the judge's response is not valid JSON at
+// all; a boolean-count mismatch is tolerated by truncating/padding rather
+// than dropping the sample.
+func (j *Judge) contextPrecision(ctx context.Context, q Question, contents []string) (float64, []string, error) {
 	sys := prompts.ContextPrecisionSystemPrompt(q.Language)
 	user := prompts.ContextPrecisionUserPrompt(q.Question, contents)
 	resp, err := j.completer.Complete(ctx, user, sys)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	var parsed struct {
 		Relevant []bool `json:"relevant"`
 	}
 	if err := unmarshalStrict(resp, &parsed); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	if len(parsed.Relevant) != len(contents) {
-		return 0, fmt.Errorf("judge returned %d booleans, expected %d", len(parsed.Relevant), len(contents))
+	relevant := parsed.Relevant
+	var warnings []string
+	if len(relevant) != len(contents) {
+		warnings = append(warnings, fmt.Sprintf("context_precision: judge returned %d booleans, expected %d — truncated/padded", len(relevant), len(contents)))
+		if len(relevant) > len(contents) {
+			relevant = relevant[:len(contents)]
+		} else {
+			padded := make([]bool, len(contents))
+			copy(padded, relevant)
+			relevant = padded
+		}
 	}
 	relevantCount := 0
-	for _, r := range parsed.Relevant {
-		if r {
+	for i := 0; i < len(contents); i++ {
+		if relevant[i] {
 			relevantCount++
 		}
 	}
-	return float64(relevantCount) / float64(len(contents)), nil
+	return float64(relevantCount) / float64(len(contents)), warnings, nil
 }
 
 func assembleContextText(chunks []RetrievedChunk, contents []string) string {

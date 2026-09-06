@@ -124,6 +124,9 @@ func Aggregate(reports []QuestionReport, k int) AggregateMetrics {
 		}
 		agg.JudgedCount++
 	}
+	agg.FaithfulnessN = len(faiths)
+	agg.AnswerRelevanceN = len(rels)
+	agg.ContextPrecisionN = len(precs)
 	if len(faiths) > 0 {
 		m := mean(faiths)
 		agg.MeanFaithfulness = &m

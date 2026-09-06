@@ -89,3 +89,133 @@ func TestJudgeEvaluate_NoChunksSkipsContextPrecision(t *testing.T) {
 		t.Errorf("expected precision nil when no chunks, got %+v", got.ContextPrecision)
 	}
 }
+
+// --- W4-R1: tolerant answer-relevance score parsing ---
+
+func TestAnswerRelevance_AcceptsNumericStringScore(t *testing.T) {
+	j := NewJudge(&scriptedCompleter{responses: []string{`{"score":"5","reasoning":"x"}`}})
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	got, err := j.answerRelevance(context.Background(), q, "answer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 1.0 {
+		t.Errorf("expected 1.0, got %f", got)
+	}
+}
+
+func TestAnswerRelevance_AcceptsNumericFloatString(t *testing.T) {
+	j := NewJudge(&scriptedCompleter{responses: []string{`{"score":"4.0","reasoning":"x"}`}})
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	got, err := j.answerRelevance(context.Background(), q, "answer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 0.75 {
+		t.Errorf("expected 0.75, got %f", got)
+	}
+}
+
+func TestAnswerRelevance_UnparseableScoreErrors(t *testing.T) {
+	j := NewJudge(&scriptedCompleter{responses: []string{`{"score":"abc","reasoning":"x"}`}})
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	_, err := j.answerRelevance(context.Background(), q, "answer")
+	if err == nil {
+		t.Fatal("expected error for unparseable score")
+	}
+}
+
+func TestJudgeEvaluate_AnswerRelevanceUnparseableScoreRecordsErrorNotFatal(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{
+		`{"claims":[]}`,
+		`{"score":"abc","reasoning":"x"}`,
+	}}
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+	got := NewJudge(completer).Evaluate(context.Background(), q, "answer", nil, nil)
+
+	if got.AnswerRelevance != nil {
+		t.Errorf("expected nil AnswerRelevance, got %+v", got.AnswerRelevance)
+	}
+	if len(got.JudgeErrors) != 1 || !strings.Contains(got.JudgeErrors[0], "answer_relevance") {
+		t.Errorf("expected 1 answer_relevance error, got %v", got.JudgeErrors)
+	}
+}
+
+// --- W4-R1: tolerant context-precision boolean-count parsing ---
+
+func TestContextPrecision_TruncatesExtraBooleansWithWarning(t *testing.T) {
+	j := NewJudge(&scriptedCompleter{responses: []string{`{"relevant":[true,true,false,true]}`}})
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+	contents := []string{"c1", "c2", "c3"}
+
+	got, warnings, err := j.contextPrecision(context.Background(), q, contents)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got < 0.666 || got > 0.667 {
+		t.Errorf("expected ~0.666, got %f", got)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "expected 3") {
+		t.Errorf("expected 1 warning mentioning 'expected 3', got %v", warnings)
+	}
+}
+
+func TestContextPrecision_PadsMissingBooleansWithWarning(t *testing.T) {
+	j := NewJudge(&scriptedCompleter{responses: []string{`{"relevant":[true,false]}`}})
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+	contents := []string{"c1", "c2", "c3"}
+
+	got, warnings, err := j.contextPrecision(context.Background(), q, contents)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got < 0.333 || got > 0.334 {
+		t.Errorf("expected ~0.333, got %f", got)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "expected 3") {
+		t.Errorf("expected 1 warning mentioning 'expected 3', got %v", warnings)
+	}
+}
+
+func TestContextPrecision_UnparseableJSONErrors(t *testing.T) {
+	j := NewJudge(&scriptedCompleter{responses: []string{`not json`}})
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+	contents := []string{"c1", "c2", "c3"}
+
+	got, warnings, err := j.contextPrecision(context.Background(), q, contents)
+	if err == nil {
+		t.Fatal("expected error for unparseable JSON")
+	}
+	if got != 0 {
+		t.Errorf("expected 0 on error, got %f", got)
+	}
+	if warnings != nil {
+		t.Errorf("expected nil warnings on error, got %v", warnings)
+	}
+}
+
+func TestJudgeEvaluate_ContextPrecisionMismatchProducesWarningNotError(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{
+		`{"claims":[]}`,
+		`{"score":"3","reasoning":"ok"}`,
+		`{"relevant":[true,true,false,true]}`,
+	}}
+	chunks := []RetrievedChunk{{FileID: "f1"}, {FileID: "f2"}, {FileID: "f3"}}
+	contents := []string{"c1", "c2", "c3"}
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	got := NewJudge(completer).Evaluate(context.Background(), q, "answer", chunks, contents)
+
+	if got.ContextPrecision == nil || *got.ContextPrecision < 0.666 || *got.ContextPrecision > 0.667 {
+		t.Errorf("expected precision ~0.666, got %+v", got.ContextPrecision)
+	}
+	if len(got.JudgeErrors) != 0 {
+		t.Errorf("expected no errors, got %v", got.JudgeErrors)
+	}
+	if len(got.JudgeWarnings) != 1 || !strings.Contains(got.JudgeWarnings[0], "expected 3") {
+		t.Errorf("expected 1 warning, got %v", got.JudgeWarnings)
+	}
+}
