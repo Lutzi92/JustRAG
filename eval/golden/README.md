@@ -311,6 +311,15 @@ historical reports.
 | `--multi-query` | Enable multi-query retrieval. |
 | `--crag on\|off` | Force CRAG on/off regardless of KB config (production-context mode only). |
 | `--enumeration on\|off` | Force enumeration pre-pass on/off regardless of `IsEnumerationQuery` (production-context mode only). |
+| `--longcontext on\|off` | Per-run override for `chat_longcontext_enabled`. `on` puts `OrchLongContext` at the top of the eval orchestrator ladder, so a global-synthesis set can be measured on a deployment where the flag is off. Empty = live site_config. |
+| `--longcontext-mode flat\|map_reduce` | Per-run override for `chat_longcontext_mode` — which consumer the long-context orchestrator uses. Only has an effect together with `--longcontext on` (or a live-on flag). Empty = live site_config. |
+| `--golden-query-type` | Forward each row's curated `query_type` into the retrieval pipeline instead of classifying the question. Default **off** so existing reports keep their historical shape. Does **not** affect orchestrator dispatch, which classifies independently — if a question fails to reach the intended orchestrator, rewrite the question, not the label. |
+
+All three are per-run **overlays**: they wrap the site-config reader for that
+process only and never write `site_configs`. `--longcontext`/`--longcontext-mode`
+are chat-layer keys and share one overlay wrapper (`chatOverlayReader` in
+`cmd/eval/main.go`), chained after `--crag`; the vector-layer flags
+(`--bm25-mode`, `--recency-boost`, …) use the separate `overlaySiteConfig`.
 
 Example — measure the contribution of the enumeration pre-pass on
 enumeration-labeled questions:
@@ -513,6 +522,87 @@ credential is available in the environment, the acceptance record documents
 "not run" with the specific blocking reason instead of fabricating numbers.
 That is not a failure of this task — see
 `eval/golden/spreadsheets-de.acceptance.md`.
+
+## Global-synthesis set (Wave 3 Task 4)
+
+`global-synthesis-de.jsonl` — **gitignored** (derived from the JLU
+Confluence corpus; the question text names real internal projects). 12
+German questions against the `PPM-Eval` KB
+(`83262307-3a1b-49bc-bd08-3b925a868a92`, 297 files / 1815 chunks), all
+`query_type: "global_synthesis"`. It exists to measure the long-context
+orchestrator (`OrchLongContext`, ruling W3-R5) and to A/B its two
+consumers, `chat_longcontext_mode = flat` vs `map_reduce` (W3-R6).
+
+**Two gates have to fire for a question to reach that orchestrator**, and
+the set is authored so both do, deterministically where possible:
+
+1. `IsGlobalSynthesisQuery` — a pure lower-cased **substring** match against
+   the trigger lists in `internal/chat/longcontext.go`. Every question
+   therefore carries exactly one documented German trigger **verbatim,
+   umlauts included**: `fasse alle` (G01/G05/G09), `überblick über alle`
+   (G02/G10), `vergleiche alle` (G03/G08/G12), `gesamtbild` (G04/G11),
+   `widersprüche in` (G06), `gemeinsame themen` (G07). An ASCII
+   transliteration (`ueberblick`) silently does not match — the question
+   then falls through to whatever orchestrator is next on the ladder and
+   the run measures nothing. G07 is phrased without an article ("Nenne
+   gemeinsame Themen, die …") so the trigger is both verbatim and
+   grammatical.
+2. The query-type classifier must return `complex_reasoning`. Every question
+   is multi-clause ("… und …"), which keeps `ai.HeuristicComplexity` out of
+   its short-single-clause `simple` shortcut and lets the LLM classifier
+   decide. This arm is an LLM call and therefore **not** deterministic —
+   confirm per run that the report's per-question `agent` is `longcontext`
+   for all 12 (`grep eval.orchestrator_dispatch` in the run log). If a
+   question drifts to `lookup`, rewrite the question; do not touch the
+   classifier.
+
+`must_cite_file_names` lists the 12–15 files a curator would expect per
+topical cluster (migration/Ablösung, KI-Vorhaben, Informationssicherheit,
+Netz/RZ, Campusmanagement, Workshop-Orga, Thementische,
+Hochschul-Benchmark, IAM, Verwaltungsdigitalisierung, PPM-Governance,
+Client-Management). **Recall/MRR on this set are diagnostics, not the
+acceptance metric** (ruling W3-R8): the honest ground truth for a
+global-synthesis question is "a large part of the corpus", and the
+long-context pool is `chat_longcontext_top_k` (200) chunks against a k=10
+metric cutoff, so recall is structurally capped far below 1.0. The
+acceptance metrics are judge-based — **answer relevance primary,
+faithfulness secondary**. Context precision is deliberately not used for
+this route: the judge needs one boolean per context item and the pool is
+200.
+
+Two corpus gotchas worth knowing before extending the set: several
+Confluence-exported file names contain a **non-breaking space** (U+00A0)
+or a double space, so `must_cite_file_names` must be copied byte-exactly
+from `SELECT name FROM files WHERE kb_id = …` rather than retyped; and the
+KB holds ~20 "other university" pages, of which G08 lists 13 plus the
+summary page rather than all of them.
+
+### Running the flat vs map_reduce A/B
+
+```bash
+# (a) flat — byte-identical to the pre-orchestrator behaviour
+bash <workspace>/run-eval.sh --golden eval/golden/global-synthesis-de.jsonl \
+  --production-context --orchestrator-dispatch=true --judge \
+  --longcontext on --longcontext-mode flat --output <workspace>/t4-a-flat.json
+
+# (b) map_reduce, compared against (a)
+bash <workspace>/run-eval.sh --golden eval/golden/global-synthesis-de.jsonl \
+  --production-context --orchestrator-dispatch=true --judge \
+  --longcontext on --longcontext-mode map_reduce \
+  --baseline <workspace>/t4-a-flat.json --output <workspace>/t4-b-mapreduce.json
+
+# (c) flat again — the noise band. NEVER conclude from (a) vs (b) alone.
+```
+
+`--baseline` compares **retrieval** metrics only and exits 3 on a regression;
+on this set that gate is noise, so read the judge means out of the reports
+(`.aggregate.mean_answer_relevance` / `.mean_faithfulness`) and compare the
+(b)−(a) delta against the |(c)−(a)| noise band on **both** metrics. Map/reduce
+group counts are trajectory events, not report fields — scrape them from the
+run log (`rag.longcontext.map_reduce` carries `groups`, `failed_groups`,
+`findings`, `pool`; `longcontext.map_group_failed` marks a degraded group).
+
+Results and the standing recommendation: `global-synthesis-de.acceptance.md`.
 
 ## CERT recency set (Wave 2 Task 8)
 
