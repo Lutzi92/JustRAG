@@ -363,6 +363,11 @@ func (s *PGStore) UpdateConfluenceSource(ctx context.Context, sourceID string, u
 		args = append(args, *updates.LastSyncedAt)
 		param++
 	}
+	if updates.LastSuccessAt != nil {
+		setClauses = append(setClauses, fmt.Sprintf("last_success_at = $%d", param))
+		args = append(args, *updates.LastSuccessAt)
+		param++
+	}
 
 	if len(setClauses) == 0 {
 		// Nothing to update — return current row.

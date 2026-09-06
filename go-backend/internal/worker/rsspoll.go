@@ -151,6 +151,13 @@ func NewRSSPollHandler(deps RSSPollDeps) asynq.HandlerFunc {
 				Origin:      "rss",
 				StoragePath: storagePath,
 				RSSFeedID:   feedID,
+				// The item's own publication date, when the feed carries a
+				// parseable one. This is the single origin that fills
+				// files.published_at (W3-R9); every date-window read then
+				// keys on COALESCE(published_at, created_at), so an
+				// advisory published last week but ingested today sorts and
+				// filters by last week rather than by our poll time.
+				PublishedAt: item.PublishedParsed,
 			})
 			if createErr != nil {
 				slog.Error("failed to create file record for RSS item", "feedId", feedID, "item", fileName, "error", createErr)

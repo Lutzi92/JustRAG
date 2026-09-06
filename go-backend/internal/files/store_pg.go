@@ -149,18 +149,22 @@ func (s *PGStore) CreateFile(ctx context.Context, data CreateFileData) (*FileRec
 	var sqlStr string
 	var args []any
 
+	// published_at is passed as a typed nil for every origin that has no
+	// publication date of its own, which is all of them but RSS today
+	// (W3-R9) — the column then stays NULL and COALESCE(published_at,
+	// created_at) falls back to the ingest timestamp at every read site.
 	if data.RSSFeedID != "" {
 		sqlStr = `
-			INSERT INTO files (kb_id, name, type, size, status, origin, storage_path, rss_feed_id)
-			VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
+			INSERT INTO files (kb_id, name, type, size, status, origin, storage_path, rss_feed_id, published_at)
+			VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
 			RETURNING id, kb_id, name, type, size, status, progress, origin, storage_path, created_at`
-		args = []any{data.KbID, data.Name, data.Type, data.Size, data.Origin, data.StoragePath, data.RSSFeedID}
+		args = []any{data.KbID, data.Name, data.Type, data.Size, data.Origin, data.StoragePath, data.RSSFeedID, data.PublishedAt}
 	} else {
 		sqlStr = `
-			INSERT INTO files (kb_id, name, type, size, status, origin, storage_path)
-			VALUES ($1, $2, $3, $4, 'pending', $5, $6)
+			INSERT INTO files (kb_id, name, type, size, status, origin, storage_path, published_at)
+			VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
 			RETURNING id, kb_id, name, type, size, status, progress, origin, storage_path, created_at`
-		args = []any{data.KbID, data.Name, data.Type, data.Size, data.Origin, data.StoragePath}
+		args = []any{data.KbID, data.Name, data.Type, data.Size, data.Origin, data.StoragePath, data.PublishedAt}
 	}
 
 	rows, err := pgxutil.QueryRows[createFileDBRow](ctx, s.pool, sqlStr, args...)
@@ -183,6 +187,49 @@ func (s *PGStore) CreateFile(ctx context.Context, data CreateFileData) (*FileRec
 		StoragePath: r.StoragePath,
 		CreatedAt:   r.CreatedAt,
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Source dates (freshness surface)
+// ---------------------------------------------------------------------------
+
+// FileDates carries the two date columns of a files row: CreatedAt is the
+// ingest timestamp, PublishedAt the document's own publication date (NULL for
+// every origin that does not carry one — see CreateFileData.PublishedAt).
+// Mirrors chat.FileDates; this package deliberately does not import the chat
+// package, so production wires a tiny adapter in the route setup, the same
+// way UploadLimits is wired.
+type FileDates struct {
+	CreatedAt   time.Time
+	PublishedAt *time.Time
+}
+
+// fileDatesRow scans one row of the batch date lookup.
+type fileDatesRow struct {
+	ID          string     `db:"id"`
+	CreatedAt   time.Time  `db:"created_at"`
+	PublishedAt *time.Time `db:"published_at"`
+}
+
+// FileDatesByIDs resolves file ids to their dates in one indexed query. Used
+// once per chat turn to stamp freshness onto the answer's sources; ids that
+// no longer exist are simply absent from the result map.
+func (s *PGStore) FileDatesByIDs(ctx context.Context, ids []string) (map[string]FileDates, error) {
+	if len(ids) == 0 {
+		return map[string]FileDates{}, nil
+	}
+	const sql = `SELECT id::text AS id, created_at, published_at
+	               FROM files
+	              WHERE id::text = ANY($1)`
+	rows, err := pgxutil.QueryRows[fileDatesRow](ctx, s.pool, sql, ids)
+	if err != nil {
+		return nil, fmt.Errorf("FileDatesByIDs: %w", err)
+	}
+	out := make(map[string]FileDates, len(rows))
+	for _, r := range rows {
+		out[r.ID] = FileDates{CreatedAt: r.CreatedAt, PublishedAt: r.PublishedAt}
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------

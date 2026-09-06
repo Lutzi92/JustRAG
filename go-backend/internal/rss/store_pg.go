@@ -190,12 +190,17 @@ func (s *PGStore) DeleteRSSFeed(ctx context.Context, feedID string) error {
 	return nil
 }
 
-// UpdateRSSFeedPollSuccess updates last_polled_at, item_count, and clears error
-// fields after a successful poll.
+// UpdateRSSFeedPollSuccess updates last_polled_at, last_success_at, item_count,
+// and clears error fields after a successful poll.
+//
+// last_success_at is deliberately written ONLY here, never in the failure twin
+// below: last_polled_at tracks attempts (a failing feed keeps refreshing it),
+// so the admin overview and the rag_source_sync_age_seconds gauge need a
+// column that only a success can move (W3-R10).
 func (s *PGStore) UpdateRSSFeedPollSuccess(ctx context.Context, feedID string, itemCount int) error {
 	const sql = `
 		UPDATE rss_feeds
-		SET last_polled_at = NOW(), item_count = $1, consecutive_failures = 0, error_message = NULL
+		SET last_polled_at = NOW(), last_success_at = NOW(), item_count = $1, consecutive_failures = 0, error_message = NULL
 		WHERE id = $2`
 	_, err := s.pool.Exec(ctx, sql, itemCount, feedID)
 	if err != nil {

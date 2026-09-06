@@ -313,6 +313,7 @@ dispatch:
 			Status:              &activeStatus,
 			PageCount:           &pageCount,
 			LastSyncedAt:        &now,
+			LastSuccessAt:       &now,
 			SyncProgress:        &zero,
 			SyncTotal:           &zero,
 			ErrorMessage:        &empty,
@@ -326,6 +327,7 @@ dispatch:
 			Status:              &activeStatus,
 			PageCount:           &pageCount,
 			LastSyncedAt:        &now,
+			LastSuccessAt:       &now,
 			SyncProgress:        &fileTotal,
 			SyncTotal:           &fileTotal,
 			ErrorMessage:        &empty,
@@ -803,6 +805,7 @@ func UpdateSourceProgressAfterFile(ctx context.Context, store ConfluenceStore, t
 		_, _ = store.UpdateConfluenceSource(ctx, sourceID, ConfluenceSourceUpdate{
 			Status:              &activeStatus,
 			LastSyncedAt:        &now,
+			LastSuccessAt:       &now,
 			SyncProgress:        &total,
 			SyncTotal:           &total,
 			ErrorMessage:        &empty,

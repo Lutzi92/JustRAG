@@ -84,10 +84,15 @@ type GitRepoSourceUpdate struct {
 }
 
 type SyncState struct {
-	Status              string
-	ErrorMessage        *string
-	LastCommitSHA       *string
-	LastSyncedAt        *time.Time
+	Status        string
+	ErrorMessage  *string
+	LastCommitSHA *string
+	LastSyncedAt  *time.Time
+	// LastSuccessAt is set only by the sync's success paths. last_synced_at
+	// is refreshed by every attempt, a failing one included, so a column
+	// only a success can move is what the admin overview and the sync-age
+	// gauge read (W3-R10).
+	LastSuccessAt       *time.Time
 	FileCount           *int
 	SyncProgress        *int
 	SyncTotal           *int
@@ -257,10 +262,12 @@ func (s *PGStore) SetGitRepoSyncState(ctx context.Context, id string, st SyncSta
 			file_count = COALESCE($6, file_count),
 			sync_progress = COALESCE($7, sync_progress),
 			sync_total = COALESCE($8, sync_total),
-			consecutive_failures = COALESCE($9, consecutive_failures)
+			consecutive_failures = COALESCE($9, consecutive_failures),
+			last_success_at = COALESCE($10, last_success_at)
 		WHERE id = $1`
 	_, err := s.pool.Exec(ctx, q, id, st.Status, st.ErrorMessage, st.LastCommitSHA,
-		st.LastSyncedAt, st.FileCount, st.SyncProgress, st.SyncTotal, st.ConsecutiveFailures)
+		st.LastSyncedAt, st.FileCount, st.SyncProgress, st.SyncTotal, st.ConsecutiveFailures,
+		st.LastSuccessAt)
 	if err != nil {
 		return fmt.Errorf("SetGitRepoSyncState: %w", err)
 	}

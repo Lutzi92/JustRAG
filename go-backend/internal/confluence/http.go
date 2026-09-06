@@ -73,6 +73,11 @@ type ConfluenceSourceUpdate struct {
 	SyncProgress        *int
 	SyncTotal           *int
 	LastSyncedAt        *time.Time
+	// LastSuccessAt is stamped only by the sync's success branches. Unlike
+	// LastSyncedAt (which every attempt, including a failing one, refreshes)
+	// it is the timestamp the admin overview and the sync-age gauge trust
+	// (W3-R10).
+	LastSuccessAt *time.Time
 }
 
 // ---------------------------------------------------------------------------
