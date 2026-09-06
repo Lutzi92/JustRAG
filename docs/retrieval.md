@@ -130,6 +130,8 @@ Corrective RAG (CRAG): when `crag_enabled` is true (admin Agent panel, default o
 
 Citation validator: when `citation_validation_enabled` is true (default off), every chat answer runs through a deterministic per-citation check after generation. For each `[N]` (or `[1, 2]`) marker, the validator builds the local sentence window (the marker's sentence ±1) and looks for content-token n-gram overlap (4-gram, falling back to 3-gram, lowercased + stopword-filtered) with the cited source. Multi-cite is "any source overlap = verified for all cited Ns". Out-of-range Ns (`[3]` when only 2 sources exist) get the explicit `out_of_range` reason. Runs in `runPostResponseTasks` parallel to the LLM-based factchecker; results merge into the existing `verification` JSONB blob as a `citations: [{n, verified, reason}]` array — no migration, no new SSE event. Frontend (`MessageContent.tsx`) renders suspect `[N]` with an amber dashed underline and ⚠ glyph plus a hover tooltip explaining the reason. Validator is pure CPU (no LLM call, no I/O), deterministic, and can produce false positives on heavily paraphrased correct answers — the UI treatment is intentionally cautious (warn, don't reject).
 
+**Span verification (Wave 3, `chat_citation_spans_enabled`, default off).** The n-gram/semantic check answers "is this citation plausible?" but cannot point at *what* in the source supports it — the UI can only show the first few hundred characters of the cited chunk and let the reader hunt. The optional span pass closes that: after the deterministic validator, one fast-tier call copies **one verbatim quote** per still-eligible citation out of the cited source, and the backend then matches that quote against the source body itself — normalised (Unicode NFC, lower-cased, whitespace runs collapsed, quote characters and edge punctuation trimmed) but otherwise exact. Design point: the model supplies *text*, never offsets; the offsets are computed from the match, so a hallucinated or paraphrased quote simply fails to match and the entry keeps its previous `method` untouched. On a match the entry becomes `method: "span"` with `span: {start, end}` — **rune** offsets (code points, `end` exclusive) into `sources[n-1].content`, a different domain from `internal/chat/citation_spans.go`'s byte offsets of the `[N]` marker inside the *answer*. NFC is applied through `norm.Iter` segment-wise, so a decomposed `u`+U+0308 in OCR'd content still matches a precomposed `ü` in the quote and still maps back to the correct original rune range. Summary and `community_summary` sources are excluded (a RAPTOR or community summary is not verbatim source text). Fail-soft in every direction: timeout, transport error, unparseable reply or malformed span all leave the deterministic verdict in place, and the frontend falls back from the highlight to the plain snippet. Cost: one extra fast-tier call per answer with at least one eligible citation, bounded by `chat_citation_spans_timeout_ms` (8000 ms default) — post-response work is synchronous, which is why the budget exists. The pass runs *before* the attribution metrics, so `span` appears as its own `method` label on `rag_citation_attributions_total` rather than being folded into `none`. Enablement block: `docs/feature-recipes.md` §"Span-verified citations". `internal/chat/citation_spans_verify.go`.
+
 ## Contextual Retrieval (Anthropic-style)
 
 Contextual Retrieval (Anthropic-style): when `contextual_enrichment` is enabled (default), the ingestion pipeline asks an LLM to write a 1-sentence context prefix per chunk (e.g. *"This passage discusses §3 Kündigungsfrist of the Müller GmbH contract"*). Each per-chunk LLM call sends the **full source document** as the user-message prefix (truncated to ~8k cl100k_base tokens via `splitter.CountTokens`); the chunk goes last in `<chunk>...</chunk>` tags so OpenAI-compatible automatic prompt caching (OpenAI ≥1024-tok prefix, DeepSeek auto, vLLM with prefix caching, …) reuses the document prefix across every chunk of the same file — Anthropic's cookbook quotes ~90 % cost reduction at typical chunk counts. Document and chunk bodies are interpolated verbatim (not XML-escaped): escaping degraded the enrichment LLM's view of technical content (code, URLs, quoted strings), which poisoned the generated prefix and measurably hurt retrieval. The filename **is** escaped because it sits inside the `name="..."` attribute where a stray quote would actually break the wrapper. The system prompt explicitly instructs the LLM to mention named persons together with their role/title as stated in the document (e.g. "CIO Eberhard Kurz") and forbids inventing roles. This was added 2026-05-08 (Phase 2 of the post-Octen-8B roadmap) after a Q085 diagnostic against the dev KB showed only 2 of 20 chunks containing "Eberhard Kurz" had any role mention in the prefix; person-role lookup queries previously matched only the ~10% of chunks where the prefix happened to capture the role. Existing chunks keep their old prefixes until re-ingested.
@@ -225,13 +227,183 @@ Per-alt-query BM25 (P4): when `rag_fusion_enabled` is on, every alternative-phra
 
 **Tiered boost interaction**: `bm25_tiered_boost_enabled` was designed as an IDF proxy for `ts_rank` (a coarse CASE-based multiplier approximating "rare term → bigger boost" without real corpus statistics). With real BM25 scoring already carrying an IDF term, the boost stacks on top rather than substituting for it — cell D (bm25 + boost) doesn't clearly beat cell C (bm25, no boost) on lookup MRR (0.913 vs 0.895) or complex_reasoning (both regress by the same ~7pp), and cell B (ts_rank + boost) regresses on every route relative to A (ts_rank, no boost) by more than the noise band, including a −3.5pp overall MRR regression. The boost's IDF-proxy rationale weakens once real IDF is available; it is not a clean win in either mode on this fixture.
 
+**`bm25_tiered_boost_enabled` is deprecated (2026-09, Wave 3 Task 7).** The A/B above is the whole case: under `ts_rank` it regressed every route beyond the noise band (cell B), and under `bm25` it added nothing the real IDF term doesn't already provide (cell D vs C). No deployment should turn it on, and the admin-UI help text now says so (`Veraltet — im 2026-09 A/B auf allen Routen negativ; Kandidat für Entfernung. Standardmäßig aus.`). The key, its `site_config` entry and `buildBoostExpr` **stay in place for now** — removal is its own release (a deployment that has it on would silently change ranking on upgrade, and `--bm25-tiered-boost on|off` is still the way to reproduce the measurement above). Treat it as frozen: no new tuning, no new call sites.
+
 **Decision**: the brief's literal rule — *the default stays `ts_rank` unless C or D beats A on lookup MRR by more than the noise band on that metric, without losing recall on any route by more than the noise band* — evaluates as follows. C's lookup-MRR delta (+2.3pp) equals the noise band exactly, not more than it, so **C does not clear the bar**. D's lookup-MRR delta (+4.1pp) exceeds the noise band (2.3pp), and D loses recall on no route (complex_reasoning +1.0pp, enumeration +0.0pp, lookup +5.4pp — all ≥0) — **by the letter of the rule, D clears the bar**.
 
 However, this recall-only guard misses a real and consistent side effect: both C and D regress `complex_reasoning` MRR by ~7.0pp — roughly 14× that route's own 0.5pp noise band, and more than double `cmd/eval`'s own default MRR regression threshold (3pp), tripping the regression gate (exit 3) on every C/D/B run. Recall is essentially unchanged on that route (+0.1pp / +1.0pp), so the right chunks are still retrieved — they just rank lower after CRAG's multi-round grading and the RRF fusion. The most likely cause is scale mismatch: `rrf_weight_bm25` (currently 1, tuned against `ts_rank`'s output range) is applied unchanged to `bm25`'s IDF·TF-saturation scores, which live on a different numeric scale, especially once multiple sub-query lists get fused for `complex_reasoning`'s plan-execute path.
 
-**This wave keeps the default at `ts_rank`** (no code or config change lands in this task, per the global constraints — Task 9 owns flipping any default). The literal per-metric rule favors flipping to `bm25` (uncapped, no tiered boost), but this doc recommends Task 9 treat that reading with the complex_reasoning caveat squarely in view rather than flip on the lookup-MRR number alone — either re-tune `rrf_weight_bm25` for the `bm25` scale range first, or land the flip with an explicit note that complex_reasoning ranking quality is accepted as a known regression pending that re-tune.
+**This wave keeps the default at `ts_rank`** (no code or config change lands in this task, per the global constraints — Task 9 owns flipping any default). The literal per-metric rule favors flipping to `bm25` (uncapped, no tiered boost), but this doc recommends Task 9 treat that reading with the complex_reasoning caveat squarely in view rather than flip on the lookup-MRR number alone — either re-tune `rrf_weight_bm25` for the `bm25` scale range first, or land the flip with an explicit note that complex_reasoning ranking quality is accepted as a known regression pending that re-tune. **Read this paragraph together with the Wave-3 retune grid below, which measured −0.3 pp on that route at the same weights — but with orchestrator dispatch OFF, i.e. on the standard path only, whereas this A/B ran with dispatch ON and routed `complex_reasoning` through plan-execute. The two are not the same experiment: the ~7 pp is a plan-execute finding that the later grid neither reproduced nor refuted, and the scale-mismatch explanation below is untested rather than confirmed.**
 
-**Follow-up** (not this wave): re-run the `rerank_blend_alpha` / `rrf_weight_*` α-grid under whichever mode ships as the default — the weights in `docs/retrieval.md`'s "Reranker score weighting" / "RAG-Fusion" sections were tuned against `ts_rank`'s score distribution and the complex_reasoning MRR regression above is consistent with them being off-scale for `bm25`.
+### Retune grid: `rrf_weight_bm25` × α under `bm25` (Wave 3 Task 7, 2026-09-06)
+
+The Wave-2 follow-up above — *"re-run the α-grid under the mode that ships as
+the default"* — ran as a full grid: baseline **A** (`ts_rank`, live weights),
+its same-flag repeat **A2**, then `bm25` × `rrf_weight_bm25` ∈ {0.5, 0.75, 1.0}
+× `rerank_blend_alpha` ∈ {0.6, 0.8}. Same fixture and settings as the Wave-2
+table (89 questions, k=10, `--production-context --orchestrator-dispatch=false`,
+`--refresh-bm25-stats` on every cell, no judge, no `site_configs` mutation —
+every knob is a `cmd/eval` overlay flag). Full record, including the
+per-cell evidence that `bm25` mode actually ran (93–96 searches per cell with
+`"keyword_mode":"bm25"`, zero `rag_bm25_mode_fallback_total` events):
+`eval/golden/bm25-retune.acceptance.md`.
+
+| Cell | Mode | w<sub>bm25</sub> | α | overall R/MRR/nDCG | lookup R/MRR/nDCG | enumeration R/MRR/nDCG | complex R/MRR/nDCG | wall |
+|---|---|---|---|---|---|---|---|---|
+| **A** (baseline) | ts_rank | 1.0 | 0.8 | 0.828/0.906/0.906 | 0.887/0.895/0.898 | 0.864/1.000/1.000 | 0.733/0.878/0.876 | 16m49s |
+| **A2** (noise repeat) | ts_rank | 1.0 | 0.8 | 0.806/0.888/0.888 | 0.841/0.849/0.852 | 0.864/1.000/1.000 | 0.733/0.891/0.887 | 17m39s |
+| C1 | bm25 | 0.5 | 0.6 | 0.856/0.916/0.918 | 0.909/0.895/0.904 | 0.899/1.000/1.000 | 0.765/0.906/0.902 | 16m29s |
+| C2 | bm25 | 0.5 | 0.8 | 0.850/0.916/0.919 | 0.909/0.895/0.904 | 0.899/1.000/1.000 | 0.749/0.906/0.902 | 16m38s |
+| C3 | bm25 | 0.75 | 0.6 | 0.828/0.899/0.900 | 0.886/0.884/0.890 | 0.903/1.000/0.993 | 0.718/0.875/0.872 | 16m18s |
+| C4 | bm25 | 0.75 | 0.8 | 0.844/0.904/0.908 | 0.886/0.872/0.881 | 0.899/1.000/1.000 | 0.764/0.906/0.902 | 16m44s |
+| C5 | bm25 | 1.0 | 0.6 | 0.846/0.904/0.907 | 0.909/0.895/0.904 | 0.899/1.000/1.000 | 0.738/0.875/0.869 | 16m34s |
+| C6 | bm25 | 1.0 | 0.8 | 0.843/0.899/0.900 | 0.886/0.884/0.890 | 0.935/1.000/0.994 | 0.744/0.875/0.871 | 16m44s |
+
+**Deltas vs A** (percentage points, recall / MRR):
+
+| Cell | overall ΔR | overall ΔMRR | lookup ΔR | lookup ΔMRR | enum ΔR | enum ΔMRR | complex ΔR | complex ΔMRR |
+|---|---|---|---|---|---|---|---|---|
+| A2 (**noise band**) | −2.2 | −1.8 | −4.7 | −4.7 | +0.0 | +0.0 | +0.0 | +1.2 |
+| C1 (0.5 / 0.6) | +2.8 | +1.0 | +2.2 | +0.0 | +3.6 | +0.0 | +3.2 | +2.8 |
+| C2 (0.5 / 0.8) | +2.2 | +1.0 | +2.2 | +0.0 | +3.6 | +0.0 | +1.6 | +2.8 |
+| C3 (0.75 / 0.6) | +0.0 | −0.7 | −0.1 | −1.2 | +3.9 | +0.0 | −1.5 | −0.3 |
+| C4 (0.75 / 0.8) | +1.6 | −0.1 | −0.1 | −2.3 | +3.6 | +0.0 | +3.1 | +2.8 |
+| C5 (1.0 / 0.6) | +1.8 | −0.1 | +2.2 | +0.0 | +3.6 | +0.0 | +0.5 | −0.3 |
+| C6 (1.0 / 0.8) | +1.5 | −0.7 | −0.1 | −1.2 | +7.1 | +0.0 | +1.1 | −0.3 |
+
+**Decision: no cell wins; the default stays `ts_rank` and no weight/α default
+changes.** W3-R13's rule is *"flip only if a cell beats the baseline on lookup
+MRR beyond the noise band **and** loses no route's recall or MRR beyond
+noise"*. The second half is satisfied by four of the six cells — but the first
+half fails everywhere, and not narrowly: **no `bm25` cell moved lookup MRR at
+all** (best delta +0.0 pp, worst −2.3 pp) against a lookup-MRR noise band of
+**4.7 pp**.
+
+**The noise band is the headline of this run.** A2 is a byte-identical repeat
+of A, and it came out 4.7 pp lower on lookup recall *and* lookup MRR — enough
+to trip `cmd/eval --baseline`'s own default gate (exit 3) on three route+metric
+pairs. Every one of the six `bm25` cells exited **0** against the same gate.
+Two consequences:
+
+1. **Wave 2's headline regression does not appear on the standard path — but
+   this grid did not test the path it was measured on.** The two runs are not
+   the same experiment: Wave 2's A/B ran with orchestrator dispatch at its
+   **default (on)**, which routed 27–29 of the 89 questions — including the
+   whole `complex_reasoning` route — through **plan-execute**; this grid ran
+   `--orchestrator-dispatch=false`, i.e. the standard `PrepareChatContext`
+   path only. So cell C6 is *not* a rerun of Wave-2's cell C, and the −7 pp is
+   neither reproduced nor refuted here. What this grid supports is narrower
+   and still useful: **at identical weights (1.0 / α 0.8), `bm25` costs −0.3 pp
+   of `complex_reasoning` MRR on the standard path**, inside that route's
+   1.2 pp band. Wave 2's causal story ("`rrf_weight_bm25` is off-scale for
+   `bm25`") is likewise **untested** rather than refuted, though it gains no
+   support here: down-weighting BM25 does not monotonically improve
+   complex_reasoning on the standard path (C1/C2/C4 +2.8 pp, C3/C5/C6 −0.3 pp,
+   across all three weights). **Follow-up:** rerun this grid with
+   `--orchestrator-dispatch=true` to measure the plan-execute path Wave 2
+   actually exercised; until then, treat the −7 pp as a plan-execute finding
+   of unknown reproducibility, not as a property of the scoring mode.
+2. **This fixture cannot resolve effects below ~5 pp on `lookup` with one run
+   per cell.** CRAG is enabled on the PPM-Eval KB, so an LLM call sits inside
+   the retrieval path of every question — that, not the keyword arm, is the
+   most likely dominant variance source. Any future retune of these weights
+   needs repeated runs per cell (or CRAG forced off, `--crag off`) before a
+   3–5 pp effect means anything.
+
+**What the grid does show** is that `bm25` **lifts recall in most cells, but
+not universally**: enumeration recall is up in all six (+3.6 to +7.1 pp) and
+overall recall is up or flat in all six (+0.0 to +2.8 pp), but lookup recall
+is −0.1 pp in three cells, and **C3 (0.75 / 0.6) loses 1.5 pp of
+`complex_reasoning` recall** — the one route-recall loss in the grid, and the
+reason C3 is flagged as a rule violation on the second half of W3-R13 as well
+as the first. Ranking (MRR) is flat to slightly better everywhere except C4's
+lookup (−2.3 pp). The recall direction agrees with Wave 2's; the magnitude is
+smaller and the exceptions are real.
+
+**Documented operating point** (for an operator who opts a KB into `bm25`, not
+a new default and explicitly **not** a change for `ts_rank` deployments, whose
+weights stay at 1.0/1.0 and α 0.8): **`rrf_weight_bm25 = 0.5`, α unchanged at
+`0.8`** — cell C2, the best-behaved cell that keeps the live α, with the
+largest overall MRR (+1.0 pp) and no route below baseline on either metric.
+C1 (the same weight at α 0.6) is equivalent within noise; nothing in this grid
+justifies moving α. Re-run `--refresh-bm25-stats` and bump
+`queryCacheSchemaVersion` when flipping the mode, per the mode's own note
+above, and read the cost check below first if the KB is large.
+
+### Cost at corpus scale (Wave 3 Task 7, 2026-09-06)
+
+Wave 2 measured no latency difference between the modes and flagged the
+`bm25` scoring CTEs' O(candidates × lexemes) shape as "worth re-checking at a
+KB an order of magnitude larger". It is real. A synthetic 99 825-chunk KB
+(ruling W3-R14: 55 salted copies of the PPM-Eval corpus in
+`document_chunks_768`, seeded and dropped by
+`eval/fixtures/bm25-scale/seed-scale-kb.sh`, stats written by the production
+refresher) was EXPLAINed with both builders' real SQL — rendered by the new
+`cmd/eval --print-keyword-sql "<q>" --kb-id <uuid>`, so the profiled
+statement cannot drift from the one the query path sends — at three query
+shapes, 3 runs each, LIMIT 50:
+
+| Query shape | Mode | Candidates 1.8k | Candidates 100k | Exec ms 1.8k | Exec ms 100k | Growth | Plan ms 1.8k | Plan ms 100k | GIN 1.8k | GIN 100k | Buffers 100k (shared hit) | cand CTE 100k |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| rare | `ts_rank` | 817 | 44935 | 7.7 | 206.8 | 27× | 1.6 | 1.4 | yes | no | 909,982 | — |
+| rare | `bm25` | 817 | 44935 | 52.3 | 2648.7 | 51× | 2.8 | 2.4 | yes | no | 1,207,096 | 6.3 MB (Memory) |
+| common | `ts_rank` | 1766 | 97130 | 18.2 | 282.0 | 16× | 1.7 | 1.7 | no | no | 1,344,949 | — |
+| common | `bm25` | 1766 | 97130 | 113.1 | 5623.2 | 50× | 2.8 | 2.9 | no | no | 2,653,993 | 17.2 MB (Memory) |
+| phrase | `ts_rank` | 64 | 3520 | 1.0 | 26.2 | 25× | 1.3 | 1.3 | yes | yes | 28,638 | — |
+| phrase | `bm25` | 64 | 3520 | 4.5 | 207.4 | 46× | 2.2 | 2.6 | yes | yes | 56,017 | 0.5 MB (Memory) |
+
+Reading it: the candidate set grows exactly 55× (the copy factor) on every
+shape, `ts_rank` execution grows 16–27×, `bm25` grows 46–51×. The
+`bm25`/`ts_rank` ratio therefore *widens* with corpus size — 6.8× → 12.8×
+(`rare`), 6.2× → 19.9× (`common`), 4.3× → 7.9× (`phrase`).
+
+**Part of that widening is lost parallelism, not extra work.** At 100k the two
+low-selectivity `ts_rank` plans go parallel (`Gather Merge`, 2 workers
+launched + the leader = 3 processes, `loops=3` on the `Parallel Seq Scan`)
+while the `bm25` plans stay **serial** — the materialised `cand` CTE blocks
+parallelism. Counting the `ts_rank` side's extra workers as CPU time, the
+ratio is roughly **6.6× (`common`) and 4.3× (`rare`)** rather than 19.9× and
+12.8×. The `phrase` shape is serial on both sides at both sizes, so its 7.9×
+is a clean like-for-like comparison. The wall-clock numbers are still what a
+user waits for, and the operational conclusion below is unchanged — but the
+CPU-side gap is smaller than the wall-clock gap, and a Postgres configured
+with more parallel workers would widen the wall-clock ratio further without
+`bm25` doing anything worse.
+
+The reason the work scales at all is that it is per-candidate (`unnest` the candidate's tsvector, join it
+against the query lexemes, `LEFT JOIN bm25_term_stats_<dim>` per matched
+lexeme, once **per arm**; the simple arm doubles it). The worst case measured
+is one keyword arm taking **5.6 s** (`bm25`, the low-selectivity `common`
+shape, 97 130 candidates) against 282 ms for `ts_rank` on the identical
+candidate set — a whole turn's latency budget inside one of two retrieval
+arms, and the arm runs once more per alternative phrasing when
+multi-query/RAG-Fusion/sub-queries are on. At the 1815-chunk production
+fixture the same pair is 113 ms vs 18 ms, which is why the Wave-2
+measurement saw nothing.
+
+Memory: the materialised `cand` CTE reports `Storage: Memory` with a maximum
+of 471 kB / 6.3 MB / 17.2 MB (phrase / rare / common) at 100k; no sort spilled
+(`top-N heapsort`, 31 kB) and no plan in the set wrote a temp file. The
+footprint scales with the candidate count, not the corpus, and stays inside
+`work_mem` at this size — but it is per concurrent query.
+
+Index usage is identical in both modes (they share the candidate WHERE clause
+byte-for-byte): the GIN tsvector indexes are used for the selective `phrase`
+shape at both sizes; `rare` (45 % of the corpus matches, because the
+OR-token recall floor is deliberately generous) uses GIN at 1.8k and falls to
+a sequential scan at 100k; `common` (97 % match) never uses GIN. That is the
+planner behaving correctly, and it is a property of the shared candidate
+clause, not of the scoring mode.
+
+**Operational reading:** `bm25` is affordable at the KB sizes this
+deployment runs today and is not affordable, unchanged, at 100k chunks with
+unselective queries. Before enabling `bm25_scoring_mode = bm25` on a large
+KB, either bound the candidate set (the OR-token floor is the driver: a
+tighter floor is the single biggest lever) or accept seconds of keyword-arm
+latency on broad queries. Caveats — synthetic near-duplicate text, a KB that
+is the sole occupant of its dim table (so `kb_id` has no selectivity), dim
+768 rather than production's 4096, warm cache, single client — are recorded
+in `eval/golden/bm25-retune.acceptance.md`.
 
 ## Raw-query lane (rewrite ⊕ raw, multi-turn)
 
@@ -258,9 +430,36 @@ Every kind except `pronoun_ref` scores byte-identical across all three runs (exp
 
 ## Recency prior (similarity ⊕ freshness)
 
-Recency prior (`recency_boost_enabled`, default off): after the rerank blend and the feedback boost (stage 10c), each doc gets `recency_boost_weight · 2^(−ageDays/recency_half_life_days)` added to its score, then the pool re-sorts. Age is the source file's `created_at` (the files table has no document-publication timestamp; for RSS/Confluence each item is its own file row, so created_at ≈ publish time — that's the intended corpus type). One main-DB query per search over the fused pool's distinct file IDs; fail-open. Defaults pre-seeded at the literature operating point (weight 0.1, half-life 14 d — arXiv 2509.19376). Antipattern: enabling on static document KBs — gains nothing, and re-uploading a file resets `created_at`, churning rankings. `internal/vector/recency_boost.go`.
+Recency prior (`recency_boost_enabled`, default off): after the rerank blend and the feedback boost (stage 10c), each doc gets `recency_boost_weight · 2^(−ageDays/recency_half_life_days)` added to its score, then the pool re-sorts. Age is the source file's **effective date**, `COALESCE(published_at, created_at)` (see "Effective date" below); for RSS/Confluence each item is its own file row, so the ingest timestamp already approximates publish time — that's the intended corpus type. One main-DB query per search over the fused pool's distinct file IDs; fail-open. Defaults pre-seeded at the literature operating point (weight 0.1, half-life 14 d — arXiv 2509.19376). Antipattern: enabling on static document KBs — gains nothing, and re-uploading a file resets `created_at`, churning rankings. `internal/vector/recency_boost.go`.
 
 **Now measurable (Wave 2, Task 8/9):** `eval/golden/cert-recency-de.jsonl` (25 questions; synthetic, fully fictional German CERT-advisory corpus — 12 fictional products, 26 fictional WID-SEC advisories, 14 issued as NEU then followed by an UPDATE, ages 1–120 days; `eval/fixtures/cert-advisories/**` + `eval/fixtures/seed-cert.sh`, both committed) is the first golden set with time-sensitive questions. A/B (`--recency-boost on|off`, standard path forced via `--orchestrator-dispatch=false` to isolate the mechanism from the LLM query-type classifier's own non-determinism — full tables including the production-like dispatch-on run in `eval/golden/cert-recency-de.acceptance.md`): `recency_boost_enabled=on` raised overall recall 0.651 → 0.696 against a 4.0 pp same-flag noise band (two off-only runs: 0.651 / 0.611), and raised the UPDATE-outranks-NEU win rate across the 8 NEU/UPDATE pairs from 3/8 to 5/8 — a marginal but directionally positive, noise-exceeding effect on n=25 questions. **Default stays off**; recommended specifically for RSS/CERT-style KBs. Recency-listing (`chat_recency_listing_enabled`, see "Date-aware chat" in `docs/feature-recipes.md`) was exercised on the same fixture and confirmed to resolve explicit windows and the name-marker arm correctly when the question reaches the standard path — it does not fire when orchestrator dispatch routes the same question to `plan_execute`/`supervisor`/`agentic` instead, a pre-existing production interaction the fixture surfaces rather than introduces. Note for future `cmd/eval` users: prior to this task no eval adapter set `CurrentDateLine`/wired a recency lister at all, so every earlier `--production-context` run silently diverged from production date-awareness; `--orchestrator-dispatch=false` is the right setting for isolating standard-path-only features like this one.
+
+### Effective date (`COALESCE(published_at, created_at)`)
+
+Every date-keyed read in the pipeline goes through one expression. `effectiveDateExpr` in
+`internal/vector/recency_boost.go` is `COALESCE(published_at, created_at)` and is used by the
+recency boost's `fileCreatedTimes` lookup, the `SearchOptions.CreatedAfter` window filter, both
+`recent_documents` queries (`RecentDocuments` and `NameMarkerDocuments`, which keep a
+byte-identical package-local copy of the constant — `internal/mcp/builtin` importing
+`internal/vector` would be a new dependency edge for one string), the admin KB overview's
+`oldestFileAt` / stale-share aggregates and the KB-card LATERAL. Each package carries a source-text
+drift test that fails if a bare `created_at` reappears in its SQL, and both tests pin the same
+literal, so changing one fails the other.
+
+`files.published_at` (migration 0071) is populated **only** for RSS items, from the feed entry's
+`PublishedParsed`; every other origin leaves it NULL and therefore keeps keying on ingest time.
+There is **no backfill**: RSS files ingested before 0071 stay NULL until re-polled or re-ingested.
+Consequence for the recency prior on an existing RSS KB: nothing changes until the feed next
+delivers, and then newer items start being aged by their own publication date rather than by when
+the poller happened to fetch them — which is what makes "re-uploading a file resets `created_at`"
+survivable for RSS corpora specifically. Confluence and git sources have no publication timestamp
+to read yet; wiring one is a roadmap item, and it needs no config change when it lands because the
+read side already goes through the shared expression.
+
+The date-window semantics the chat layer exposes (`kb_search`'s `date_from`/`date_to`, the
+recency-listing window, `recent_documents`) are documented in `docs/feature-recipes.md`
+§"Date-aware chat"; the freshness/staleness reporting built on the same expression is
+§"Freshness surface".
 
 ## Ingestion deduplication
 

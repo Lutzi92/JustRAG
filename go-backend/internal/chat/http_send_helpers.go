@@ -615,6 +615,10 @@ func (h *Handler) handleTransformFollowUp(
 // Caller has already saved the user message; ctx already carries the
 // turn budget + tool-call recorder.
 func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWriter, p chatResponseParams) {
+	// Freshness dates for the cited files (one batch query, fail-soft).
+	// Runs before the `sources` frame below AND before the AddMessage that
+	// persists the same slice, so the SSE payload and messages.sources agree.
+	enrichSourceDates(ctx, h.fileDates, p.chatCtx.Sources)
 	sources := p.chatCtx.Sources
 	enhancedQuery := p.chatCtx.EnhancedQuery
 	systemPrompt := p.chatCtx.SystemPrompt
@@ -821,6 +825,8 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 // non-streaming path returns refinedAnswer when AP-A1 produced one
 // (no painted-text mismatch concern since there's no SSE channel).
 func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, p chatResponseParams) {
+	// Same one-shot enrichment as the streaming branch — see there.
+	enrichSourceDates(ctx, h.fileDates, p.chatCtx.Sources)
 	sources := p.chatCtx.Sources
 	enhancedQuery := p.chatCtx.EnhancedQuery
 	systemPrompt := p.chatCtx.SystemPrompt

@@ -2,10 +2,11 @@ import { lazy, Suspense, useMemo } from 'react';
 import {
   BookOpen, Settings, Sun, Moon, User, LogOut, Copy, Check, Plus,
   Trash2, UserPlus, Globe, Pencil, FileText, MessageSquare, Loader2, Bot, Search, Star, Users,
-  SlidersHorizontal
+  SlidersHorizontal, Clock
 } from 'lucide-react';
 import type { KnowledgeBase, SafeAIConfig, KbAssignableRole } from '../types';
 import { API_BASE_URL } from '../api';
+import { formatRelative } from '../utils/dates';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { KBCardSkeleton } from './Skeleton';
@@ -140,12 +141,14 @@ function canManageMembers(kb: KnowledgeBase): boolean {
 
 // KbCardChips is the compact metadata slice on each Home KB card (improvement
 // #6): up to two scent chips (files · messages) plus a single needs-attention
-// chip (failed, else processing). Lucide icons (#2), status tokens (#1).
-function KbCardChips({ kb, t }: { kb: KnowledgeBase; t: (k: string) => string }) {
+// chip (failed, else processing), plus a freshness chip (Wave-3 Task 6) when
+// the KB has files with a known date. Lucide icons (#2), status tokens (#1).
+function KbCardChips({ kb, t, language }: { kb: KnowledgeBase; t: (k: string) => string; language: 'de' | 'en' }) {
   const processing = kb.processingFileCount ?? 0;
   const files = kb.fileCount ?? 0;
   const messages = kb.turnCount ?? 0;
-  if (files === 0 && messages === 0 && processing === 0) return null;
+  const hasFreshness = !!kb.oldestFileAt;
+  if (files === 0 && messages === 0 && processing === 0 && !hasFreshness) return null;
   return (
     <div className="home-view__chip-row">
       {files > 0 && (
@@ -166,6 +169,12 @@ function KbCardChips({ kb, t }: { kb: KnowledgeBase; t: (k: string) => string })
           {t('kbProcessingChip').replace('{n}', String(processing))}
         </span>
       )}
+      {hasFreshness && (
+        <span className="home-view__chip" title={kb.oldestFileAt}>
+          <Clock size={12} aria-hidden="true" />
+          {t('kbFreshnessChip').replace('{date}', formatRelative(kb.oldestFileAt, language))}
+        </span>
+      )}
     </div>
   );
 }
@@ -176,6 +185,7 @@ interface PublicKbCardProps {
   removingKb: boolean;
   rtf: Intl.RelativeTimeFormat;
   t: (k: string) => string;
+  language: 'de' | 'en';
   onSelectKB: (kb: KnowledgeBase) => void;
   onOpenGlobalKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onDeleteGlobalKB: (id: string, e: React.MouseEvent) => void;
@@ -185,7 +195,7 @@ interface PublicKbCardProps {
 // PublicKbCard is one tile in the Favoriten section. System admins get the
 // settings/delete pair on top of the shared card chrome.
 function PublicKbCard({
-  kb, isSystemAdmin, removingKb, rtf, t,
+  kb, isSystemAdmin, removingKb, rtf, t, language,
   onSelectKB, onOpenGlobalKbSettings, onDeleteGlobalKB, onDeleteKB,
 }: PublicKbCardProps) {
   return (
@@ -269,7 +279,7 @@ function PublicKbCard({
 
       {kb.headerText && <div className="home-view__kb-header-text">{kb.headerText}</div>}
       <div className="source-meta home-view__kb-meta">{lastActiveLabel(kb, rtf, t)}</div>
-      <KbCardChips kb={kb} t={t} />
+      <KbCardChips kb={kb} t={t} language={language} />
     </li>
   );
 }
@@ -286,6 +296,7 @@ interface PrivateKbCardProps {
   removingKb: boolean;
   rtf: Intl.RelativeTimeFormat;
   t: (k: string) => string;
+  language: 'de' | 'en';
   onSelectKB: (kb: KnowledgeBase) => void;
   onOpenShare: (kb: KnowledgeBase, e: React.MouseEvent) => void;
   onOpenKbSettings: (kb: KnowledgeBase, e: React.MouseEvent) => void;
@@ -297,7 +308,7 @@ interface PrivateKbCardProps {
 // card in both, since the only difference between the sections is the
 // caller's own role, which the card already reads off myRole.
 function PrivateKbCard({
-  kb, currentUserId, systemRole, removingKb, rtf, t, onSelectKB, onOpenShare, onOpenKbSettings, onRenameKB, onDeleteKB,
+  kb, currentUserId, systemRole, removingKb, rtf, t, language, onSelectKB, onOpenShare, onOpenKbSettings, onRenameKB, onDeleteKB,
 }: PrivateKbCardProps) {
   return (
     // Card-level click is a mouse convenience (role="presentation"); the
@@ -406,7 +417,7 @@ function PrivateKbCard({
           </div>
         )}
       </div>
-      <KbCardChips kb={kb} t={t} />
+      <KbCardChips kb={kb} t={t} language={language} />
     </li>
   );
 }
@@ -555,6 +566,7 @@ export function HomeView(props: HomeViewProps) {
                 removingKb={removingKb}
                 rtf={rtf}
                 t={t}
+                language={language}
                 onSelectKB={onSelectKB}
                 onOpenGlobalKbSettings={onOpenGlobalKbSettings}
                 onDeleteGlobalKB={onDeleteGlobalKB}
@@ -598,6 +610,7 @@ export function HomeView(props: HomeViewProps) {
                 removingKb={removingKb}
                 rtf={rtf}
                 t={t}
+                language={language}
                 onSelectKB={onSelectKB}
                 onOpenShare={onOpenShare}
                 onOpenKbSettings={onOpenKbSettings}
@@ -638,6 +651,7 @@ export function HomeView(props: HomeViewProps) {
               removingKb={removingKb}
               rtf={rtf}
               t={t}
+              language={language}
               onSelectKB={onSelectKB}
               onOpenShare={onOpenShare}
               onOpenKbSettings={onOpenKbSettings}

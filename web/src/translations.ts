@@ -530,6 +530,7 @@ export const translations = {
     sourcesLabel: { de: 'Quellen:', en: 'Sources:' },
     sourceCount: { de: 'Quelle', en: 'Source' },
     openInDocument: { de: 'Im Dokument öffnen', en: 'Open in document' },
+    sourceDateLabel: { de: 'Datum:', en: 'Date:' },
     answerSourcesToggle: { de: 'Quellen', en: 'Sources' },
     hitsLabel: { de: 'Treffer', en: 'hits' },
     followUpsLabel: { de: 'Weiterfragen', en: 'Ask a follow-up' },
@@ -965,6 +966,10 @@ export const translations = {
     colProcessing: { de: 'In Bearbeitung', en: 'Processing' },
     colChats: { de: 'Chats', en: 'Chats' },
     colCreated: { de: 'Erstellt', en: 'Created' },
+    colOldestContent: { de: 'Ältester Inhalt', en: 'Oldest content' },
+    colStaleShare: { de: 'Veraltet', en: 'Stale' },
+    colLastSync: { de: 'Letzte Synchronisierung', en: 'Last sync' },
+    kbSyncFailing: { de: 'Synchronisierung fehlerhaft', en: 'Sync failing' },
     // KB Overview — superadmin actions
     colActions: { de: 'Aktionen', en: 'Actions' },
     kbActionDelete: { de: 'KB löschen', en: 'Delete KB' },
@@ -1024,6 +1029,7 @@ export const translations = {
     kbMessagesChip: { de: '{n} Nachrichten', en: '{n} messages' },
     kbFailedChip: { de: '{n} fehlgeschlagen', en: '{n} failed' },
     kbProcessingChip: { de: '{n} in Bearbeitung', en: '{n} processing' },
+    kbFreshnessChip: { de: 'Ältester Inhalt {date}', en: 'Oldest content {date}' },
 
     // AI Configs Tab
     aiConfigurations: { de: 'KI-Konfigurationen', en: 'AI Configurations' },
@@ -1559,6 +1565,21 @@ export const translations = {
         de: 'Wahrscheinlichkeit, mit der eine abgeschlossene Antwort an den RAGAS-Judge weitergeleitet wird. Bereich 0.0–1.0; Standard 0.0 (nichts wird gesampelt, auch wenn der Master-Schalter oben an ist). Empfehlung: mit 0.01 (1%) starten, Kosten in den Prometheus-Counters beobachten, dann nach Bedarf anpassen. Bei 100 Anfragen/Tag und Rate 0.05 ergibt das ~5 Samples/Tag = 15 Judge-LLM-Aufrufe/Tag — klein genug für stabile Wochen-Trends ohne nennenswerte Zusatzkosten.',
         en: 'Probability that a completed response is forwarded to the RAGAS judge. Range 0.0–1.0; default 0.0 (nothing is sampled even when the master switch above is on). Recommended starting point: 0.01 (1%), watch the Prometheus counters, then adjust as needed. At 100 queries/day with rate 0.05 you get ~5 samples/day = 15 judge LLM calls/day — small enough for stable weekly trends without meaningful additional cost.',
     },
+    chatCitationSpansEnabled: { de: 'Zitat-Fundstellen (wortgenaue Belegstelle)', en: 'Citation spans (verbatim quote match)' },
+    chatCitationSpansEnabledHelp: {
+        de: 'Wenn aktiviert: zitiert der Antworttext [N], extrahiert ein Fast-Tier-Modell nach der Antwort ein wörtliches Zitat aus der jeweiligen Quelle und prüft es exakt gegen den Chunk-Text; die gefundene Fundstelle (Rune-Offsets in die Quelle) wird im Quellen-Popover als hervorgehobene Textstelle angezeigt statt des bisherigen 320-Zeichen-Ausschnitts. Ein zusätzlicher Modellaufruf pro Antwort, zeitbudgetiert (s. Timeout unten); bei Fehler oder Timeout bleibt die bisherige Zitatprüfung unverändert bestehen. Standard: aus.',
+        en: 'When on: for each [N] the answer cites, a fast-tier model extracts a verbatim quote from that source after the answer and checks it exactly against the chunk text; the resulting span (rune offsets into the source) is shown as a highlighted passage in the source popover instead of the old flat 320-char snippet. One extra model call per response, time-boxed (see timeout below); on error or timeout the existing citation validation is unchanged. Default: off.',
+    },
+    chatCitationSpansMaxSources: { de: 'Zitat-Fundstellen: max. Quellen', en: 'Citation spans: max sources' },
+    chatCitationSpansMaxSourcesHelp: {
+        de: 'Obergrenze für unterschiedliche Quellen, die pro Antwort in einem Aufruf an die Fundstellen-Extraktion gehen. Bereich 1–50; Standard 12. Höhere Werte decken mehr Zitate ab, verlängern aber den Prompt und damit die Latenz des Modellaufrufs.',
+        en: 'Upper bound on distinct sources sent to the span-extraction call per response. Range 1–50; default 12. Higher values cover more citations but lengthen the prompt and the model call\'s latency.',
+    },
+    chatCitationSpansTimeoutMs: { de: 'Zitat-Fundstellen: Timeout (ms)', en: 'Citation spans: timeout (ms)' },
+    chatCitationSpansTimeoutMsHelp: {
+        de: 'Zeitbudget für den Fundstellen-Modellaufruf in Millisekunden. Bereich 1000–60000; Standard 8000. Läuft die Extraktion nicht rechtzeitig durch, bleibt die bisherige Zitatprüfung unverändert bestehen — die Post-Response-Verarbeitung wartet nicht länger.',
+        en: 'Time budget for the span-extraction model call, in milliseconds. Range 1000–60000; default 8000. If extraction doesn\'t finish in time, the existing citation validation is left unchanged — post-response processing never waits longer.',
+    },
     chatAgenticEnabled: { de: 'Agentischer Chat-Loop (Multi-Hop Suche)', en: 'Agentic chat loop (multi-hop search)' },
     chatAgenticEnabledHelp: {
         de: 'Wenn aktiviert: für Anfragen, die der Query-Klassifikator als komplex einstuft (Vergleichs- / Synthese-Fragen, mehrteilig), führt der Chat-Handler statt der bestehenden 2-Schritt-Recherche eine adaptive Multi-Hop-Schleife aus. Pro Hop nach dem ersten fragt ein LLM-Richter, ob die bisherigen Quellen die Frage vollständig beantworten — falls nein, schlägt er eine fokussierte Folgeanfrage vor. Stops früh wenn (a) der Richter sagt "genug", (b) keine neuen Chunks dazukommen, oder (c) das Hop-Budget aufgebraucht ist. Standard: aus. Kosten: 1-2 zusätzliche LLM-Aufrufe (kleines Modell), 1-2 zusätzliche Suchen pro betroffener Anfrage. Wirkt nur im Streaming-Modus auf complex_reasoning-Anfragen ohne explizites Enhance — andere Anfragen behalten den bestehenden Pfad.',
@@ -1675,6 +1696,11 @@ export const translations = {
     langfuseBaseUrlHelp: {
         de: 'Wenn gesetzt, blendet JustRAG für Admins einen "Trace anzeigen"-Button neben jeder KI-Antwort ein, der direkt zur entsprechenden Langfuse-Trace führt. Beispiel: https://langfuse.example.local oder https://cloud.langfuse.com/project/abc123/traces',
         en: 'When set, JustRAG shows admins a "View trace" button next to each AI message linking to the matching Langfuse trace. Example: https://langfuse.example.local or https://cloud.langfuse.com/project/abc123/traces',
+    },
+    kbStaleDays: { de: 'Schwellenwert für veraltete Inhalte (Tage)', en: 'Stale-content threshold (days)' },
+    kbStaleDaysHelp: {
+        de: 'Alter in Tagen, ab dem eine Datei in der KB-Übersicht als veraltet zählt (Ältester Inhalt / Veraltet-Anteil). Global, nicht pro KB. Standard: 180.',
+        en: 'Age in days above which a file counts as stale in the KB-overview dashboard (oldest content / stale share). Global, not per-KB. Default: 180.',
     },
     viewTrace: { de: 'Trace anzeigen', en: 'View trace' },
     exportAnswer: { de: 'Antwort exportieren', en: 'Export answer' },
@@ -2169,6 +2195,23 @@ export const translations = {
     chatLongcontextMaxTokensHelp: {
         de: 'Token-Budget-Obergrenze, die die Chat-Schicht auf den Long-Context-Chunk-Pool vor der Prompt-Assemblierung anwendet. Bereich [10.000, 500.000]; Default 100.000. 100k erlaubt ~200 Chunks à ~500 Token aber bleibt deutlich unter den meisten Produktionsmodell-Kontextfenstern (1M auf neueren Gemini/Claude-Tieren, 200k auf Sonnet).',
         en: 'Token-budget ceiling the chat layer applies to the long-context chunk pool before prompt assembly. Range [10,000, 500,000]; default 100,000. 100 k accommodates ~200 chunks at ~500 tokens each but stays well under most production model context windows (1 M on the latest Gemini/Claude tiers, 200 k on Sonnet).',
+    },
+    chatLongcontextMode: { de: 'Long-Context: Verarbeitung', en: 'Long-context: consumer' },
+    chatLongcontextModeFlat: { de: 'flat — kompletter Chunk-Pool roh an das Antwortmodell', en: 'flat — whole chunk pool raw to the answer model' },
+    chatLongcontextModeMapReduce: { de: 'map_reduce — erst Befunde je Chunk-Gruppe extrahieren', en: 'map_reduce — extract findings per chunk group first' },
+    chatLongcontextModeHelp: {
+        de: 'Wie der breite Chunk-Pool (bis ~200 Chunks) zur Antwort wird. flat = bisheriges Verhalten: der komplette, aufs Token-Budget gekürzte Pool geht roh an das Antwortmodell. map_reduce = pro Chunk-Gruppe zuerst ein günstiger Fast-Tier-Aufruf, der je Quelle eine Aussage plus wörtliches Zitat extrahiert; das Antwortmodell sieht dann nur diese Befunde und die Quellenüberschriften, nicht die Rohtexte. Vorteil: deutlich kürzerer Antwort-Prompt und weniger Positionsbias über 200 Chunks. Kosten: ein zusätzlicher Fast-Tier-Aufruf je Gruppe. Achtung: eine Quelle, zu der kein Befund extrahiert wurde, kann in der Antwort nicht mehr zitiert werden. Scheitert eine Gruppe, gehen deren Rohtexte (erste 600 Zeichen je Chunk) als Ersatz-Befunde in den Prompt — Belege gehen nie still verloren. Wirkt nur, wenn Long-Context aktiv ist. Standard: flat.',
+        en: 'How the wide chunk pool (up to ~200 chunks) becomes an answer. flat = today\'s behaviour: the whole token-budgeted pool goes to the answer model raw. map_reduce = one cheap fast-tier call per chunk group first, extracting one claim plus a verbatim quote per source; the answer model then sees only those findings and the source headers, not the raw bodies. Upside: a much shorter answer prompt and less position bias across 200 chunks. Cost: one extra fast-tier call per group. Caveat: a source no finding surfaced can no longer be cited in the answer. If a group fails, its raw text (first 600 characters per chunk) enters the prompt as fallback findings — evidence is never silently dropped. Only has an effect when long-context is on. Default: flat.',
+    },
+    chatLongcontextMapGroupSize: { de: 'Long-Context: Chunks je Gruppe', en: 'Long-context: chunks per group' },
+    chatLongcontextMapGroupSizeHelp: {
+        de: 'Wie viele Chunks ein Extraktionsaufruf im map_reduce-Modus sieht. Bereich [2, 32]; Default 8. Kleinere Gruppen bedeuten mehr Aufrufe, aber weniger Positionsbias innerhalb eines Aufrufs; größere Gruppen sind billiger, erzeugen aber wieder genau die Verdrängung, gegen die die Map-Stufe existiert. Nur im Modus map_reduce wirksam.',
+        en: 'How many chunks one extraction call sees in map_reduce mode. Range [2, 32]; default 8. Smaller groups mean more calls but less within-call position bias; larger groups are cheaper but re-create exactly the crowding the map stage exists to avoid. Only effective in map_reduce mode.',
+    },
+    chatLongcontextMapConcurrency: { de: 'Long-Context: parallele Extraktionen', en: 'Long-context: map concurrency' },
+    chatLongcontextMapConcurrencyHelp: {
+        de: 'Obergrenze gleichzeitiger Extraktionsaufrufe der Map-Stufe pro Chat-Turn. Bereich [1, 32]; Default 6. Dies ist eine Grenze pro Turn — die deploymentweite Obergrenze ist AI_MAX_CONCURRENT_REQUESTS. Nur im Modus map_reduce wirksam.',
+        en: 'Upper bound on simultaneous map-stage extraction calls per chat turn. Range [1, 32]; default 6. This is a per-turn cap — the deployment-wide ceiling is AI_MAX_CONCURRENT_REQUESTS. Only effective in map_reduce mode.',
     },
 
     // My Memory (GDPR)

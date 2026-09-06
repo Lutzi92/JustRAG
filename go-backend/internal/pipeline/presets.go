@@ -67,10 +67,12 @@ const (
 //     batch job (kg_communities_enabled, global-only).
 //     - chat_graph_routing_enabled needs kg_extraction_enabled on the KB,
 //     which is rule 1's re-ingest.
-//     chat_longcontext_enabled is a fourth case: it requires a
-//     complex_reasoning query AND chat.PrepareChatContext (service.go:898),
-//     and the streaming chat never combines the two — see the paragraph
-//     below. No preset enables it either.
+//     chat_longcontext_enabled is a fourth case, for a different reason:
+//     since Wave 3 it IS reachable from streaming chat (it became the
+//     OrchLongContext orchestrator, orchestrator_select.go), but it is a
+//     ~30x-per-turn cost switch that only pays off on global-synthesis
+//     traffic. No preset enables it either — an operator turns it on
+//     deliberately, per deployment.
 //
 //  5. NO INVENTED NUMBERS. Every value below is a boolean the registry or the
 //     read call site documents. Tuning floats (mmr_lambda,

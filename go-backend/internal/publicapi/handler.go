@@ -69,6 +69,10 @@ type Handler struct {
 
 	// usageRecorder writes one usage_events row per accepted turn. Optional.
 	usageRecorder usage.Recorder
+
+	// fileDates resolves the cited files' dates for the sources payload.
+	// Optional — see SetFileDates.
+	fileDates chat.FileDateLookup
 }
 
 // NewHandler creates a Handler backed by the given store, AI resolver, and
@@ -92,6 +96,14 @@ func (h *Handler) SetResearchDeps(rs ResearchStore, rdb *redis.Client) {
 // this surface are not counted.
 func (h *Handler) SetUsageRecorder(r usage.Recorder) {
 	h.usageRecorder = r
+}
+
+// SetFileDates injects the per-turn source-date lookup used to stamp
+// createdAt/publishedAt onto the sources this surface returns and persists.
+// Optional — when unset, the date fields are simply omitted, exactly as
+// before the freshness surface existed.
+func (h *Handler) SetFileDates(l chat.FileDateLookup) {
+	h.fileDates = l
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +428,12 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to prepare context")
 		return
 	}
+
+	// Freshness dates for the cited files (one batch query, fail-soft) —
+	// same enrichment the web chat paths do, applied once before the
+	// sources are persisted with either AddMessage below and before they
+	// are written to the client (W3-R11).
+	chat.EnrichSourceDates(ctx, h.fileDates, chatCtx.Sources)
 
 	sources := chatCtx.Sources
 	enhancedQuery := chatCtx.EnhancedQuery

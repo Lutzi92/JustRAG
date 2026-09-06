@@ -7,7 +7,7 @@ When CLAUDE.md says "see `docs/agent-orchestration.md` for the full rationale", 
 ## Read order
 
 1. **Trajectory streaming** — how SSE events surface every decision; required mental model for everything else.
-2. **The four orchestrators** — Supervisor, Plan-and-Execute, Agentic, Standard fallback. Priority order and dispatch.
+2. **The orchestrators** — Long-context, Supervisor, Plan-and-Execute, Agentic, Standard fallback. Priority order and dispatch.
 3. **Feature index** — each chat-pipeline feature, why it exists, how it composes with the orchestrators.
 
 ## Trajectory streaming
@@ -18,9 +18,25 @@ Every orchestrator emits structured `agent_*` SSE events alongside the answer st
 
 Implementation: `internal/chat/trajectory.go` (event encoder), `internal/chat/agentic_chat.go`, `internal/chat/plan_execute_chat.go`, `internal/agents/supervisor.go` (emit sites). The events stream alongside content tokens on the same SSE channel.
 
-## The four orchestrators
+## The orchestrators
 
-Streaming chat for `complex_reasoning` queries dispatches through the first orchestrator whose flag is on. Dispatch happens in `internal/chat/http_send.go` (`Handler.tryDeepChat`, around line 289).
+Streaming chat for `complex_reasoning` queries dispatches through the first orchestrator whose flag is on. The ladder itself lives in `internal/chat/orchestrator_select.go` (`SelectOrchestrator`); `internal/chat/http_send.go` (`Handler.tryDeepChat`) only resolves its inputs and runs the winner. Full precedence, highest first:
+
+| # | Orchestrator | Flag(s) | Shape |
+|---|---|---|---|
+| 0 | Comparison / Team / Corpus-table | explicit user intent | attachment comparison, an explicitly selected agent/team, corpus-comparison table |
+| 1 | DRIFT | `chat_drift_enabled` + global-synthesis | primer → follow-ups → light searches → synthesise |
+| 2 | Long-context | `chat_longcontext_enabled` + global-synthesis | wide retrieval (≈200 chunks) → `flat` or `map_reduce` consumer |
+| 3 | Supervisor | `chat_supervisor_enabled` | classification → specialist → search → answer |
+| 4 | Plan-and-Execute | `chat_plan_execute_enabled` (+ `_dag`, …) | plan → iterate → generate |
+| 5 | Agentic | `chat_agentic_enabled` | hop-1 → critique → optional follow-up hops |
+| 6 | Standard | (always-on fallback) | the legacy 2-step research path |
+
+### 0. Long-context (`chat_longcontext_enabled` + `chat_longcontext_mode`)
+
+**Shape:** one wide retrieval pass (`LongContextMode`, top-k `chat_longcontext_top_k` ≈ 200, no MMR / score-drop / parent-child swap) → the consumer selected by `chat_longcontext_mode`. See the [Long-context routing](#long-context-system-2-routing-t2-1-chat_longcontext_enabled--_max_tokens--chat_longcontext_mode) section below for the mechanism, both consumer modes and the cost argument.
+
+**Why it is an orchestrator (Wave 3, W3-R5):** the route used to be a branch INSIDE `PrepareChatContext`, which the streaming chat never reaches for `complex_reasoning` turns — every one of those goes through `tryDeepChat`. So the route was configured, documented, metered and unreachable for exactly the query class it targets. It now sits directly below DRIFT (which is the more specific global-synthesis answer when KG community summaries exist) and above the supervisor; the `PrepareChatContext` branch remains for the non-streaming surfaces and drives the same consumer.
 
 ### 1. Supervisor (`chat_supervisor_enabled`)
 
@@ -194,15 +210,37 @@ DSGVO requirement: privacy drawer (per-entry delete + bulk clear + JSON export) 
 
 Implementation: `internal/longmem/longmem.go`.
 
-### Long-context (System 2) routing (T2-1: `chat_longcontext_enabled` + `_max_tokens`)
+### Long-context (System 2) routing (T2-1: `chat_longcontext_enabled` + `_max_tokens` + `chat_longcontext_mode`)
 
-When the gate is on AND the query is `complex_reasoning` AND the keyword classifier (`IsGlobalSynthesisQuery` — EN+DE triggers like "summarise all", "across every", "Fasse alle … zusammen") fires: `SearchOptions.LongContextMode` is set. `Search()` then raises top-k to `LongContextTopK=200`, skips MMR / score-drop / parent-child swap; the chat pipeline replaces the standard 120k token budget with `chat_longcontext_max_tokens` and skips ECoRAG compression + multipass extraction (both would re-narrow the wide pool).
+When the gate is on AND the query is `complex_reasoning` AND the keyword classifier (`IsGlobalSynthesisQuery` — EN+DE triggers like "summarise all", "across every", "Fasse alle … zusammen") fires: `SearchOptions.LongContextMode` is set. `Search()` then raises top-k to `LongContextTopK=200`, skips MMR / score-drop / parent-child swap; the chat pipeline replaces the standard 120k token budget with `chat_longcontext_max_tokens` and skips ECoRAG compression + multipass extraction (both would re-narrow the wide pool). Since Wave 3 this is the `OrchLongContext` orchestrator (`RunLongContextChat`), not just a `PrepareChatContext` branch — see the orchestrator table above.
+
+**Consumer modes (`chat_longcontext_mode`, W3-R6).** One shared consumer (`internal/chat/longcontext_consume.go`) serves the orchestrator and the `PrepareChatContext` branch:
+
+- `flat` (default) — the token-budgeted pool goes to the answer LLM raw, sandwich-ordered. Byte-identical to the pre-Wave-3 behaviour: the same assembler (`assembleFlatFromParts`) now builds the standard path's prompt tail too, so the two cannot drift.
+- `map_reduce` — the pool is grouped in score order into `chat_longcontext_map_group_size` (default 8) chunk groups, each rendered with its ORIGINAL `[N]` headers. One fast-tier structured call per group (`ai.ExtractLongContextFindings`, `chat_longcontext_map_model`, up to `chat_longcontext_map_concurrency` in flight, 45 s per group) returns `{source_idx, claim, quote}` findings. The answer prompt then carries `FINDINGS (grouped by source)` plus the source headers — no chunk bodies. `Sources` and `FinalChunks` stay the full pool, so `[N]` citations, the citation validator and eval recall keep working. Consequence, accepted for a synthesis route: a chunk no finding surfaced cannot be cited. In `PrepareChatContext` the map stage is **skipped on abstain** (there is nothing to synthesise and the abstain notice belongs to the flat tail) — the same rule ECoRAG compression, multipass extraction and the sufficient-context gate already follow. Flat mode is unaffected.
+- Fail-soft (W3-R7): a group whose extraction fails — including a panic, recovered into a per-group error via `safego.RecoverError` — contributes its chunks' first 600 runes as fallback findings, so evidence is never silently dropped. An all-empty map degrades to `flat`.
+
+Trajectory events: `longcontext_route` (mode + query), `longcontext_map` (per group, emitted for failed groups too), `longcontext_reduce` (total findings).
+
+**Measured: the default stays `flat` (Wave 3 Task 4).** Judge A/B on `eval/golden/global-synthesis-de.jsonl` — 12 German global-synthesis questions on the PPM-Eval KB, gitignored; full tables and per-question anomalies in `eval/golden/global-synthesis-de.acceptance.md`. Three runs (flat, map_reduce, flat repeat), 12/12 questions dispatched to `longcontext` in each, 0 errors:
+
+| Run | answer relevance | faithfulness | context precision | ctx-assembly latency | wall |
+|---|---|---|---|---|---|
+| flat | 1.000 | 0.613 | 0.409 | 10.2 s | 563 s |
+| map_reduce | 1.000 | 0.565 | 0.600 | 63.4 s | 954 s |
+| flat (repeat) | 1.000 | 0.597 | 0.420 | 10.3 s | 568 s |
+
+The decision rule was "adopt `map_reduce` iff mean answer relevance improves beyond the noise band AND faithfulness does not drop beyond it". Its primary arm was **unsatisfiable on this route**: the Likert answer-relevance judge sees only question + answer and scores a 3000–5000-character structured German synthesis 5/5 by construction, in every run and both modes — a property of the instrument, not a finding about the modes. Faithfulness moved −4.8 pp, 0.34 × the ≈0.14 standard error of a 12-question mean (individual questions swing up to a full point between two runs of the *identical* configuration, so the 1.6 pp gap between the two flat means is cancellation, not stability) — "no detectable difference", not "worse". The single noise-exceeding effect is **context precision 0.409 → 0.600 (+19.1 pp, 3.5 × SE)**: the findings block doing exactly what W3-R6 designed it to do. That metric was explicitly de-scoped for this route, so it is recorded as grounds for keeping `map_reduce` available, not for defaulting to it. Measured cost: 6.2× the context-assembly latency (63.4 s vs 10.2 s per question) and **25 extra fast-tier calls per turn** on a 200-chunk pool at the default group size — bounded per turn, not per deployment, so set `AI_MAX_CONCURRENT_REQUESTS` before enabling it broadly. Observed live: on one question two groups hit the 45 s per-group budget and took the W3-R7 fallback path (207 findings instead of the usual 33–156) — designed degradation, no error surfaced, no evidence dropped.
+
+Before the flat/map_reduce question can be revisited, the judge needs replacing: a coverage-of-expected-clusters or pairwise-preference judge has headroom on long-form synthesis answers where a 1–5 "is this on topic" scale does not.
+
+Reproduce with `cmd/eval --production-context --longcontext on --longcontext-mode flat|map_reduce`; both flags overlay the site_config for that run only. The map/reduce counts are trajectory events, not report fields — scrape them from the `rag.longcontext.map_reduce` log lines.
 
 **Why:** global-synthesis queries ("what does every document say about X?") have a System-1 failure mode — top-k=10 with strong reranker discrimination is exactly wrong for them, because the *coverage* of the chunk pool is what determines whether the synthesis can be accurate. The long-context route trades per-turn LLM cost (~30× when the gate fires) for a much wider, less-filtered evidence pool.
 
 **Scope note:** this is "wide-retrieval mode" rather than full retrieval bypass. The pipeline still BM25/vector-searches against the query (so relevance ranking still applies to the wider pool); chunks reach the LLM raw, no post-filter. A true `FetchAllChunks` path that ignores query relevance would need new Searcher methods and is deferred.
 
-The classifier is keyword-only in this cut; an LLM-based classifier behind a sub-flag is a follow-up. Telemetry: `rag_longcontext_route_total{outcome}` — watch the `fired` count vs traffic before broad rollout. The shape hash (`internal/vector/query_cache_shape.go`) includes `LongContextMode` so cached normal-mode results don't collide with long-context entries.
+The classifier is keyword-only in this cut; an LLM-based classifier behind a sub-flag is a follow-up. Telemetry: `rag_longcontext_route_total{outcome,mode}` — watch `fired` against the `considered` denominator (gate on, turn eligible — `complex_reasoning`, no `Enhance` — but the classifier did not match) before broad rollout. **Upgrade note:** the label set gained `mode`, and `outcome` gained `considered` and `map_empty`, so any dashboard or alert keyed on the pre-Wave-3 label set breaks. Both emitting surfaces (the orchestrator in `http_send.go` and the `PrepareChatContext` branch) apply the same eligibility test, so `fired/considered` means the same thing on both; the one accepted imprecision is that an orchestrator error falls through to `PrepareChatContext`, which re-evaluates the same turn and contributes a second `considered` (or `fired`) — named in the metric's own help text. The shape hash (`internal/vector/query_cache_shape.go`) includes `LongContextMode` so cached normal-mode results don't collide with long-context entries.
 
 ### Self-RAG verifier (`chat_self_rag_enabled` + `chat_self_rag_model`)
 

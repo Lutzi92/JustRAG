@@ -72,8 +72,27 @@ func main() {
 	refreshBM25Stats := flag.Bool("refresh-bm25-stats", false, "Before running, recompute BM25 statistics (vector.BM25StatsRefresher.RefreshKB) for every KB referenced by the golden set, across every dim table that has rows for that KB, so an A/B never runs against missing/stale stats.")
 	bm25ModeOverride := flag.String("bm25-mode", "", `Wave-2 Task 6 / ruling W2-R10: per-run override for bm25_scoring_mode ("ts_rank" | "bm25"). Empty = read the live site_config. Applied the same way as --rerank-blend-alpha (wraps the vector-layer site-config reader; no site_configs mutation) — combine with --refresh-bm25-stats when testing "bm25" against a golden set whose KBs haven't had a stats refresh yet.`)
 	bm25TieredBoostOverride := flag.String("bm25-tiered-boost", "", `Per-run override for bm25_tiered_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-mode.`)
+	longContextModeOverride := flag.String("longcontext-mode", "", `Wave-3 ruling W3-R6: per-run override for chat_longcontext_mode ("flat" | "map_reduce") — which consumer the OrchLongContext orchestrator uses. Empty = read the live site_config. This is a CHAT-layer key, so it wraps siteReader like --crag (not the vector-layer overlay). Only has an effect when chat_longcontext_enabled is on and the question trips the global-synthesis classifier.`)
+	longContextEnabled := flag.String("longcontext", "", `Wave-3 ruling W3-R5: per-run override for chat_longcontext_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext-mode. "on" puts OrchLongContext at the top of the eval orchestrator ladder for questions the global-synthesis classifier accepts, so a global-synthesis golden set can be measured without mutating site_configs.`)
+	goldenQueryType := flag.Bool("golden-query-type", false, `Forward each golden row's curated "query_type" label into the retrieval pipeline (chat.ChatContextParams.QueryType) instead of letting the pipeline classify the question. Default false so existing --production-context reports keep their historical shape. Does NOT affect orchestrator dispatch, which classifies independently — if a question does not reach the intended orchestrator, rewrite the question, not the label.`)
 	recencyBoostOverride := flag.String("recency-boost", "", `Wave 2 Task 8: per-run override for recency_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-tiered-boost (a vector-layer key, applied via the searchReader overlay, not the chat-level siteReader). Lets the CERT recency fixture A/B the recency prior without a site_configs mutation.`)
+	printKeywordSQL := flag.String("print-keyword-sql", "", `Diagnostic mode (Wave-3 Task 7): print the keyword arm's SQL for this query — for BOTH scoring modes (ts_rank and bm25), with the KB's real resolved settings (chunk table, text-search config, simple arm, tiered boost, k1/b, dim-keyed stats tables) — as one JSON document on stdout, then exit 0. Requires --kb-id. Runs no search, no LLM call, and needs no golden set; --top-k sets the statement's LIMIT (pass 50 to match the legacy pre-rerank candidate depth the keyword arm actually runs with at top-k 10 with a reranker; a non-positive value falls back to 50). Each mode carries both the parameterised SQL and an "executable_sql" with the placeholders inlined, so it can be handed straight to EXPLAIN (ANALYZE, BUFFERS).`)
+	printKeywordSQLKBID := flag.String("kb-id", "", "KB id for --print-keyword-sql. Ignored in every other mode (the golden set carries its own kb_id per question).")
 	flag.Parse()
+
+	// Diagnostic mode short-circuits before --golden is required: it needs
+	// only a KB and a query.
+	if *printKeywordSQL != "" {
+		if err := validateKeywordSQLFlags(*printKeywordSQLKBID); err != nil {
+			slog.Error("invalid --print-keyword-sql invocation", "error", err)
+			os.Exit(2)
+		}
+		if err := runPrintKeywordSQL(*printKeywordSQL, *printKeywordSQLKBID, *topK, os.Stdout); err != nil {
+			slog.Error("--print-keyword-sql failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	var baseline *eval.Report
 	if *baselinePath != "" {
@@ -122,6 +141,14 @@ func main() {
 
 	if *bm25ModeOverride != "" && *bm25ModeOverride != "ts_rank" && *bm25ModeOverride != "bm25" {
 		slog.Error("invalid --bm25-mode value", "value", *bm25ModeOverride)
+		os.Exit(2)
+	}
+	if *longContextModeOverride != "" && *longContextModeOverride != "flat" && *longContextModeOverride != "map_reduce" {
+		slog.Error("invalid --longcontext-mode value", "value", *longContextModeOverride)
+		os.Exit(2)
+	}
+	if *longContextEnabled != "" && *longContextEnabled != "on" && *longContextEnabled != "off" {
+		slog.Error("invalid --longcontext value", "value", *longContextEnabled)
 		os.Exit(2)
 	}
 	if *bm25TieredBoostOverride != "" && *bm25TieredBoostOverride != "on" && *bm25TieredBoostOverride != "off" {
@@ -287,6 +314,15 @@ func main() {
 	if *cragOverride != "" {
 		siteReader = &cragOverrideReader{inner: chatStore, override: *cragOverride}
 	}
+	// chat_longcontext_enabled / chat_longcontext_mode are CHAT-layer keys
+	// (chat.ChatLongContextEnabled / ChatLongContextMode), so they wrap
+	// siteReader rather than the vector-layer overlay above. Chained after
+	// the CRAG wrapper so both overrides compose. One wrapper carries both
+	// keys — a second wrapper would be indistinguishable but harder to read.
+	if chatOverlays := buildChatOverlays(*longContextEnabled, *longContextModeOverride); len(chatOverlays) > 0 {
+		siteReader = &chatOverlayReader{inner: siteReader, overlays: chatOverlays}
+		slog.Info("eval: applying chat site_config overlays for this run", "overlays", chatOverlays)
+	}
 
 	type evalAdapter interface {
 		Search(ctx context.Context, q eval.Question, k int) ([]eval.RetrievedChunk, error)
@@ -305,6 +341,7 @@ func main() {
 			MultiQuery:              *multiQuery,
 			StepBack:                *stepBack,
 			ForceEnumerationPrepass: forceEnumeration,
+			GoldenQueryType:         *goldenQueryType,
 		}
 		// KB-system-prompt accessor - same closure shape as the trajectory
 		// runner uses below - so the dispatched orchestrators/team see the
@@ -740,6 +777,41 @@ func (a *legacySearchAdapter) ContentsForQuestion(questionID string, k int) (con
 		fileNames[i] = c.FileName
 	}
 	return contents, fileNames, true
+}
+
+// chatOverlayReader wraps a chat.SiteConfigReader and serves a fixed set of
+// chat-layer keys from an in-memory map for one run, without mutating
+// site_configs — the chat-side twin of overlaySiteConfig (which serves the
+// internal/vector reader). Any key not in the overlay delegates to the inner
+// reader. Wrappers compose, so it can sit on top of cragOverrideReader.
+type chatOverlayReader struct {
+	inner    chat.SiteConfigReader
+	overlays map[string]string
+}
+
+// buildChatOverlays turns the two long-context CLI flags into the overlay
+// map. An empty flag contributes NO entry, which is the whole point: an
+// entry with an empty value would pin the key to the zero value for the run
+// instead of delegating to the live site_config.
+func buildChatOverlays(longContextEnabled, longContextMode string) map[string]string {
+	overlays := map[string]string{}
+	switch longContextEnabled {
+	case "on":
+		overlays["chat_longcontext_enabled"] = "true"
+	case "off":
+		overlays["chat_longcontext_enabled"] = "false"
+	}
+	if longContextMode != "" {
+		overlays["chat_longcontext_mode"] = longContextMode
+	}
+	return overlays
+}
+
+func (w *chatOverlayReader) GetSiteConfigValue(ctx context.Context, key string) (*string, error) {
+	if v, ok := w.overlays[key]; ok {
+		return &v, nil
+	}
+	return w.inner.GetSiteConfigValue(ctx, key)
 }
 
 // cragOverrideReader wraps a chat.SiteConfigReader to force CRAG on or

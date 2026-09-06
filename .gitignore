@@ -86,6 +86,10 @@ go-backend/cmd/migrate/migrate
 /eval/golden/production-ppm-2026-08.jsonl
 /eval/golden/production.jsonl
 /eval/golden/multi-turn-de.jsonl
+# Wave 3 Task 4: global-synthesis set. Derived from the JLU Confluence corpus
+# (question text names real internal projects), so it stays local like the
+# other production-derived sets. The acceptance record next to it IS committed.
+/eval/golden/global-synthesis-de.jsonl
 /eval/golden/*.xlsx
 /eval/golden/*.zip
 /eval/golden/snapshots/*.json

@@ -128,8 +128,11 @@ func syncGitRepoSource(ctx context.Context, deps SyncDeps, sourceID string) erro
 	if src.LastCommitSHA != nil && *src.LastCommitSHA == res.CommitSHA {
 		now := time.Now()
 		active := "active"
+		// HEAD unchanged is a successful sync, not a skipped one: the remote
+		// was reached and the local copy is verified current, so
+		// last_success_at moves with last_synced_at.
 		return deps.Store.SetGitRepoSyncState(ctx, sourceID, SyncState{
-			Status: active, LastSyncedAt: &now,
+			Status: active, LastSyncedAt: &now, LastSuccessAt: &now,
 		})
 	}
 
@@ -200,7 +203,7 @@ func syncGitRepoSource(ctx context.Context, deps SyncDeps, sourceID string) erro
 	total := len(res.Files)
 	zeroFail := 0
 	return deps.Store.SetGitRepoSyncState(ctx, sourceID, SyncState{
-		Status: active, LastCommitSHA: &res.CommitSHA, LastSyncedAt: &now,
+		Status: active, LastCommitSHA: &res.CommitSHA, LastSyncedAt: &now, LastSuccessAt: &now,
 		FileCount: &total, SyncTotal: &created, SyncProgress: intPtr(0),
 		ConsecutiveFailures: &zeroFail,
 	})

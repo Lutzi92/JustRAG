@@ -311,6 +311,20 @@ historical reports.
 | `--multi-query` | Enable multi-query retrieval. |
 | `--crag on\|off` | Force CRAG on/off regardless of KB config (production-context mode only). |
 | `--enumeration on\|off` | Force enumeration pre-pass on/off regardless of `IsEnumerationQuery` (production-context mode only). |
+| `--longcontext on\|off` | Per-run override for `chat_longcontext_enabled`. `on` puts `OrchLongContext` at the top of the eval orchestrator ladder, so a global-synthesis set can be measured on a deployment where the flag is off. Empty = live site_config. |
+| `--longcontext-mode flat\|map_reduce` | Per-run override for `chat_longcontext_mode` — which consumer the long-context orchestrator uses. Only has an effect together with `--longcontext on` (or a live-on flag). Empty = live site_config. |
+| `--golden-query-type` | Forward each row's curated `query_type` into the retrieval pipeline instead of classifying the question. Default **off** so existing reports keep their historical shape. Does **not** affect orchestrator dispatch, which classifies independently — if a question fails to reach the intended orchestrator, rewrite the question, not the label. |
+| `--bm25-mode ts_rank\|bm25` | Per-run override for `bm25_scoring_mode`. Combine with `--refresh-bm25-stats` (recomputes the golden set's KBs' BM25 statistics first) whenever the KB hasn't had a recent refresh — without stats the arm silently falls back to `ts_rank` and the A/B measures nothing. |
+| `--bm25-tiered-boost on\|off` | Per-run override for `bm25_tiered_boost_enabled` (deprecated; see `docs/retrieval.md`). |
+| `--recency-boost on\|off` | Per-run override for `recency_boost_enabled`. |
+| `--rrf-weight-bm25 <f>` / `--rrf-weight-vector <f>` / `--rerank-blend-alpha <f>` | Per-run overrides for the fusion weights and the **global** reranker α. Per-route α overrides (`rerank_blend_alpha_lookup` etc.) are NOT overridden — set those in `site_configs` if you want to grid them. Used together with `--bm25-mode bm25` for the Wave-3 retune grid (`eval/golden/bm25-retune.acceptance.md`). |
+| `--keep-raw on\|off` | Multi-turn only: per-run override for `chat_condense_keep_raw_enabled`. |
+
+These are all per-run **overlays**: they wrap the site-config reader for that
+process only and never write `site_configs`. `--longcontext`/`--longcontext-mode`
+are chat-layer keys and share one overlay wrapper (`chatOverlayReader` in
+`cmd/eval/main.go`), chained after `--crag`; the vector-layer flags
+(`--bm25-mode`, `--recency-boost`, …) use the separate `overlaySiteConfig`.
 
 Example — measure the contribution of the enumeration pre-pass on
 enumeration-labeled questions:
@@ -342,6 +356,15 @@ smaller/cheaper) model; empty falls back to the KB's chat model.
 Judge calls use temperature 0 for determinism. All three metrics are
 optional and run independently — a single judge failure is captured in
 `judge.judge_errors` and does not abort the others.
+
+**Wave-3 comparability note:** since Wave 3, `ChatContextForQuestion` serves the
+dispatched orchestrator's OWN assembled context for every orchestrator branch,
+not just for long-context — before, orchestrator-branch questions missed that
+cache and the judge graded a generic content-based answer instead of the prompt
+the orchestrator actually built. Judge-mode numbers (faithfulness, context
+precision) are therefore **not comparable** with pre-Wave-3 judge runs; re-run
+the baseline if you need a delta. Retrieval metrics — and therefore `--baseline`
+recall/MRR/nDCG deltas — are unaffected.
 
 ```bash
 ./cmd/eval/eval --golden ../eval/golden/example.jsonl --judge --judge-model gpt-4o-mini
@@ -514,6 +537,87 @@ credential is available in the environment, the acceptance record documents
 That is not a failure of this task — see
 `eval/golden/spreadsheets-de.acceptance.md`.
 
+## Global-synthesis set (Wave 3 Task 4)
+
+`global-synthesis-de.jsonl` — **gitignored** (derived from the JLU
+Confluence corpus; the question text names real internal projects). 12
+German questions against the `PPM-Eval` KB
+(`83262307-3a1b-49bc-bd08-3b925a868a92`, 297 files / 1815 chunks), all
+`query_type: "global_synthesis"`. It exists to measure the long-context
+orchestrator (`OrchLongContext`, ruling W3-R5) and to A/B its two
+consumers, `chat_longcontext_mode = flat` vs `map_reduce` (W3-R6).
+
+**Two gates have to fire for a question to reach that orchestrator**, and
+the set is authored so both do, deterministically where possible:
+
+1. `IsGlobalSynthesisQuery` — a pure lower-cased **substring** match against
+   the trigger lists in `internal/chat/longcontext.go`. Every question
+   therefore carries exactly one documented German trigger **verbatim,
+   umlauts included**: `fasse alle` (G01/G05/G09), `überblick über alle`
+   (G02/G10), `vergleiche alle` (G03/G08/G12), `gesamtbild` (G04/G11),
+   `widersprüche in` (G06), `gemeinsame themen` (G07). An ASCII
+   transliteration (`ueberblick`) silently does not match — the question
+   then falls through to whatever orchestrator is next on the ladder and
+   the run measures nothing. G07 is phrased without an article ("Nenne
+   gemeinsame Themen, die …") so the trigger is both verbatim and
+   grammatical.
+2. The query-type classifier must return `complex_reasoning`. Every question
+   is multi-clause ("… und …"), which keeps `ai.HeuristicComplexity` out of
+   its short-single-clause `simple` shortcut and lets the LLM classifier
+   decide. This arm is an LLM call and therefore **not** deterministic —
+   confirm per run that the report's per-question `agent` is `longcontext`
+   for all 12 (`grep eval.orchestrator_dispatch` in the run log). If a
+   question drifts to `lookup`, rewrite the question; do not touch the
+   classifier.
+
+`must_cite_file_names` lists the 12–15 files a curator would expect per
+topical cluster (migration/Ablösung, KI-Vorhaben, Informationssicherheit,
+Netz/RZ, Campusmanagement, Workshop-Orga, Thementische,
+Hochschul-Benchmark, IAM, Verwaltungsdigitalisierung, PPM-Governance,
+Client-Management). **Recall/MRR on this set are diagnostics, not the
+acceptance metric** (ruling W3-R8): the honest ground truth for a
+global-synthesis question is "a large part of the corpus", and the
+long-context pool is `chat_longcontext_top_k` (200) chunks against a k=10
+metric cutoff, so recall is structurally capped far below 1.0. The
+acceptance metrics are judge-based — **answer relevance primary,
+faithfulness secondary**. Context precision is deliberately not used for
+this route: the judge needs one boolean per context item and the pool is
+200.
+
+Two corpus gotchas worth knowing before extending the set: several
+Confluence-exported file names contain a **non-breaking space** (U+00A0)
+or a double space, so `must_cite_file_names` must be copied byte-exactly
+from `SELECT name FROM files WHERE kb_id = …` rather than retyped; and the
+KB holds ~20 "other university" pages, of which G08 lists 13 plus the
+summary page rather than all of them.
+
+### Running the flat vs map_reduce A/B
+
+```bash
+# (a) flat — byte-identical to the pre-orchestrator behaviour
+bash <workspace>/run-eval.sh --golden eval/golden/global-synthesis-de.jsonl \
+  --production-context --orchestrator-dispatch=true --judge \
+  --longcontext on --longcontext-mode flat --output <workspace>/t4-a-flat.json
+
+# (b) map_reduce, compared against (a)
+bash <workspace>/run-eval.sh --golden eval/golden/global-synthesis-de.jsonl \
+  --production-context --orchestrator-dispatch=true --judge \
+  --longcontext on --longcontext-mode map_reduce \
+  --baseline <workspace>/t4-a-flat.json --output <workspace>/t4-b-mapreduce.json
+
+# (c) flat again — the noise band. NEVER conclude from (a) vs (b) alone.
+```
+
+`--baseline` compares **retrieval** metrics only and exits 3 on a regression;
+on this set that gate is noise, so read the judge means out of the reports
+(`.aggregate.mean_answer_relevance` / `.mean_faithfulness`) and compare the
+(b)−(a) delta against the |(c)−(a)| noise band on **both** metrics. Map/reduce
+group counts are trajectory events, not report fields — scrape them from the
+run log (`rag.longcontext.map_reduce` carries `groups`, `failed_groups`,
+`findings`, `pool`; `longcontext.map_group_failed` marks a degraded group).
+
+Results and the standing recommendation: `global-synthesis-de.acceptance.md`.
+
 ## CERT recency set (Wave 2 Task 8)
 
 `cert-recency-de.jsonl` is a fully synthetic, fictional German CERT-advisory
@@ -670,3 +774,34 @@ standard path (it does not fire when orchestrator dispatch routes the
 same question elsewhere — a pre-existing production interaction, not a
 fixture defect). See `docs/retrieval.md`'s "Recency prior" section and
 `docs/feature-recipes.md`'s "Recency prior" / "Date-aware chat" recipes.
+
+## BM25 keyword-arm cost check (Wave 3 Task 7)
+
+`eval/fixtures/bm25-scale/` holds a throwaway, SQL-only fixture for profiling
+the keyword arm an order of magnitude above the production golden set:
+
+```bash
+# 1. Seed ~100k chunks (55 salted copies of the PPM-Eval corpus) into
+#    document_chunks_768 under an obviously synthetic KB, then refresh that
+#    KB's BM25 stats with the real refresher. Prints the KB id.
+DB_PASSWORD=… JWT_SECRET=… eval/fixtures/bm25-scale/seed-scale-kb.sh --copies 55
+
+# 2. EXPLAIN (ANALYZE, BUFFERS) both scoring builders x three query shapes.
+#    The statements come from `cmd/eval --print-keyword-sql`, so they are the
+#    real builders' output, not a hand-copy.
+DB_PASSWORD=… JWT_SECRET=… eval/fixtures/bm25-scale/time-keyword-sql.sh \
+  --kb-id 5ca1e000-0000-4000-8000-000000000001 --out /tmp/scale --label scale100k
+
+# 3. Always drop it — it is a synthetic corpus with no embeddings.
+eval/fixtures/bm25-scale/seed-scale-kb.sh --drop
+```
+
+`cmd/eval --print-keyword-sql "<query>" --kb-id <uuid> [--top-k 50]` is
+usable on its own: it prints one JSON document carrying the keyword arm's
+SQL for **both** scoring modes with the KB's real resolved settings (chunk
+table, text-search config, simple arm, tiered boost, k1/b, dim-keyed stats
+tables), including a placeholder-free `executable_sql` per mode. It runs no
+search and needs no golden set.
+
+Results and the measurement caveats: `eval/golden/bm25-retune.acceptance.md`
+and `docs/retrieval.md` §"Keyword arm scoring: ts_rank vs BM25".

@@ -151,6 +151,14 @@ func NewRSSPollHandler(deps RSSPollDeps) asynq.HandlerFunc {
 				Origin:      "rss",
 				StoragePath: storagePath,
 				RSSFeedID:   feedID,
+				// The item's own publication date, when the feed carries a
+				// parseable one. This is the single origin that fills
+				// files.published_at (W3-R9); every date-window read then
+				// keys on COALESCE(published_at, created_at), so an
+				// advisory published last week but ingested today sorts and
+				// filters by last week rather than by our poll time.
+				// Clamped to now — see clampPublishedAt.
+				PublishedAt: clampPublishedAt(item.PublishedParsed, time.Now()),
 			})
 			if createErr != nil {
 				slog.Error("failed to create file record for RSS item", "feedId", feedID, "item", fileName, "error", createErr)
@@ -405,4 +413,25 @@ func isWIDLink(link string) bool {
 		return false
 	}
 	return strings.EqualFold(u.Hostname(), widcert.Host)
+}
+
+// clampPublishedAt bounds a feed-supplied publication date at `now`.
+//
+// files.published_at is entirely feed-controlled: whatever <pubDate> says
+// lands in the column, and the effective date COALESCE(published_at,
+// created_at) drives the recency boost, the recency listing and every date
+// window. A single item dated in the future would therefore be permanently
+// "the newest document in the KB" — outranking real news on every
+// freshness-sensitive turn until someone deleted it. Past dates are left
+// exactly as the feed reported them (back-dating is legitimate: an advisory
+// published last week and ingested today).
+//
+// A nil input stays nil — "no date" must not become "today", or
+// COALESCE(published_at, created_at) would be a no-op.
+func clampPublishedAt(t *time.Time, now time.Time) *time.Time {
+	if t == nil || !t.After(now) {
+		return t
+	}
+	clamped := now.UTC()
+	return &clamped
 }

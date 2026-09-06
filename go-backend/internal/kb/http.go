@@ -58,6 +58,11 @@ type KBRow struct {
 	ProcessingFileCount int        `json:"processingFileCount"`
 	TurnCount           int        `json:"turnCount"`
 	LastActivityAt      *time.Time `json:"lastActivityAt,omitempty"`
+	// OldestFileAt is MIN(COALESCE(published_at, created_at)) over the KB's
+	// files — how far back the corpus reaches, so a card can say "covers
+	// documents since 2019" next to the file count. Nil for an empty KB and
+	// on single-row fetches, like the other card metadata above.
+	OldestFileAt *time.Time `json:"oldestFileAt,omitempty"`
 
 	// MyRole is the caller's own kb_members.role for this KB, and MemberCount
 	// the KB's total member count — populated only by the same two list

@@ -26,7 +26,9 @@ import (
 //	  "score":    number,           // factcheck 0..100
 //	  "issues":   [string],         // factcheck findings
 //	  "citations":[                  // citation-validator per-N entries (optional)
-//	    {"n": 3, "verified": false, "reason": "no_overlap"}
+//	    {"n": 3, "verified": false, "reason": "no_overlap"},
+//	    {"n": 1, "verified": true, "method": "span",
+//	     "span": {"start": 19, "end": 48}}   // rune offsets into sources[n-1].content
 //	  ]
 //	}
 type MessageVerification struct {

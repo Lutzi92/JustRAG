@@ -1,0 +1,7 @@
+# Stub golden set for eval/fixtures/bm25-scale/seed-scale-kb.sh.
+# NOT a quality fixture: its only job is to name the throwaway scale KB so
+# `cmd/eval --refresh-bm25-stats` recomputes that KB's BM25 statistics with the
+# production refresher before the cost check EXPLAINs the bm25 statement.
+# The question's own retrieval result is meaningless (the synthetic rows carry
+# no embeddings) and the run's exit code is ignored by the seed script.
+{"id":"SCALE01","question":"Zugriffsrechte Portal","kb_id":"5ca1e000-0000-4000-8000-000000000001","language":"de","must_cite_file_names":["synthetic-scale-corpus"],"query_type":"lookup","notes":"stats-refresh stub only"}

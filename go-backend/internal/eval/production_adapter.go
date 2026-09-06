@@ -79,6 +79,17 @@ type EvalFlags struct {
 	// site_config inside PrepareChatContext.
 	StepBack                bool
 	ForceEnumerationPrepass *bool
+	// GoldenQueryType forwards the golden row's curated `query_type` label
+	// into chat.ChatContextParams.QueryType instead of leaving the
+	// classification to the pipeline (cmd/eval --golden-query-type).
+	// Default false: every pre-existing --production-context run keeps
+	// classifying the query itself, so report shapes stay comparable.
+	// Only the retrieval-layer routing keys on this — the eval
+	// orchestrator ladder still classifies independently
+	// (ClassifyQueryTypeForEval), which is deliberate: a golden set whose
+	// questions do not trip the production classifier is a question-authoring
+	// problem, not something a label should paper over.
+	GoldenQueryType bool
 }
 
 // NewProductionContextAdapter constructs a ProductionContextAdapter with the
@@ -119,7 +130,16 @@ func (a *ProductionContextAdapter) Search(ctx context.Context, q Question, k int
 // scoping + the file-listing addendum) never fires under cmd/eval, but the
 // question doesn't error, so nothing else in the pipeline notices.
 func (a *ProductionContextAdapter) buildParams(ctx context.Context, q Question, searchQuery, rawQuery string) chat.ChatContextParams {
+	// Wave 3 Task 4: the golden label reaches the pipeline only behind
+	// EvalFlags.GoldenQueryType (cmd/eval --golden-query-type). An
+	// unlabelled row stays empty either way — the flag forwards a curator's
+	// label, it never invents one.
+	queryType := ""
+	if a.flags.GoldenQueryType {
+		queryType = q.QueryType
+	}
 	return chat.ChatContextParams{
+		QueryType:               queryType,
 		KbID:                    q.KbID,
 		SearchQuery:             searchQuery,
 		RawQuery:                rawQuery,

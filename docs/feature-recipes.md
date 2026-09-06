@@ -119,14 +119,16 @@ No migration. `ts_rank` mode is Postgres's built-in two-argument `ts_rank()` (te
 
 **Tokeniser-divergence caveat:** the WHERE-clause candidate floor (`buildOrTokensExpr`) and `to_tsvector` (which `bm25`'s `qlex` CTE independently re-tokenises the raw query text through, per `keyword_sql.go`'s `bm25ArmCTE`) can segment the same input differently — e.g. `Stud.IP` may pass the OR-token floor as a unit but split into `stud` + `ip` under `to_tsvector`. A candidate admitted by the floor can therefore score exactly 0 under `bm25` (its independent re-tokenisation finds no matching lexeme) while `ts_rank` still gives it a small positive score — it scores directly off the same composed tsquery the floor already admitted the candidate under, term-frequency only (`ts_rank`'s default normalisation is 0 — no document-length or cover-density/proximity weighting), rather than re-tokenising from scratch. Scoring-only: the candidate is never dropped from the keyword-tier list, just ranked poorly.
 
-**Default stays `ts_rank`.** A/B on the production fixture (`eval/golden/production-ppm-2026-08.jsonl`, 89 questions, `docs/retrieval.md` §"Keyword arm scoring: ts_rank vs BM25 (2026-09)"): `bm25` (no tiered boost) lifted lookup recall +5.1 pp and lookup MRR +2.3 pp against a 2.3 pp noise band — right at the noise floor, not clearly above it — while `bm25` + tiered boost lifted lookup MRR +4.1 pp, clearing the bar. But both `bm25` cells regressed `complex_reasoning` MRR by ~7 pp (recall on that route stayed flat — the right chunks are retrieved, they just rank lower after RRF fusion), tripping `cmd/eval`'s own regression gate. The likely cause is scale mismatch: `rrf_weight_bm25` (tuned against `ts_rank`'s output range) applied unchanged to BM25's differently-scaled IDF·TF-saturation scores. **`bm25` ships as an opt-in per-KB mode** — flip it on a KB where lookup-heavy traffic outweighs `complex_reasoning` traffic, or once the Wave-3 follow-up re-tunes `rrf_weight_bm25`/`rerank_blend_alpha` for BM25's score scale and the default gets revisited.
+**Default stays `ts_rank`.** A/B on the production fixture (`eval/golden/production-ppm-2026-08.jsonl`, 89 questions, `docs/retrieval.md` §"Keyword arm scoring: ts_rank vs BM25 (2026-09)"): `bm25` (no tiered boost) lifted lookup recall +5.1 pp and lookup MRR +2.3 pp against a 2.3 pp noise band — right at the noise floor, not clearly above it — while `bm25` + tiered boost lifted lookup MRR +4.1 pp, clearing the bar. But both `bm25` cells regressed `complex_reasoning` MRR by ~7 pp (recall on that route stayed flat — the right chunks are retrieved, they just rank lower after RRF fusion), tripping `cmd/eval`'s own regression gate. The likely cause is scale mismatch: `rrf_weight_bm25` (tuned against `ts_rank`'s output range) applied unchanged to BM25's differently-scaled IDF·TF-saturation scores. **`bm25` ships as an opt-in per-KB mode.** The Wave-3 follow-up ran that re-tune as a full grid (`rrf_weight_bm25` {0.5, 0.75, 1.0} × α {0.6, 0.8} under `bm25`, plus a same-flag baseline repeat; `eval/golden/bm25-retune.acceptance.md`) and found **no winning cell**, so **the default stays `ts_rank` and no weight/α default changes**. Two qualifications to the paragraph above come out of it. First, the ~7 pp `complex_reasoning` MRR regression was measured with orchestrator dispatch **on** (that A/B routed `complex_reasoning` through plan-execute), while the grid ran dispatch **off**; on the standard path the same weights cost **−0.3 pp**, inside that route's 1.2 pp band. The grid therefore neither reproduces nor refutes the −7 pp, and the scale-mismatch explanation is **untested** rather than confirmed — rerunning the grid with `--orchestrator-dispatch=true` is the open follow-up. Second, the same-flag noise band on this fixture measured **4.7 pp on lookup** that day — wider than most of the effects, and wide enough that the baseline's own repeat tripped `cmd/eval`'s regression gate while every `bm25` cell passed it. What holds across the grid is that `bm25` **lifts recall in most cells but not universally** (enumeration +3.6…+7.1 pp in all six, overall +0.0…+2.8 pp; but lookup −0.1 pp in three cells and `complex_reasoning` recall −1.5 pp in the 0.75/0.6 cell). If you opt a KB in, the documented operating point is `rrf_weight_bm25 = 0.5` with α unchanged at `0.8` — a per-KB setting for that KB, **not** a change for `ts_rank` deployments. Before enabling it on a **large** KB, read `docs/retrieval.md` §"Cost at corpus scale": at ~100k chunks one `bm25` keyword arm measured 5.6 s on a low-selectivity query against 282 ms for `ts_rank`, and the ratio widens with corpus size.
 
 **Side finding:** `bm25_tiered_boost_enabled` (the coarse ts_rank×100/×10 IDF proxy) was net negative under `ts_rank` on every route on this fixture (overall MRR −3.5 pp vs. the `ts_rank`/no-boost baseline, more than the 1.3 pp overall-MRR noise band) and didn't clearly help under `bm25` either (real BM25 already carries an IDF term, so the boost stacks rather than substitutes). Keep `bm25_tiered_boost_enabled` default off; it's a Wave-3 retirement candidate.
 
-## Tiered BM25 boost (T0-3) and per-query-type cache thresholds (T0-4)
+## Tiered BM25 boost (T0-3, **DEPRECATED**) and per-query-type cache thresholds (T0-4)
+
+> **`bm25_tiered_boost_enabled` is deprecated (2026-09, Wave 3 Task 7).** It regressed every route beyond the noise band under `ts_rank` and added nothing on top of real BM25's own IDF term under `bm25` (see the side finding above). Do not enable it. The key and its code stay for now — removing it would silently change ranking for any deployment that has it on — but it is frozen: no new tuning, no new call sites, removal in a later release. The block below is kept so the measurement can be reproduced (`cmd/eval --bm25-tiered-boost on|off`); the cache-threshold keys in it are unaffected by the deprecation.
 
 ```
-bm25_tiered_boost_enabled                              = true        # ts_rank × 100 (strict match) or × 10 (OR-fallback)
+bm25_tiered_boost_enabled                              = true        # DEPRECATED — ts_rank × 100 (strict match) or × 10 (OR-fallback)
 query_cache_similarity_threshold_lookup                = 0.92        # paraphrase-tolerant
 query_cache_similarity_threshold_enumeration           = 0.94        # mid
 query_cache_similarity_threshold_complex_reasoning     = 0.98        # paraphrase-sensitive
@@ -185,6 +187,55 @@ chat_sufficient_context_model   = <small>  # falls through to model_tier_fast �
 
 No migration. One fast-tier call between context assembly and generation asking whether the assembled chunk set as a WHOLE suffices to answer (Google ICLR 2025 "sufficient context": models hallucinate most when context is partially relevant but jointly insufficient). Complements CRAG (per-chunk relevance) — it does not replace it. On "insufficient": the existing abstain plumbing fires (abstain notice in the system prompt, `ChatContext.Abstain` for metrics/UI); the context still reaches the prompt so the model can say what IS covered. Wired in the standard path (`PrepareChatContext`, skipped when CRAG already abstained or under long-context routing) and the supervisor orchestrator (flags arrive pre-resolved via `SupervisorChatParams`). Fail-open: judge errors or unparsable verdicts never block answers. Validate abstain rates on a golden set with unanswerable items before flipping on. `internal/ai/sufficient_context.go`, `internal/prompts/sufficient_context.go`.
 
+## Span-verified citations
+
+```
+citation_validation_enabled     = true     # PREREQUISITE — the pass this extends; default off
+chat_citation_spans_enabled     = true     # gate; default off. 1 fast-tier call per answer with >=1 eligible citation
+chat_citation_spans_max_sources = 12       # [1,50] distinct cited sources sent to the extractor in one call
+chat_citation_spans_timeout_ms  = 8000     # [1000,60000] budget for that call; post-response work is synchronous
+chat_citation_spans_model       = <small>  # optional; falls through model_tier_fast -> KB chat model
+```
+
+No migration — the existing `verification` JSONB gains an optional key per citation.
+
+**What it does.** `runPostResponseTasks` first runs the deterministic n-gram / semantic
+citation validator as before. When `chat_citation_spans_enabled` is on, a second pass asks a
+fast-tier model to copy **one verbatim quote** out of each still-eligible citation's source,
+then matches that quote against the source body itself — normalised (Unicode NFC, lower-cased,
+whitespace runs collapsed, quote characters and edge punctuation trimmed) but otherwise exact.
+The model never supplies offsets; it only supplies text, and the offsets are computed from the
+match, so a hallucinated quote simply fails to match and changes nothing.
+
+**Wire format** (`verification.citations[]`, documented on `internal/chat/types.go`):
+
+```json
+{ "n": 1, "verified": true, "method": "span", "span": { "start": 19, "end": 48 } }
+```
+
+`method` may now be `"ngram"` | `"semantic"` | `"span"`. `start`/`end` are **rune** offsets
+(Unicode code points, `end` exclusive) into `sources[n-1].content` — *not* byte offsets, and a
+different domain from `internal/chat/citation_spans.go`'s `CitationSpan`, which carries byte
+offsets of the `[N]` marker inside the answer. Entries the pass did not improve keep their old
+shape and carry no `span` key (`omitempty`), per the existing "absence = not run / not improved"
+convention. Frontend consumers must slice with `Array.from(content)`, never `content.slice`.
+
+**Frontend.** The citation popover highlights the matched quote (`<mark class="citation-span">`)
+inside a windowed excerpt instead of the flat leading snippet; a malformed or out-of-range span
+falls back to that plain snippet rather than erroring.
+
+**Cost and safety.** One extra fast-tier call per answer that has at least one eligible citation,
+bounded by `_timeout_ms`; a timeout, transport error or unparseable reply leaves the statuses
+exactly as the deterministic validator produced them. Summary and `community_summary` sources are
+excluded from the extraction (a RAPTOR/community summary is not verbatim source text). Span
+verification runs *before* the attribution metrics, so `rag_citation_attributions_total`'s `method`
+label reflects the final verdict — `span` is its own label value, not folded into `none`.
+
+**Default off; opt-in.** The roadmap's intent was "default off, revisit after a week of clean
+telemetry" — no production telemetry has been collected yet, so the default stays off in this
+wave. Enable `citation_validation_enabled` first; with it off the span pass has nothing to
+upgrade. `internal/chat/citation_spans_verify.go`, `internal/prompts/citation_spans.go`.
+
 ## ECoRAG evidentiality compression (T2-3)
 
 ```
@@ -199,11 +250,36 @@ Drops chunks judged to lack DIRECT evidence (distinct from reranker topicality);
 ## Long-context routing (System 2, T2-1)
 
 ```
-chat_longcontext_enabled         = true          # CAUTION: per-turn LLM cost up to ~30× when gate fires
-chat_longcontext_max_tokens      = 100000        # 10k..500k; chat-layer truncation budget for the wide pool
+chat_longcontext_enabled          = true         # gate; CAUTION: per-turn LLM cost up to ~30× when it fires
+chat_longcontext_max_tokens       = 100000       # 10k..500k; chat-layer truncation budget for the wide pool
+chat_longcontext_top_k            = 200          # 50..500; size of the wide chunk pool (global-only)
+chat_longcontext_mode             = flat         # flat (default) | map_reduce
+chat_longcontext_map_group_size   = 8            # [2,32] chunks per map-stage extraction call (map_reduce only)
+chat_longcontext_map_concurrency  = 6            # [1,32] simultaneous map calls per turn (map_reduce only)
+chat_longcontext_map_model        = <small>      # optional; falls through model_tier_fast -> KB chat model
 ```
 
-Fires on `complex_reasoning` + the `IsGlobalSynthesisQuery` classifier (EN+DE "summarise all"). When fired: top-k → 200; MMR + score-drop + parent-child + ECoRAG + multipass skipped (still relevance-ranks, NOT a bypass). Watch `rag_longcontext_route_total{outcome=fired}` before broad rollout.
+Fires on `complex_reasoning` + the `IsGlobalSynthesisQuery` classifier (EN+DE "summarise all"). When fired: top-k → `chat_longcontext_top_k`; MMR + score-drop + parent-child + ECoRAG + multipass skipped (still relevance-ranks, NOT a bypass). Watch `rag_longcontext_route_total{outcome=fired}` against the `considered` denominator before broad rollout.
+
+**It is an orchestrator since Wave 3.** `OrchLongContext` sits directly below DRIFT and above the Supervisor in the ladder (`internal/chat/orchestrator_select.go`). Before that the route existed only as a branch inside `PrepareChatContext`, which a streaming `complex_reasoning` turn never reaches — those all go through `tryDeepChat` — so the route was configured, documented, metered and unreachable for exactly the query class it targets. DRIFT still wins when both are on: it is the more specific answer for a KB that has KG community summaries. Both consumers (`flat` and `map_reduce`) live in one shared file, `internal/chat/longcontext_consume.go`, driven by the orchestrator and by the `PrepareChatContext` branch that the non-streaming surfaces still use.
+
+**`map_reduce` (opt-in).** The token-budgeted pool is grouped in score order into `_map_group_size` chunk groups, each rendered with its ORIGINAL `[N]` headers so no index remapping is needed. One structured fast-tier call per group extracts `{source_idx, claim, quote}` findings (`_map_model`, up to `_map_concurrency` in flight, 45 s per group under a 180 s whole-stage deadline). The answer prompt then carries a fenced `FINDINGS` block plus the bare source headers — no chunk bodies. `Sources` and `FinalChunks` stay the full pool, so `[N]` citations, the citation validator and eval recall keep working; the accepted cost is that a chunk no finding surfaced cannot be cited. Fail-soft: a group whose extraction fails or panics contributes its chunks' first 600 runes as fallback findings, and an all-empty map degrades to `flat` (`outcome="map_empty"`). `map_reduce` is **skipped on abstain** in `PrepareChatContext`, like ECoRAG compression, multipass extraction and the sufficient-context gate.
+
+**Default stays `flat`.** Task-4 judge A/B on `eval/golden/global-synthesis-de.jsonl` (12 German global-synthesis questions on the PPM-Eval KB, gitignored; full tables in `eval/golden/global-synthesis-de.acceptance.md`), three runs — flat, map_reduce, flat repeat — 12/12 questions dispatched to `longcontext`, 0 errors:
+
+| Run | answer relevance | faithfulness | context precision | ctx-assembly latency | wall |
+|---|---|---|---|---|---|
+| flat | 1.000 | 0.613 | 0.409 | 10.2 s | 563 s |
+| map_reduce | 1.000 | 0.565 | 0.600 | 63.4 s | 954 s |
+| flat (repeat) | 1.000 | 0.597 | 0.420 | 10.3 s | 568 s |
+
+The decision rule was "adopt `map_reduce` iff mean answer relevance improves beyond the noise band AND faithfulness does not drop beyond it". Its primary arm turned out to be **unsatisfiable on this route**: the Likert answer-relevance judge sees only question + answer and scores a 3000–5000-character structured German synthesis 5/5 by construction — every question in every run. Faithfulness moved −4.8 pp, which is 0.34 × the ≈0.14 standard error of a 12-question mean (individual questions swing up to a full point between two runs of the *identical* configuration), i.e. no detectable difference rather than a regression. The one noise-exceeding effect is **context precision 0.409 → 0.600 (+19.1 pp, 3.5 × SE)** — the findings block behaving as designed — but that metric was explicitly de-scoped for this route, so it is grounds for keeping `map_reduce` available, not for making it the default. Cost, measured: 6.2× the context-assembly latency and **25 extra fast-tier calls per turn** at the default group size on a 200-chunk pool.
+
+**Before enabling `map_reduce` broadly:** 25 concurrent-capped calls per turn is bounded per turn but not per deployment — set `AI_MAX_CONCURRENT_REQUESTS` to the backend's safe ceiling first. Observed live on the A/B: two groups on one question hit the 45 s per-group budget, took the fallback path, and produced 207 findings instead of the usual 33–156 — designed degradation, no error surfaced, no evidence dropped.
+
+**Telemetry change (upgrade note).** `rag_longcontext_route_total` gained a `mode` label and now also emits `outcome="considered"` (gate on, turn eligible, classifier did not fire) and `outcome="map_empty"`. Dashboards or alerts keyed on the old label set break. An orchestrator error that falls through to `PrepareChatContext` re-evaluates the same turn and can therefore count it twice — documented in the metric's help text. Trajectory events: `longcontext_route`, `longcontext_map` (per group), `longcontext_reduce`.
+
+**Measuring it.** `cmd/eval --production-context --longcontext on|off --longcontext-mode flat|map_reduce` overlays both keys for one run without touching `site_configs`; `--golden-query-type` feeds the golden row's own `query_type` into retrieval. See `docs/agent-orchestration.md` for the mechanism and `eval/golden/README.md` §"Global-synthesis set" for how the fixture's DE triggers are authored (the umlauts are load-bearing — the classifier is a lower-cased substring test).
 
 ## Late chunking (Jina-style)
 
@@ -364,11 +440,88 @@ Parameters: `date_from` (required, ISO `YYYY-MM-DD`) and `date_to` (optional, IS
 
 **Name-marker arm (`chat_recency_listing_name_match_enabled`, default ON):** some corpora label new items in the file NAME — CERT-Bund advisories carry "NEU" vs "UPDATE" in the title — so "neue Meldungen" can target the labeled subset rather than ingest recency. When the query literally mentions "neu"/"new" (any inflection; purely temporal phrasings like "aktuelle Warnungen" or "zuletzt hinzugefügt" do not trigger it), files whose name matches the word-boundary regex `\m(neu|new)\M` are fetched regardless of window, merged into the listing (out-of-window matches annotated with their date and label provenance), and — when safe (no user file selection to respect, window listing not truncated) — retrieval switches from the `CreatedAfter` window to an explicit `FileIDs` union so the labeled files' chunks stay citable. The addendum also instructs the model to consider name status labels when the question targets them. A marker-lookup error keeps the window arm (fail-open).
 
-**Date column:** date windows key on `files.created_at` (file ingest timestamp). A future phase 2 feature will introduce a per-file `published_at` column for corpora with explicit publication dates (RSS feeds, news archives, etc.); the single `effectiveDateExpr` constant in `internal/vector/recency_boost.go` will swap in the published-at column when it becomes available, requiring no config change.
+**Date column:** date windows key on the effective date `COALESCE(published_at, created_at)` — one `effectiveDateExpr` constant in `internal/vector/recency_boost.go`, mirrored byte-identically in `internal/mcp/builtin/recent_documents.go` (each package has a source-text drift test pinning the literal). `files.published_at` arrived with migration 0071 (Wave 3) and is **RSS-only**, taken from the feed item's `PublishedParsed`; every other origin leaves it NULL and therefore keys on `created_at` (ingest time) exactly as before. There is **no backfill** — existing RSS files keep a NULL `published_at` until they are re-polled or re-ingested. No config change is involved either way. See the "Freshness surface" recipe below.
 
 **Golden-set coverage (Wave 2, Task 8):** `eval/golden/cert-recency-de.jsonl` (25 questions; synthetic, fictional German CERT-advisory corpus, `eval/fixtures/cert-advisories/*.md` + `manifest.tsv`, both committed) exercises both `chat_recency_listing_enabled` and `recency_boost_enabled` (see the "Recency prior" recipe above for the boost numbers) against 12 fictional products / 26 fictional WID-SEC advisories (14 NEU→UPDATE pairs, 12 single-issue). Seed with `eval/fixtures/seed-cert.sh` (creates/reuses KB "CERT Fixtures", ingests via `POST /api/kb/{id}/text`, verifies every file landed under its expected name, backdates `files.created_at` per the manifest, writes the gitignored `eval/golden/cert-recency-de.local.jsonl` with `kb_id` resolved; `--restamp --kb-id <uuid>` re-runs just the backdating against an already-seeded KB). Confirmed live: the recency-listing classifier resolves explicit windows (3/6/7/14 days) and the name-marker arm ("neu"/"Neues" → all NEU-labeled files regardless of window) correctly, logs `rag.recency_listing.fired`, and window-scopes retrieval as documented — but only fires when the question actually reaches the standard path; under production-like orchestrator dispatch, an LLM misclassification of a recency-listing-shaped question as `complex_reasoning` routes it to `plan_execute` instead, where the lister never runs — a real, pre-existing production interaction, not a fixture defect. See `eval/golden/README.md` §"CERT recency set" and `eval/golden/cert-recency-de.acceptance.md` for the full per-question tables.
 
 Code: `internal/chat/date_prompt.go` (injection), `internal/chat/recency_classifier.go` + `internal/chat/recency_listing.go` (recency listing), `internal/mcp/builtin/recent_documents.go` (tool implementation), `internal/mcp/builtin/kb_search.go` (search date params).
+
+## Freshness surface
+
+```
+kb_stale_days = 180    # global-only; integer, clamped 1..3650; default 180
+```
+
+**Migration 0071 required** (`files.published_at` + `last_success_at` on `rss_feeds` /
+`confluence_sources` / `git_repo_sources`; four `ADD COLUMN IF NOT EXISTS`, no index). There is
+**no feature gate** — the surface is on once the migration is applied; `kb_stale_days` only moves
+the threshold. It is deliberately **not** a `kbConfigRegistry` key: it is global-only, edited as an
+integer field in the admin Agent panel's observability section (next to `langfuse_base_url`). A
+non-integer or out-of-range value silently falls back to 180.
+
+**Run the migration before the new image** — on k8s that is a manual
+`kubectl run … /app/migrate` step (compose does it via the `migrate` one-shot service). New code
+on the pre-0071 schema breaks **all ingestion**, not just the freshness display: both `CreateFile`
+INSERTs name `published_at`, so uploads, RSS polls, Confluence and git syncs and the crawler each
+fail on the missing column. With `chat_recency_listing_enabled` (default ON) a recency-listing
+turn also answers 500, because the window-scoped search selects it too.
+
+**What it answers:** "is this KB's content stale, and is its ingestion still working?" — two
+questions the product previously had no data for, because nothing recorded whether a scheduled sync
+had ever *succeeded* (only when it last ran) and nothing carried a document's own publication date.
+
+**API surface:**
+
+- `GET /api/admin/kb-overview` gains `staleDays` on the response, and per row `oldestFileAt`
+  (`MIN(COALESCE(published_at, created_at))`), `staleFileCount`, `staleShare` (0..1, `0` for an
+  empty KB), `lastSyncAt`, `syncSucceeded`, `syncFailing`, `syncKinds`.
+- `GET /api/kb` and `GET /api/kb/global` gain `oldestFileAt`.
+- Chat and public-API sources gain `createdAt` and `publishedAt` (RFC3339, both `omitempty`), also
+  inside the persisted `messages.sources` JSONB.
+- **Documented gap:** the OpenAI-compat endpoint and the KB-as-MCP server build their own source
+  projections and carry **no** dates. Wiring them is a small follow-up.
+
+**`published_at` is clamped at ingest.** The value is feed-controlled, and a future-dated RSS item
+would otherwise be permanently "the newest document in the KB" for the recency boost, the recency
+listing and every date window; an item dated after `now` is stored as `now` instead (past dates are
+left untouched — back-dating is legitimate). `clampPublishedAt` in `internal/worker/rsspoll.go`.
+
+**`lastSyncAt` is success-first, attempt-fallback.** `last_success_at` is stamped only when a sync
+actually completes (an RSS poll failure, a Confluence run with files still processing, and a failed
+git sync all leave it untouched — the git write `COALESCE`s so a failure cannot NULL a prior
+success). When no success has ever been recorded the API falls back to the last *attempt* and sets
+`syncSucceeded = false`; the UI renders that with the failing badge, not as a green sync.
+
+**Frontend:** citation popover and source cards show `publishedAt ?? createdAt`; the admin KB
+overview gains three **optional** columns (off by default, toggled in the existing "Columns"
+popover, all sortable) — `colOldestContent`, `colStaleShare` (percent, with
+`staleFileCount/fileCount > staleDays` in the tooltip) and `colLastSync` (relative time plus the
+failing badge); the Home KB card gains a freshness chip on `oldestFileAt`. Shared helpers in
+`web/src/utils/dates.ts`.
+
+**Alerting.** New gauge `rag_source_sync_age_seconds{kind,kb}` — seconds since each KB's OLDEST
+last-successful sync per kind, so one broken feed among ten healthy ones stays visible. `kind` ∈
+`rss` | `confluence` | `git` | `other`; `kb` is capped at 500 distinct values, after which further
+KBs fold into `overflow`. It is refreshed on the worker's metrics tick (`MetricsInterval`, 5 min
+default) and only on a worker with the maintenance queue enabled (`WORKER_MAINTENANCE`), and the
+whole gauge is **reset** each tick before the new snapshot is written, so a deleted source's series
+disappears instead of freezing an alert that can never resolve. A query failure leaves the previous
+snapshot intact rather than blanking it. Suggested alert:
+
+```
+rag_source_sync_age_seconds > <that source kind's schedule interval, with slack>   for 1h
+```
+
+(nightly `daily` sources: alert above ~36 h; `weekly`: above ~9 d — see the night-window recipe).
+
+**No backfill, by design.** Every file ingested before 0071 keeps `published_at = NULL` and
+therefore keeps keying on `created_at`; every source shows its last *attempt* with
+`syncSucceeded = false` until its next successful sync stamps the new column. Both are visible in
+the UI rather than hidden, and both heal on the next ingest / sync. Do not hand-write either
+column to "fix" the display.
+
+`internal/adminkboverview`, `internal/chat/source_dates.go`,
+`internal/observability/source_sync_age.go`, `internal/files/store_pg.go`.
 
 ## Image captioning + better tables (Docling)
 

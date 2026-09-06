@@ -21,12 +21,12 @@ The runtime is Go-only — the legacy Node.js path has been removed:
 - Hybrid retrieval with pgvector, PostgreSQL full-text search, RRF fusion, MMR diversity, cross-encoder reranking, BM25 floor reinsertion, quoted-phrase boosting, and prompt-injection checks
 - Anthropic-style contextual chunk enrichment, pre-embed deduplication, and MRL two-pass vector retrieval for high-dimension embedding models
 - Corrective RAG (CRAG) with relevance grading, single-doc shortcut, and query-rewrite retry, plus optional enumeration pre-pass for list-style queries
-- Per-answer factcheck with persisted verification badges and a deterministic citation validator
+- Per-answer factcheck with persisted verification badges and a deterministic citation validator, optionally span-verified so the exact supporting quote is highlighted in the source
 - Research and academic research workflows with streaming progress plus DOCX and BibTeX export
 - Generated content for cards, presentations, podcasts, analyses, and abstracts
 - Built-in retrieval evaluation harness (`cmd/eval`) with golden sets, route-based metrics, optional LLM-as-judge, and an admin UI runner
 - API key based public API at `/api/v1/*` plus an OpenAI-compatible surface at `/openai/v1/*`
-- Structured logs with request-id correlation, Prometheus metrics, OpenTelemetry tracing with Langfuse deep-links, health/readiness probes, version metadata, and worker health endpoints
+- Structured logs with request-id correlation, Prometheus metrics, OpenTelemetry tracing with Langfuse deep-links, health/readiness probes, version metadata, worker health endpoints, and a content-freshness surface (source dates, per-KB staleness, last-successful-sync age)
 
 ## Known Gaps
 

@@ -291,6 +291,14 @@ var defaultOn = map[string]bool{
 // So on the complex lane these stages do not run for the streaming chat a KB
 // admin is looking at, no matter how their flag is set. They are not dead,
 // though — see complexBypassCondition.
+//
+// Wave 3 note: OrchLongContext (chat_longcontext_enabled) joined that switch
+// and bypasses PrepareChatContext exactly like the others. What CHANGED is
+// the long-context route itself — it used to exist only as a branch INSIDE
+// PrepareChatContext, i.e. it was unreachable from streaming chat for the very
+// query class it targets; it is now an orchestrator, and the branch that
+// remains in PrepareChatContext serves the non-streaming surfaces through the
+// same consumer (chat/longcontext_consume.go).
 var prepareChatContextOwned = map[NodeID]bool{
 	NodeStepBack:      true,
 	NodeDecompose:     true,
@@ -330,6 +338,7 @@ var orchestratorLabels = map[chat.Orchestrator]string{
 	chat.OrchTeam:        "Agent oder Team",
 	chat.OrchCorpusTable: "Korpus-Vergleichstabelle",
 	chat.OrchDrift:       "DRIFT",
+	chat.OrchLongContext: "Long-Context (System 2)",
 	chat.OrchSupervisor:  "Supervisor",
 	chat.OrchPlanExecute: "Plan-and-Execute",
 	chat.OrchAgentic:     "Agentische Suche",
@@ -888,6 +897,7 @@ func orchestratorCandidates(vals map[string]*string, queryType string, binding A
 		CorpusChunksAvailable: true,
 		CorpusRouterLLMOn:     false, // projection cannot make an LLM call
 		DriftEnabled:          boolVal(vals, "chat_drift_enabled"),
+		LongContextEnabled:    boolVal(vals, "chat_longcontext_enabled"),
 		SupervisorEnabled:     boolVal(vals, "chat_supervisor_enabled"),
 		PlanExecuteEnabled:    boolVal(vals, "chat_plan_execute_enabled"),
 		AgenticEnabled:        boolVal(vals, "chat_agentic_enabled"),

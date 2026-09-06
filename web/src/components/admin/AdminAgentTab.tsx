@@ -20,7 +20,7 @@ const SECTION_CONFIGS = [
     { id: 'reranker', titleKey: 'agentSectionReranker', i18nKeys: ['rerankBlendAlpha', 'rerankBlendAlphaLookup', 'rerankBlendAlphaEnumeration', 'rerankBlendAlphaComplexReasoning', 'rerankBlendAlphaEntity', 'hybridDynamicAlphaEnabled', 'hybridDynamicAlphaSensitivity', 'rerankUseChatTemplate', 'rerankInstruction'], settingKeys: ['rerank_blend_alpha', 'rerank_blend_alpha_lookup', 'rerank_blend_alpha_enumeration', 'rerank_blend_alpha_complex_reasoning', 'rerank_blend_alpha_entity', 'hybrid_dynamic_alpha_enabled', 'hybrid_dynamic_alpha_sensitivity', 'rerank_use_chat_template', 'rerank_instruction'] },
     { id: 'topn', titleKey: 'agentSectionPerRouteTopN', i18nKeys: ['topNLookup', 'topNEnumeration', 'topNComplexReasoning'], settingKeys: ['top_n_lookup', 'top_n_enumeration', 'top_n_complex_reasoning'] },
     { id: 'compression', titleKey: 'agentSectionCompression', i18nKeys: ['chatContextCompressionEnabled', 'chatContextCompressionMinChunks', 'chatContextCompressionThreshold', 'chatContextCompressionModel'], settingKeys: ['chat_context_compression_enabled', 'chat_context_compression_min_chunks', 'chat_context_compression_threshold', 'chat_context_compression_model'] },
-    { id: 'queryEnh', titleKey: 'agentSectionQueryEnhancement', i18nKeys: ['autoSpellCorrect', 'stepBackEnabled', 'queryDecomposeEnabled', 'queryDecomposeModel', 'chatLongcontextEnabled', 'chatLongcontextMaxTokens', 'queryCacheEnabled', 'queryCacheSimilarityThreshold', 'queryCacheSimilarityThresholdLookup', 'queryCacheSimilarityThresholdEnumeration', 'queryCacheSimilarityThresholdComplexReasoning', 'queryCacheTtlHours'], settingKeys: ['auto_spell_correct', 'step_back_enabled', 'query_decompose_enabled', 'query_decompose_model', 'chat_longcontext_enabled', 'chat_longcontext_max_tokens', 'query_cache_enabled', 'query_cache_similarity_threshold', 'query_cache_similarity_threshold_lookup', 'query_cache_similarity_threshold_enumeration', 'query_cache_similarity_threshold_complex_reasoning', 'query_cache_ttl_hours'] },
+    { id: 'queryEnh', titleKey: 'agentSectionQueryEnhancement', i18nKeys: ['autoSpellCorrect', 'stepBackEnabled', 'queryDecomposeEnabled', 'queryDecomposeModel', 'chatLongcontextEnabled', 'chatLongcontextMaxTokens', 'chatLongcontextMode', 'chatLongcontextMapGroupSize', 'chatLongcontextMapConcurrency', 'queryCacheEnabled', 'queryCacheSimilarityThreshold', 'queryCacheSimilarityThresholdLookup', 'queryCacheSimilarityThresholdEnumeration', 'queryCacheSimilarityThresholdComplexReasoning', 'queryCacheTtlHours'], settingKeys: ['auto_spell_correct', 'step_back_enabled', 'query_decompose_enabled', 'query_decompose_model', 'chat_longcontext_enabled', 'chat_longcontext_max_tokens', 'chat_longcontext_mode', 'chat_longcontext_map_group_size', 'chat_longcontext_map_concurrency', 'query_cache_enabled', 'query_cache_similarity_threshold', 'query_cache_similarity_threshold_lookup', 'query_cache_similarity_threshold_enumeration', 'query_cache_similarity_threshold_complex_reasoning', 'query_cache_ttl_hours'] },
     { id: 'crag', titleKey: 'agentSectionCragAdaptive', i18nKeys: ['cragEnabled', 'cragMinRelevantChunks', 'adaptiveRoutingEnabled'], settingKeys: ['crag_enabled', 'crag_min_relevant_chunks', 'adaptive_routing_enabled'] },
     { id: 'graph', titleKey: 'agentSectionGraph', i18nKeys: ['kgExtractionEnabled', 'chatGraphRoutingEnabled', 'chatGraphRoutingInjectChunks', 'chatGraphRoutingMaxChunks', 'chatGraphRoutingPathMode', 'chatGraphRoutingPPRDamping', 'chatGraphRoutingPPRMaxIter', 'chatGraphRoutingPPRTopEntities', 'chatGraphRoutingPathsMaxLen', 'chatGraphRoutingPathsMaxPaths'], settingKeys: ['kg_extraction_enabled', 'chat_graph_routing_enabled', 'chat_graph_routing_inject_chunks', 'chat_graph_routing_max_chunks', 'chat_graph_routing_path_mode', 'chat_graph_routing_ppr_damping', 'chat_graph_routing_ppr_max_iter', 'chat_graph_routing_ppr_top_entities', 'chat_graph_routing_paths_max_len', 'chat_graph_routing_paths_max_paths'] },
     { id: 'multistep', titleKey: 'agentSectionMultiStep', i18nKeys: ['chatKBRouterEnabled', 'chatKBRouterMinConfidence', 'chatTurnBudgetSeconds', 'chatTurnBudgetTokens', 'chatTurnBudgetToolCalls', 'chatAgenticEnabled', 'chatAgenticMaxHops', 'chatPlanExecuteEnabled', 'chatPlanExecuteMaxSubQueries', 'chatPlanExecuteMaxIterations', 'chatPlanExecuteTokenBudget', 'chatPlanExecuteToolAware', 'chatPlanExecuteDAGIterative', 'chatAnswerToolsEnabled', 'chatAnswerToolsMaxRounds', 'chatSupervisorEnabled', 'chatSupervisorMultiSpecialist', 'chatDriftEnabled', 'chatCommunitySearchEnabled'], settingKeys: ['chat_kb_router_enabled', 'chat_kb_router_min_confidence', 'chat_turn_budget_seconds', 'chat_turn_budget_tokens', 'chat_turn_budget_tool_calls', 'chat_agentic_enabled', 'chat_agentic_max_hops', 'chat_plan_execute_enabled', 'chat_plan_execute_max_sub_queries', 'chat_plan_execute_max_iterations', 'chat_plan_execute_token_budget', 'chat_plan_execute_tool_aware', 'chat_plan_execute_dag_iterative', 'chat_answer_tools_enabled', 'chat_answer_tools_max_rounds', 'chat_supervisor_enabled', 'chat_supervisor_multi_specialist', 'chat_drift_enabled', 'chat_community_search_enabled'] },
@@ -29,9 +29,9 @@ const SECTION_CONFIGS = [
     { id: 'compare', titleKey: 'agentSectionCompare', i18nKeys: ['chatCompareEnabled', 'chatCompareModel', 'chatCompareMaxSections', 'chatCompareConcurrency', 'chatComparePeersPerSection', 'chatCompareAttachmentTtlHours', 'chatCompareMaxFileBytes'], settingKeys: ['chat_compare_enabled', 'chat_compare_model', 'chat_compare_max_sections', 'chat_compare_concurrency', 'chat_compare_peers_per_section', 'chat_compare_attachment_ttl_hours', 'chat_compare_max_file_bytes'] },
     { id: 'teams', titleKey: 'agentSectionTeams', i18nKeys: ['agentTeamRouterModel', 'agentsAllowPrivilegedTools'], settingKeys: ['agent_team_router_model', 'agents_allow_privileged_tools'] },
     { id: 'longmem', titleKey: 'agentSectionLongmem', i18nKeys: ['chatLongmemEnabled', 'chatLongmemMinSalience', 'chatLongmemRecallTopK', 'chatLongmemDecayDays', 'chatLongmemRecallSemantic', 'chatLongmemConflictResolution', 'chatLongmemConflictModel', 'chatLongmemConflictCandidates'], settingKeys: ['chat_longmem_enabled', 'chat_longmem_min_salience', 'chat_longmem_recall_top_k', 'chat_longmem_decay_days', 'chat_longmem_recall_semantic', 'chat_longmem_conflict_resolution', 'chat_longmem_conflict_model', 'chat_longmem_conflict_candidates'] },
-    { id: 'validation', titleKey: 'agentSectionValidation', i18nKeys: ['factcheckInChat', 'citationValidationEnabled', 'citationValidationSemanticThreshold', 'chatFactualityGateEnabled', 'chatFactualityGateMaxRefines', 'chatSelfRAGEnabled', 'ragasSamplingEnabled', 'ragasSamplingRate'], settingKeys: ['factcheck_in_chat', 'citation_validation_enabled', 'citation_validation_semantic_threshold', 'chat_factuality_gate_enabled', 'chat_factuality_gate_max_refines', 'chat_self_rag_enabled', 'ragas_sampling_enabled', 'ragas_sampling_rate'] },
+    { id: 'validation', titleKey: 'agentSectionValidation', i18nKeys: ['factcheckInChat', 'citationValidationEnabled', 'citationValidationSemanticThreshold', 'chatFactualityGateEnabled', 'chatFactualityGateMaxRefines', 'chatSelfRAGEnabled', 'ragasSamplingEnabled', 'ragasSamplingRate', 'chatCitationSpansEnabled', 'chatCitationSpansMaxSources', 'chatCitationSpansTimeoutMs'], settingKeys: ['factcheck_in_chat', 'citation_validation_enabled', 'citation_validation_semantic_threshold', 'chat_factuality_gate_enabled', 'chat_factuality_gate_max_refines', 'chat_self_rag_enabled', 'ragas_sampling_enabled', 'ragas_sampling_rate', 'chat_citation_spans_enabled', 'chat_citation_spans_max_sources', 'chat_citation_spans_timeout_ms'] },
     { id: 'ingestion', titleKey: 'agentSectionIngestion', i18nKeys: ['doclingEnabled', 'doclingBaseUrl', 'doclingTableMode', 'doclingOcrLanguages', 'doclingForceOcr', 'doclingPictureDescriptionEnabled', 'doclingPictureAreaThreshold', 'doclingPictureDescriptionPrompt', 'describeImageEnabled', 'describeImageEnabledHelp', 'describeImageModel', 'describeImageModelHelp', 'contextualEnrichment', 'embeddingBatchSize', 'lateChunkingEnabled', 'lateChunkingMaxInputTokens', 'parentChildEnabled', 'parentChunkSize', 'childChunkSize', 'raptorEnabled', 'raptorMinChunks', 'raptorMaxLevels', 'raptorBranchingFactor', 'raptorClusteringAlgorithm', 'raptorLeidenResolution', 'hyPEEnabled', 'hyPEQuestionsPerChunk', 'hyPEModel'], settingKeys: ['docling_enabled', 'docling_base_url', 'docling_table_mode', 'docling_ocr_languages', 'docling_force_ocr', 'docling_picture_description_enabled', 'docling_picture_area_threshold', 'docling_picture_description_prompt', 'describe_image_enabled', 'describe_image_model', 'contextual_enrichment', 'embedding_batch_size', 'late_chunking_enabled', 'late_chunking_max_input_tokens', 'parent_child_enabled', 'parent_chunk_size', 'child_chunk_size', 'raptor_enabled', 'raptor_min_chunks', 'raptor_max_levels', 'raptor_branching_factor', 'raptor_clustering_algorithm', 'raptor_leiden_resolution', 'hype_enabled', 'hype_questions_per_chunk', 'hype_model'] },
-    { id: 'observability', titleKey: 'agentSectionObservability', i18nKeys: ['langfuseBaseUrl'], settingKeys: ['langfuse_base_url'] },
+    { id: 'observability', titleKey: 'agentSectionObservability', i18nKeys: ['langfuseBaseUrl', 'kbStaleDays'], settingKeys: ['langfuse_base_url', 'kb_stale_days'] },
     { id: 'tools', titleKey: 'agentSectionTools', i18nKeys: ['chatCodeExecEnabled'], settingKeys: ['mcp_servers', 'chat_use_mcp_tools', 'chat_code_exec_enabled'] },
     { id: 'tabular', titleKey: 'agentSectionTabular', i18nKeys: ['chatTabularQueryEnabled', 'chatTabularChartsEnabled', 'chatTabularRouterEnabled', 'chatTabularRouterModel', 'chatTabularRouterMaxRows', 'chatTabularRouterMaxRepairs', 'chatTabularRouterTimeoutMs', 'chatTabularRouterSchemaMaxTokens', 'chatTabularGuidanceMaxTokens'], settingKeys: ['chat_tabular_query_enabled', 'chat_tabular_charts_enabled', 'chat_tabular_router_enabled', 'chat_tabular_router_model', 'chat_tabular_router_max_rows', 'chat_tabular_router_max_repairs', 'chat_tabular_router_timeout_ms', 'chat_tabular_router_schema_max_tokens', 'chat_tabular_guidance_max_tokens'] },
     { id: 'dateAware', titleKey: 'agentSectionDateAware', i18nKeys: ['chatDateAwarenessEnabled', 'chatDateTimezone', 'chatDateToolsEnabled', 'chatDateToolsMaxResults', 'chatRecencyListingEnabled', 'chatRecencyListingNameMatchEnabled', 'chatRecencyListingWindowDays', 'chatRecencyListingMaxResults'], settingKeys: ['chat_date_awareness_enabled', 'chat_date_timezone', 'chat_date_tools_enabled', 'chat_date_tools_max_results', 'chat_recency_listing_enabled', 'chat_recency_listing_name_match_enabled', 'chat_recency_listing_window_days', 'chat_recency_listing_max_results'] },
@@ -93,6 +93,9 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
     const isContextualEnrichmentEnabled = siteConfigs.contextual_enrichment !== 'false' && siteConfigs.contextual_enrichment !== '0';
     const isQueryCacheEnabled = siteConfigs.query_cache_enabled === 'true' || siteConfigs.query_cache_enabled === '1';
     const isCorpusTableEnabled = siteConfigs.chat_corpus_table_enabled === 'true' || siteConfigs.chat_corpus_table_enabled === '1';
+    const isLongcontextEnabled = siteConfigs.chat_longcontext_enabled === 'true' || siteConfigs.chat_longcontext_enabled === '1';
+    // The two map knobs only do anything in map_reduce mode.
+    const isLongcontextMapReduce = isLongcontextEnabled && siteConfigs.chat_longcontext_mode === 'map_reduce';
 
     const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => {
         try {
@@ -751,6 +754,53 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
                         />
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatLongcontextMaxTokensHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-longcontext-mode">{t('chatLongcontextMode')}</label>
+                        <select
+                            id="chat-longcontext-mode"
+                            value={siteConfigs.chat_longcontext_mode || 'flat'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_longcontext_mode: e.target.value }))}
+                            disabled={!isLongcontextEnabled}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        >
+                            <option value="flat">{t('chatLongcontextModeFlat')}</option>
+                            <option value="map_reduce">{t('chatLongcontextModeMapReduce')}</option>
+                        </select>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatLongcontextModeHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-longcontext-map-group-size">{t('chatLongcontextMapGroupSize')}</label>
+                        <input
+                            id="chat-longcontext-map-group-size"
+                            type="number"
+                            min={2}
+                            max={32}
+                            step={1}
+                            value={siteConfigs.chat_longcontext_map_group_size || '8'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_longcontext_map_group_size: e.target.value }))}
+                            disabled={!isLongcontextMapReduce}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatLongcontextMapGroupSizeHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-longcontext-map-concurrency">{t('chatLongcontextMapConcurrency')}</label>
+                        <input
+                            id="chat-longcontext-map-concurrency"
+                            type="number"
+                            min={1}
+                            max={32}
+                            step={1}
+                            value={siteConfigs.chat_longcontext_map_concurrency || '6'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_longcontext_map_concurrency: e.target.value }))}
+                            disabled={!isLongcontextMapReduce}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatLongcontextMapConcurrencyHelp')}</p>
                     </div>
 
                     <div className="input-group" style={{ maxWidth: '400px' }}>
@@ -1836,6 +1886,50 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                         />
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('ragasSamplingRateHelp')}</p>
                     </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-citation-spans-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="chat-citation-spans-enabled"
+                                type="checkbox"
+                                checked={siteConfigs.chat_citation_spans_enabled === 'true' || siteConfigs.chat_citation_spans_enabled === '1'}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, chat_citation_spans_enabled: e.target.checked ? 'true' : 'false' }))}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('chatCitationSpansEnabled')}
+                        </label>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatCitationSpansEnabledHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-citation-spans-max-sources">{t('chatCitationSpansMaxSources')}</label>
+                        <input
+                            id="chat-citation-spans-max-sources"
+                            type="number"
+                            min="1"
+                            max="50"
+                            step="1"
+                            value={siteConfigs.chat_citation_spans_max_sources || '12'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_citation_spans_max_sources: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatCitationSpansMaxSourcesHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-citation-spans-timeout-ms">{t('chatCitationSpansTimeoutMs')}</label>
+                        <input
+                            id="chat-citation-spans-timeout-ms"
+                            type="number"
+                            min="1000"
+                            max="60000"
+                            step="500"
+                            value={siteConfigs.chat_citation_spans_timeout_ms || '8000'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_citation_spans_timeout_ms: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatCitationSpansTimeoutMsHelp')}</p>
+                    </div>
                 </Section>
 
                 <Section title={t('agentSectionIngestion')} {...sectionState('ingestion')}>
@@ -2238,6 +2332,21 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
                         />
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('langfuseBaseUrlHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="kb-stale-days">{t('kbStaleDays')}</label>
+                        <input
+                            id="kb-stale-days"
+                            type="number"
+                            min={1}
+                            max={3650}
+                            step={1}
+                            value={siteConfigs.kb_stale_days ?? '180'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, kb_stale_days: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('kbStaleDaysHelp')}</p>
                     </div>
                 </Section>
 

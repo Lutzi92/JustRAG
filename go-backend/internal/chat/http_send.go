@@ -566,6 +566,7 @@ func (h *Handler) tryDeepChat(
 	planExecuteEnabled := ChatPlanExecuteEnabled(ctx, h.siteConfigReader)
 	supervisorEnabled := ChatSupervisorEnabled(ctx, h.siteConfigReader)
 	driftEnabled := ChatDriftEnabled(ctx, h.siteConfigReader)
+	longContextEnabled := ChatLongContextEnabled(ctx, h.siteConfigReader)
 	corpusTableEnabled := ChatCorpusTableEnabled(ctx, h.siteConfigReader)
 
 	// In-chat document comparison takes top priority over every orchestrator
@@ -591,6 +592,11 @@ func (h *Handler) tryDeepChat(
 	//     is wasted on narrow lookups). Narrow gate → it rarely intercepts;
 	//     everything else falls through to
 	//     supervisor/plan-execute/agentic/standard unchanged.
+	//   - longcontext (W3-R5): the System-2 wide-retrieval route, promoted
+	//     from a PrepareChatContext-internal branch — which the streaming
+	//     path never reaches — to a real orchestrator. Same narrow
+	//     global-synthesis gate as drift, and below it: DRIFT is the more
+	//     specific answer for those queries when its KG communities exist.
 	//   - supervisor: Phase 3 §3.2 supervisor takes priority over both
 	//     plan-execute and agentic when the gate is on. Plan §3.2 ship
 	//     gate: "non-regression on lookup/enumeration; ≥ 2 pp gain on
@@ -607,6 +613,7 @@ func (h *Handler) tryDeepChat(
 		CorpusRouterLLMOn:     ChatCorpusTableRouterLLMEnabled(ctx, h.siteConfigReader),
 		DriftEnabled:          driftEnabled,
 		IsGlobalSynthesis:     IsGlobalSynthesisQuery(searchQuery),
+		LongContextEnabled:    longContextEnabled,
 		SupervisorEnabled:     supervisorEnabled,
 		PlanExecuteEnabled:    planExecuteEnabled,
 		AgenticEnabled:        agenticEnabled,
@@ -621,11 +628,19 @@ func (h *Handler) tryDeepChat(
 		return ai.ConfirmCorpusComparison(ctx, h.aiResolver, searchQuery, kbID, lang, ChatCorpusTableModel(ctx, h.siteConfigReader))
 	})
 
+	// The `considered` denominator for rag_longcontext_route_total: the
+	// operator gate is on and the turn was eligible, but the keyword
+	// classifier did not fire. `fired` is recorded inside RunLongContextChat.
+	if longContextEnabled && orchIn.complexAndUnenhanced() && !orchIn.IsGlobalSynthesis {
+		observability.RecordLongContextRoute("considered", "")
+	}
+
 	logctx.From(ctx).Info("rag.deep_chat.dispatch",
 		"supervisor_enabled", supervisorEnabled,
 		"plan_execute_enabled", planExecuteEnabled,
 		"agentic_enabled", agenticEnabled,
 		"drift_enabled", driftEnabled,
+		"longcontext_enabled", longContextEnabled,
 		"corpus_table_enabled", corpusTableEnabled,
 		"query_type", queryType,
 		"enhance", body.Enhance,
@@ -633,6 +648,7 @@ func (h *Handler) tryDeepChat(
 		"will_run_corpus_table", orch == OrchCorpusTable,
 		"will_run_team", orch == OrchTeam,
 		"will_run_drift", orch == OrchDrift,
+		"will_run_longcontext", orch == OrchLongContext,
 		"will_run_supervisor", orch == OrchSupervisor,
 		"will_run_plan_execute", orch == OrchPlanExecute,
 		"will_run_agentic", orch == OrchAgentic,
@@ -797,6 +813,25 @@ func (h *Handler) tryDeepChat(
 		}
 		chatCtx, err = RunDriftChat(ctx, h.aiResolver, h.searchService, driftParams, collectEmit)
 
+	case OrchLongContext:
+		// Knobs are resolved inside RunLongContextChat from h.siteConfigReader
+		// (the per-KB-overlaid reader SendMessage installed via forKB), so the
+		// per-KB `chat_longcontext_mode` override is honoured. Only the fields
+		// that come from THIS request are set here.
+		chatCtx, err = RunLongContextChat(ctx, h.aiResolver, h.searchService, h.siteConfigReader, LongContextParams{
+			KbID:            kbID,
+			Query:           searchQuery,
+			Language:        lang,
+			CurrentDateLine: dateLine,
+			KbSystemPrompt:  kbSystemPrompt,
+			FileIDs:         body.SelectedFileIDs,
+			RawQuery:        rawQuery,
+			GraphChunkIDs:   graphChunkIDs,
+			BridgeChunks:    bridgeChunks,
+			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
+			Emit:            collectEmit,
+		})
+
 	case OrchSupervisor:
 		// Resolved HERE, not at wiring time: h is the per-KB handler
 		// (SendMessage swapped it via forKB before calling tryDeepChat),
@@ -912,6 +947,12 @@ func (h *Handler) tryDeepChat(
 	}
 
 	// Deep chat succeeded — commit to SSE response.
+
+	// Freshness dates for the cited files (one batch query, fail-soft).
+	// Runs before the `sources` SSE frame below AND before the AddMessage
+	// that persists the same slice, so the stream and messages.sources
+	// carry identical dates.
+	enrichSourceDates(ctx, h.fileDates, chatCtx.Sources)
 
 	// Save user message.
 	enhancedQuery := chatCtx.EnhancedQuery
@@ -1138,6 +1179,8 @@ func (h *Handler) tryDeepChat(
 		mode = "corpus_table"
 	case OrchDrift:
 		mode = "drift"
+	case OrchLongContext:
+		mode = "longcontext"
 	case OrchSupervisor:
 		mode = "supervisor"
 	case OrchPlanExecute:

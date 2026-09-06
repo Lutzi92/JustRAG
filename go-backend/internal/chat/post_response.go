@@ -294,15 +294,56 @@ func (h *Handler) runPostResponseTasks(
 					},
 					Threshold: CitationValidationSemanticThreshold(ctx, h.siteConfigReader),
 				}
-				verRes.citationStatuses = RunCitationValidation(ctx, aiResponse, sources, sem)
+				det := RunCitationValidation(ctx, aiResponse, sources, sem)
+
+				// W3-R1..R3: span verification. Runs after the n-gram/
+				// semantic pass so it only spends its one extra model call
+				// on citations that pass could not already resolve into a
+				// still-eligible verdict (collectQuoteRequests skips
+				// out_of_range and summary sources on its own). Guarded on
+				// the citation validator itself being enabled — span
+				// verification has no independent value without it, since
+				// it only ever upgrades an existing CitationStatus.
+				var applySpans func([]CitationStatus) []CitationStatus
+				if ChatCitationSpansEnabled(ctx, h.siteConfigReader) {
+					applySpans = func(in []CitationStatus) []CitationStatus {
+						spanStart := time.Now()
+						reqCount := len(collectQuoteRequests(aiResponse, sources, in, ChatCitationSpansMaxSources(ctx, h.siteConfigReader)))
+						if reqCount == 0 {
+							return in
+						}
+						spanCfg := SpanConfig{
+							Model:      ChatCitationSpansModel(ctx, h.siteConfigReader),
+							MaxSources: ChatCitationSpansMaxSources(ctx, h.siteConfigReader),
+							Timeout:    time.Duration(ChatCitationSpansTimeoutMs(ctx, h.siteConfigReader)) * time.Millisecond,
+							Lang:       lang,
+							KbID:       kbID,
+						}
+						out := ApplySpanVerification(ctx, h.aiResolver, spanCfg, aiResponse, sources, in)
+						matched := 0
+						for _, c := range out {
+							if c.Method == "span" {
+								matched++
+							}
+						}
+						logctx.From(ctx).Info("citation.spans", "kbId", kbID,
+							"requested", reqCount, "matched", matched,
+							"ms", time.Since(spanStart).Milliseconds())
+						return out
+					}
+				}
+				// The gate signal comes from the PRE-span verdicts (see
+				// citationStatusesAndGate); the statuses we display and
+				// persist carry the span upgrade.
+				verRes.citationStatuses, hasCitationSuspect = citationStatusesAndGate(det, applySpans)
+
 				for _, c := range verRes.citationStatuses {
 					// Per-marker attribution telemetry: verified/(verified+
 					// unverified) over a window is the attribution rate. Record
 					// every marker (no early break) so the denominator is whole.
+					// Deliberately post-span: this measures what the reader
+					// actually sees, unlike the verifier gate above.
 					observability.RecordCitationAttribution(c.Verified, c.Method)
-					if !c.Verified {
-						hasCitationSuspect = true
-					}
 				}
 				// Phase F cite-by-kind telemetry: increment after
 				// validation so we count only the citations the
@@ -329,6 +370,11 @@ func (h *Handler) runPostResponseTasks(
 			// enabled (so we have no gate signal). always_run
 			// bypasses both conditions. The same gate applies to
 			// Self-RAG when it's the active verifier.
+			//
+			// hasCitationSuspect is the PRE-span verdict by
+			// construction: an LLM-matched quote may upgrade a
+			// citation for display, but must never talk this gate
+			// out of running the verifier (citationStatusesAndGate).
 			if !verifierAlwaysRun && !hasCitationSuspect {
 				if selfRAGEnabled {
 					observability.RecordSelfRAG("skipped_no_citation_warn")

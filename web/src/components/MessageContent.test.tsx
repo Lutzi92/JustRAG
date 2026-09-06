@@ -372,4 +372,159 @@ describe('MessageContent citation source popover', () => {
         expect(pill.getAttribute('tabindex')).toBe('0');
         expect(pill.getAttribute('aria-haspopup')).toBe('dialog');
     });
+
+    it('renders the plain 320-char snippet with no <mark> when no span is available', () => {
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.click(firstPill(container));
+
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toHaveTextContent(sources[0].content);
+        expect(dialog.querySelector('mark.citation-span')).toBeNull();
+    });
+
+    describe('with a verified citation span', () => {
+        // Umlaut before the span, as the brief specifies; the rune-safety of
+        // the slicing itself is covered by excerptAroundSpan's own unit tests.
+        const spanContent = 'Die Übersicht zeigt: der zitierte Paragraph regelt die Kündigungsfrist ausführlich und gilt ab sofort für den gesamten Vertrag.';
+        const quotedText = 'zitierte Paragraph';
+        const start = spanContent.indexOf(quotedText);
+        const end = start + Array.from(quotedText).length;
+        const spanSources = [
+            { index: 1, fileName: 'vertrag.pdf', fileId: 'f9', content: spanContent, score: 0.9 },
+        ];
+
+        it('renders a <mark class="citation-span"> whose text is exactly the quoted span', () => {
+            const { container } = render(
+                <MessageContent
+                    content="Claim [1]."
+                    sources={spanSources}
+                    citationSpans={new Map([[1, { start, end }]])}
+                    onOpenSource={vi.fn()}
+                />,
+            );
+            fireEvent.click(firstPill(container));
+
+            const dialog = screen.getByRole('dialog');
+            const mark = dialog.querySelector('mark.citation-span');
+            expect(mark).not.toBeNull();
+            expect(mark).toHaveTextContent(Array.from(spanContent).slice(start, end).join(''));
+        });
+
+        it('shows at most 160 chars of context on each side, with an ellipsis when truncated', () => {
+            const long = 'x'.repeat(500) + 'ZIEL-SATZ' + 'y'.repeat(500);
+            const longSources = [
+                { index: 1, fileName: 'lang.pdf', fileId: 'f10', content: long, score: 0.9 },
+            ];
+            const { container } = render(
+                <MessageContent
+                    content="Claim [1]."
+                    sources={longSources}
+                    citationSpans={new Map([[1, { start: 500, end: 509 }]])}
+                    onOpenSource={vi.fn()}
+                />,
+            );
+            fireEvent.click(firstPill(container));
+
+            const dialog = screen.getByRole('dialog');
+            expect(dialog).toHaveTextContent(`…${'x'.repeat(160)}`);
+            expect(dialog).toHaveTextContent(`${'y'.repeat(160)}…`);
+            expect(dialog.querySelector('mark.citation-span')).toHaveTextContent('ZIEL-SATZ');
+        });
+
+        it('survives a source with no content at all', () => {
+            // MessageSource.content is optional on the wire; a span arriving
+            // alongside a content-less source must degrade to an empty snippet,
+            // never throw out of the render (Array.from(undefined) does).
+            const noContentSources = [
+                { index: 1, fileName: 'leer.pdf', fileId: 'f12', score: 0.9 } as (typeof spanSources)[number],
+            ];
+            const { container } = render(
+                <MessageContent
+                    content="Claim [1]."
+                    sources={noContentSources}
+                    citationSpans={new Map([[1, { start: 0, end: 5 }]])}
+                    onOpenSource={vi.fn()}
+                />,
+            );
+            fireEvent.click(firstPill(container));
+
+            const dialog = screen.getByRole('dialog');
+            expect(dialog).toHaveTextContent('leer.pdf');
+            expect(dialog.querySelector('mark.citation-span')).toBeNull();
+        });
+
+        it('falls back to the plain snippet, with no <mark>, when the span is malformed', () => {
+            // 29-char content, span end (5) < start (20): out of range / backwards.
+            const shortContent = 'Ein kurzer Beispieltext hier.';
+            const shortSources = [
+                { index: 1, fileName: 'kurz.pdf', fileId: 'f11', content: shortContent, score: 0.9 },
+            ];
+            const { container } = render(
+                <MessageContent
+                    content="Claim [1]."
+                    sources={shortSources}
+                    citationSpans={new Map([[1, { start: 20, end: 5 }]])}
+                    onOpenSource={vi.fn()}
+                />,
+            );
+            fireEvent.click(firstPill(container));
+
+            const dialog = screen.getByRole('dialog');
+            expect(dialog).toHaveTextContent(shortContent);
+            expect(dialog.querySelector('mark.citation-span')).toBeNull();
+        });
+    });
+});
+
+// Wave-3 Task 6: source dates on the citation popover. createdAt/publishedAt
+// are both optional on the wire (old messages, non-RSS files), so the date
+// line must degrade to nothing rather than rendering "—" or "Invalid Date".
+describe('MessageContent citation popover source date', () => {
+    beforeEach(() => {
+        vi.resetAllMocks();
+        vi.mocked(ThemeContext.useTheme).mockReturnValue({
+            language: 'en',
+            t: (key: string) => key,
+        } as unknown as ReturnType<typeof ThemeContext.useTheme>);
+    });
+
+    const firstPill = (container: HTMLElement) => container.querySelector('sup.source-ref') as HTMLElement;
+
+    it('shows the date line, with the real t() label, when createdAt is set', () => {
+        const sources = [
+            { index: 1, fileName: 'doc.pdf', fileId: 'f1', content: 'Body.', score: 0.9, createdAt: '2026-01-05T00:00:00Z' },
+        ];
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.click(firstPill(container));
+
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toHaveTextContent('sourceDateLabel');
+        expect(dialog).toHaveTextContent('01/05/2026');
+    });
+
+    it('omits the date line entirely when neither createdAt nor publishedAt is set', () => {
+        const sources = [
+            { index: 1, fileName: 'doc.pdf', fileId: 'f1', content: 'Body.', score: 0.9 },
+        ];
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.click(firstPill(container));
+
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).not.toHaveTextContent('sourceDateLabel');
+    });
+
+    it('prefers publishedAt over createdAt when both are set', () => {
+        const sources = [
+            {
+                index: 1, fileName: 'feed-item.html', fileId: 'f1', content: 'Body.', score: 0.9,
+                createdAt: '2026-01-05T00:00:00Z', publishedAt: '2025-12-01T00:00:00Z',
+            },
+        ];
+        const { container } = render(<MessageContent content="Claim [1]." sources={sources} onOpenSource={vi.fn()} />);
+        fireEvent.click(firstPill(container));
+
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toHaveTextContent('12/01/2025');
+        expect(dialog).not.toHaveTextContent('01/05/2026');
+    });
 });

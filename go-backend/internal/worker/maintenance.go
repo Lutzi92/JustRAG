@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/safego"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/vector"
@@ -424,7 +425,74 @@ func recordMetricsSnapshot(ctx context.Context, mainDB *pgxpool.Pool) {
 		}
 	}
 
+	refreshSourceSyncAge(ctx, mainDB)
+
 	slog.Debug("metrics snapshot recorded")
+}
+
+// sourceSyncAgeSQL reports, per (kb, source kind), the age in seconds of the
+// OLDEST last-successful sync among that KB's sources of that kind.
+//
+// Oldest, not newest, deliberately: the gauge is an alerting signal, so a KB
+// with ten healthy feeds and one that has not synced in a month must read as
+// a month, not as a minute. COALESCE falls back to the last ATTEMPT column
+// for a source that has not succeeded since migration 0071 added
+// last_success_at (there was nothing to backfill it from); a source with
+// neither timestamp has never run and is skipped rather than reported as
+// infinitely stale.
+const sourceSyncAgeSQL = `
+	SELECT kb_id::text AS kb_id, kind,
+	       EXTRACT(EPOCH FROM (NOW() - MIN(ts)))::float8 AS age_seconds
+	  FROM (
+	      SELECT kb_id, 'rss'::text AS kind, COALESCE(last_success_at, last_polled_at) AS ts
+	        FROM rss_feeds
+	      UNION ALL
+	      SELECT kb_id, 'confluence'::text, COALESCE(last_success_at, last_synced_at)
+	        FROM confluence_sources
+	      UNION ALL
+	      SELECT kb_id, 'git'::text, COALESCE(last_success_at, last_synced_at)
+	        FROM git_repo_sources
+	  ) s
+	 WHERE kb_id IS NOT NULL AND ts IS NOT NULL
+	 GROUP BY kb_id, kind`
+
+// refreshSourceSyncAge republishes the rag_source_sync_age_seconds gauge from
+// the three source tables as a full SNAPSHOT: the vector is reset once the
+// query has succeeded, so a source (or a whole KB) that has since been
+// deleted loses its series instead of keeping a frozen age that no future
+// tick can ever lower — which would leave an age alert permanently firing for
+// something that no longer exists.
+//
+// The reset deliberately happens AFTER the query returns, not before it: a
+// query failure must leave the previous snapshot intact (a slightly stale
+// gauge beats a blank one), and the maintenance tick retries in minutes.
+func refreshSourceSyncAge(ctx context.Context, mainDB *pgxpool.Pool) {
+	if mainDB == nil {
+		return
+	}
+	rows, err := mainDB.Query(ctx, sourceSyncAgeSQL)
+	if err != nil {
+		slog.Error("source sync age: query failed", "error", err)
+		return
+	}
+	defer rows.Close()
+	observability.ResetSourceSyncAge()
+	n := 0
+	for rows.Next() {
+		var kbID, kind string
+		var age float64
+		if err := rows.Scan(&kbID, &kind, &age); err != nil {
+			slog.Error("source sync age: scan failed", "error", err)
+			return
+		}
+		observability.SetSourceSyncAge(kind, kbID, age)
+		n++
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("source sync age: row iteration failed", "error", err)
+		return
+	}
+	slog.Debug("source sync age refreshed", "series", n)
 }
 
 // pruneOldMetrics deletes system_metrics rows older than the retention period.

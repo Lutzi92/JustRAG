@@ -48,6 +48,11 @@ type CreateFileData struct {
 	Origin      string // e.g. "upload"
 	StoragePath string
 	RSSFeedID   string // optional: links file to an RSS feed
+	// PublishedAt is the document's OWN publication date, as opposed to
+	// created_at (the ingest timestamp). Only origins that carry one set
+	// it — the RSS poller, from the feed item's PublishedParsed (W3-R9);
+	// everything else leaves it nil and the column stays NULL.
+	PublishedAt *time.Time
 }
 
 // FileRecord is the full file row returned after creation.
