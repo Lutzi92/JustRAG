@@ -212,3 +212,74 @@ describe('KBOverviewDashboard per-kind sync status (Wave-4 Task 7)', () => {
         expect(title).toContain('syncNeverSucceeded');
     });
 });
+
+// Fix round 1: the "Last sync" column must sort by the same worst-kind
+// severity the cell displays, not the aggregate MAX(success) timestamp —
+// otherwise a KB with a healthy RSS feed and a never-succeeded git source
+// shows the alarming badge but still sorts as if it were freshly synced.
+// All three rows below share nearby timestamps precisely so a
+// timestamp-only sort would NOT reproduce the expected order — only a
+// severity-first sort does.
+const urgencyOverview = {
+    rows: [
+        {
+            id: 'kb-x1', name: 'KB One', isGlobal: false, isPublished: false, fileCount: 1, totalSizeBytes: 10,
+            failedFileCount: 0, processingFileCount: 0, webTurns: 0, apiTurns: 0, chatCount: 0, createdAt: '2026-01-01T00:00:00Z',
+            // Healthy (ok tier) — but has the OLDEST timestamp of the three,
+            // so a timestamp-only sort would (wrongly) put it in the middle
+            // when ascending, not last.
+            lastSyncAt: '2026-08-01T00:00:00Z', syncSucceeded: true, syncFailing: false, syncKinds: ['confluence'],
+            syncByKind: [{ kind: 'confluence', lastSyncAt: '2026-08-01T00:00:00Z', syncSucceeded: true, syncFailing: false, sourceCount: 1 }],
+        },
+        {
+            id: 'kb-x2', name: 'KB Two', isGlobal: false, isPublished: false, fileCount: 1, totalSizeBytes: 10,
+            failedFileCount: 0, processingFileCount: 0, webTurns: 0, apiTurns: 0, chatCount: 0, createdAt: '2026-01-01T00:00:00Z',
+            // Currently failing (has succeeded before) — middle timestamp.
+            lastSyncAt: '2026-09-01T00:00:00Z', syncSucceeded: true, syncFailing: true, syncKinds: ['rss'],
+            syncByKind: [{ kind: 'rss', lastSyncAt: '2026-09-01T00:00:00Z', syncSucceeded: true, syncFailing: true, sourceCount: 1 }],
+        },
+        {
+            id: 'kb-x3', name: 'KB Three', isGlobal: false, isPublished: false, fileCount: 1, totalSizeBytes: 10,
+            failedFileCount: 0, processingFileCount: 0, webTurns: 0, apiTurns: 0, chatCount: 0, createdAt: '2026-01-01T00:00:00Z',
+            // Never succeeded — but has the NEWEST timestamp (an attempt
+            // fallback) of the three, so an aggregate-timestamp sort would
+            // (wrongly) treat it as the most recently synced, not the most
+            // urgent.
+            lastSyncAt: '2026-09-06T02:00:00Z', syncSucceeded: false, syncFailing: false, syncKinds: ['git'],
+            syncByKind: [{ kind: 'git', lastSyncAt: '2026-09-06T02:00:00Z', syncSucceeded: false, syncFailing: false, sourceCount: 1 }],
+        },
+    ],
+    queueSummary: {},
+    timestamp: '2026-09-06T12:00:00Z',
+    staleDays: 180,
+};
+
+describe('KBOverviewDashboard last-sync sort (Wave-4 Task 7 fix round 1)', () => {
+    beforeEach(() => {
+        installMemoryStorage();
+        mockedAxios.get = vi.fn().mockResolvedValue({ data: urgencyOverview });
+        mockedAxios.delete = vi.fn().mockResolvedValue({});
+        mockedAxios.patch = vi.fn().mockResolvedValue({ data: {} });
+        mockedAxios.post = vi.fn().mockResolvedValue({ status: 204 });
+    });
+
+    it('sorts by worst-kind severity, not the aggregate lastSyncAt', async () => {
+        render(<KBOverviewDashboard />);
+        await waitFor(() => expect(screen.getByText('KB One')).toBeTruthy());
+
+        fireEvent.click(screen.getByRole('button', { name: 'columnsToggle' }));
+        fireEvent.click(screen.getByLabelText('colLastSync'));
+
+        // First click sorts ascending, which — by the ascending-rank /
+        // descending-urgency convention compareSyncUrgency documents —
+        // puts the worst kind first: never-succeeded, then failing, then ok.
+        fireEvent.click(screen.getByRole('columnheader', { name: /colLastSync/ }));
+        const namesAsc = screen.getAllByRole('row').slice(1).map((r) => r.querySelector('td')?.textContent);
+        expect(namesAsc).toEqual(['KB Three', 'KB Two', 'KB One']);
+
+        // A second click flips the direction: healthy first, never-succeeded last.
+        fireEvent.click(screen.getByRole('columnheader', { name: /colLastSync/ }));
+        const namesDesc = screen.getAllByRole('row').slice(1).map((r) => r.querySelector('td')?.textContent);
+        expect(namesDesc).toEqual(['KB One', 'KB Two', 'KB Three']);
+    });
+});

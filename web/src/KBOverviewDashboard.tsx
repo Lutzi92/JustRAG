@@ -145,6 +145,41 @@ function turnTotal(row: KBRow): number {
     return (row.webTurns ?? 0) + (row.apiTurns ?? 0);
 }
 
+// Sort comparator for the "Last sync" column (Wave-4 Task 7 fix round 1):
+// the cell displays the WORST kind, so the column must sort by that same
+// severity — never-succeeded, then currently-failing, then healthy — before
+// falling back to that kind's own timestamp for a tie. Ascending numeric
+// order on syncKindRank (0 = worst) is exactly descending order on
+// "urgency" (2 - rank), i.e. ascending puts problems on top; the caller's
+// sortAsc flip mirrors that for the other direction, same as every other
+// numeric column in this table.
+//
+// A row with no per-kind breakdown (no external sources at all, or an
+// older cached response) falls back to row.lastSyncAt directly and is
+// treated as the same severity tier as a healthy kind, so it sorts purely
+// by timestamp among rows lacking a real breakdown. A row with neither a
+// breakdown nor a lastSyncAt has nothing to rank on and sorts last
+// regardless of direction — matching the "nullish sorts last" convention
+// the generic branch below uses for every other column, which is why the
+// direction flip is applied here (not by the caller) and skipped for that
+// case specifically.
+function compareSyncUrgency(a: KBRow, b: KBRow, sortAsc: boolean): number {
+    const wa = worstSyncKind(a);
+    const wb = worstSyncKind(b);
+    const ta = wa ? wa.lastSyncAt : a.lastSyncAt;
+    const tb = wb ? wb.lastSyncAt : b.lastSyncAt;
+    const hasA = wa != null || ta != null;
+    const hasB = wb != null || tb != null;
+    if (!hasA && !hasB) return 0;
+    if (!hasA) return 1;
+    if (!hasB) return -1;
+
+    const ra = wa ? syncKindRank(wa) : 2;
+    const rb = wb ? syncKindRank(wb) : 2;
+    const cmp = ra !== rb ? ra - rb : (ta ?? '').localeCompare(tb ?? '');
+    return sortAsc ? cmp : -cmp;
+}
+
 function formatBytes(bytes: number): string {
     if (bytes <= 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -295,6 +330,12 @@ export default function KBOverviewDashboard() {
             if (sortKey === 'activity') {
                 const cmp = turnTotal(a) - turnTotal(b);
                 return sortAsc ? cmp : -cmp;
+            }
+            // 'lastSyncAt' sorts by the same worst-kind severity the cell
+            // displays (never-succeeded > failing > ok), not the aggregate
+            // MAX(success) timestamp — see compareSyncUrgency.
+            if (sortKey === 'lastSyncAt') {
+                return compareSyncUrgency(a, b, sortAsc);
             }
             const av = a[sortKey];
             const bv = b[sortKey];
