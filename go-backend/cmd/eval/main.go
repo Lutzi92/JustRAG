@@ -29,6 +29,7 @@ import (
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/database"
 	"github.com/justrag/go-backend/internal/eval"
+	"github.com/justrag/go-backend/internal/files"
 	"github.com/justrag/go-backend/internal/recencylister"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/tabular/sqlexec"
@@ -75,6 +76,7 @@ func main() {
 	bm25TieredBoostOverride := flag.String("bm25-tiered-boost", "", `Per-run override for bm25_tiered_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-mode.`)
 	longContextModeOverride := flag.String("longcontext-mode", "", `Wave-3 ruling W3-R6: per-run override for chat_longcontext_mode ("flat" | "map_reduce") — which consumer the OrchLongContext orchestrator uses. Empty = read the live site_config. This is a CHAT-layer key, so it wraps siteReader like --crag (not the vector-layer overlay). Only has an effect when chat_longcontext_enabled is on and the question trips the global-synthesis classifier.`)
 	longContextEnabled := flag.String("longcontext", "", `Wave-3 ruling W3-R5: per-run override for chat_longcontext_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext-mode. "on" puts OrchLongContext at the top of the eval orchestrator ladder for questions the global-synthesis classifier accepts, so a global-synthesis golden set can be measured without mutating site_configs.`)
+	conflictSurfacing := flag.String("conflict-surfacing", "", `Wave-5 ruling W5-R7: per-run override for chat_conflict_surfacing_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext. "on" makes every turn whose assembled set spans >= 2 distinct files run the fast-tier conflict / supersession pass, and records the resulting report per question as "conflicts" in the JSON report (the same bare array a chat turn persists and streams). Effective on the standard PrepareChatContext path and, under --orchestrator-dispatch, on the Supervisor path.`)
 	goldenQueryType := flag.Bool("golden-query-type", false, `Forward each golden row's curated "query_type" label into the retrieval pipeline (chat.ChatContextParams.QueryType) instead of letting the pipeline classify the question. Default false so existing --production-context reports keep their historical shape. Does NOT affect orchestrator dispatch, which classifies independently — if a question does not reach the intended orchestrator, rewrite the question, not the label.`)
 	recencyBoostOverride := flag.String("recency-boost", "", `Wave 2 Task 8: per-run override for recency_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-tiered-boost (a vector-layer key, applied via the searchReader overlay, not the chat-level siteReader). Lets the CERT recency fixture A/B the recency prior without a site_configs mutation.`)
 	printKeywordSQL := flag.String("print-keyword-sql", "", `Diagnostic mode (Wave-3 Task 7): print the keyword arm's SQL for this query — for BOTH scoring modes (ts_rank and bm25), with the KB's real resolved settings (chunk table, text-search config, simple arm, tiered boost, k1/b, dim-keyed stats tables) — as one JSON document on stdout, then exit 0. Requires --kb-id. Runs no search, no LLM call, and needs no golden set; --top-k sets the statement's LIMIT (pass 50 to match the legacy pre-rerank candidate depth the keyword arm actually runs with at top-k 10 with a reranker; a non-positive value falls back to 50). Each mode carries both the parameterised SQL and an "executable_sql" with the placeholders inlined, so it can be handed straight to EXPLAIN (ANALYZE, BUFFERS).`)
@@ -172,6 +174,10 @@ func main() {
 	}
 	if *bm25TieredBoostOverride != "" && *bm25TieredBoostOverride != "on" && *bm25TieredBoostOverride != "off" {
 		slog.Error("invalid --bm25-tiered-boost value", "value", *bm25TieredBoostOverride)
+		os.Exit(2)
+	}
+	if *conflictSurfacing != "" && *conflictSurfacing != "on" && *conflictSurfacing != "off" {
+		slog.Error("invalid --conflict-surfacing value", "value", *conflictSurfacing)
 		os.Exit(2)
 	}
 	if *recencyBoostOverride != "" && *recencyBoostOverride != "on" && *recencyBoostOverride != "off" {
@@ -338,7 +344,7 @@ func main() {
 	// siteReader rather than the vector-layer overlay above. Chained after
 	// the CRAG wrapper so both overrides compose. One wrapper carries both
 	// keys — a second wrapper would be indistinguishable but harder to read.
-	if chatOverlays := buildChatOverlays(*longContextEnabled, *longContextModeOverride); len(chatOverlays) > 0 {
+	if chatOverlays := buildChatOverlays(*longContextEnabled, *longContextModeOverride, *conflictSurfacing); len(chatOverlays) > 0 {
 		siteReader = &chatOverlayReader{inner: siteReader, overlays: chatOverlays}
 		slog.Info("eval: applying chat site_config overlays for this run", "overlays", chatOverlays)
 	}
@@ -398,6 +404,15 @@ func main() {
 		// tabularRouter above, and wired into every --production-context
 		// branch that runs the standard PrepareChatContext path.
 		recencyLister := recencylister.New(db.Main)
+		// Wave 5 Task 5 (W5-R7): the conflict / supersession pass decides
+		// DIRECTION from each source's date line, and those dates come from
+		// a chat.FileDateLookup. internal/app wires exactly this adapter for
+		// production; without it every date renders "unknown" and no
+		// supersession can ever be reported with `newer` set, which would
+		// make the CERT NEU/UPDATE measurement vacuous. Inert when
+		// chat_conflict_surfacing_enabled is off (PrepareChatContext never
+		// reaches FileDates then).
+		fileDates := &fileDatesAdapter{store: files.NewStore(db.Main)}
 		if hasTurns {
 			// Turn rows bypass orchestrator dispatch and teams entirely
 			// (validated above: --team-id is already rejected when
@@ -414,6 +429,7 @@ func main() {
 				flags,
 				eval.WithTabularRouter(tabularRouter),
 				eval.WithRecencyLister(recencyLister),
+				eval.WithFileDates(fileDates),
 			)
 			adapter = eval.NewMultiTurnAdapter(prod, aiResolver, siteReader, keepRaw)
 			slog.Info("eval: multi-turn replay mode on (golden set has turns; standard PrepareChatContext path, no orchestrator dispatch, no team)")
@@ -437,6 +453,7 @@ func main() {
 				flags,
 				eval.WithTabularRouter(tabularRouter),
 				eval.WithRecencyLister(recencyLister),
+				eval.WithFileDates(fileDates),
 			)
 			slog.Info("eval: orchestrator-dispatch mode on (production-parity routing)")
 		} else {
@@ -465,6 +482,7 @@ func main() {
 				siteReader,
 				flags,
 				eval.WithRecencyLister(recencyLister),
+				eval.WithFileDates(fileDates),
 			)
 		}
 	} else {
@@ -808,11 +826,12 @@ type chatOverlayReader struct {
 	overlays map[string]string
 }
 
-// buildChatOverlays turns the two long-context CLI flags into the overlay
-// map. An empty flag contributes NO entry, which is the whole point: an
-// entry with an empty value would pin the key to the zero value for the run
-// instead of delegating to the live site_config.
-func buildChatOverlays(longContextEnabled, longContextMode string) map[string]string {
+// buildChatOverlays turns the chat-layer CLI flags (the two long-context
+// ones and --conflict-surfacing) into the overlay map. An empty flag
+// contributes NO entry, which is the whole point: an entry with an empty
+// value would pin the key to the zero value for the run instead of
+// delegating to the live site_config.
+func buildChatOverlays(longContextEnabled, longContextMode, conflictSurfacing string) map[string]string {
 	overlays := map[string]string{}
 	switch longContextEnabled {
 	case "on":
@@ -823,6 +842,12 @@ func buildChatOverlays(longContextEnabled, longContextMode string) map[string]st
 	if longContextMode != "" {
 		overlays["chat_longcontext_mode"] = longContextMode
 	}
+	switch conflictSurfacing {
+	case "on":
+		overlays["chat_conflict_surfacing_enabled"] = "true"
+	case "off":
+		overlays["chat_conflict_surfacing_enabled"] = "false"
+	}
 	return overlays
 }
 
@@ -831,6 +856,31 @@ func (w *chatOverlayReader) GetSiteConfigValue(ctx context.Context, key string) 
 		return &v, nil
 	}
 	return w.inner.GetSiteConfigValue(ctx, key)
+}
+
+// fileDatesAdapter implements chat.FileDateLookup over the main-DB files
+// store, exactly like internal/app/routes.go's identically-named adapter:
+// internal/files must not import internal/chat, so the two flat date structs
+// meet in one copy per entrypoint. cmd/eval needs it so a
+// --conflict-surfacing run sees the same published_at/created_at date lines
+// a real chat turn sees.
+type fileDatesAdapter struct {
+	store *files.PGStore
+}
+
+func (a *fileDatesAdapter) FileDatesByIDs(ctx context.Context, ids []string) (map[string]chat.FileDates, error) {
+	if a.store == nil {
+		return nil, nil
+	}
+	rows, err := a.store.FileDatesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]chat.FileDates, len(rows))
+	for id, d := range rows {
+		out[id] = chat.FileDates{CreatedAt: d.CreatedAt, PublishedAt: d.PublishedAt}
+	}
+	return out, nil
 }
 
 // cragOverrideReader wraps a chat.SiteConfigReader to force CRAG on or

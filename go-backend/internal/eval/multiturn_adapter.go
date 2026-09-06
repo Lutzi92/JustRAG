@@ -107,6 +107,19 @@ func (m *MultiTurnAdapter) ChatContextForQuestion(questionID string) (*chat.Chat
 	return m.inner.ChatContextForQuestion(questionID)
 }
 
+// ConflictsForQuestion satisfies conflictTracer by reading the inner
+// adapter's cached ChatContext, so a multi-turn replay carries the same
+// per-turn `conflicts` array a single-turn run does. Without this the
+// wrapper would hide the inner adapter's implementation from RunEval's type
+// assertion and every replayed turn would report no conflicts.
+func (m *MultiTurnAdapter) ConflictsForQuestion(questionID string) []chat.MessageConflict {
+	c, ok := m.inner.ChatContextForQuestion(questionID)
+	if !ok || c == nil {
+		return nil
+	}
+	return chat.ConflictsForWire(c.Conflicts)
+}
+
 // CondensedQueryForQuestion returns the condensed (standalone) query
 // computed for questionID's turn, or "" if Search hasn't run for it yet.
 // Satisfies condensedQueryTracer so RunEval can surface it on

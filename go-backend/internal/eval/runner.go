@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/justrag/go-backend/internal/chat"
 )
 
 // Searcher is the minimum interface RunEval needs. vector.SearchService is
@@ -24,6 +26,15 @@ type agentTracer interface {
 	AgentTraceForQuestion(questionID string) *AgentTrace
 }
 
+// conflictTracer is the optional surface RunEval uses to attach the W5-R7
+// conflict / supersession report onto each QuestionReport. Same pattern as
+// agentTracer: adapters that never assemble a chat.ChatContext (legacy
+// retrieval-only) simply don't implement it and QuestionReport.Conflicts
+// stays nil.
+type conflictTracer interface {
+	ConflictsForQuestion(questionID string) []chat.MessageConflict
+}
+
 // RunEval iterates questions sequentially (concurrency currently ignored —
 // reserved for a future knob) and returns a populated Report.
 //
@@ -41,6 +52,7 @@ func RunEval(ctx context.Context, searcher Searcher, questions []Question, k int
 		Questions:   make([]QuestionReport, 0, len(questions)),
 	}
 	tracer, _ := searcher.(agentTracer)
+	ct, _ := searcher.(conflictTracer)
 	for _, q := range questions {
 		if err := ctx.Err(); err != nil {
 			return rep, err
@@ -48,6 +60,9 @@ func RunEval(ctx context.Context, searcher Searcher, questions []Question, k int
 		qr := runOne(ctx, searcher, q, k)
 		if tracer != nil {
 			qr.Agent = tracer.AgentTraceForQuestion(q.ID)
+		}
+		if ct != nil {
+			qr.Conflicts = ct.ConflictsForQuestion(q.ID)
 		}
 		if cqt, ok := searcher.(condensedQueryTracer); ok {
 			qr.CondensedQuery = cqt.CondensedQueryForQuestion(q.ID)
@@ -217,6 +232,7 @@ func RunEvalWithJudge(ctx context.Context, searcher Searcher, questions []Questi
 		Questions:   make([]QuestionReport, 0, len(questions)),
 	}
 	tracer, _ := searcher.(agentTracer)
+	ct, _ := searcher.(conflictTracer)
 	for _, q := range questions {
 		if err := ctx.Err(); err != nil {
 			return rep, err
@@ -224,6 +240,9 @@ func RunEvalWithJudge(ctx context.Context, searcher Searcher, questions []Questi
 		qr := runOne(ctx, searcher, q, k)
 		if tracer != nil {
 			qr.Agent = tracer.AgentTraceForQuestion(q.ID)
+		}
+		if ct != nil {
+			qr.Conflicts = ct.ConflictsForQuestion(q.ID)
 		}
 		if cqt, ok := searcher.(condensedQueryTracer); ok {
 			qr.CondensedQuery = cqt.CondensedQueryForQuestion(q.ID)

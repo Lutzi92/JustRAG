@@ -322,7 +322,7 @@ func renderConflictDateLine(lang string, d FileDates) string {
 	return "unknown"
 }
 
-// conflictsForWire flattens a report to the ONE shape every surface carries:
+// ConflictsForWire flattens a report to the ONE shape every surface carries:
 // the bare array. The SSE frame, the non-streaming response body and
 // messages.conflicts (and therefore a reloaded message) all serialise this
 // same value, so a client reads `conflicts[0].claim` everywhere and the
@@ -331,7 +331,12 @@ func renderConflictDateLine(lang string, d FileDates) string {
 // Returns nil when there is nothing to report, which is what keeps the key
 // absent on the overwhelming majority of turns and lets "absent means not
 // run" hold on every surface, including the DB column.
-func conflictsForWire(report *ConflictReport) []MessageConflict {
+//
+// Exported because internal/eval writes the same value into
+// QuestionReport.Conflicts (Wave-5 Task 5): an eval report's `conflicts`
+// array must be byte-identical to what a chat turn would have surfaced, so
+// the measurement cannot drift from the shipped shape.
+func ConflictsForWire(report *ConflictReport) []MessageConflict {
 	if report == nil || len(report.Conflicts) == 0 {
 		return nil
 	}

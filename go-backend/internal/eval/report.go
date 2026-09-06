@@ -186,6 +186,16 @@ Aggregate (k=%d, count=%d):
 			fmt.Fprintf(w, "  sql_error_rate = %.3f (of fired questions)\n", *rep.TabularSQLErrorRate)
 		}
 	}
+	// Conflict surfacing (W5-R7). Printed only when at least one question
+	// carries an entry, so every report from a run with the flag off (i.e.
+	// every pre-Wave-5 report) keeps its exact previous text.
+	if flagged, withNewer := ConflictCounts(rep.Questions); flagged > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Conflict surfacing:")
+		fmt.Fprintf(w, "  questions_with_conflict     = %d/%d (%.3f)\n",
+			flagged, len(rep.Questions), float64(flagged)/float64(len(rep.Questions)))
+		fmt.Fprintf(w, "  with_superseded_newer_known = %d\n", withNewer)
+	}
 	if rep.DepthBuckets != nil {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "Depth buckets (k=%d, min_total_chunks=%d, eligible_questions=%d):\n",
@@ -200,4 +210,32 @@ Aggregate (k=%d, count=%d):
 		}
 	}
 	return nil
+}
+
+// ConflictCounts summarises the W5-R7 conflict reports across a run.
+//
+// Rules, stated once so the acceptance record and the printer cannot
+// disagree:
+//   - flagged = number of questions whose Conflicts array has >= 1 entry.
+//     The flag RATE is that count over ALL questions in the report,
+//     errored ones included (an errored question produced no chat context
+//     and therefore no conflicts, which is the honest denominator for
+//     "how often does a turn get a badge").
+//   - withSupersededNewer = number of questions carrying at least one entry
+//     with kind "superseded" AND newer neither empty nor "unknown", i.e. a
+//     supersession the detector actually gave a direction for.
+func ConflictCounts(qs []QuestionReport) (flagged, withSupersededNewer int) {
+	for _, q := range qs {
+		if len(q.Conflicts) == 0 {
+			continue
+		}
+		flagged++
+		for _, c := range q.Conflicts {
+			if c.Kind == "superseded" && c.Newer != "" && c.Newer != "unknown" {
+				withSupersededNewer++
+				break
+			}
+		}
+	}
+	return flagged, withSupersededNewer
 }

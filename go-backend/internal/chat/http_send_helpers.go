@@ -762,7 +762,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		Sources:         sources,
 		Reasoning:       reasoningPtr,
 		ParentMessageID: &p.userMsgID,
-		Conflicts:       conflictsForWire(p.chatCtx.Conflicts),
+		Conflicts:       ConflictsForWire(p.chatCtx.Conflicts),
 	})
 	if err != nil {
 		logctx.From(ctx).Error("chat.send: save AI message (stream)", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
@@ -863,7 +863,7 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 		Sources:         sources,
 		Reasoning:       reasoningPtr,
 		ParentMessageID: &p.userMsgID,
-		Conflicts:       conflictsForWire(p.chatCtx.Conflicts),
+		Conflicts:       ConflictsForWire(p.chatCtx.Conflicts),
 	})
 	if err != nil {
 		logctx.From(ctx).Error("chat.send: save AI message", "error", err, "chat_id", p.chatID, "kb_id", p.kbID)
@@ -900,7 +900,7 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 	// Added only when there is something to report, so a client that never
 	// sees a conflict sees byte-identical JSON to before this existed —
 	// same rule the SSE frame follows.
-	if cs := conflictsForWire(p.chatCtx.Conflicts); cs != nil {
+	if cs := ConflictsForWire(p.chatCtx.Conflicts); cs != nil {
 		payload["conflicts"] = cs
 	}
 	httputil.WriteJSONCtx(ctx, w, http.StatusOK, payload)

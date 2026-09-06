@@ -153,7 +153,7 @@ func writeOpeningFrames(ctx context.Context, w http.ResponseWriter, sources []Ch
 		"chatId":        chatID,
 		"userMessageId": userMsgID,
 	})
-	if cs := conflictsForWire(report); cs != nil {
+	if cs := ConflictsForWire(report); cs != nil {
 		writeSSE(ctx, w, map[string]any{"conflicts": cs})
 	}
 }
@@ -1161,7 +1161,7 @@ func (h *Handler) tryDeepChat(
 		Reasoning:       reasoningPtr,
 		ParentMessageID: &userMsg.ID,
 		StructuredTable: chatCtx.StructuredTable,
-		Conflicts:       conflictsForWire(chatCtx.Conflicts),
+		Conflicts:       ConflictsForWire(chatCtx.Conflicts),
 		TeamID:          decTeamID,
 		AgentID:         decAgentID,
 	})

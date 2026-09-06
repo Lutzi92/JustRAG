@@ -262,14 +262,14 @@ func TestAssembleFlatFromParts_CarriesConflictAddendum(t *testing.T) {
 }
 
 func TestConflictsForWire(t *testing.T) {
-	if got := conflictsForWire(nil); got != nil {
+	if got := ConflictsForWire(nil); got != nil {
 		t.Errorf("nil report: got %+v, want nil", got)
 	}
-	if got := conflictsForWire(&ConflictReport{}); got != nil {
+	if got := ConflictsForWire(&ConflictReport{}); got != nil {
 		t.Errorf("empty report: got %+v, want nil", got)
 	}
 	r := &ConflictReport{Conflicts: []MessageConflict{{Claim: "c"}}}
-	if got := conflictsForWire(r); len(got) != 1 {
+	if got := ConflictsForWire(r); len(got) != 1 {
 		t.Errorf("populated report: got %+v, want 1 entry", got)
 	}
 }

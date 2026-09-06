@@ -243,6 +243,16 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 			cfg := chat.ResolveTabularRouterConfig(ctx, a.siteCfg)
 			tabularCfg = &cfg
 		}
+		// Same reasoning as tabularCfg above for the W5-R7 conflict pass:
+		// resolved from the per-KB-overlaid reader HERE, mirroring
+		// internal/chat/http_send.go's OrchSupervisor case, so a
+		// --conflict-surfacing run reaches the Supervisor path too. A
+		// disabled config is the zero-cost no-op RunSupervisorChat
+		// already handles.
+		var conflictCfg chat.ConflictConfig
+		if a.siteCfg != nil && chat.ChatConflictSurfacingEnabled(ctx, a.siteCfg) {
+			conflictCfg = chat.ResolveConflictConfig(ctx, a.siteCfg)
+		}
 		chatCtx, err = chat.RunSupervisorChat(ctx, a.aiResolver, a.searchService, chat.SupervisorChatParams{
 			KbID:                q.KbID,
 			Query:               q.Question,
@@ -251,6 +261,8 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 			PlanningModel:       a.planningModel,
 			TabularRouter:       a.prod.tabularRouter,
 			TabularRouterConfig: tabularCfg,
+			ConflictConfig:      conflictCfg,
+			FileDates:           a.prod.fileDates,
 		}, emit)
 	case OrchestratorPlanExecute, OrchestratorPlanExecuteDAG:
 		dag := orchestrator == OrchestratorPlanExecuteDAG
@@ -406,4 +418,16 @@ func (a *OrchestratorDispatchAdapter) ChatContextForQuestion(questionID string) 
 		return cc, true
 	}
 	return a.prod.ChatContextForQuestion(questionID)
+}
+
+// ConflictsForQuestion satisfies the conflictTracer interface RunEval detects
+// by type assertion. Reads through ChatContextForQuestion, so it covers every
+// branch that produces a ChatContext — the Supervisor and long-context
+// orchestrators as well as the standard fallback — without a second cache.
+func (a *OrchestratorDispatchAdapter) ConflictsForQuestion(questionID string) []chat.MessageConflict {
+	cc, ok := a.ChatContextForQuestion(questionID)
+	if !ok || cc == nil {
+		return nil
+	}
+	return chat.ConflictsForWire(cc.Conflicts)
 }
