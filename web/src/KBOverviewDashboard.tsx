@@ -58,6 +58,16 @@ interface KBRow {
     // Per-kind breakdown (Wave-4 Task 7). Empty/absent for a KB with no
     // external sources, same as syncKinds above.
     syncByKind?: SyncKindStatus[];
+    // RAGAS 24h sample stats (Wave-5 Task 2). Absent for a KB with no
+    // samples in the trailing 24h window — distinct from a zeroed block.
+    ragas?: RagasStats;
+}
+
+interface RagasStats {
+    n24h: number;
+    faithfulness?: number;
+    answerRelevance?: number;
+    contextPrecision?: number;
 }
 
 interface OverviewResponse {
@@ -73,7 +83,22 @@ type SortKey = keyof Pick<KBRow,
     'name' | 'ownerName' | 'fileCount' | 'totalSizeBytes' | 'failedFileCount' |
     'processingFileCount' | 'chatCount' | 'createdAt' |
     'oldestFileAt' | 'staleShare' | 'lastSyncAt'>
-    | 'lastActivity' | 'activity';
+    | 'lastActivity' | 'activity' | 'ragasN24h';
+
+// n24h is the sort value for the ragasN24h column — nested under row.ragas,
+// so it cannot be read via a[sortKey] like the other numeric columns.
+function ragasN24h(row: KBRow): number | undefined {
+    return row.ragas?.n24h;
+}
+
+// "n · F 0.61 / AR 0.98 / CP 0.47" with a dash for any missing metric — a
+// judge prompt that failed leaves that one mean nil (see RagasStats' backend
+// doc comment), which must not be conflated with a score of exactly zero.
+function formatRagasCell(row: KBRow): string {
+    if (!row.ragas) return '—';
+    const fmt = (v?: number) => (v != null ? v.toFixed(2) : '–');
+    return `${row.ragas.n24h} · F ${fmt(row.ragas.faithfulness)} / AR ${fmt(row.ragas.answerRelevance)} / CP ${fmt(row.ragas.contextPrecision)}`;
+}
 
 interface ColumnDef {
     key: SortKey;
@@ -229,6 +254,7 @@ export default function KBOverviewDashboard() {
         oldestFileAt: false,
         staleShare: false,
         lastSyncAt: false,
+        ragasN24h: false,
     });
     const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
     const columnsMenuRef = useRef<HTMLDivElement | null>(null);
@@ -348,6 +374,17 @@ export default function KBOverviewDashboard() {
             if (sortKey === 'lastSyncAt') {
                 return compareSyncUrgency(a, b, sortAsc);
             }
+            // 'ragasN24h' is nested under row.ragas, so it cannot go through
+            // the generic a[sortKey] lookup below.
+            if (sortKey === 'ragasN24h') {
+                const an = ragasN24h(a);
+                const bn = ragasN24h(b);
+                if (an == null && bn == null) return 0;
+                if (an == null) return 1;
+                if (bn == null) return -1;
+                const cmp = an - bn;
+                return sortAsc ? cmp : -cmp;
+            }
             const av = a[sortKey];
             const bv = b[sortKey];
             // Nullish values sort last regardless of direction.
@@ -388,6 +425,7 @@ export default function KBOverviewDashboard() {
         { key: 'oldestFileAt', label: t('colOldestContent'), optional: true },
         { key: 'staleShare', label: t('colStaleShare'), numeric: true, optional: true },
         { key: 'lastSyncAt', label: t('colLastSync'), optional: true },
+        { key: 'ragasN24h', label: t('colRagas'), numeric: true, optional: true },
     ];
     const columns = ALL_COLUMNS.filter((c) => !c.optional || optionalVisible[c.key]);
     const optionalColumns = ALL_COLUMNS.filter((c) => c.optional);
@@ -485,6 +523,8 @@ export default function KBOverviewDashboard() {
                     </>
                 );
             }
+            case 'ragasN24h':
+                return formatRagasCell(row);
             default:
                 return null;
         }
@@ -647,7 +687,9 @@ export default function KBOverviewDashboard() {
                                                                 ? `${row.staleFileCount ?? 0}/${row.fileCount} > ${data?.staleDays ?? 180}d`
                                                                 : c.key === 'lastSyncAt'
                                                                     ? syncTooltip(row, t)
-                                                                    : undefined;
+                                                                    : c.key === 'ragasN24h'
+                                                                        ? t('colRagasTooltip')
+                                                                        : undefined;
                                             return (
                                                 <td key={c.key} style={cellStyle} title={title}>
                                                     {renderCell(row, c.key)}

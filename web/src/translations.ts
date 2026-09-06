@@ -969,6 +969,11 @@ export const translations = {
     colOldestContent: { de: 'Ältester Inhalt', en: 'Oldest content' },
     colStaleShare: { de: 'Veraltet', en: 'Stale' },
     colLastSync: { de: 'Letzte Synchronisierung', en: 'Last sync' },
+    colRagas: { de: 'RAGAS (24 Std.)', en: 'RAGAS (24h)' },
+    colRagasTooltip: {
+        de: 'RAGAS-Stichprobe der letzten 24 Stunden: Anzahl · F = Treue (Faithfulness), AR = Antwortrelevanz (Answer Relevance), CP = Kontextpräzision (Context Precision). Ein Bindestrich statt Wert bedeutet: kein Ergebnis für diese Metrik (Judge-Aufruf fehlgeschlagen).',
+        en: 'RAGAS sample over the trailing 24 hours: count · F = Faithfulness, AR = Answer Relevance, CP = Context Precision. A dash instead of a value means no result for that metric (the judge call failed).',
+    },
     kbSyncFailing: { de: 'Synchronisierung fehlerhaft', en: 'Sync failing' },
     // Per-kind sync status (Wave-4 Task 7 / W4-R9): a KB with several source
     // kinds shows the worst one in the lastSync cell and lists all of them
@@ -1572,6 +1577,11 @@ export const translations = {
     ragasSamplingRateHelp: {
         de: 'Wahrscheinlichkeit, mit der eine abgeschlossene Antwort an den RAGAS-Judge weitergeleitet wird. Bereich 0.0–1.0; Standard 0.0 (nichts wird gesampelt, auch wenn der Master-Schalter oben an ist). Empfehlung: mit 0.01 (1%) starten, Kosten in den Prometheus-Counters beobachten, dann nach Bedarf anpassen. Bei 100 Anfragen/Tag und Rate 0.05 ergibt das ~5 Samples/Tag = 15 Judge-LLM-Aufrufe/Tag — klein genug für stabile Wochen-Trends ohne nennenswerte Zusatzkosten.',
         en: 'Probability that a completed response is forwarded to the RAGAS judge. Range 0.0–1.0; default 0.0 (nothing is sampled even when the master switch above is on). Recommended starting point: 0.01 (1%), watch the Prometheus counters, then adjust as needed. At 100 queries/day with rate 0.05 you get ~5 samples/day = 15 judge LLM calls/day — small enough for stable weekly trends without meaningful additional cost.',
+    },
+    ragasSamplesRetentionDays: { de: 'RAGAS-Stichproben: Aufbewahrung (Tage)', en: 'RAGAS samples: retention (days)' },
+    ragasSamplesRetentionDaysHelp: {
+        de: 'Wie viele Tage ein einzelnes RAGAS-Stichprobenergebnis in ragas_samples aufbewahrt wird, bevor die nächtliche Bereinigung es löscht. Bereich 1–3650; Standard 90. Global (nicht pro Wissensbasis) — betrifft die Rohdaten hinter der 24-Std.-Spalte in der Admin-KB-Übersicht und die RAGAS-Prometheus-Metriken, nicht die Metriken selbst.',
+        en: 'How many days a single RAGAS sample result stays in ragas_samples before the nightly cleanup deletes it. Range 1–3650; default 90. Global (not per-KB) — affects the raw rows behind the 24h column in the admin KB overview and the RAGAS Prometheus metrics, not the metrics themselves.',
     },
     chatCitationSpansEnabled: { de: 'Zitat-Fundstellen (wortgenaue Belegstelle)', en: 'Citation spans (verbatim quote match)' },
     chatCitationSpansEnabledHelp: {

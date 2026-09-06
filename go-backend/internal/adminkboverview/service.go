@@ -154,6 +154,19 @@ type QueueStats struct {
 	Failed  int `json:"failed"`
 }
 
+// RagasStats is one KB's RAGAS judge-score aggregate over the trailing 24h
+// window (Wave 5 / Task 2), reusing internal/ragassamples' DailyStats shape
+// (Task 1). N24h counts every sample in the window, including rows whose
+// judge failed; each mean is nil when no row in the window carried that
+// metric — N24h is deliberately NOT the denominator of the means (see
+// ragassamples.DailyStats' doc comment for why).
+type RagasStats struct {
+	N24h             int      `json:"n24h"`
+	Faithfulness     *float64 `json:"faithfulness,omitempty"`
+	AnswerRelevance  *float64 `json:"answerRelevance,omitempty"`
+	ContextPrecision *float64 `json:"contextPrecision,omitempty"`
+}
+
 // KBRow is one row of the rendered table.
 type KBRow struct {
 	ID                  string  `json:"id"`
@@ -197,6 +210,12 @@ type KBRow struct {
 	SyncFailing   bool             `json:"syncFailing"`
 	SyncKinds     []string         `json:"syncKinds,omitempty"`
 	SyncByKind    []SyncKindStatus `json:"syncByKind,omitempty"`
+
+	// Ragas is the KB's RAGAS judge-score sample over the trailing 24h
+	// window (Wave 5 / Task 2). Nil for a KB with no samples in the window —
+	// distinct from a zeroed struct, which would read as "0 samples,
+	// 0 scores" rather than "no data yet".
+	Ragas *RagasStats `json:"ragas,omitempty"`
 }
 
 // OverviewResponse is the JSON returned by GET /api/admin/kb-overview.
@@ -217,7 +236,15 @@ type Store interface {
 	ChatStatsByKB(ctx context.Context) (map[string]ChatStats, error)
 	TurnStatsByKB(ctx context.Context) (map[string]TurnStats, error)
 	SyncStatsByKB(ctx context.Context) (map[string]SyncStats, error)
+	// RagasStatsByKB returns each KB's RAGAS judge-score aggregate for
+	// samples with sampled_at >= since, keyed by KB id.
+	RagasStatsByKB(ctx context.Context, since time.Time) (map[string]RagasStats, error)
 }
+
+// ragasWindow bounds the trailing window RagasStatsByKB aggregates over. A
+// fixed 24h window (not a site_config knob): the admin overview column is
+// meant to answer "how is this KB doing right now", not a tunable lookback.
+const ragasWindow = 24 * time.Hour
 
 // queueInspector is the subset of *asynq.Inspector we use (for testability).
 type queueInspector interface {
@@ -261,6 +288,10 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 		return OverviewResponse{}, err
 	}
 	syncStats, err := s.store.SyncStatsByKB(ctx)
+	if err != nil {
+		return OverviewResponse{}, err
+	}
+	ragasStats, err := s.store.RagasStatsByKB(ctx, time.Now().Add(-ragasWindow))
 	if err != nil {
 		return OverviewResponse{}, err
 	}
@@ -318,6 +349,9 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 			// breakdown, not from the aggregate LastSuccessAt above,
 			// which only proves ONE kind succeeded.
 			row.SyncSucceeded = allSyncKindsSucceeded(ss.ByKind)
+		}
+		if rs, ok := ragasStats[kb.ID]; ok {
+			row.Ragas = &rs
 		}
 		rows = append(rows, row)
 	}

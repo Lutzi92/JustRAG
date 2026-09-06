@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/kbmembers"
 	"github.com/justrag/go-backend/internal/pgxutil"
+	"github.com/justrag/go-backend/internal/ragassamples"
 )
 
 // ErrKBNotFound is returned by TransferKBOwner when the target KB no longer
@@ -23,11 +25,12 @@ var ErrKBNotFound = errors.New("knowledge base not found")
 type PGStore struct {
 	pool    *pgxpool.Pool
 	members kbmembers.Store
+	ragas   ragassamples.Store
 }
 
 // NewStore creates a PGStore over the main pool.
 func NewStore(pool *pgxpool.Pool) *PGStore {
-	return &PGStore{pool: pool, members: kbmembers.NewStore(pool)}
+	return &PGStore{pool: pool, members: kbmembers.NewStore(pool), ragas: ragassamples.NewStore(pool)}
 }
 
 // Compile-time interface assertion.
@@ -257,6 +260,29 @@ func (s *PGStore) TurnStatsByKB(ctx context.Context) (map[string]TurnStats, erro
 	out := make(map[string]TurnStats, len(rows))
 	for _, r := range rows {
 		out[r.KbID] = TurnStats{WebTurns: r.WebTurns, APITurns: r.APITurns, LastTurnAt: r.LastTurnAt}
+	}
+	return out, nil
+}
+
+// RagasStatsByKB returns each KB's RAGAS judge-score aggregate for the window
+// starting at since, keyed by kb_id (text).
+//
+// Deliberately delegates to ragassamples.Store.DailyStats (Task 1) rather
+// than writing a second aggregate query against ragas_samples: the two
+// packages must never be able to compute this number two different ways.
+func (s *PGStore) RagasStatsByKB(ctx context.Context, since time.Time) (map[string]RagasStats, error) {
+	daily, err := s.ragas.DailyStats(ctx, since)
+	if err != nil {
+		return nil, fmt.Errorf("RagasStatsByKB: %w", err)
+	}
+	out := make(map[string]RagasStats, len(daily))
+	for kbID, st := range daily {
+		out[kbID] = RagasStats{
+			N24h:             st.N,
+			Faithfulness:     st.Faithfulness,
+			AnswerRelevance:  st.AnswerRelevance,
+			ContextPrecision: st.ContextPrecision,
+		}
 	}
 	return out, nil
 }
