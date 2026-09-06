@@ -320,12 +320,21 @@ historical reports.
 | `--recency-boost on\|off` | Per-run override for `recency_boost_enabled`. |
 | `--rrf-weight-bm25 <f>` / `--rrf-weight-vector <f>` / `--rerank-blend-alpha <f>` | Per-run overrides for the fusion weights and the **global** reranker α. Per-route α overrides (`rerank_blend_alpha_lookup` etc.) are NOT overridden — set those in `site_configs` if you want to grid them. Used together with `--bm25-mode bm25` for the Wave-3 retune grid (`eval/golden/bm25-retune.acceptance.md`). |
 | `--keep-raw on\|off` | Multi-turn only: per-run override for `chat_condense_keep_raw_enabled`. |
+| `--conflict-surfacing on\|off` | Per-run override for `chat_conflict_surfacing_enabled` (W5-R7). `on` makes every turn whose assembled set spans ≥ 2 distinct files run the fast-tier conflict / supersession pass; the resulting report is written per question as `conflicts` in the JSON report — the same bare array a chat turn persists and streams (`claim, sourceA, sourceB, kind, newer, fileA, fileB`) — and the human summary gains a `Conflict surfacing:` block whenever at least one question carries an entry. Effective on the standard `PrepareChatContext` path and, under `--orchestrator-dispatch`, on the Supervisor path. Empty = live site_config. |
 
 These are all per-run **overlays**: they wrap the site-config reader for that
-process only and never write `site_configs`. `--longcontext`/`--longcontext-mode`
-are chat-layer keys and share one overlay wrapper (`chatOverlayReader` in
-`cmd/eval/main.go`), chained after `--crag`; the vector-layer flags
-(`--bm25-mode`, `--recency-boost`, …) use the separate `overlaySiteConfig`.
+process only and never write `site_configs`.
+`--longcontext`/`--longcontext-mode`/`--conflict-surfacing` are chat-layer keys
+and share one overlay wrapper (`chatOverlayReader` in `cmd/eval/main.go`),
+chained after `--crag`; the vector-layer flags (`--bm25-mode`,
+`--recency-boost`, …) use the separate `overlaySiteConfig`.
+
+The conflict pass decides supersession DIRECTION from each source's
+`published_at`/`created_at` date line, so `cmd/eval` wires the same
+`chat.FileDateLookup` production uses (`eval.WithFileDates`). Without it every
+date renders "unknown" and `newer` can only ever be `"unknown"` — which is
+also what the public API / OpenAI-compat / MCP-server paths get today, since
+they leave `FileDates` nil.
 
 Example — measure the contribution of the enumeration pre-pass on
 enumeration-labeled questions:

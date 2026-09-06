@@ -340,3 +340,295 @@ claims about either flag.
    isolated effect on this fixture. Both `.local.jsonl` runs and the JSON
    reports live under `.superpowers/sdd/2026-09-05-rag-sota-wave2/task8-out/`
    (gitignored, not committed).
+
+---
+
+# Conflict surfacing (Wave 5)
+
+- **Date:** 2026-09-06
+- **Branch/base:** `feat/rag-sota-wave5` (Task 3 shipped the mechanism; this
+  section is the W5-R7 measurement it still owed)
+- **Feature:** `chat_conflict_surfacing_enabled` (default **OFF**, per-KB).
+  One structured fast-tier call per turn over the turn's own numbered
+  sources, capped at `chat_conflict_max_chunks` (12), returning
+  `{claim, sourceA, sourceB, kind, newer}`; direction (`newer`) is decided
+  from each source's date line only.
+- **Model:** `jlu-internal/gemma-4-26b-it-bulk` (the resolved fast tier —
+  `chat_conflict_model` unset, `model_tier_fast` in force), timeout 6000 ms,
+  max chunks 12. No `site_configs` row exists for any `chat_conflict_*` key
+  (verified: `select * from site_configs where key like 'chat_conflict%'`
+  returns 0 rows), so the flag was at its code default and the per-run
+  overlay is the only thing that turned it on.
+- **Dates:** the pair files carry backdated `files.created_at` and NULL
+  `published_at`; the conflict date line falls back to `created_at`.
+
+## Setup — exact commands
+
+```bash
+# 1. Re-stamp the fixture (the backdating is relative to now(); W2-R8) and
+#    regenerate the runnable golden set. Sources the main checkout's .env and
+#    maps ADMIN_PASSWORD -> JUSTRAG_ADMIN_PASSWORD; never echoes it.
+bash .superpowers/sdd/2026-09-06-rag-sota-wave5/t5-cert.sh
+
+# 2. The four runs (standard path only, no judge).
+bash .superpowers/sdd/2026-09-06-rag-sota-wave5/t5-runs.sh
+#   == run-eval.sh --golden eval/golden/cert-recency-de.local.jsonl \
+#        --production-context --orchestrator-dispatch=false \
+#        --conflict-surfacing on   --output .../t5-out/t5-cert-on.json
+#   == ... --conflict-surfacing off --output .../t5-out/t5-cert-off.json
+#   == ... --conflict-surfacing on  --output .../t5-out/t5-cert-on2.json   (repeat, noise band)
+#   == run-eval.sh --golden eval/golden/production-ppm-2026-08.jsonl \
+#        --production-context --orchestrator-dispatch=false \
+#        --conflict-surfacing on   --output .../t5-out/t5-ppm-on.json
+
+# 3. Every number below is reproduced by:
+python3 .superpowers/sdd/2026-09-06-rag-sota-wave5/t5-analyse.py
+```
+
+`--orchestrator-dispatch=false` per W5-R12: conflict surfacing is a
+standard-`PrepareChatContext` feature, and dispatch-on runs on this fixture
+are dominated by the LLM query-type classifier's run-to-run routing noise
+(documented in the Wave-2 section above).
+
+### Re-stamp verification (read-only, before the runs)
+
+All 8 golden pairs carry two distinct `created_at` values with the UPDATE
+newer, and `published_at` is NULL throughout:
+
+```
+ pairs | update_newer | same_timestamp
+-------+--------------+----------------
+     8 |            8 |              0
+```
+
+e.g. `WID-SEC-2026-0104`: NEU `2026-08-30 20:43:36`, UPDATE
+`2026-09-05 20:43:36`.
+
+## Rules (stated before the numbers)
+
+- **assembled set** — the question's `retrieved` array in the JSON report:
+  the final chunk set sorted by score and cut at k=10. The detector's own
+  window is the turn's `sources` list capped at 12, which the report does
+  not carry, so this view slightly **under-counts** what the detector saw.
+  Membership is judged on file NAMES.
+- **pair** — `cert-p01`..`cert-p08` each target one WID id; the pair's two
+  files are `NEU <wid> …` and `UPDATE <wid> …`.
+- **flagged (pair)** — the question's `conflicts` array contains an entry
+  whose `{fileA,fileB}` is exactly that pair.
+- **newer correct** — such an entry has `kind == "superseded"` and the side
+  `newer` points at is the UPDATE file.
+- **flag rate** — questions with ≥ 1 conflict entry of any shape, over ALL
+  questions in the report (errored ones included; there were none).
+- **latency** — mean of per-question `latency_ms`.
+- **opportunity** — a (question, corpus pair) where BOTH halves are in that
+  question's top-10. **hit** — an opportunity the detector reported;
+  **directed** — a hit with `kind=superseded` and the UPDATE marked newer.
+
+## Result 1 — the eight pair questions: 0/8, and not because of the detector
+
+| Question | WID | Product | pair in assembled set (`on`) | pair in assembled set (`on2`) | pair flagged | newer=UPDATE |
+|---|---|---|---|---|---|---|
+| cert-p01 | WID-SEC-2026-0104 | Fortinet FortiOS | NEU only | NEU only | no | – |
+| cert-p02 | WID-SEC-2026-0106 | Ivanti Connect Secure | NEU only | UPDATE only | no | – |
+| cert-p03 | WID-SEC-2026-0107 | Cisco IOS XE | NEU only | NEU only | no | – |
+| cert-p04 | WID-SEC-2026-0108 | VMware ESXi | NEU only | NEU only | no | – |
+| cert-p05 | WID-SEC-2026-0109 | OpenSSL | NEU only | NEU only | no | – |
+| cert-p06 | WID-SEC-2026-0113 | Citrix NetScaler | NEU only | NEU only | no | – |
+| cert-p07 | WID-SEC-2026-0119 | Atlassian Confluence | UPDATE only | UPDATE only | no | – |
+| cert-p08 | WID-SEC-2026-0123 | GitLab | UPDATE only | UPDATE only | no | – |
+| **totals** | | | **0/8 both present** | **0/8 both present** | **0/8** | **0/8** |
+
+**Both halves of the queried pair are never in the assembled set**, in either
+`on` run — so the detector is never given the chance to flag the pair the
+question is about. This is not a new observation: the Wave-2 section above
+records the same thing ("In every case where both files appeared in the same
+top-10, only one of the pair ever did — MMR diversity plus the near-duplicate
+content of a NEU/UPDATE pair means the reranker+MMR stage keeps at most one").
+The eight pair questions were authored to measure *which half survives*, and
+that property makes them structurally unable to measure conflict surfacing.
+The literal brief gate (≥ 6/8 pairs flagged with the newer marked) therefore
+reads **0/8** — a fact about retrieval on this fixture, not about the pass.
+
+## Result 2 — what the pass actually does on the same 25 questions
+
+The corpus carries **14** NEU/UPDATE pairs (from
+`eval/fixtures/cert-advisories/manifest.tsv`); the eight golden questions
+target eight of them, but every question's top-10 tends to contain *other*
+complete pairs.
+
+| Run | opportunities | hits | directed (UPDATE marked newer) | detection rate |
+|---|---|---|---|---|
+| cert `on`  | 37 | 12 | 12 | 0.324 |
+| cert `on2` | 35 | 10 | 10 | 0.286 |
+| cert `off` | 35 | 0 | 0 | 0.000 |
+
+- **Every hit had the direction right** in both `on` runs (12/12 and 10/10).
+- **Entry-level precision**: `on` produced 17 conflict entries, `on2` 14.
+  All 31 name a genuine NEU/UPDATE pair of the corpus — **zero** entries
+  pair two files that are not a real supersession pair. One entry (of 17,
+  `on`, `cert-n01`) is a *duplicate* of another entry with the two sources
+  swapped and the direction inverted, i.e. the only wrong-direction entry in
+  the whole measurement: 16/17 and 14/14 correct.
+- **Pairs surfaced anywhere in the run**: 8/14 (`on`) and 9/14 (`on2`)
+  distinct corpus pairs were flagged at least once with the UPDATE marked
+  newer.
+- **`off` is a clean control**: 0 entries, 0 flagged questions, and the
+  `conflicts` key absent from every question in the JSON — the override does
+  nothing else.
+
+Per-question flag rates:
+
+| Run | flagged | flag rate | with a directed supersession |
+|---|---|---|---|
+| cert `on`  | 10/25 | 0.400 | 10 |
+| cert `on2` |  8/25 | 0.320 |  8 |
+| cert `off` |  0/25 | 0.000 |  0 |
+
+The two same-flag runs differ by 2 questions (0.400 vs 0.320), which is the
+noise band for this rate at n=25: the pass depends on which chunks CRAG and
+MMR happened to assemble that run, and on one non-deterministic fast-tier
+call.
+
+## Result 3 — cost and retrieval neutrality
+
+Wall time per run (25 questions each), from the runs' own `Total wall time`:
+
+| Run | wall time | mean per-question latency |
+|---|---|---|
+| cert `on`  | 1m14.4s | 2974.0 ms |
+| cert `on2` | 1m05.3s | 2611.4 ms |
+| cert `off` | 0m58.6s | 2343.2 ms |
+
+Mean latency delta `on` − `off` = **+630.8 ms (+26.9 %)**; `on2` − `off` =
+**+268.2 ms (+11.4 %)**. Averaging the two `on` runs against the single
+`off` run: **+449.5 ms (+19.2 %) per turn** — one extra fast-tier call over
+≤ 12 sources, as designed.
+
+Retrieval metrics (k=10) — the addendum is computed **after** the final
+chunk set, so it must not move them:
+
+| Run | mean_recall | mean_precision | mrr | mean_ndcg |
+|---|---|---|---|---|
+| cert `on`  | 0.630 | 0.234 | 0.637 | 0.666 |
+| cert `on2` | 0.668 | 0.234 | 0.677 | 0.704 |
+| cert `off` | 0.668 | 0.234 | 0.677 | 0.704 |
+
+`on2` and `off` are **identical to three decimals on every column**, which
+is the direct demonstration that the flag does not touch retrieval. The
+`on` run's −0.038 recall / −0.040 MRR versus `off` is therefore entirely
+inside the same-flag noise band (`on` vs `on2` is exactly those same
+0.038/0.040), and is the ordinary CRAG-grader non-determinism this fixture
+has shown since Wave 2 — not an effect of the flag.
+
+## Result 4 — false positives on the PPM set (89 questions, no known conflicts)
+
+`eval/golden/production-ppm-2026-08.jsonl`, same standard-path run with
+`--conflict-surfacing on` (17m58s wall, 0 errors, mean per-question latency
+12 114 ms — this KB is much slower per turn than the CERT fixture, and there
+is no `off` companion run for it, so no latency delta is claimed here).
+
+| Metric | Value |
+|---|---|
+| questions flagged (≥ 1 entry) | **11/89 = 0.124** |
+| total entries | 13 |
+| entries with `kind = superseded` | 0 |
+| questions with a directed supersession | 0 |
+
+Everything the pass reported on this corpus is a `contradiction`, never a
+supersession — which is the right shape for a project-documentation KB with
+no NEU/UPDATE convention, but it means the badge would appear on ~1 turn in
+8 with nothing actionable behind most of them.
+
+Two of the thirteen, quoted in full:
+
+> `[Q071] kind=contradiction newer=unknown`
+> claim: *"Das Projekt 'Neue Wege mit KI' wurde im März 2026 abgeschlossen."*
+> A: `Projektabschlussbericht Neue Wege mit KI.md`
+> B: `Kommunikation Projektabschluss Neue Wege mit KI.md`
+
+— an announcement and the closing report of the *same* project; they agree,
+they merely phrase the date differently. The same question also produced the
+mirror-image entry with A and B swapped ("… wurde im März beendet"), i.e. the
+duplicate-pair behaviour also seen once on CERT.
+
+> `[Q095] kind=contradiction newer=unknown`
+> claim: *"Das Projekt 'Verlängerung Adobe Softwarelizenzverträge' ist als
+> 'Must-Have' eingestuft."*
+> A: `Verlängerung Adobe Softwarelizenzverträge.md`
+> B: `JLU-weites Confluence.md`
+
+— a project sheet and an unrelated Confluence page that happens to carry a
+different priority list; the "disagreement" is between two documents that
+were never talking about the same thing.
+
+**A real defect this run surfaced:** two of the 13 entries (`Q018`, `Q096`)
+pair a file **with itself** (`fileA == fileB`) — two chunks of the same
+document given different `[N]` numbers. `ai.DetectSourceConflicts` rejects a
+self-pair only when the two *indices* are equal, and the ≥ 2-distinct-files
+gate is applied to the whole set, not per entry, so "one document contradicts
+itself" survives validation. That is exactly the category error the gate's
+own comment says it exists to prevent. Worth a follow-up fix (drop entries
+whose two sources share a `FileID`) before this flag is ever recommended.
+
+## Decision
+
+Gate from the brief (W5-R7): recommend the flag in the recipe **for RSS KBs
+only if** ≥ 6/8 pairs are flagged with the newer marked **AND** the PPM flag
+rate is ≤ 10 %.
+
+| Criterion | Threshold | Measured | Met? |
+|---|---|---|---|
+| pairs flagged with newer=UPDATE | ≥ 6/8 | **0/8** | no |
+| PPM flag rate | ≤ 0.10 | **0.124** | no |
+
+**Decision: no recipe recommendation, and no default flip.**
+`chat_conflict_surfacing_enabled` stays **OFF**, exactly as Task 3 shipped it.
+
+Both criteria fail, but for different reasons, and the distinction matters
+for whoever picks this up next:
+
+1. The **0/8** is a property of the fixture, not evidence against the
+   mechanism. The eight pair questions cannot put both halves of their own
+   pair into the assembled set (MMR near-duplicate suppression), so they
+   cannot test conflict surfacing at all. On the same 25 questions the pass
+   flagged 12 of 37 co-occurring pairs with the direction right **12/12**,
+   surfaced 8–9 of the corpus's 14 pairs at least once, and produced **zero**
+   entries naming a non-pair. On a supersession-shaped corpus the mechanism
+   works and its direction reasoning is reliable; what it lacks is retrieval
+   that puts both halves in front of it.
+2. The **0.124** is evidence against enabling it broadly. On a normal
+   project-documentation KB it fires on ~1 turn in 8, always as
+   `contradiction`, and the inspected examples are two documents about the
+   same project agreeing in different words, or two documents that are not
+   about the same thing at all.
+
+Follow-ups this measurement earns (not done here — W5-R9 forbids further
+answer-time work in this wave):
+
+- Drop entries whose two sources share a `FileID` (the self-pair defect
+  above) and de-duplicate mirrored pairs (A/B swapped) before building the
+  report. Both were observed live.
+- A supersession-shaped fixture whose questions are authored to put *both*
+  halves of a pair in the set (e.g. "Was hat sich an WID-SEC-2026-0104
+  geändert?") — the current pair questions were designed for a different
+  measurement and are not reusable for this one.
+- Re-measure the false-positive rate after those two fixes; the ~1-in-8
+  rate is the number that has to come down before an RSS-KB recommendation
+  is defensible.
+
+## Artifacts
+
+Gitignored (not committed), under
+`.superpowers/sdd/2026-09-06-rag-sota-wave5/`:
+
+| Path | Contents |
+|---|---|
+| `t5-cert.sh` | restamp + read-only date verification |
+| `t5-runs.sh` | the four runs |
+| `t5-analyse.py` | reproduces every number above |
+| `t5-out/t5-cert-on.json` / `.log` | CERT, flag on |
+| `t5-out/t5-cert-off.json` / `.log` | CERT, flag off (control) |
+| `t5-out/t5-cert-on2.json` / `.log` | CERT, flag on (repeat) |
+| `t5-out/t5-ppm-on.json` / `.log` | PPM, flag on |
+| `t5-analysis.txt` | the analysis script's full output |
+| `eval/golden/cert-recency-de.local.jsonl` | the runnable golden set (KB id resolved) |
