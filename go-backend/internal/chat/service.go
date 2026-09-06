@@ -949,9 +949,14 @@ func PrepareChatContext(
 			"max_tokens": maxTokens,
 			"top_k":      opts.LongContextTopK,
 		})
-	} else if ChatLongContextEnabled(ctx, siteConfig) {
-		// The operator gate is on but the classifier did not fire on this
-		// query — the denominator operators need to audit the firing rate.
+	} else if ChatLongContextEnabled(ctx, siteConfig) &&
+		params.QueryType == vector.QueryTypeComplexReasoning && params.Enhance == "" {
+		// The operator gate is on and this turn was ELIGIBLE, but the keyword
+		// classifier did not fire — the denominator operators need to audit
+		// the firing rate. The eligibility conditions must match the ones
+		// http_send.go's ladder applies before its own `considered` emission
+		// (complex_reasoning AND no explicit Enhance), or `fired/considered`
+		// would mean a different thing depending on which surface answered.
 		observability.RecordLongContextRoute("considered", "")
 	}
 

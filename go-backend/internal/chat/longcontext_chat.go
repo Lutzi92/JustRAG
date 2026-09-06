@@ -61,6 +61,9 @@ func runLongContextChatTestable(
 		QueryType:       vector.QueryTypeComplexReasoning,
 		FileIDs:         p.FileIDs,
 		RawQuery:        p.RawQuery,
+		GraphChunkIDs:   p.GraphChunkIDs,
+		BridgeChunks:    p.BridgeChunks,
+		HyPESearch:      p.HyPESearch,
 	}
 	res, err := searcher.Search(ctx, p.KbID, p.Query, 0, opts)
 	if err != nil {

@@ -826,6 +826,9 @@ func (h *Handler) tryDeepChat(
 			KbSystemPrompt:  kbSystemPrompt,
 			FileIDs:         body.SelectedFileIDs,
 			RawQuery:        rawQuery,
+			GraphChunkIDs:   graphChunkIDs,
+			BridgeChunks:    bridgeChunks,
+			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
 			Emit:            collectEmit,
 		})
 

@@ -46,6 +46,20 @@ const chunkBlockSeparator = "\n\n---\n\n"
 // metadata twice. idx is 1-based and is the citation number the answer LLM is
 // expected to use.
 func renderChunkAnnotation(idx int, c vector.SearchChunk) (string, []int) {
+	annotation, pages := renderChunkHeaderLine(idx, c)
+	if p := strings.TrimSpace(c.ContextualPrefix); p != "" {
+		annotation += "\nContext: " + p
+	}
+	return annotation, pages
+}
+
+// renderChunkHeaderLine is renderChunkAnnotation without the optional
+// ingestion-time `Context:` line, i.e. guaranteed to be exactly ONE line.
+// Used where the caller renders a list of sources with no bodies (the
+// long-context map-reduce SOURCES block), where a multi-line entry would
+// make the list unreadable and let an enrichment prefix masquerade as a
+// separate source line.
+func renderChunkHeaderLine(idx int, c vector.SearchChunk) (string, []int) {
 	pages := pagesFromMetadata(c.Metadata)
 
 	pageAnnotation := ""
@@ -56,10 +70,5 @@ func renderChunkAnnotation(idx int, c vector.SearchChunk) (string, []int) {
 			pageAnnotation = fmt.Sprintf(", p. %d-%d", pages[0], pages[len(pages)-1])
 		}
 	}
-
-	annotation := renderSourceHeader(idx, c.FileName, pageAnnotation, c.NodeKind, c.TreeLevel)
-	if p := strings.TrimSpace(c.ContextualPrefix); p != "" {
-		annotation += "\nContext: " + p
-	}
-	return annotation, pages
+	return renderSourceHeader(idx, c.FileName, pageAnnotation, c.NodeKind, c.TreeLevel), pages
 }

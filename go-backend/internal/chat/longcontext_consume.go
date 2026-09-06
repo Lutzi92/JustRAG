@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/prompts"
+	"github.com/justrag/go-backend/internal/promptsafety"
 	"github.com/justrag/go-backend/internal/safego"
 	"github.com/justrag/go-backend/internal/vector"
 )
@@ -32,6 +34,21 @@ const (
 // tail latency here is the difference between "slow" and "abandoned".
 const longContextMapTimeout = 45 * time.Second
 
+// longContextMapStageTimeout bounds the WHOLE map stage. The per-group
+// timeout above is not an overall bound: a 200-chunk pool at the default
+// group size is ~25 groups, and at concurrency 6 that is five sequential
+// waves, so the worst case is ~5 × 45 s ≈ 225 s of a synchronous chat turn
+// before a single token streams. 180 s is the ceiling on that: groups the
+// stage deadline cuts off degrade to their raw-chunk fallback findings like
+// any other per-group failure, so a slow backend costs evidence quality, not
+// the answer. Deliberately a constant, not a site_config key — it is a
+// latency guardrail on an already-opt-in route, and the two knobs that
+// actually shape the cost (group size, concurrency) are operator-tunable.
+//
+// A package var rather than a const solely so the test that exercises the
+// stage deadline can shorten it; nothing at runtime writes it.
+var longContextMapStageTimeout = 180 * time.Second
+
 // longContextFallbackRunes is how much of a chunk's raw body becomes its
 // fallback "finding" when its group's extraction failed (W3-R7).
 const longContextFallbackRunes = 600
@@ -50,6 +67,15 @@ type LongContextParams struct {
 	// layer's extra RRF lane (chat_condense_keep_raw_enabled); empty when the
 	// turn was not condensed.
 	RawQuery string
+	// GraphChunkIDs, BridgeChunks and HyPESearch are the same retrieval
+	// signals every other orchestrator threads into SearchOptions (see
+	// DriftChatParams): the AP-C4 graph router's resolved chunk ids, the
+	// bridge-evidence tally, and the HyPE question-embedding lane. Omitting
+	// them would silently disable graph routing and HyPE for exactly the
+	// turns this route serves.
+	GraphChunkIDs []string
+	BridgeChunks  map[string]int
+	HyPESearch    bool
 
 	// Mode is LongContextModeFlat or LongContextModeMapReduce. Anything else
 	// normalises to flat.
@@ -170,6 +196,12 @@ func consumeLongContextWith(
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
+	// One deadline for the entire fan-out; each group's own 45 s budget is
+	// derived from it, so the stage can never outlive this even across
+	// several sequential waves of groups.
+	stageCtx, stageCancel := context.WithTimeout(ctx, longContextMapStageTimeout)
+	defer stageCancel()
+
 	for i := range groups {
 		wg.Add(1)
 		// Plain goroutine + safego.RecoverError, NOT safego.GoCtx — the
@@ -184,19 +216,22 @@ func consumeLongContextWith(
 			defer wg.Done()
 			defer safego.RecoverError(&results[i].err)
 
-			if ctx.Err() != nil {
-				results[i].err = ctx.Err()
+			// Every wait keys on stageCtx, not ctx: a group still queued when
+			// the stage deadline passes must abandon immediately and take the
+			// fallback path rather than start a fresh 45 s call.
+			if stageCtx.Err() != nil {
+				results[i].err = stageCtx.Err()
 				return
 			}
 			select {
 			case sem <- struct{}{}:
-			case <-ctx.Done():
-				results[i].err = ctx.Err()
+			case <-stageCtx.Done():
+				results[i].err = stageCtx.Err()
 				return
 			}
 			defer func() { <-sem }()
 
-			gctx, cancel := context.WithTimeout(ctx, longContextMapTimeout)
+			gctx, cancel := context.WithTimeout(stageCtx, longContextMapTimeout)
 			defer cancel()
 
 			offset := i * groupSizeOrDefault(p.GroupSize)
@@ -253,7 +288,7 @@ func consumeLongContextWith(
 		"groups", len(groups), "failed_groups", failedGroups,
 		"findings", len(all), "pool", len(pool))
 
-	findingsText := renderFindingsContext(all, pool)
+	findingsText := renderFindingsContext(all, pool, p.Language)
 
 	var sb strings.Builder
 	if p.KbSystemPrompt != "" {
@@ -340,10 +375,53 @@ func firstRunes(s string, n int) string {
 	return string(r[:n])
 }
 
+// findingsFenceOpen / findingsFenceClose delimit the findings list in the
+// prompt. Both the claims and the quotes are model output derived from
+// retrieved document text — an injection carrier, exactly like a spreadsheet
+// cell in the tabular addendum — so they are fenced as data rather than left
+// loose in the system prompt, and the synthesis instruction names the fence.
+const (
+	findingsFenceOpen  = "```FINDINGS"
+	findingsFenceClose = "```"
+)
+
+// fenceRunRe matches a run of three or more backticks, which a claim or quote
+// could otherwise use to close the fence early and continue as prose the model
+// reads as instructions. Mirrors internal/prompts' fenceSafe.
+var fenceRunRe = regexp.MustCompile("`{3,}")
+
+// findingTextFilteredDE / EN replace a claim or quote that trips the
+// instruction heuristic. The finding is dropped rather than rendered, but its
+// `[N]` line stays so the numbering and the source attribution survive.
+const (
+	findingTextFilteredDE = "[gefiltert]"
+	findingTextFilteredEN = "[filtered]"
+)
+
+// sanitizeFindingText makes one model-authored string safe to place inside the
+// fenced findings block: newlines collapse (a finding is one line, and an
+// embedded newline could fake a fresh line outside the data), backtick runs are
+// neutralised so the fence cannot be closed early, and text matching the
+// instruction heuristic is replaced wholesale.
+func sanitizeFindingText(s, lang string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return ""
+	}
+	if promptsafety.LooksLikeInstruction(s) {
+		if lang == "de" {
+			return findingTextFilteredDE
+		}
+		return findingTextFilteredEN
+	}
+	return fenceRunRe.ReplaceAllString(s, "‵‵‵")
+}
+
 // renderFindingsContext builds the reduce-stage CONTEXT block: the findings
-// grouped by source in ascending `[N]` order, then the original source headers
-// (no chunk bodies, W3-R6) so the answer LLM can attribute every citation.
-func renderFindingsContext(findings []ai.LongContextFinding, pool []vector.SearchChunk) string {
+// grouped by source in ascending `[N]` order inside a data fence, then the
+// original source headers (one line each, no chunk bodies, W3-R6) so the
+// answer LLM can attribute every citation.
+func renderFindingsContext(findings []ai.LongContextFinding, pool []vector.SearchChunk, lang string) string {
 	byIdx := map[int][]ai.LongContextFinding{}
 	for _, f := range findings {
 		byIdx[f.SourceIdx] = append(byIdx[f.SourceIdx], f)
@@ -356,19 +434,22 @@ func renderFindingsContext(findings []ai.LongContextFinding, pool []vector.Searc
 
 	var sb strings.Builder
 	sb.WriteString("FINDINGS (grouped by source):\n")
+	sb.WriteString(findingsFenceOpen)
+	sb.WriteString("\n")
 	for _, idx := range idxs {
 		for _, f := range byIdx[idx] {
-			sb.WriteString(fmt.Sprintf("[%d] %s", idx, f.Claim))
-			if f.Quote != "" {
-				sb.WriteString(fmt.Sprintf(" — „%s“", f.Quote))
+			sb.WriteString(fmt.Sprintf("[%d] %s", idx, sanitizeFindingText(f.Claim, lang)))
+			if q := sanitizeFindingText(f.Quote, lang); q != "" {
+				sb.WriteString(fmt.Sprintf(" — „%s“", q))
 			}
 			sb.WriteString("\n")
 		}
 	}
-	sb.WriteString("\nSOURCES:\n")
+	sb.WriteString(findingsFenceClose)
+	sb.WriteString("\n\nSOURCES:\n")
 	for i, c := range pool {
-		annotation, _ := renderChunkAnnotation(i+1, c)
-		sb.WriteString(annotation)
+		header, _ := renderChunkHeaderLine(i+1, c)
+		sb.WriteString(header)
 		sb.WriteString("\n")
 	}
 	return sb.String()

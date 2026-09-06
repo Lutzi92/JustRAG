@@ -758,13 +758,11 @@ func (a *legacySearchAdapter) ContentsForQuestion(questionID string, k int) (con
 	return contents, fileNames, true
 }
 
-// cragOverrideReader wraps a chat.SiteConfigReader to force CRAG on or
-// off without modifying site_configs. When override is "on"/"off",
-// GetSiteConfigValue intercepts the "crag_enabled" key and returns
-// "true"/"false" respectively. All other keys delegate to the inner
-// reader.
-// chatOverlayReader overlays chat-layer site_config keys for one run without
-// mutating site_configs — the chat-side twin of overlaySiteConfig.
+// chatOverlayReader wraps a chat.SiteConfigReader and serves a fixed set of
+// chat-layer keys from an in-memory map for one run, without mutating
+// site_configs — the chat-side twin of overlaySiteConfig (which serves the
+// internal/vector reader). Any key not in the overlay delegates to the inner
+// reader. Wrappers compose, so it can sit on top of cragOverrideReader.
 type chatOverlayReader struct {
 	inner    chat.SiteConfigReader
 	overlays map[string]string
@@ -777,6 +775,11 @@ func (w *chatOverlayReader) GetSiteConfigValue(ctx context.Context, key string) 
 	return w.inner.GetSiteConfigValue(ctx, key)
 }
 
+// cragOverrideReader wraps a chat.SiteConfigReader to force CRAG on or
+// off without modifying site_configs. When override is "on"/"off",
+// GetSiteConfigValue intercepts the "crag_enabled" key and returns
+// "true"/"false" respectively. All other keys delegate to the inner
+// reader.
 type cragOverrideReader struct {
 	inner    chat.SiteConfigReader
 	override string // "on" | "off"
