@@ -41,6 +41,7 @@ import (
 	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/parser/docling"
 	"github.com/justrag/go-backend/internal/processor"
+	"github.com/justrag/go-backend/internal/ragassamples"
 	"github.com/justrag/go-backend/internal/redisclient"
 	"github.com/justrag/go-backend/internal/rss"
 	"github.com/justrag/go-backend/internal/safego"
@@ -277,7 +278,11 @@ func RunWorker(cfg *config.Config) error {
 	proc.SetKGDeleter(kg.NewPgStore(db.Main))
 	mux.HandleFunc(jobs.TypeResearchExecution, worker.Instrument(worker.NewResearchExecutionHandler(aiResolver, searchService, rdb.Client, chatStore, sharedFetcher)))
 	mux.HandleFunc(jobs.TypeAcademicResearchExecution, worker.Instrument(worker.NewAcademicResearchHandler(aiResolver, rdb.Client, chatStore, sharedFetcher)))
-	mux.HandleFunc(jobs.TypeRAGASSample, worker.Instrument(worker.NewRAGASSampleHandlerForResolver(aiResolver)))
+	// RAGAS sampling persists each judged sample to ragas_samples (migration
+	// 0072) in addition to the Prometheus histograms, so a score can be
+	// attributed to a KB, a message and a judge model after the fact.
+	ragasStore := ragassamples.NewStore(db.Main)
+	mux.HandleFunc(jobs.TypeRAGASSample, worker.Instrument(worker.NewRAGASSampleHandlerForResolver(aiResolver, ragasStore)))
 	// Crawl: moved out of the HTTP server so Chromium/rod doesn't run in
 	// go-server. See internal/crawler/handler.go for the HTTP façade and
 	// internal/worker/crawl.go for the BFS loop.
@@ -506,6 +511,13 @@ func RunWorker(cfg *config.Config) error {
 			StuckFileTimeout:     cfg.StuckFileTimeout,
 			TabularOrphanSweeper: tabular.NewOrphanSweeper(db.Main),
 			BM25StatsRefresher:   bm25Refresher,
+			RagasStore:           ragasStore,
+			// Read per pass, not once here: retention is a knob an operator
+			// may want to lower after noticing the table's size, and a
+			// worker restart should not be the price of that.
+			RagasRetention: func(ctx context.Context) time.Duration {
+				return time.Duration(chat.RagasSamplesRetentionDays(ctx, chatStore)) * 24 * time.Hour
+			},
 		})
 	}
 	defer func() {

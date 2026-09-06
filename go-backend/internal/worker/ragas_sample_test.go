@@ -66,7 +66,7 @@ func TestRAGASSampleHandler_HappyPath_EmitsCompletedOutcome(t *testing.T) {
 	counter := observability.RAGASSampleTotalForTest()
 	beforeCompleted := testutil.ToFloat64(counter.WithLabelValues("completed"))
 
-	handler := NewRAGASSampleHandler(completer)
+	handler := NewRAGASSampleHandler(completer, nil)
 	if err := handler(context.Background(), task); err != nil {
 		t.Fatalf("handler returned error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestRAGASSampleHandler_AllPromptsFail_RecordsErrorOutcome(t *testing.T) {
 	counter := observability.RAGASSampleTotalForTest()
 	beforeError := testutil.ToFloat64(counter.WithLabelValues("error"))
 
-	handler := NewRAGASSampleHandler(completer)
+	handler := NewRAGASSampleHandler(completer, nil)
 	// Worker handler should NOT return an error — that would cause asynq
 	// to retry. Sampling is best-effort.
 	if err := handler(context.Background(), task); err != nil {
@@ -115,7 +115,7 @@ func TestRAGASSampleHandler_MalformedPayload_ReturnsError(t *testing.T) {
 	task := asynq.NewTask(jobs.TypeRAGASSample, []byte("not json"))
 
 	completer := &fakeJudgeCompleter{}
-	handler := NewRAGASSampleHandler(completer)
+	handler := NewRAGASSampleHandler(completer, nil)
 	if err := handler(context.Background(), task); err == nil {
 		t.Error("malformed payload should return error so asynq can retry")
 	}

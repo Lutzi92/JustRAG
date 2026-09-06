@@ -204,8 +204,9 @@ var ignoredKeys = map[string]string{
 	"chat_turn_budget_seconds":      "operational budget",
 
 	// Observability / sampling — no user-visible pipeline stage.
-	"ragas_sampling_enabled": "background eval sampling",
-	"ragas_sampling_rate":    "tuning knob for the out-of-scope background eval sampling",
+	"ragas_sampling_enabled":       "background eval sampling",
+	"ragas_sampling_rate":          "tuning knob for the out-of-scope background eval sampling",
+	"ragas_samples_retention_days": "storage retention for the out-of-scope background eval sampling; read by the worker's nightly pass, not by a chat turn",
 
 	// --- Resolved during Task 4's first coverage run ---
 

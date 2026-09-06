@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/observability"
+	"github.com/justrag/go-backend/internal/ragassamples"
 	"github.com/justrag/go-backend/internal/safego"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/vector"
@@ -66,6 +67,20 @@ type MaintenanceConfig struct {
 	// Default: 15 minutes.
 	BM25StatsInterval time.Duration
 
+	// RagasStore backs the nightly RAGAS aggregate + retention pass
+	// (migration 0072). Nil disables the loop entirely (e.g. tests, or a
+	// worker without a main pool) rather than looping on a nil store.
+	RagasStore ragassamples.Store
+
+	// RagasRetention resolves how long a judged sample is kept, read fresh
+	// each pass so the knob can be retuned without a worker restart. Nil
+	// falls back to ragasDefaultRetention.
+	RagasRetention func(ctx context.Context) time.Duration
+
+	// RagasDailyInterval is how often the RAGAS aggregate + retention pass
+	// runs. Default: 24 hours.
+	RagasDailyInterval time.Duration
+
 	// BM25StatsMaxAge is the staleness threshold (W2-R5) applied to the
 	// sweep's StaleKBs call — a KB whose stats are older than this is
 	// refreshed even if no new chunk has landed since (catches deletions,
@@ -104,6 +119,9 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 	}
 	if cfg.BM25StatsMaxAge == 0 {
 		cfg.BM25StatsMaxAge = 24 * time.Hour
+	}
+	if cfg.RagasDailyInterval == 0 {
+		cfg.RagasDailyInterval = 24 * time.Hour
 	}
 	if cfg.BM25StatsRefresher != nil {
 		cfg.BM25StatsRefresher.StaleMaxAge = cfg.BM25StatsMaxAge
@@ -305,6 +323,36 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 		})
 	}
 
+	// Nightly RAGAS aggregate + retention (W5-R6): republishes the per-KB
+	// daily gauges from ragas_samples and deletes rows past the retention
+	// window. Nil store (persistence not wired) skips the loop entirely.
+	if cfg.RagasStore != nil {
+		launch("ragas_daily", func() {
+			// 10 minutes rather than the shorter delays above: this pass is
+			// neither latency-sensitive nor cheap to repeat, and starting it
+			// after the ingest-side loops keeps startup contention down.
+			startupDelay := time.NewTimer(10 * time.Minute)
+			defer startupDelay.Stop()
+			select {
+			case <-ctx.Done():
+				return
+			case <-startupDelay.C:
+				refreshRagasDaily(ctx, cfg.RagasStore, ragasRetention(ctx, cfg.RagasRetention))
+			}
+
+			ticker := time.NewTicker(cfg.RagasDailyInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					refreshRagasDaily(ctx, cfg.RagasStore, ragasRetention(ctx, cfg.RagasRetention))
+				}
+			}
+		})
+	}
+
 	slog.Info("maintenance tasks started",
 		"stuckCheckInterval", cfg.StuckCheckInterval,
 		"stuckFileTimeout", cfg.StuckFileTimeout,
@@ -314,6 +362,8 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 		"tabularOrphanInterval", cfg.TabularOrphanInterval,
 		"bm25StatsInterval", cfg.BM25StatsInterval,
 		"bm25StatsMaxAge", cfg.BM25StatsMaxAge,
+		"ragasDailyInterval", cfg.RagasDailyInterval,
+		"ragasDailyEnabled", cfg.RagasStore != nil,
 	)
 
 	return func() {

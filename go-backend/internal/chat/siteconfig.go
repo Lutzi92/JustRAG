@@ -265,6 +265,20 @@ func RAGASSamplingRate(ctx context.Context, reader SiteConfigReader) float64 {
 	return readFloat(ctx, reader, "ragas_sampling_rate", 0.0, 0.0, 1.0)
 }
 
+// RagasSamplesRetentionDays is how long a judged sample stays in the
+// ragas_samples table (migration 0072) before the nightly maintenance pass
+// deletes it. Default 90 days, clamped to [1, 3650]; global-only, since
+// retention is a property of the table, not of a KB.
+//
+// Out-of-range values fall back to 90 rather than clamping to the nearest
+// bound — readInt's documented behaviour, and load-bearing here: a "0" typed
+// into the field would otherwise mean "delete every sample tonight", turning
+// a retention knob into a data-loss one. Tunable via site_configs key
+// "ragas_samples_retention_days".
+func RagasSamplesRetentionDays(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "ragas_samples_retention_days", 90, 1, 3650)
+}
+
 // CitationValidationSemanticThreshold returns the cosine-similarity floor
 // for the semantic-fallback verification tier. The value comes from the
 // site_configs key "citation_validation_semantic_threshold" and must lie
