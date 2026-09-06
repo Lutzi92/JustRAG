@@ -249,13 +249,75 @@ func TestAggregate_IncludesJudgeMeansWhenPresent(t *testing.T) {
 	}
 }
 
+func TestAggregate_PerMetricJudgedCounts(t *testing.T) {
+	// Three questions; the second has a nil AnswerRelevance (e.g. an
+	// unparseable score that was recorded as an error, not silently
+	// dropped) while Faithfulness/ContextPrecision are present on all
+	// three. JudgedCount counts questions with a Judge block regardless
+	// of which individual metrics succeeded (W4-R2); the per-metric N
+	// fields must reflect the metric-specific drop.
+	f1, f2, f3 := 1.0, 0.5, 0.8
+	r1, r3 := 0.75, 0.25
+	p1, p2, p3 := 1.0, 0.5, 0.9
+	reports := []QuestionReport{
+		{
+			Metrics: PerQuestionMetrics{K: 10, RecallAtK: 1.0},
+			Judge:   &JudgeMetrics{Faithfulness: &f1, AnswerRelevance: &r1, ContextPrecision: &p1},
+		},
+		{
+			Metrics: PerQuestionMetrics{K: 10, RecallAtK: 0.5},
+			Judge:   &JudgeMetrics{Faithfulness: &f2, AnswerRelevance: nil, ContextPrecision: &p2, JudgeErrors: []string{"answer_relevance: boom"}},
+		},
+		{
+			Metrics: PerQuestionMetrics{K: 10, RecallAtK: 0.8},
+			Judge:   &JudgeMetrics{Faithfulness: &f3, AnswerRelevance: &r3, ContextPrecision: &p3},
+		},
+	}
+
+	agg := Aggregate(reports, 10)
+
+	if agg.FaithfulnessN != 3 {
+		t.Errorf("expected FaithfulnessN=3, got %d", agg.FaithfulnessN)
+	}
+	if agg.AnswerRelevanceN != 2 {
+		t.Errorf("expected AnswerRelevanceN=2, got %d", agg.AnswerRelevanceN)
+	}
+	if agg.ContextPrecisionN != 3 {
+		t.Errorf("expected ContextPrecisionN=3, got %d", agg.ContextPrecisionN)
+	}
+	if agg.JudgedCount != 3 {
+		t.Errorf("expected JudgedCount=3, got %d", agg.JudgedCount)
+	}
+}
+
+func TestAggregate_MeanCoverageOverNonNilOnly(t *testing.T) {
+	// Three questions; only two carry a non-nil Coverage (the third's
+	// golden row had no expected_points, so its Judge.Coverage is nil).
+	c1, c2 := 0.666, 1.0
+	reports := []QuestionReport{
+		{Metrics: PerQuestionMetrics{K: 10, RecallAtK: 1.0}, Judge: &JudgeMetrics{Coverage: &c1}},
+		{Metrics: PerQuestionMetrics{K: 10, RecallAtK: 0.5}, Judge: &JudgeMetrics{Coverage: &c2}},
+		{Metrics: PerQuestionMetrics{K: 10, RecallAtK: 0.8}, Judge: &JudgeMetrics{}},
+	}
+	agg := Aggregate(reports, 10)
+	if agg.MeanCoverage == nil || !approxEqual(*agg.MeanCoverage, (0.666+1.0)/2) {
+		t.Errorf("expected mean coverage %f, got %+v", (0.666+1.0)/2, agg.MeanCoverage)
+	}
+	if agg.CoverageN != 2 {
+		t.Errorf("expected CoverageN=2, got %d", agg.CoverageN)
+	}
+	if agg.JudgedCount != 3 {
+		t.Errorf("expected JudgedCount=3, got %d", agg.JudgedCount)
+	}
+}
+
 func TestAggregate_OmitsJudgeMeansWhenAbsent(t *testing.T) {
 	reports := []QuestionReport{
 		{Metrics: PerQuestionMetrics{K: 10, RecallAtK: 1.0}},
 		{Metrics: PerQuestionMetrics{K: 10, RecallAtK: 0.5}},
 	}
 	agg := Aggregate(reports, 10)
-	if agg.MeanFaithfulness != nil || agg.MeanAnswerRelevance != nil || agg.MeanContextPrecision != nil {
+	if agg.MeanFaithfulness != nil || agg.MeanAnswerRelevance != nil || agg.MeanContextPrecision != nil || agg.MeanCoverage != nil {
 		t.Errorf("expected all judge means nil, got %+v", agg)
 	}
 	if agg.JudgedCount != 0 {

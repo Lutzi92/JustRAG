@@ -71,17 +71,20 @@ Aggregate (k=%d, count=%d):
 	if err != nil {
 		return err
 	}
-	if rep.Aggregate.MeanFaithfulness != nil || rep.Aggregate.MeanAnswerRelevance != nil || rep.Aggregate.MeanContextPrecision != nil {
+	if rep.Aggregate.MeanFaithfulness != nil || rep.Aggregate.MeanAnswerRelevance != nil || rep.Aggregate.MeanContextPrecision != nil || rep.Aggregate.MeanCoverage != nil {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "Judge (judged_count=%d):\n", rep.Aggregate.JudgedCount)
 		if rep.Aggregate.MeanFaithfulness != nil {
-			fmt.Fprintf(w, "  mean_faithfulness       = %.3f\n", *rep.Aggregate.MeanFaithfulness)
+			fmt.Fprintf(w, "  mean_faithfulness       = %.3f (n=%d)\n", *rep.Aggregate.MeanFaithfulness, rep.Aggregate.FaithfulnessN)
 		}
 		if rep.Aggregate.MeanAnswerRelevance != nil {
-			fmt.Fprintf(w, "  mean_answer_relevance   = %.3f\n", *rep.Aggregate.MeanAnswerRelevance)
+			fmt.Fprintf(w, "  mean_answer_relevance   = %.3f (n=%d)\n", *rep.Aggregate.MeanAnswerRelevance, rep.Aggregate.AnswerRelevanceN)
 		}
 		if rep.Aggregate.MeanContextPrecision != nil {
-			fmt.Fprintf(w, "  mean_context_precision  = %.3f\n", *rep.Aggregate.MeanContextPrecision)
+			fmt.Fprintf(w, "  mean_context_precision  = %.3f (n=%d)\n", *rep.Aggregate.MeanContextPrecision, rep.Aggregate.ContextPrecisionN)
+		}
+		if rep.Aggregate.MeanCoverage != nil {
+			fmt.Fprintf(w, "  mean_coverage           = %.3f (n=%d)\n", *rep.Aggregate.MeanCoverage, rep.Aggregate.CoverageN)
 		}
 	}
 	if len(rep.RouteAggregates) > 0 {

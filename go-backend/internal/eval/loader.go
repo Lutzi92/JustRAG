@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 )
 
 // ParseGoldenSetContent decodes the JSONB content of an eval_golden_sets row
@@ -142,6 +143,22 @@ func validateQuestion(q Question) error {
 	}
 	// R75 TabularExpected: optional *bool, nothing to validate — absent,
 	// true, and false are all accepted values.
+	// W4-R5 ExpectedPoints: optional; when present each point must be
+	// non-empty after trimming, at most 300 runes, and at most 12 points
+	// total (the coverage judge sends every point in one call, and a
+	// runaway list would inflate its prompt without adding signal).
+	if len(q.ExpectedPoints) > 12 {
+		return fmt.Errorf("expected_points: at most 12 points allowed, got %d", len(q.ExpectedPoints))
+	}
+	for i, p := range q.ExpectedPoints {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			return fmt.Errorf("expected_points[%d] is empty", i)
+		}
+		if utf8.RuneCountInString(trimmed) > 300 {
+			return fmt.Errorf("expected_points[%d] exceeds 300 runes", i)
+		}
+	}
 	return nil
 }
 

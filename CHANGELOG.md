@@ -75,8 +75,78 @@ one-step rollback** (`cmd/migrate` is up-only).
   `chat_citation_spans_enabled` (+ `_max_sources`, `_timeout_ms`, `_model`),
   `chat_longcontext_mode` (+ `_map_group_size`, `_map_concurrency`,
   `_map_model`), and the global-only integer `kb_stale_days` (default 180).
+- **RAG Wave 4 adds no migration.** Nothing in it changes the schema; 0071
+  (Wave 3, above) is still the highest migration in this Unreleased block.
+- **`published_at` now also comes from Confluence and git.** Confluence
+  **pages** are stamped with the page's current version timestamp
+  (attachments stay NULL — the REST shape carries no attachment date), and
+  every file of a git sync is stamped with the HEAD commit's *committer* time
+  (the clone is shallow, so there is no per-file history to read). All three
+  origins clamp a future date to `now`. As with the RSS case there is **no
+  backfill**, and Confluence/git dates are written on file *creation*: a
+  Confluence page changes by delete-and-recreate, and a git sync whose HEAD
+  has not moved creates nothing — so an existing KB keeps `published_at =
+  NULL` on those files until its next real sync. Nothing to run; do not
+  hand-write the column.
+- **Source dates on two more surfaces (additive).** OpenAI-compat's Azure-
+  shaped `message.context.citations[]` entries gain `created_at` /
+  `published_at`, and the KB-as-MCP `ask_kb` tool's `Source` gains `createdAt`
+  / `publishedAt` — RFC 3339 in UTC, omitted when unset, so a client that does
+  not read them is unaffected. The OpenAI `file_citation` **annotation** shape
+  deliberately stays dateless (the spec has no slot for it).
+- **`GET /api/admin/kb-overview` rows gain `syncByKind`, and the row-level
+  `syncSucceeded` changed meaning.** Each row now carries one
+  `{kind, lastSyncAt, syncSucceeded, syncFailing, sourceCount}` entry per
+  source kind, and the aggregate `syncSucceeded` means "**every** kind with
+  sources has a verified success" instead of "at least one has". A dashboard
+  or alert reading the old field will see rows flip from `true` to `false`
+  where one healthy source kind had been masking a dead one — that is the
+  point of the change, not a regression.
+- **`cmd/eval` gains a pairwise mode and a coverage judge.**
+  `--pairwise-a A.json --pairwise-b B.json [--pairwise-out out.json]` compares
+  two finished `--judge` reports offline: each question pair is judged in both
+  orders and counts only when both agree, printing wins/ties/losses, a win
+  rate with a 95 % Wilson interval, and per-route/per-question tables. It
+  always exits 0 on a completed comparison (a measurement, not a gate). The
+  optional golden field `expected_points` (2–6 short statements, loader caps
+  ≤ 12 points / ≤ 300 runes) adds a fourth judge, `coverage`, reported as
+  `mean_coverage` + `coverage_n`; rows without it skip the judge entirely.
+- **Judge parsing is tolerant, and the aggregate reports per-metric counts.**
+  A score emitted as a numeric string is accepted and clamped to 1–5; a
+  boolean list of the wrong length is truncated or padded with a
+  `judge_warnings` entry; only unparseable JSON still drops a sample. New
+  aggregate fields `faithfulness_n` / `answer_relevance_n` /
+  `context_precision_n` / `coverage_n`, printed as `(n=…)`. Old judge numbers
+  stay comparable for well-formed responses, but `n` may be higher than before
+  because fewer samples are dropped. The extractor also survives two shapes it
+  used to reject outright: a reply containing **two** JSON objects (the first
+  parseable one wins) and one wrapped in a ```json fence around an object that
+  is complete. A reply cut off before its object closes is still an error, now
+  reported as a distinct `truncated JSON` (a completion-token limit on the
+  judge model is the usual cause) instead of a generic "not valid JSON". A
+  `"score": null` — the judge declining to rate — is now an error too, so the
+  sample is dropped: it used to unmarshal to 0 and clamp **up** to 1, silently
+  recording a real "barely relevant" rating. **This is not eval-only.** The
+  same `internal/eval.Judge` runs at runtime in the RAGAS background sampler
+  (`ragas_sampling_enabled`, `internal/worker/ragas_sample.go`) and in the
+  in-app / scheduled eval runner, so those surfaces get the same tolerance:
+  expect fewer `error`-outcome samples and the `rag_ragas_*` distributions to
+  shift accordingly (more samples, and no more `null` scores landing on the
+  Likert floor).
+- **The eval ladder now mirrors DRIFT.** `cmd/eval --production-context
+  --orchestrator-dispatch=true` dispatches global-synthesis questions through
+  the real DRIFT orchestrator at production's ladder position (above
+  long-context) and reports `agent.orchestrator = "drift"`. A deployment with
+  `chat_drift_enabled` on was previously evaluating those questions through
+  long-context instead.
 - **No `site_config` default was flipped, no re-ingest is required, and
-  `queryCacheSchemaVersion` is unchanged this wave.**
+  `queryCacheSchemaVersion` is unchanged this wave.** Both Wave-4 measurement
+  tasks concluded "keep the default": `chat_longcontext_mode` stays `flat`
+  (map_reduce raised coverage in both cross pairs and won 16 of 20 pooled
+  decisive pairs, but the pre-registered per-pair rule missed on one pair at
+  n=12) and `bm25_scoring_mode` stays `ts_rank` (on the plan-execute path with
+  dispatch on, `complex_reasoning` MRR is −4.7 pp against a 2.6 pp band over 3
+  repeats).
 
 ## v0.10.0 — 2026-08-19
 

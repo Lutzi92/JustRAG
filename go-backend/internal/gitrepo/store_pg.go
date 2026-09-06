@@ -115,6 +115,12 @@ type CreateGitRepoFileInput struct {
 	GitRepoSourceID string
 	GitFilePath     string
 	GitBlobSHA      string
+	// PublishedAt is the document's OWN content date, as opposed to
+	// created_at (the ingest timestamp): the HEAD commit's committer time
+	// for every file of that sync (W4-R11), clamped at now. The clone is
+	// shallow, so no per-file history exists to date each file
+	// individually.
+	PublishedAt *time.Time
 }
 
 type Store interface {
@@ -289,14 +295,15 @@ func (s *PGStore) ListGitRepoFiles(ctx context.Context, sourceID string) ([]GitR
 func (s *PGStore) CreateGitRepoFile(ctx context.Context, in CreateGitRepoFileInput) (string, error) {
 	const q = `
 		INSERT INTO files (kb_id, name, type, size, status, origin, storage_path,
-		                   git_repo_source_id, git_file_path, git_blob_sha)
-		VALUES ($1, $2, $3, $4, 'pending', 'git', $5, $6, $7, $8)
+		                   git_repo_source_id, git_file_path, git_blob_sha, published_at)
+		VALUES ($1, $2, $3, $4, 'pending', 'git', $5, $6, $7, $8, $9)
 		RETURNING id`
 	type idRow struct {
 		ID string `db:"id"`
 	}
 	rows, err := pgxutil.QueryRows[idRow](ctx, s.pool, q,
-		in.KbID, in.Name, in.Type, in.Size, in.StoragePath, in.GitRepoSourceID, in.GitFilePath, in.GitBlobSHA)
+		in.KbID, in.Name, in.Type, in.Size, in.StoragePath, in.GitRepoSourceID, in.GitFilePath, in.GitBlobSHA,
+		in.PublishedAt)
 	if err != nil {
 		return "", fmt.Errorf("CreateGitRepoFile: %w", err)
 	}

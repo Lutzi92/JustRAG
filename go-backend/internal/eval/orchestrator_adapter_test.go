@@ -104,6 +104,47 @@ func TestSelectOrchestrator_AgenticLast(t *testing.T) {
 	}
 }
 
+// W4-R3: the eval ladder must mirror the chat ladder's OrchDrift arm at the
+// SAME position as production — directly above long-context. On a
+// global-synthesis question with both flags on, drift wins.
+// MUTATION: swap the drift/longcontext arm order in SelectOrchestrator and
+// this test returns "longcontext" instead of "drift".
+func TestSelectOrchestrator_DriftBeatsLongContext(t *testing.T) {
+	cfg := &stubSiteCfg{values: map[string]string{
+		"chat_drift_enabled":       "true",
+		"chat_longcontext_enabled": "true",
+	}}
+	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Fasse alle Befunde aus diesen Dokumenten zusammen")
+	if got != OrchestratorDrift {
+		t.Fatalf("got %q, want %q", got, OrchestratorDrift)
+	}
+	if reason != "complex_reasoning_drift_gate" {
+		t.Fatalf("got reason %q", reason)
+	}
+}
+
+// The classifier, not the flag alone, gates the route: a narrow complex
+// question with chat_drift_enabled still falls through past drift.
+func TestSelectOrchestrator_DriftNeedsGlobalSynthesisQuery(t *testing.T) {
+	cfg := &stubSiteCfg{values: map[string]string{
+		"chat_drift_enabled":      "true",
+		"chat_supervisor_enabled": "true",
+	}}
+	got, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
+	if got != OrchestratorSupervisor {
+		t.Fatalf("got %q, want %q", got, OrchestratorSupervisor)
+	}
+}
+
+// A lookup query never reaches the drift gate.
+func TestSelectOrchestrator_DriftRequiresComplexReasoning(t *testing.T) {
+	cfg := &stubSiteCfg{values: map[string]string{"chat_drift_enabled": "true"}}
+	got, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "Fasse alle Befunde zusammen")
+	if got != OrchestratorStandard {
+		t.Fatalf("got %q, want %q", got, OrchestratorStandard)
+	}
+}
+
 // The eval ladder must mirror the chat ladder's OrchLongContext arm (W3-R5):
 // on a global-synthesis question the long-context gate beats the supervisor.
 // MUTATION: move the longcontext arm below the supervisor arm in

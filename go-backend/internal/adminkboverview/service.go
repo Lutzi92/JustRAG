@@ -67,6 +67,23 @@ type SyncStats struct {
 	// Kinds lists the source kinds the KB actually has ("rss", "confluence",
 	// "git") so the UI can label the timestamp.
 	Kinds []string
+	// ByKind is the per-source-kind breakdown (W4-R9): one entry per kind the
+	// KB actually has sources of. A KB whose RSS feed is healthy but whose
+	// git source has never succeeded must not read as fully synced just
+	// because the aggregate LastSuccessAt above picks up the RSS success.
+	ByKind []SyncKindStatus
+}
+
+// SyncKindStatus is the sync status of one source kind ("rss", "confluence",
+// "git") within a KB. LastSyncAt follows the same success-preferred-over-
+// attempt fallback as the aggregate: SyncSucceeded says which of the two it
+// is, so a fallback timestamp cannot be mistaken for a verified success.
+type SyncKindStatus struct {
+	Kind          string  `json:"kind"`
+	LastSyncAt    *string `json:"lastSyncAt,omitempty"`
+	SyncSucceeded bool    `json:"syncSucceeded"`
+	SyncFailing   bool    `json:"syncFailing"`
+	SourceCount   int     `json:"sourceCount"`
 }
 
 // SiteConfigReader reads one global site_config value. This package needs
@@ -164,15 +181,22 @@ type KBRow struct {
 	StaleFileCount int     `json:"staleFileCount"`
 	StaleShare     float64 `json:"staleShare"`
 	// LastSyncAt is the newest successful source sync, falling back to the
-	// newest attempt when no success is recorded yet — SyncSucceeded says
-	// which of the two it is, so a fallback timestamp cannot be mistaken for
-	// a healthy sync. SyncFailing flags a source with consecutive failures;
-	// SyncKinds names the source kinds this KB has (empty for a KB with no
-	// external sources, where LastSyncAt is nil).
-	LastSyncAt    *string  `json:"lastSyncAt,omitempty"`
-	SyncSucceeded bool     `json:"syncSucceeded"`
-	SyncFailing   bool     `json:"syncFailing"`
-	SyncKinds     []string `json:"syncKinds,omitempty"`
+	// newest attempt when no success is recorded yet. SyncFailing flags a
+	// source with consecutive failures; SyncKinds names the source kinds
+	// this KB has (empty for a KB with no external sources, where
+	// LastSyncAt is nil).
+	//
+	// SyncSucceeded (W4-R9) means "every kind that has sources has a
+	// verified success" — NOT "at least one has", which is what it meant
+	// through Wave 3. Under the old ANY semantics one healthy RSS feed
+	// could mask a git source that has never synced; the per-kind
+	// breakdown in SyncByKind is what the FE needs to show that source
+	// specifically instead of the KB's best kind.
+	LastSyncAt    *string          `json:"lastSyncAt,omitempty"`
+	SyncSucceeded bool             `json:"syncSucceeded"`
+	SyncFailing   bool             `json:"syncFailing"`
+	SyncKinds     []string         `json:"syncKinds,omitempty"`
+	SyncByKind    []SyncKindStatus `json:"syncByKind,omitempty"`
 }
 
 // OverviewResponse is the JSON returned by GET /api/admin/kb-overview.
@@ -280,15 +304,20 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 		if ss, ok := syncStats[kb.ID]; ok {
 			row.SyncFailing = ss.Failing
 			row.SyncKinds = ss.Kinds
+			row.SyncByKind = ss.ByKind
 			// Prefer the verified success; fall back to the last attempt
 			// only when no success is recorded (pre-0071 rows, or a source
-			// that has never succeeded), and say so via SyncSucceeded.
+			// that has never succeeded).
 			if ss.LastSuccessAt != nil {
 				row.LastSyncAt = ss.LastSuccessAt
-				row.SyncSucceeded = true
 			} else {
 				row.LastSyncAt = ss.LastAttemptAt
 			}
+			// SyncSucceeded is "every kind that has sources has a
+			// verified success" (W4-R9) — computed from the per-kind
+			// breakdown, not from the aggregate LastSuccessAt above,
+			// which only proves ONE kind succeeded.
+			row.SyncSucceeded = allSyncKindsSucceeded(ss.ByKind)
 		}
 		rows = append(rows, row)
 	}
@@ -299,6 +328,27 @@ func (s *Service) Overview(ctx context.Context) (OverviewResponse, error) {
 		Timestamp:    time.Now().UTC().Format(time.RFC3339),
 		StaleDays:    staleDays,
 	}, nil
+}
+
+// allSyncKindsSucceeded reports whether every kind in byKind has a verified
+// success. A KB with no external sources (empty byKind) is NOT "succeeded" —
+// there is nothing to have succeeded, so the aggregate stays false, matching
+// the pre-W4-R9 behaviour for a KB with no sync stats row at all.
+//
+// Mutation: revert this to "at least one kind succeeded" (the pre-W4-R9 ANY
+// semantics) → a KB with a healthy RSS feed and a never-succeeded git source
+// reports SyncSucceeded=true again, which is exactly the masking bug W4-R9
+// exists to fix.
+func allSyncKindsSucceeded(byKind []SyncKindStatus) bool {
+	if len(byKind) == 0 {
+		return false
+	}
+	for _, k := range byKind {
+		if !k.SyncSucceeded {
+			return false
+		}
+	}
+	return true
 }
 
 // queueSummary reads Asynq queue depths; any failure degrades that queue to zeros.

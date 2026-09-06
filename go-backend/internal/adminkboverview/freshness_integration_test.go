@@ -77,7 +77,11 @@ func TestFileStatsByKB_StalenessAndOldestFile(t *testing.T) {
 // TestSyncStatsByKB_UnionsThreeSourceTables seeds one RSS feed (succeeded, no
 // failures) and one git repository (never succeeded, failing) and asserts the
 // merge: the success timestamp wins, the attempt timestamp is carried
-// alongside, failing is OR-ed, kinds are collected.
+// alongside, failing is OR-ed, kinds are collected — plus the W4-R9 per-kind
+// breakdown: two ByKind entries, rss succeeded, git never succeeded (which is
+// exactly the case allSyncKindsSucceeded uses to flip the aggregate
+// SyncSucceeded to false, per the service-level test of the same scenario in
+// freshness_test.go).
 //
 // Mutation: change BOOL_OR to BOOL_AND → failing reads false here and the
 // admin panel would show a broken source as healthy.
@@ -129,5 +133,29 @@ func TestSyncStatsByKB_UnionsThreeSourceTables(t *testing.T) {
 	}
 	if len(ss.Kinds) != 2 {
 		t.Errorf("kinds = %v, want rss + git", ss.Kinds)
+	}
+	if len(ss.ByKind) != 2 {
+		t.Fatalf("byKind = %+v, want two entries (rss + git)", ss.ByKind)
+	}
+	var rssStatus, gitStatus *adminkboverview.SyncKindStatus
+	for i := range ss.ByKind {
+		switch ss.ByKind[i].Kind {
+		case "rss":
+			rssStatus = &ss.ByKind[i]
+		case "git":
+			gitStatus = &ss.ByKind[i]
+		}
+	}
+	if rssStatus == nil || !rssStatus.SyncSucceeded {
+		t.Errorf("rss byKind entry must report syncSucceeded=true, got %+v", rssStatus)
+	}
+	if gitStatus == nil {
+		t.Fatal("no git entry in byKind")
+	}
+	if gitStatus.SyncSucceeded {
+		t.Error("git byKind entry must report syncSucceeded=false — it has never succeeded")
+	}
+	if !gitStatus.SyncFailing {
+		t.Error("git byKind entry must report syncFailing=true")
 	}
 }

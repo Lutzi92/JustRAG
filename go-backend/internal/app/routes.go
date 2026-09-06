@@ -1368,6 +1368,7 @@ func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 	apiKeyAuth := apikeyauth.NewMiddleware(apikeyauth.NewStore(rc.infra.db.Main))
 	openaiHandler := openaicompat.NewHandler(&openaiDeps{PGStore: rc.kbStore, kbAccessStore: rc.kbAccessStore}, rc.aiResolver, rc.searchService)
 	openaiHandler.SetUsageRecorder(usage.NewRecorder(rc.infra.db.Main))
+	openaiHandler.SetFileDates(&fileDatesAdapter{store: rc.filesStore})
 
 	rc.mux.Handle("GET /openai/v1/models", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(openaiHandler.ListModels))))
 	rc.mux.Handle("POST /openai/v1/chat/completions", apiRL.Middleware(apiKeyAuth.Authenticate(http.HandlerFunc(openaiHandler.ChatCompletions))))
@@ -1391,7 +1392,8 @@ func registerPublicAPIRoutes(rc *routeCtx, apiRL *middleware.RedisRateLimiter) {
 	// Gated by the mcp_server_enabled site_config flag (default off); per-KB
 	// access is enforced by the same apiKeyAuth + RequireKBRole(kbaccess.RoleView)
 	// chain as the public chat endpoint.
-	mcpAnswerer := mcpserver.NewPipelineAnswerer(rc.aiResolver, rc.searchService, rc.chatStore, rc.chatStore)
+	mcpAnswerer := mcpserver.NewPipelineAnswerer(rc.aiResolver, rc.searchService, rc.chatStore, rc.chatStore,
+		mcpserver.WithFileDates(&fileDatesAdapter{store: rc.filesStore}))
 	mcpKBHandler := mcpserver.NewHandler(mcpAnswerer, rc.chatStore)
 	mcpKBHandler.SetUsageRecorder(usage.NewRecorder(rc.infra.db.Main))
 	rc.mux.Handle("POST /api/v1/kb/{id}/mcp", apiRL.Middleware(apiKeyAuth.Authenticate(

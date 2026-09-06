@@ -415,23 +415,15 @@ func isWIDLink(link string) bool {
 	return strings.EqualFold(u.Hostname(), widcert.Host)
 }
 
-// clampPublishedAt bounds a feed-supplied publication date at `now`.
+// clampPublishedAt is files.ClampPublishedAt under the name the poller has
+// always used. The implementation moved to internal/files (next to the
+// column it guards) once Confluence and git started writing published_at
+// too: three copies of a bound that only matters when it is applied
+// everywhere is how one source ends up skipping it.
 //
-// files.published_at is entirely feed-controlled: whatever <pubDate> says
-// lands in the column, and the effective date COALESCE(published_at,
-// created_at) drives the recency boost, the recency listing and every date
-// window. A single item dated in the future would therefore be permanently
-// "the newest document in the KB" — outranking real news on every
-// freshness-sensitive turn until someone deleted it. Past dates are left
-// exactly as the feed reported them (back-dating is legitimate: an advisory
-// published last week and ingested today).
-//
-// A nil input stays nil — "no date" must not become "today", or
-// COALESCE(published_at, created_at) would be a no-op.
+// A function, not a `var` alias: package-level mutable state that any test
+// (or future code) could reassign is not worth the two saved lines when the
+// thing being aliased is a pure function.
 func clampPublishedAt(t *time.Time, now time.Time) *time.Time {
-	if t == nil || !t.After(now) {
-		return t
-	}
-	clamped := now.UTC()
-	return &clamped
+	return files.ClampPublishedAt(t, now)
 }

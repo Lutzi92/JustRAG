@@ -292,6 +292,62 @@ func TestParseGoldenSetContent_ExpectedKBIDsRejectsEmpty(t *testing.T) {
 	}
 }
 
+// W4-R5: ExpectedPoints is optional; when present each point must be
+// non-empty after trimming, at most 300 runes, and at most 12 total.
+func TestParseGoldenSetContent_ExpectedPointsOptional(t *testing.T) {
+	raw := json.RawMessage(`[
+		{"id":"q1","question":"Q?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"]},
+		{"id":"q2","question":"Q?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"],"expected_points":["point A","point B"]}
+	]`)
+	qs, err := ParseGoldenSetContent(raw)
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if len(qs) != 2 {
+		t.Fatalf("got %d, want 2", len(qs))
+	}
+	if len(qs[0].ExpectedPoints) != 0 {
+		t.Errorf("q1 should default to empty ExpectedPoints, got %v", qs[0].ExpectedPoints)
+	}
+	if len(qs[1].ExpectedPoints) != 2 || qs[1].ExpectedPoints[0] != "point A" {
+		t.Errorf("q2 ExpectedPoints not preserved: %v", qs[1].ExpectedPoints)
+	}
+}
+
+func TestParseGoldenSetContent_ExpectedPointsRejectsEmptyPoint(t *testing.T) {
+	raw := json.RawMessage(`[
+		{"id":"q1","question":"Q?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"],"expected_points":["point A","   "]}
+	]`)
+	_, err := ParseGoldenSetContent(raw)
+	if err == nil || !strings.Contains(err.Error(), "expected_points[1] is empty") {
+		t.Errorf("expected empty-point error, got %v", err)
+	}
+}
+
+func TestParseGoldenSetContent_ExpectedPointsRejectsOverLongPoint(t *testing.T) {
+	raw := json.RawMessage(`[
+		{"id":"q1","question":"Q?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"],"expected_points":["` + strings.Repeat("a", 301) + `"]}
+	]`)
+	_, err := ParseGoldenSetContent(raw)
+	if err == nil || !strings.Contains(err.Error(), "expected_points[0] exceeds 300 runes") {
+		t.Errorf("expected over-long-point error, got %v", err)
+	}
+}
+
+func TestParseGoldenSetContent_ExpectedPointsRejectsTooMany(t *testing.T) {
+	points := make([]string, 13)
+	for i := range points {
+		points[i] = `"p"`
+	}
+	raw := json.RawMessage(`[
+		{"id":"q1","question":"Q?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"],"expected_points":[` + strings.Join(points, ",") + `]}
+	]`)
+	_, err := ParseGoldenSetContent(raw)
+	if err == nil || !strings.Contains(err.Error(), "at most 12 points allowed, got 13") {
+		t.Errorf("expected too-many-points error, got %v", err)
+	}
+}
+
 // TestSpreadsheetGoldenSetParses is the Phase 4 spreadsheet-ingest release
 // acceptance golden set (spec .superpowers/sdd/2026-09-05-spreadsheet-ingest-phase4,
 // Task 9; see eval/golden/README.md "Spreadsheet set" section and

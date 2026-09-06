@@ -10,6 +10,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -47,7 +48,19 @@ type RepoFile struct {
 // CloneResult holds the HEAD commit SHA and the collected files.
 type CloneResult struct {
 	CommitSHA string
-	Files     []RepoFile
+	// HeadCommitAt is the HEAD commit's committer time — the repository's
+	// content date (W4-R11). The clone is shallow (Depth: 1), so no
+	// per-file history exists to derive a per-file date from; every file
+	// of one sync therefore shares this single timestamp. Coarser than a
+	// real per-file date, but still a CONTENT date rather than the ingest
+	// timestamp, which is what the freshness surfaces need.
+	//
+	// The committer time (not the author time) is deliberate: a rebased or
+	// cherry-picked commit keeps its original author date, sometimes years
+	// old, while the committer date is when this content actually landed
+	// on the branch we cloned.
+	HeadCommitAt time.Time
+	Files        []RepoFile
 	// Truncated is true when the file list was capped at GitRepoMaxFiles.
 	Truncated bool
 }
@@ -133,10 +146,10 @@ func CloneAndCollect(ctx context.Context, opts CloneOptions) (*CloneResult, erro
 		return nil, fmt.Errorf("tree: %w", err)
 	}
 
-	var files []RepoFile
+	var collected []RepoFile
 	var truncated bool
 	walkErr := tree.Files().ForEach(func(f *object.File) error {
-		if len(files) >= GitRepoMaxFiles {
+		if len(collected) >= GitRepoMaxFiles {
 			truncated = true
 			return storer.ErrStop
 		}
@@ -161,7 +174,7 @@ func CloneAndCollect(ctx context.Context, opts CloneOptions) (*CloneResult, erro
 		if IsBinaryContent(cb) {
 			return nil
 		}
-		files = append(files, RepoFile{
+		collected = append(collected, RepoFile{
 			Path:     f.Name,
 			BlobSHA:  f.Hash.String(),
 			Size:     int(f.Size),
@@ -173,7 +186,12 @@ func CloneAndCollect(ctx context.Context, opts CloneOptions) (*CloneResult, erro
 	if walkErr != nil {
 		return nil, fmt.Errorf("walk tree: %w", walkErr)
 	}
-	return &CloneResult{CommitSHA: head.Hash().String(), Files: files, Truncated: truncated}, nil
+	return &CloneResult{
+		CommitSHA:    head.Hash().String(),
+		HeadCommitAt: commit.Committer.When,
+		Files:        collected,
+		Truncated:    truncated,
+	}, nil
 }
 
 // validateRepoURL enforces https always; file:// only when allowFileScheme is

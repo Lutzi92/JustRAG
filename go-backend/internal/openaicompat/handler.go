@@ -52,6 +52,10 @@ type Handler struct {
 
 	// usageRecorder writes one usage_events row per accepted turn. Optional.
 	usageRecorder usage.Recorder
+
+	// fileDates resolves the cited files' dates for the citation payload.
+	// Optional — see SetFileDates.
+	fileDates chat.FileDateLookup
 }
 
 // NewHandler creates a Handler backed by the given store, AI resolver, and
@@ -68,6 +72,14 @@ func NewHandler(store Store, aiResolver *ai.ConfigResolver, searchSvc vector.Sea
 // this surface are not counted.
 func (h *Handler) SetUsageRecorder(r usage.Recorder) {
 	h.usageRecorder = r
+}
+
+// SetFileDates injects the per-turn source-date lookup used to stamp
+// created_at/published_at onto the citations this surface returns. Optional —
+// when unset, the date fields are simply omitted, exactly as before the
+// freshness surface existed.
+func (h *Handler) SetFileDates(l chat.FileDateLookup) {
+	h.fileDates = l
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +475,12 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(ctx, w, http.StatusInternalServerError, "failed to prepare context")
 		return
 	}
+
+	// Freshness dates for the cited files (one batch query, fail-soft) —
+	// the same enrichment the web chat and public-API paths do, applied
+	// once here so both response shapes see it: the streaming path emits
+	// the citations on its OPENING chunk, before a single token exists.
+	chat.EnrichSourceDates(ctx, h.fileDates, chatCtx.Sources)
 
 	// ------------------------------------------------------------------
 	// 9. Generate completion (streaming or non-streaming).

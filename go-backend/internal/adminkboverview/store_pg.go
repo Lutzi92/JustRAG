@@ -108,20 +108,25 @@ func (s *PGStore) FileStatsByKB(ctx context.Context, staleDays int) (map[string]
 	return out, nil
 }
 
-// syncStatRow scans the source-sync aggregate.
-type syncStatRow struct {
-	KbID          string   `db:"kb_id"`
-	LastSuccessAt *string  `db:"last_success_at"`
-	LastAttemptAt *string  `db:"last_attempt_at"`
-	Failing       bool     `db:"failing"`
-	Kinds         []string `db:"kinds"`
+// syncKindStatRow scans one per-(kb_id, kind) row. GROUP BY kb_id, kind
+// (rather than kb_id alone) is what makes the per-kind breakdown possible —
+// the aggregate in SyncStats is folded from these rows in Go rather than
+// computed by a second SQL query, so the two views can never drift apart.
+type syncKindStatRow struct {
+	KbID          string  `db:"kb_id"`
+	Kind          string  `db:"kind"`
+	LastSuccessAt *string `db:"last_success_at"`
+	LastAttemptAt *string `db:"last_attempt_at"`
+	Failing       bool    `db:"failing"`
+	SourceCount   int     `db:"source_count"`
 }
 
-// SyncStatsByKB returns per-KB source-sync aggregates over the three source
-// tables. last_success_at (migration 0071) moves only on a success; the
-// last-attempt column of each table is carried alongside as the display
-// fallback for sources that have not succeeded since the column landed
-// (W3-R10). A KB with no external sources simply has no row.
+// SyncStatsByKB returns per-KB source-sync stats over the three source
+// tables, both as a per-kind breakdown (W4-R9) and as the folded aggregate
+// used for the KB-wide badge. last_success_at (migration 0071) moves only on
+// a success; the last-attempt column of each table is carried alongside as
+// the display fallback for sources that have not succeeded since the column
+// landed (W3-R10). A KB with no external sources simply has no row.
 func (s *PGStore) SyncStatsByKB(ctx context.Context) (map[string]SyncStats, error) {
 	const sql = `
 		WITH src AS (
@@ -137,28 +142,61 @@ func (s *PGStore) SyncStatsByKB(ctx context.Context) (map[string]SyncStats, erro
 		           last_synced_at, consecutive_failures
 		      FROM git_repo_sources
 		)
-		SELECT kb_id::text AS kb_id,
+		SELECT kb_id::text                                                          AS kb_id,
+		       kind,
 		       to_char(MAX(last_success_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_success_at,
 		       to_char(MAX(last_attempt_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_attempt_at,
 		       BOOL_OR(COALESCE(consecutive_failures, 0) > 0)                        AS failing,
-		       array_agg(DISTINCT kind)                                              AS kinds
+		       COUNT(*)::int                                                         AS source_count
 		FROM src
 		WHERE kb_id IS NOT NULL
-		GROUP BY kb_id`
-	rows, err := pgxutil.QueryRows[syncStatRow](ctx, s.pool, sql)
+		GROUP BY kb_id, kind
+		ORDER BY kb_id, kind`
+	rows, err := pgxutil.QueryRows[syncKindStatRow](ctx, s.pool, sql)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]SyncStats, len(rows))
+	out := make(map[string]SyncStats)
 	for _, r := range rows {
-		out[r.KbID] = SyncStats{
-			LastSuccessAt: r.LastSuccessAt,
-			LastAttemptAt: r.LastAttemptAt,
-			Failing:       r.Failing,
-			Kinds:         r.Kinds,
+		agg := out[r.KbID]
+
+		kindStatus := SyncKindStatus{
+			Kind:        r.Kind,
+			SyncFailing: r.Failing,
+			SourceCount: r.SourceCount,
 		}
+		if r.LastSuccessAt != nil {
+			kindStatus.LastSyncAt = r.LastSuccessAt
+			kindStatus.SyncSucceeded = true
+		} else {
+			kindStatus.LastSyncAt = r.LastAttemptAt
+		}
+		agg.ByKind = append(agg.ByKind, kindStatus)
+		agg.Kinds = append(agg.Kinds, r.Kind)
+		agg.Failing = agg.Failing || r.Failing
+		agg.LastSuccessAt = laterTimestamp(agg.LastSuccessAt, r.LastSuccessAt)
+		agg.LastAttemptAt = laterTimestamp(agg.LastAttemptAt, r.LastAttemptAt)
+
+		out[r.KbID] = agg
 	}
 	return out, nil
+}
+
+// laterTimestamp returns whichever of a, b is chronologically later, treating
+// nil as "no timestamp". Both are to_char'd as fixed-width
+// 'YYYY-MM-DDTHH:MI:SSZ' UTC strings, so a plain string comparison sorts
+// them correctly without a parse.
+func laterTimestamp(a, b *string) *string {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	case *b > *a:
+		return b
+	default:
+		return a
+	}
 }
 
 // chatStatRow scans the chat aggregate.

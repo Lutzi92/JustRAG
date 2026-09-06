@@ -3,6 +3,7 @@ import axios from 'axios';
 import { RefreshCw, AlertTriangle, Loader2, ChevronDown, Hourglass, Play, XCircle, Trash2, UserCog, Globe } from 'lucide-react';
 import { getApiErrorMessage } from './utils/apiError';
 import { formatRelative } from './utils/dates';
+import { translations } from './translations';
 import { API_BASE_URL } from './api';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
@@ -14,6 +15,17 @@ interface QueueStats {
     waiting: number;
     active: number;
     failed: number;
+}
+
+// Per-source-kind sync status (Wave-4 Task 7 / W4-R9). One entry per kind
+// ("rss" | "confluence" | "git") the KB actually has sources of — a healthy
+// RSS feed must not hide a git source that has never succeeded.
+interface SyncKindStatus {
+    kind: string;
+    lastSyncAt?: string;
+    syncSucceeded: boolean;
+    syncFailing: boolean;
+    sourceCount: number;
 }
 
 interface KBRow {
@@ -43,6 +55,9 @@ interface KBRow {
     syncSucceeded?: boolean;
     syncFailing?: boolean;
     syncKinds?: string[];
+    // Per-kind breakdown (Wave-4 Task 7). Empty/absent for a KB with no
+    // external sources, same as syncKinds above.
+    syncByKind?: SyncKindStatus[];
 }
 
 interface OverviewResponse {
@@ -87,10 +102,93 @@ function mergedActivityIso(row: KBRow): string | undefined {
     return a >= b ? row.lastFileUploadAt : row.lastTurnAt;
 }
 
+// syncKindRank orders a per-kind sync status from worst to best: a kind that
+// has never succeeded is worse than one that is currently failing but has
+// succeeded before, which is worse than a healthy kind (W4-R9 — the whole
+// point is that a single healthy kind must not mask a worse one).
+function syncKindRank(k: SyncKindStatus): number {
+    if (!k.syncSucceeded) return 0;
+    if (k.syncFailing) return 1;
+    return 2;
+}
+
+// The worst-ranked entry in row.syncByKind, or undefined for a KB with no
+// per-kind breakdown (no external sources, or an older backend response).
+function worstSyncKind(row: KBRow): SyncKindStatus | undefined {
+    if (!row.syncByKind || row.syncByKind.length === 0) return undefined;
+    return [...row.syncByKind].sort((a, b) => syncKindRank(a) - syncKindRank(b))[0];
+}
+
+// Label for one sync kind. t() returns the KEY when a translation is missing,
+// so an unknown kind would render "syncKindLabel_svn" at the operator; fall
+// back to the raw kind string instead. The lookup goes against the translation
+// table rather than t()'s return value because "did t() find it?" is not
+// answerable from the return value alone — the key IS the fallback.
+function syncKindLabel(t: (key: string) => string, kind: string): string {
+    const key = `syncKindLabel_${kind}`;
+    return key in translations ? t(key) : kind;
+}
+
+// Tooltip text listing EVERY sync kind with its own last-sync time (raw ISO,
+// matching the other columns' title convention) — the cell above shows only
+// the worst kind, this is where an operator finds the other ones. Falls back
+// to the pre-Wave-4 syncKinds + single lastSyncAt tooltip when no per-kind
+// breakdown is present.
+function syncTooltip(row: KBRow, t: (key: string) => string): string | undefined {
+    if (row.syncByKind && row.syncByKind.length > 0) {
+        return row.syncByKind
+            .map((k) => {
+                const label = syncKindLabel(t, k.kind);
+                const when = k.lastSyncAt ?? '—';
+                return k.syncSucceeded ? `${label}: ${when}` : `${label}: ${when} (${t('syncNeverSucceeded')})`;
+            })
+            .join(' · ');
+    }
+    // syncKinds is the missing half of "5 days ago": which source kinds
+    // that timestamp describes (rss / confluence / git).
+    return [row.syncKinds?.length ? row.syncKinds.join(', ') : null, row.lastSyncAt]
+        .filter(Boolean).join(' · ') || undefined;
+}
+
 // Aktivität = every accepted turn on every surface. One combined column
 // (web + API) keeps an already-wide table narrow; the split rides the tooltip.
 function turnTotal(row: KBRow): number {
     return (row.webTurns ?? 0) + (row.apiTurns ?? 0);
+}
+
+// Sort comparator for the "Last sync" column (Wave-4 Task 7 fix round 1):
+// the cell displays the WORST kind, so the column must sort by that same
+// severity — never-succeeded, then currently-failing, then healthy — before
+// falling back to that kind's own timestamp for a tie. Ascending numeric
+// order on syncKindRank (0 = worst) is exactly descending order on
+// "urgency" (2 - rank), i.e. ascending puts problems on top; the caller's
+// sortAsc flip mirrors that for the other direction, same as every other
+// numeric column in this table.
+//
+// A row with no per-kind breakdown (no external sources at all, or an
+// older cached response) falls back to row.lastSyncAt directly and is
+// treated as the same severity tier as a healthy kind, so it sorts purely
+// by timestamp among rows lacking a real breakdown. A row with neither a
+// breakdown nor a lastSyncAt has nothing to rank on and sorts last
+// regardless of direction — matching the "nullish sorts last" convention
+// the generic branch below uses for every other column, which is why the
+// direction flip is applied here (not by the caller) and skipped for that
+// case specifically.
+function compareSyncUrgency(a: KBRow, b: KBRow, sortAsc: boolean): number {
+    const wa = worstSyncKind(a);
+    const wb = worstSyncKind(b);
+    const ta = wa ? wa.lastSyncAt : a.lastSyncAt;
+    const tb = wb ? wb.lastSyncAt : b.lastSyncAt;
+    const hasA = wa != null || ta != null;
+    const hasB = wb != null || tb != null;
+    if (!hasA && !hasB) return 0;
+    if (!hasA) return 1;
+    if (!hasB) return -1;
+
+    const ra = wa ? syncKindRank(wa) : 2;
+    const rb = wb ? syncKindRank(wb) : 2;
+    const cmp = ra !== rb ? ra - rb : (ta ?? '').localeCompare(tb ?? '');
+    return sortAsc ? cmp : -cmp;
 }
 
 function formatBytes(bytes: number): string {
@@ -244,6 +342,12 @@ export default function KBOverviewDashboard() {
                 const cmp = turnTotal(a) - turnTotal(b);
                 return sortAsc ? cmp : -cmp;
             }
+            // 'lastSyncAt' sorts by the same worst-kind severity the cell
+            // displays (never-succeeded > failing > ok), not the aggregate
+            // MAX(success) timestamp — see compareSyncUrgency.
+            if (sortKey === 'lastSyncAt') {
+                return compareSyncUrgency(a, b, sortAsc);
+            }
             const av = a[sortKey];
             const bv = b[sortKey];
             // Nullish values sort last regardless of direction.
@@ -341,6 +445,29 @@ export default function KBOverviewDashboard() {
             case 'staleShare':
                 return row.staleShare != null ? `${Math.round(row.staleShare * 100)}%` : '—';
             case 'lastSyncAt': {
+                // W4-R9: with a per-kind breakdown, show the WORST kind
+                // (never-succeeded beats currently-failing beats healthy) so
+                // one healthy RSS feed cannot hide a git/Confluence source
+                // that has never synced. Falls back to the pre-Wave-4
+                // aggregate-only rendering when no breakdown is present.
+                const worst = worstSyncKind(row);
+                if (worst) {
+                    const neverSucceeded = !worst.syncSucceeded;
+                    const badge = neverSucceeded || worst.syncFailing;
+                    return (
+                        <>
+                            {badge && (
+                                <span
+                                    data-testid="kb-sync-failing-badge"
+                                    title={neverSucceeded ? t('syncNeverSucceeded') : t('kbSyncFailing')}
+                                >
+                                    <AlertTriangle size={14} style={{ verticalAlign: 'middle', marginRight: 4, color: 'var(--error-text)' }} />
+                                </span>
+                            )}
+                            {syncKindLabel(t, worst.kind)}: {worst.lastSyncAt ? formatRelative(worst.lastSyncAt, language) : '—'}
+                        </>
+                    );
+                }
                 if (!row.lastSyncAt) return '—';
                 // syncSucceeded=false means the shown time is only the last
                 // ATTEMPT (no success yet) — flag it the same way a currently
@@ -519,11 +646,7 @@ export default function KBOverviewDashboard() {
                                                             : c.key === 'staleShare'
                                                                 ? `${row.staleFileCount ?? 0}/${row.fileCount} > ${data?.staleDays ?? 180}d`
                                                                 : c.key === 'lastSyncAt'
-                                                                    // syncKinds is the missing half of "5 days ago":
-                                                                    // which source kinds that timestamp describes
-                                                                    // (rss / confluence / git).
-                                                                    ? [row.syncKinds?.length ? row.syncKinds.join(', ') : null, row.lastSyncAt]
-                                                                        .filter(Boolean).join(' · ') || undefined
+                                                                    ? syncTooltip(row, t)
                                                                     : undefined;
                                             return (
                                                 <td key={c.key} style={cellStyle} title={title}>

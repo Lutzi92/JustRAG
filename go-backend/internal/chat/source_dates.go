@@ -9,8 +9,10 @@ import (
 
 // FileDates carries the two date columns of a `files` row: CreatedAt is the
 // ingest timestamp (never NULL), PublishedAt the document's own publication
-// date, which only the RSS poller fills today (W3-R9) and which is nil for
-// every other origin. Consumers that need "the" date of a document use
+// date, filled by the RSS poller (W3-R9), by Confluence page sync (W4-R10,
+// the page version's date) and by git repository sync (W4-R11, the HEAD
+// commit's committer time, shared by every file of one sync), and nil for
+// every other origin — an uploaded file has no publication date. Consumers that need "the" date of a document use
 // PublishedAt when set and CreatedAt otherwise — the Go-side twin of the SQL
 // COALESCE(published_at, created_at) used by every date-window query.
 type FileDates struct {
@@ -44,6 +46,21 @@ func WithFileDates(l FileDateLookup) HandlerOption {
 // surfaces cannot drift.
 func EnrichSourceDates(ctx context.Context, l FileDateLookup, sources []ChatSource) {
 	enrichSourceDates(ctx, l, sources)
+}
+
+// FormatSourceDate renders one source date for an API projection that speaks
+// JSON strings rather than Go times: RFC 3339 in UTC, or "" when the date is
+// absent so the caller's `omitempty` drops the key entirely (W4-R12).
+//
+// UTC, not the server's local zone: the OpenAI-compat and MCP surfaces are
+// consumed by machines across timezones, and two surfaces rendering the same
+// instant differently is the kind of drift that only shows up in a client bug
+// report. One function so those surfaces cannot diverge.
+func FormatSourceDate(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // enrichSourceDates fills CreatedAt/PublishedAt on the given sources in

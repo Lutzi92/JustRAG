@@ -105,7 +105,7 @@ func Aggregate(reports []QuestionReport, k int) AggregateMetrics {
 	agg.P50Recall = percentile(recalls, 50)
 	agg.P95Recall = percentile(recalls, 95)
 
-	var faiths, rels, precs []float64
+	var faiths, rels, precs, covs []float64
 	for _, r := range reports {
 		if r.Error != "" {
 			continue
@@ -122,8 +122,15 @@ func Aggregate(reports []QuestionReport, k int) AggregateMetrics {
 		if r.Judge.ContextPrecision != nil {
 			precs = append(precs, *r.Judge.ContextPrecision)
 		}
+		if r.Judge.Coverage != nil {
+			covs = append(covs, *r.Judge.Coverage)
+		}
 		agg.JudgedCount++
 	}
+	agg.FaithfulnessN = len(faiths)
+	agg.AnswerRelevanceN = len(rels)
+	agg.ContextPrecisionN = len(precs)
+	agg.CoverageN = len(covs)
 	if len(faiths) > 0 {
 		m := mean(faiths)
 		agg.MeanFaithfulness = &m
@@ -135,6 +142,10 @@ func Aggregate(reports []QuestionReport, k int) AggregateMetrics {
 	if len(precs) > 0 {
 		m := mean(precs)
 		agg.MeanContextPrecision = &m
+	}
+	if len(covs) > 0 {
+		m := mean(covs)
+		agg.MeanCoverage = &m
 	}
 
 	return agg

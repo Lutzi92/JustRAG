@@ -73,6 +73,15 @@ type Question struct {
 	// produces (copied from the originating Turn.Kind); it is never
 	// authored directly. The json tag is kept so a report round-trips it.
 	TurnKind string `json:"turn_kind,omitempty"`
+	// ExpectedPoints is the optional W4-R5 ground-truth list of short
+	// statements a complete answer must contain (2-6 recommended). When
+	// non-empty and --judge is on, a fourth "coverage" LLM judge scores
+	// coverage = covered/len(ExpectedPoints) via one structured call
+	// returning a boolean per point (same tolerant truncate/pad-with-
+	// warning parsing as context_precision, W4-R1). Empty (the default)
+	// skips the coverage judge entirely — JudgeMetrics.Coverage stays
+	// nil. The loader caps this at 12 points, 300 runes each.
+	ExpectedPoints []string `json:"expected_points,omitempty"`
 }
 
 // HistoryEntry is one prior conversation turn, replayed as chat history so
@@ -139,7 +148,17 @@ type JudgeMetrics struct {
 	AnswerRelevance  *float64 `json:"answer_relevance,omitempty"`
 	ContextPrecision *float64 `json:"context_precision,omitempty"`
 	JudgeErrors      []string `json:"judge_errors,omitempty"`
-	Answer           string   `json:"answer,omitempty"`
+	// JudgeWarnings records non-fatal tolerance events (e.g. a
+	// context_precision boolean-count mismatch that was truncated/padded
+	// rather than dropped). Unlike JudgeErrors, a warning does not leave
+	// the corresponding metric pointer nil.
+	JudgeWarnings []string `json:"judge_warnings,omitempty"`
+	Answer        string   `json:"answer,omitempty"`
+	// Coverage is the W4-R5 fourth judge's score over Question.ExpectedPoints
+	// (covered/len(ExpectedPoints)). Nil when the question carries no
+	// ExpectedPoints (judge not called) or when the coverage call failed
+	// (recorded in JudgeErrors instead).
+	Coverage *float64 `json:"coverage,omitempty"`
 }
 
 // QuestionReport is the per-question row in the final report.
@@ -186,7 +205,23 @@ type AggregateMetrics struct {
 	MeanFaithfulness     *float64 `json:"mean_faithfulness,omitempty"`
 	MeanAnswerRelevance  *float64 `json:"mean_answer_relevance,omitempty"`
 	MeanContextPrecision *float64 `json:"mean_context_precision,omitempty"`
-	JudgedCount          int      `json:"judged_count,omitempty"`
+	// MeanCoverage is the W4-R5 coverage judge's mean over questions that
+	// carry ExpectedPoints, averaged over non-nil values only. Nil when
+	// no question in the run had a non-nil Coverage.
+	MeanCoverage *float64 `json:"mean_coverage,omitempty"`
+	JudgedCount  int      `json:"judged_count,omitempty"`
+	// Per-metric judged counts: how many questions actually contributed a
+	// non-nil value to the corresponding mean above. JudgedCount alone
+	// hides a metric-specific drop (e.g. an unparseable answer-relevance
+	// response that left faithfulness/precision intact for the same
+	// question) — see W4-R2.
+	FaithfulnessN     int `json:"faithfulness_n,omitempty"`
+	AnswerRelevanceN  int `json:"answer_relevance_n,omitempty"`
+	ContextPrecisionN int `json:"context_precision_n,omitempty"`
+	// CoverageN is how many questions actually contributed a non-nil
+	// Coverage value to MeanCoverage (i.e. carried ExpectedPoints AND the
+	// coverage judge call succeeded).
+	CoverageN int `json:"coverage_n,omitempty"`
 }
 
 // Report is the full result of an evaluation run.

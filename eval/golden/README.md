@@ -20,6 +20,7 @@ Fields:
 | `query_type`         | string   | (optional) One of `lookup`, `enumeration`, `global_synthesis`, `complex_reasoning`. Enables per-route metrics. |
 | `expected_kb_ids`    | string[] | (optional, AP-A4) KBs the sub-KB router should pick. Empty defaults to `[kb_id]` (single-KB). Multi-element rows test cross-KB fan-out. |
 | `expected_tools`     | string[] | (optional, Phase 2 §2.2) MCP tool names the agent should invoke. |
+| `expected_points`    | string[] | (optional, W4-R5) 2-6 short statements a complete answer must contain, scored by the `--judge` coverage judge. Loader caps: ≤ 12 points, ≤ 300 runes each. Absent/empty skips the coverage judge — see "Coverage judge" below. |
 | `notes`              | string   | (optional) Human context; ignored by the runner.          |
 | `turns`              | Turn[]   | (optional) Marks this row as a multi-turn conversation instead of a single question — see "Multi-turn set" below. When present, the top-level `question`/`must_cite_*` fields are not required; ground truth lives per turn. Each `Turn` is `{question, kind, query_type?, must_cite_file_names?, answer?, answer_sources?, notes?}` — `kind` is one of `corpus`, `pronoun_ref`, `topic_shift`, `answer_ref`, `post_abstain`; `must_cite_file_names` is required for every kind except `answer_ref`, where it defaults to the previous turn's `answer_sources`. **`cmd/eval`-only**: only `cmd/eval` calls `ExpandTurns` to replay a `turns` row, so `internal/eval.ParseGoldenSetContent` (the path behind the admin UI / `eval_golden_sets` DB copy) rejects any row with a non-empty `turns` array — save and run multi-turn sets as a file via `cmd/eval`, never through the admin UI. |
 | `history`            | HistoryEntry[] | Populated by `ExpandTurns` on the per-turn `Question`s it produces from `turns` (one prior `{role, content, sources?}` entry per earlier turn); never authored directly — the field exists so a report round-trips it. |
@@ -341,7 +342,8 @@ enumeration-labeled questions:
 
 Opt-in LLM-as-judge evaluation is available via `--judge`. When enabled, the
 runner generates an answer per question (using the KB's chat model) and
-evaluates it against three metrics:
+evaluates it against three metrics, plus a fourth when the row carries
+`expected_points`:
 
 - **Faithfulness** — fraction of claims in the answer that are supported by
   the retrieved context.
@@ -349,13 +351,32 @@ evaluates it against three metrics:
   1..5 normalized to 0..1).
 - **Context precision** — fraction of retrieved top-k chunks that are
   relevant to the question.
+- **Coverage** (W4-R5, optional) — fraction of the row's `expected_points`
+  the answer states or restates equivalently. See "Coverage judge" below.
 
 Use `--judge-model <name>` to run judge prompts on a specific (typically
 smaller/cheaper) model; empty falls back to the KB's chat model.
 
-Judge calls use temperature 0 for determinism. All three metrics are
-optional and run independently — a single judge failure is captured in
+Judge calls use temperature 0 for determinism. All metrics are optional and
+run independently — a single judge failure is captured in
 `judge.judge_errors` and does not abort the others.
+
+**Tolerant parsing + per-metric counts (Wave 4, W4-R1).** Judge responses are
+parsed leniently so a well-formed *verdict* in a slightly off-shape envelope
+is kept rather than discarded: a score emitted as a numeric string
+(`"score":"5"`) is accepted and clamped to 1–5, and a boolean list whose
+length differs from the contexts or points is truncated or padded, recorded
+as an entry in `judge.judge_warnings`. A sample is dropped only when the JSON
+cannot be parsed at all. Because a dropped sample used to shrink the
+denominator invisibly, the aggregate now carries `faithfulness_n`,
+`answer_relevance_n`, `context_precision_n` and `coverage_n` — how many
+questions actually contributed to each mean — and the human summary prints
+`(n=…)` next to every judge mean. `judged_count` keeps its old meaning
+(questions with a Judge block at all). **Comparability:** pre-Wave-4 judge
+numbers are unchanged for well-formed responses — the same response scores
+the same — but `n` may now be higher on a set where the model occasionally
+mis-shapes its reply, so compare `*_n` alongside the means when reading an
+old report against a new one.
 
 **Wave-3 comparability note:** since Wave 3, `ChatContextForQuestion` serves the
 dispatched orchestrator's OWN assembled context for every orchestrator branch,
@@ -376,6 +397,117 @@ Judge mode executes roughly 4 LLM calls per question (1 answer + 3 judges).
 For a 20-question golden set on a mid-tier model, expect 80 calls total.
 Plan accordingly. For fast iteration, keep `--judge` off and rely on
 retrieval metrics alone.
+
+## Pairwise judge
+
+The Likert answer-relevance judge saturates: two configurations that differ
+visibly to a reader both land around 0.9, so it cannot rank them. The
+**pairwise preference judge** (ruling W4-R4) can — it never places an answer
+on an absolute scale, it only says which of two answers is better for the
+same question.
+
+It is an **offline** mode: it reads the `judge.answer` of two finished reports
+already persisted, so both must come from runs made with `--judge`. No
+retrieval, no answer generation, no DB writes, no golden set — the two
+report files are the whole input.
+
+```bash
+# 1. Produce two judged reports of the SAME golden set, one per config.
+./cmd/eval/eval --golden ../eval/golden/global-synthesis-de.jsonl --judge \
+  --production-context --longcontext on --longcontext-mode flat \
+  --output flat.json
+./cmd/eval/eval --golden ../eval/golden/global-synthesis-de.jsonl --judge \
+  --production-context --longcontext on --longcontext-mode map_reduce \
+  --output mapreduce.json
+
+# 2. Compare them. The win rate is A's.
+./cmd/eval/eval --pairwise-a flat.json --pairwise-b mapreduce.json \
+  --judge-model gemma-4-26b --pairwise-out pairwise-flat-vs-mapreduce.json
+```
+
+Every pair is judged **twice with the positions swapped**, and a win counts
+only when both orderings name the same answer. That is the whole point: an
+LLM preference judge prefers whatever it read first, and without the swap a
+position-biased judge hands side A a 100 % win rate. Pairs the judge flips on
+are recorded as **ties**, reported separately and excluded from the win rate
+(never averaged into it).
+
+Output: win/tie/loss counts, the win rate with a **95 % Wilson** interval
+(z = 1.96, over wins/(wins+losses)), the tie rate, a per-route breakdown
+keyed on the golden `query_type` (`unclassified` when a row carries none),
+and a per-question table with the winner and whether both orders agreed.
+`--pairwise-out` additionally writes the whole result as JSON, including
+both orders' reasoning per pair.
+
+Reading it:
+
+- **Win rate alone is not a result.** With 12 questions, 8–4 gives a Wilson
+  interval of roughly [0.39, 0.86] — it does not exclude 0.5. The W4-R7
+  decision rule (win rate ≥ 0.60 **and** Wilson lower bound > 0.50, on both
+  of two independent report pairs) exists for exactly this reason.
+- **A high tie rate means the instrument, not the configs, is speaking.**
+  Ties include every pair the judge flipped on, so a run with 2 wins, 1 loss
+  and 9 ties has a win rate of 0.667 resting on three decided pairs.
+- Questions present in only one report (`only_in_a` / `only_in_b`) and pairs
+  with a missing answer on one side are **skipped and counted**, never
+  silently dropped — that is how you notice you compared two different
+  golden sets.
+
+Cost: 2 judge calls per pair, no answer generation — a 12-question set is 24
+calls. Exit code is always 0 on a completed comparison (this measures, it
+does not gate); only an unusable invocation (missing report, no shared
+question ids, no reachable AI provider) exits non-zero.
+
+Worked example: `eval/golden/global-synthesis-de.acceptance.md` §2 (Wave 4
+flat-vs-map_reduce re-measurement) — two cross pairs, a self-pair control,
+disagreement excerpts, and the observation that the W4-R7 per-pair Wilson
+criterion is under-powered at 9–11 decisive pairs (one pair needed 9/11 wins
+and landed on 8/11).
+
+## Coverage judge — optional `expected_points`
+
+Faithfulness/answer-relevance/context-precision each grade some aspect of
+the answer in isolation; none asks "did the answer actually say the things
+a complete answer needs to say?" — an absolute (not pairwise) synthesis
+metric, useful for a scheduled/nightly run where there's no second config
+to compare against. The **coverage judge** (ruling W4-R5) fills that gap.
+
+Add an optional `expected_points` array to a golden row: 2-6 short,
+independently-checkable statements a complete answer must contain (loader
+caps: ≤ 12 points total, ≤ 300 runes each — see the format table above).
+Author them from ground truth (file contents, `must_cite_file_names`), not
+from any model's answer.
+
+```jsonl
+{"id":"gs01","question":"...","kb_id":"...","language":"de","must_cite_file_names":["..."],"query_type":"global_synthesis","expected_points":["Nennt CVE-2026-1234","Nennt den betroffenen Produktnamen X","Nennt den CVSS-Score"]}
+```
+
+When `--judge` is on and the row carries `expected_points`, one additional
+structured call scores `coverage = covered / len(expected_points)`: the
+judge sees the question, the generated answer, and the numbered point list,
+and returns one boolean per point in order (`{"covered":[true,false,...]}`).
+Same tolerant parsing as the other boolean-list judge (context precision,
+W4-R1): a mismatched boolean count is truncated/padded rather than dropped,
+recorded as a `judge_warnings` entry. The answer and the points are treated
+as **data**, not instructions — text inside either that looks like a
+directive to the judge is ignored.
+
+Rows **without** `expected_points` skip the coverage judge entirely — no
+extra LLM call, `judge.coverage` stays absent (`null`), and the question
+does not contribute to `aggregate.mean_coverage`/`coverage_n`. A report's
+`aggregate.mean_coverage` averages over only the questions that both carry
+`expected_points` and got a successful coverage call; `coverage_n` is that
+count, printed as `mean_coverage = 0.xyz (n=N)` in the human summary
+alongside the other judge means.
+
+Cost: +1 LLM call per question that carries `expected_points`, on top of
+the ~4 calls judge mode already makes (see "Cost note" above) — zero calls
+added for rows without the field.
+
+Worked example: `eval/golden/global-synthesis-de.acceptance.md` §2 — four
+runs' `mean_coverage`/`coverage_n`, a per-question coverage table across
+flat×2/map_reduce×2, and the flat-vs-flat run pair used as the coverage
+noise band.
 
 ## Tabular Q&A (table_query) — follow-up
 
@@ -616,7 +748,20 @@ group counts are trajectory events, not report fields — scrape them from the
 run log (`rag.longcontext.map_reduce` carries `groups`, `failed_groups`,
 `findings`, `pool`; `longcontext.map_group_failed` marks a degraded group).
 
-Results and the standing recommendation: `global-synthesis-de.acceptance.md`.
+Results and the standing recommendation: `global-synthesis-de.acceptance.md`
+— §1 for the Wave-3 three-run A/B above, §2 for the Wave-4 re-measurement.
+
+**Use the Wave-4 shape for any new attempt**, not the three-run one above:
+answer relevance saturates on this route, so curate `expected_points` per row
+(see "Coverage judge") and run **two** reports per mode — flat ×2 and
+map_reduce ×2 — then compare each cross pair with `--pairwise-a/--pairwise-b`
+plus one same-mode control pair. The control pair is what supplies both the
+coverage noise band and the judge's tie rate at this margin. Wave 4's verdict
+on that shape: `map_reduce` raised coverage in both cross pairs and took 16
+of 20 pooled decisive pairs, but the pre-registered per-pair Wilson rule
+missed on one pair at n=12 — grow the set to 24–36 questions, or re-register
+the rule on the pooled pairs *before* the next run, rather than pooling after
+seeing the result.
 
 ## CERT recency set (Wave 2 Task 8)
 

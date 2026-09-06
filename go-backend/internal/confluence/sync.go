@@ -18,6 +18,7 @@ import (
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/hibiken/asynq"
 
+	"github.com/justrag/go-backend/internal/files"
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/safego"
 	"github.com/justrag/go-backend/internal/storage"
@@ -149,9 +150,9 @@ func syncConfluenceSource(ctx context.Context, deps SyncDeps, sourceID string) e
 
 	// 1. Delete files for pages no longer in Confluence.
 	var filesToDelete []ConfluenceFileRow
-	for pageID, files := range existingByPageID {
+	for pageID, pageFiles := range existingByPageID {
 		if _, exists := currentPageMap[pageID]; !exists {
-			filesToDelete = append(filesToDelete, files...)
+			filesToDelete = append(filesToDelete, pageFiles...)
 		}
 	}
 	if len(filesToDelete) > 0 {
@@ -416,7 +417,7 @@ func fetchPages(ctx context.Context, client *ConfluenceClient, source *Confluenc
 
 // isPageUpdated checks if a Confluence page has been modified after the
 // existing file was created.
-func isPageUpdated(page ConfluencePage, files []ConfluenceFileRow) bool {
+func isPageUpdated(page ConfluencePage, existing []ConfluenceFileRow) bool {
 	if page.Version.When == "" {
 		return false
 	}
@@ -430,7 +431,7 @@ func isPageUpdated(page ConfluencePage, files []ConfluenceFileRow) bool {
 	}
 
 	// Find the markdown file (the main page content).
-	for _, f := range files {
+	for _, f := range existing {
 		if f.Type == "text/markdown" {
 			return pageModified.After(f.CreatedAt)
 		}
@@ -510,6 +511,12 @@ func importPage(
 		StoragePath:        storagePath,
 		ConfluenceSourceID: source.ID,
 		ConfluencePageID:   pageMeta.ID,
+		// The page's own content date (W4-R10): the timestamp of the
+		// version we just fetched, clamped at now like every other
+		// source-supplied date. A sync has no update path — a changed
+		// page is deleted and re-created through exactly this call — so
+		// re-syncing a page is what moves its published_at forward.
+		PublishedAt: files.ClampPublishedAt(page.VersionWhen(), time.Now()),
 	})
 	if err != nil {
 		return fmt.Errorf("create file record: %w", err)
@@ -575,6 +582,12 @@ func importPageAttachments(
 			StoragePath:        storagePath,
 			ConfluenceSourceID: source.ID,
 			ConfluencePageID:   pageID,
+			// PublishedAt stays nil for attachments (refinement of
+			// W4-R10): ConfluenceAttachment carries no date of its own,
+			// and the parent page's version timestamp is the page's
+			// content date, not the file's — a decade-old PDF attached
+			// to a page edited yesterday would read as brand new. Their
+			// effective date remains COALESCE(NULL, created_at).
 		})
 		if err != nil {
 			slog.Warn("failed to create attachment file record",
@@ -603,13 +616,13 @@ func importPageAttachments(
 
 // deleteConfluenceFiles removes vector chunks, storage files, and DB records
 // for the given file rows.
-func deleteConfluenceFiles(ctx context.Context, deps SyncDeps, files []ConfluenceFileRow) error {
-	if len(files) == 0 {
+func deleteConfluenceFiles(ctx context.Context, deps SyncDeps, rows []ConfluenceFileRow) error {
+	if len(rows) == 0 {
 		return nil
 	}
 
-	ids := make([]string, len(files))
-	for i, f := range files {
+	ids := make([]string, len(rows))
+	for i, f := range rows {
 		ids[i] = f.ID
 	}
 
@@ -617,8 +630,8 @@ func deleteConfluenceFiles(ctx context.Context, deps SyncDeps, files []Confluenc
 	_ = deps.ChunkService.DeleteChunksByFileIDsAllDims(ctx, ids)
 
 	// Delete storage files in one batched call (S3 DeleteObjects under the hood).
-	paths := make([]string, 0, len(files))
-	for _, f := range files {
+	paths := make([]string, 0, len(rows))
+	for _, f := range rows {
 		if f.StoragePath != nil && *f.StoragePath != "" {
 			paths = append(paths, *f.StoragePath)
 		}
