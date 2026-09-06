@@ -4,6 +4,7 @@
 // Usage:
 //
 //	eval --golden ../eval/golden/example.jsonl [--top-k 10] [--output eval-report.json] [--concurrency 1] [--question-id <id>] [--baseline prev.json]
+//	eval --pairwise-a A.json --pairwise-b B.json [--judge-model <m>] [--pairwise-out pairwise.json]
 package main
 
 import (
@@ -78,6 +79,9 @@ func main() {
 	recencyBoostOverride := flag.String("recency-boost", "", `Wave 2 Task 8: per-run override for recency_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-tiered-boost (a vector-layer key, applied via the searchReader overlay, not the chat-level siteReader). Lets the CERT recency fixture A/B the recency prior without a site_configs mutation.`)
 	printKeywordSQL := flag.String("print-keyword-sql", "", `Diagnostic mode (Wave-3 Task 7): print the keyword arm's SQL for this query — for BOTH scoring modes (ts_rank and bm25), with the KB's real resolved settings (chunk table, text-search config, simple arm, tiered boost, k1/b, dim-keyed stats tables) — as one JSON document on stdout, then exit 0. Requires --kb-id. Runs no search, no LLM call, and needs no golden set; --top-k sets the statement's LIMIT (pass 50 to match the legacy pre-rerank candidate depth the keyword arm actually runs with at top-k 10 with a reranker; a non-positive value falls back to 50). Each mode carries both the parameterised SQL and an "executable_sql" with the placeholders inlined, so it can be handed straight to EXPLAIN (ANALYZE, BUFFERS).`)
 	printKeywordSQLKBID := flag.String("kb-id", "", "KB id for --print-keyword-sql. Ignored in every other mode (the golden set carries its own kb_id per question).")
+	pairwiseA := flag.String("pairwise-a", "", `Offline pairwise preference mode (ruling W4-R4), side A: path to a judged eval report (a run made with --judge, so every question carries judge.answer). Requires --pairwise-b. Compares the two reports' persisted answers question by question with an LLM preference judge — every pair judged TWICE with the positions swapped, counting a win only when both orders agree (position debias); pairs the judge flips on are ties. Prints win/tie/loss counts, the win rate with a 95% Wilson interval, a per-route breakdown and a per-question table. Runs no retrieval and generates no answers; short-circuits before --golden and always exits 0 on a completed comparison (measurement, not a gate). --judge-model selects the judge.`)
+	pairwiseB := flag.String("pairwise-b", "", "Pairwise preference mode, side B: the report compared against --pairwise-a. The reported win rate is A's — a win rate below 0.5 means B produced the better answers.")
+	pairwiseOut := flag.String("pairwise-out", "", "Optional path for the pairwise result as JSON (per-pair verdicts incl. both orders' reasoning, counts, Wilson interval, per-route breakdown). Empty = human-readable output only.")
 	flag.Parse()
 
 	// Diagnostic mode short-circuits before --golden is required: it needs
@@ -91,6 +95,21 @@ func main() {
 			slog.Error("--print-keyword-sql failed", "error", err)
 			os.Exit(1)
 		}
+		return
+	}
+
+	// Pairwise preference mode short-circuits before --golden as well: it
+	// compares two finished reports and never loads a golden set.
+	if *pairwiseA != "" || *pairwiseB != "" {
+		if err := validatePairwiseFlags(*pairwiseA, *pairwiseB); err != nil {
+			slog.Error("invalid --pairwise invocation", "error", err)
+			os.Exit(2)
+		}
+		if err := runPairwiseMode(*pairwiseA, *pairwiseB, *pairwiseOut, *judgeModel, os.Stdout); err != nil {
+			slog.Error("--pairwise failed", "error", err)
+			os.Exit(1)
+		}
+		// Exit 0 even when report B won: this mode measures, it does not gate.
 		return
 	}
 

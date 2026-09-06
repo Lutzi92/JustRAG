@@ -377,6 +377,66 @@ For a 20-question golden set on a mid-tier model, expect 80 calls total.
 Plan accordingly. For fast iteration, keep `--judge` off and rely on
 retrieval metrics alone.
 
+## Pairwise judge
+
+The Likert answer-relevance judge saturates: two configurations that differ
+visibly to a reader both land around 0.9, so it cannot rank them. The
+**pairwise preference judge** (ruling W4-R4) can — it never places an answer
+on an absolute scale, it only says which of two answers is better for the
+same question.
+
+It is an **offline** mode: it reads the `judge.answer` two finished reports
+already persisted, so both must come from runs made with `--judge`. No
+retrieval, no answer generation, no DB writes, no golden set — the two
+report files are the whole input.
+
+```bash
+# 1. Produce two judged reports of the SAME golden set, one per config.
+./cmd/eval/eval --golden ../eval/golden/global-synthesis-de.jsonl --judge \
+  --production-context --longcontext on --longcontext-mode flat \
+  --output flat.json
+./cmd/eval/eval --golden ../eval/golden/global-synthesis-de.jsonl --judge \
+  --production-context --longcontext on --longcontext-mode map_reduce \
+  --output mapreduce.json
+
+# 2. Compare them. The win rate is A's.
+./cmd/eval/eval --pairwise-a flat.json --pairwise-b mapreduce.json \
+  --judge-model gemma-4-26b --pairwise-out pairwise-flat-vs-mapreduce.json
+```
+
+Every pair is judged **twice with the positions swapped**, and a win counts
+only when both orderings name the same answer. That is the whole point: an
+LLM preference judge prefers whatever it read first, and without the swap a
+position-biased judge hands side A a 100 % win rate. Pairs the judge flips on
+are recorded as **ties**, reported separately and excluded from the win rate
+(never averaged into it).
+
+Output: win/tie/loss counts, the win rate with a **95 % Wilson** interval
+(z = 1.96, over wins/(wins+losses)), the tie rate, a per-route breakdown
+keyed on the golden `query_type` (`unclassified` when a row carries none),
+and a per-question table with the winner and whether both orders agreed.
+`--pairwise-out` additionally writes the whole result as JSON, including
+both orders' reasoning per pair.
+
+Reading it:
+
+- **Win rate alone is not a result.** With 12 questions, 8–4 gives a Wilson
+  interval of roughly [0.39, 0.86] — it does not exclude 0.5. The W4-R7
+  decision rule (win rate ≥ 0.60 **and** Wilson lower bound > 0.50, on both
+  of two independent report pairs) exists for exactly this reason.
+- **A high tie rate means the instrument, not the configs, is speaking.**
+  Ties include every pair the judge flipped on, so a run with 2 wins, 1 loss
+  and 9 ties has a win rate of 0.667 resting on three decided pairs.
+- Questions present in only one report (`only_in_a` / `only_in_b`) and pairs
+  with a missing answer on one side are **skipped and counted**, never
+  silently dropped — that is how you notice you compared two different
+  golden sets.
+
+Cost: 2 judge calls per pair, no answer generation — a 12-question set is 24
+calls. Exit code is always 0 on a completed comparison (this measures, it
+does not gate); only an unusable invocation (missing report, no shared
+question ids, no reachable AI provider) exits non-zero.
+
 ## Tabular Q&A (table_query) — follow-up
 
 The existing harness is retrieval-oriented: questions are scored on recall,
