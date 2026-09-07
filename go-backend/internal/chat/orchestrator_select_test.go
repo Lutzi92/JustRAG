@@ -296,9 +296,55 @@ func ladderCases() []struct {
 	}
 }
 
-// W6-R10: with an empty policy the ladder must be byte-identical — same
-// orchestrator AND the same number of confirmCorpus (LLM) calls, on every
-// combination the ladder distinguishes.
+// legacySelectOrchestrator is a FROZEN copy of SelectOrchestrator's body as it
+// stood at 1f5a369, immediately before the W6-R6 policy hook was added. It is
+// deliberately duplicated rather than delegated: the byte-identity test below
+// compares the live implementation against this copy, and comparing the live
+// implementation against itself (which is what calling SelectOrchestrator on
+// both sides would do, since it now delegates to
+// SelectOrchestratorWithPolicy) can never fail — it would stay green through a
+// reordering of the ladder's rungs.
+//
+// Do not "simplify" this into a call. If a future change to the ladder is
+// intended, update this copy in the same commit and say so.
+func legacySelectOrchestrator(in OrchestratorInputs, confirmCorpus func() bool) Orchestrator {
+	if in.ComparisonReady {
+		return OrchComparison
+	}
+	if in.TeamSelected && !in.EnhanceRequested {
+		return OrchTeam
+	}
+	if in.CorpusTableEnabled && in.CorpusChunksAvailable && !in.EnhanceRequested &&
+		in.IsCorpusQuery && (!in.CorpusRouterLLMOn || confirmCorpus()) {
+		return OrchCorpusTable
+	}
+	if in.DriftEnabled && in.complexAndUnenhanced() && in.IsGlobalSynthesis {
+		return OrchDrift
+	}
+	if in.LongContextEnabled && in.complexAndUnenhanced() && in.IsGlobalSynthesis {
+		return OrchLongContext
+	}
+	if in.SupervisorEnabled && in.complexAndUnenhanced() {
+		return OrchSupervisor
+	}
+	if in.PlanExecuteEnabled && in.complexAndUnenhanced() {
+		return OrchPlanExecute
+	}
+	if in.AgenticEnabled && in.complexAndUnenhanced() {
+		return OrchAgentic
+	}
+	return OrchStandard
+}
+
+// W6-R10: with an empty policy the ladder must be byte-identical to the
+// pre-policy implementation — same orchestrator AND the same number of
+// confirmCorpus (LLM) calls, on every combination the ladder distinguishes.
+//
+// The reference side is legacySelectOrchestrator (the frozen pre-W6-R6 body),
+// NOT SelectOrchestrator: the latter delegates to the function under test, so
+// that comparison is a tautology. Mutation this now catches that the earlier
+// self-comparison did not: swapping the supervisor and plan_execute rungs
+// inside ladder() fails this test.
 func TestSelectOrchestratorWithPolicy_EmptyPolicyIsByteIdentical(t *testing.T) {
 	cases := ladderCases()
 	if len(cases) < 24 {
@@ -309,7 +355,16 @@ func TestSelectOrchestratorWithPolicy_EmptyPolicyIsByteIdentical(t *testing.T) {
 			inA := complexBase()
 			tt.mutate(&inA)
 			callsA := 0
-			wantOrch := SelectOrchestrator(inA, func() bool { callsA++; return true })
+			wantOrch := legacySelectOrchestrator(inA, func() bool { callsA++; return true })
+
+			// The exported wrapper must agree with the frozen body too — it is
+			// what internal/pipeline's workflow projection still calls.
+			inW := complexBase()
+			tt.mutate(&inW)
+			callsW := 0
+			if gotW := SelectOrchestrator(inW, func() bool { callsW++; return true }); gotW != wantOrch || callsW != callsA {
+				t.Fatalf("SelectOrchestrator() = %q (%d confirms), want %q (%d confirms)", gotW, callsW, wantOrch, callsA)
+			}
 
 			inB := complexBase()
 			tt.mutate(&inB)

@@ -70,21 +70,42 @@ func ClassifyQueryTypeForEval(ctx context.Context, resolver *ai.ConfigResolver, 
 // Production's three always-first arms (comparison / team / corpus-table)
 // have no mirror at all (they are explicit-intent routes, not complex-lane
 // dispatch), so there is nothing here for the policy to jump ahead of.
+//
+// The two ladders are pinned to agree on these cases (Wave-6 fix round 1;
+// production's half lives in internal/chat, this half in
+// TestSelectOrchestrator_Policy* below):
+//
+//   - force supervisor on a LOOKUP turn        → supervisor on both sides.
+//     Production reaches it because SendMessage's entry gate now widens for a
+//     forced non-standard route (chat.shouldTryDeepChat); before that fix the
+//     mirror said supervisor and production said standard.
+//   - prefer supervisor (flag ON) on a LOOKUP turn → supervisor on both sides,
+//     same mechanism.
+//   - empty policy on a COMPLEX turn           → the flag ladder on both
+//     sides, byte-identically (W6-R10).
+//
+// Two differences remain and are deliberate, documented for the acceptance
+// record rather than hidden: a forced "standard" rule runs RunDeepChat in
+// production (inside tryDeepChat) but PrepareChatContext here, and the
+// mirror's signal bag cannot carry HasFileSelection / HistoryTurns (see
+// PolicySignalsForQuestion).
 func SelectOrchestrator(ctx context.Context, siteCfg chat.SiteConfigReader, queryType, query string, sig chatpolicy.Signals) (string, string, chatpolicy.Decision) {
 	pol := chat.ChatOrchestratorPolicy(ctx, siteCfg)
-	dec := chatpolicy.Decide(pol, sig, map[string]bool{
-		"drift":       chat.ChatDriftEnabled(ctx, siteCfg),
-		"longcontext": chat.ChatLongContextEnabled(ctx, siteCfg),
-		"supervisor":  chat.ChatSupervisorEnabled(ctx, siteCfg),
-		// plan_execute_dag's enabled bit is plan-execute's, exactly as in
-		// chat.OrchestratorInputs.policyEnabled: the DAG is a shape of that
-		// orchestrator, not a separate one.
-		"plan_execute":     chat.ChatPlanExecuteEnabled(ctx, siteCfg),
-		"plan_execute_dag": chat.ChatPlanExecuteEnabled(ctx, siteCfg),
-		"agentic":          chat.ChatAgenticEnabled(ctx, siteCfg),
-	})
+	dec := chatpolicy.Decide(pol, sig, policyEnabledMap(ctx, siteCfg))
 	if dec.Applied {
-		return orchestratorForPolicyName(dec.Orchestrator),
+		name := orchestratorForPolicyName(dec.Orchestrator)
+		// Q1 / DAG parity with production: http_send.go's OrchPlanExecute case
+		// passes `DAG: ChatPlanExecuteDAG(...) || policyDec.ForceDAG`, so on a
+		// deployment with chat_plan_execute_dag on, a forced "plan_execute"
+		// rule runs the DAG planner. The mirror has no separate DAG flag — the
+		// orchestrator LABEL is what its dispatch switch reads — so the OR is
+		// reproduced by promoting the label here. Without this, a forced
+		// plan_execute rule would measure the flat planner under eval and the
+		// DAG planner in production.
+		if name == OrchestratorPlanExecute && chat.ChatPlanExecuteDAG(ctx, siteCfg) {
+			name = OrchestratorPlanExecuteDAG
+		}
+		return name,
 			fmt.Sprintf("policy_rule_%d_%s", dec.RuleIndex, dec.Mode),
 			dec
 	}
@@ -143,6 +164,26 @@ func orchestratorForPolicyName(name string) string {
 		return OrchestratorAgentic
 	default:
 		return OrchestratorStandard
+	}
+}
+
+// policyEnabledMap is the enabled map chatpolicy.Decide takes, read from
+// site_config. Shared by the dispatch mirror above and by RunTrajectory's
+// informational policy_rule, so the two cannot drift.
+//
+// It mirrors chat.OrchestratorInputs.policyEnabled: "plan_execute_dag" carries
+// plan-execute's flag (the DAG is a shape of that orchestrator, not a separate
+// one) and "standard" is deliberately absent (chatpolicy treats it as always
+// enabled — it has no flag).
+func policyEnabledMap(ctx context.Context, siteCfg chat.SiteConfigReader) map[string]bool {
+	planExecute := chat.ChatPlanExecuteEnabled(ctx, siteCfg)
+	return map[string]bool{
+		"drift":            chat.ChatDriftEnabled(ctx, siteCfg),
+		"longcontext":      chat.ChatLongContextEnabled(ctx, siteCfg),
+		"supervisor":       chat.ChatSupervisorEnabled(ctx, siteCfg),
+		"plan_execute":     planExecute,
+		"plan_execute_dag": planExecute,
+		"agentic":          chat.ChatAgenticEnabled(ctx, siteCfg),
 	}
 }
 

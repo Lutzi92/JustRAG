@@ -98,8 +98,11 @@ func noPolicyDecision() PolicyDecision {
 //
 // Implemented as SelectOrchestratorWithPolicy with an empty policy, so W6-R10
 // ("the flag ladder is byte-identical when the policy is empty") holds
-// structurally rather than by two implementations agreeing — and is still
-// pinned by TestSelectOrchestratorWithPolicy_EmptyPolicyIsByteIdentical.
+// structurally. Because of that delegation, a test comparing this function
+// against SelectOrchestratorWithPolicy would be a tautology — so
+// TestSelectOrchestratorWithPolicy_EmptyPolicyIsByteIdentical compares both
+// against a FROZEN copy of the pre-W6-R6 body instead, and that is what pins
+// the ladder's rung ORDER here (TestSelectOrchestratorPrecedence pins it too).
 func SelectOrchestrator(in OrchestratorInputs, confirmCorpus func() bool) Orchestrator {
 	orch, _ := SelectOrchestratorWithPolicy(in, nil, chatpolicy.Signals{}, confirmCorpus)
 	return orch

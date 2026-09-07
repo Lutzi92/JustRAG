@@ -154,16 +154,15 @@ func (s *PgStore) Record(ctx context.Context, kbID, mode, outcome string, hops, 
 		return
 	}
 	if err := s.Insert(ctx, DecisionRow{
-		KbID:      id,
-		Mode:      mode,
-		Outcome:   outcome,
-		Hops:      hops,
-		Rounds:    rounds,
-		LatencyMs: latencyMs,
-		ToolCalls: toolCalls,
-		TeamID:    teamID,
-		AgentID:   agentID,
-
+		KbID:       id,
+		Mode:       mode,
+		Outcome:    outcome,
+		Hops:       hops,
+		Rounds:     rounds,
+		LatencyMs:  latencyMs,
+		ToolCalls:  toolCalls,
+		TeamID:     teamID,
+		AgentID:    agentID,
 		PolicyRule: policyRule,
 	}); err != nil {
 		logctx.From(ctx).Warn("agent_decisions.record: insert failed", "error", err)

@@ -93,14 +93,7 @@ func trajectoryPolicyRule(ctx context.Context, siteCfg chat.SiteConfigReader, q 
 	if len(pol) == 0 {
 		return nil
 	}
-	dec := chatpolicy.Decide(pol, PolicySignalsForQuestion(q.QueryType, q), map[string]bool{
-		"drift":            chat.ChatDriftEnabled(ctx, siteCfg),
-		"longcontext":      chat.ChatLongContextEnabled(ctx, siteCfg),
-		"supervisor":       chat.ChatSupervisorEnabled(ctx, siteCfg),
-		"plan_execute":     chat.ChatPlanExecuteEnabled(ctx, siteCfg),
-		"plan_execute_dag": chat.ChatPlanExecuteEnabled(ctx, siteCfg),
-		"agentic":          chat.ChatAgenticEnabled(ctx, siteCfg),
-	})
+	dec := chatpolicy.Decide(pol, PolicySignalsForQuestion(q.QueryType, q), policyEnabledMap(ctx, siteCfg))
 	if !dec.Applied {
 		return nil
 	}

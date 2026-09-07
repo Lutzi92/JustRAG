@@ -371,15 +371,49 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// W6-R6 / Wave-6 fix round 1: the orchestrator policy is resolved HERE,
+	// above the complexity gate, not inside tryDeepChat. `isComplex` is
+	// definitionally "the classifier said complex_reasoning" (classifyQuery
+	// sets UseHyDE && UseMultiQuery only on that branch), so a policy read
+	// below this line could never steer a lookup or an enumeration turn — and
+	// `when.query_type` exists precisely to name those.
+	turnPol := h.resolveTurnPolicy(ctx, kbID, cls.QueryType, searchQuery, lang, body, answerHistory)
+
 	// Deep chat: complex streaming queries get a 2-step research agent.
 	// Comparison turns also route through tryDeepChat (its switch dispatches
 	// the comparison orchestrator) regardless of complexity classification.
+	//
+	// The policy arm only ever WIDENS this gate — with no policy, or with no
+	// matching rule, opensDeepChatDispatch() is false and the condition is
+	// byte-identical to the pre-W6-R6 one, so a lookup turn still never
+	// enters tryDeepChat. A rule naming "standard" does not widen it either
+	// (see turnPolicy.opensDeepChatDispatch); its rule index is recorded on
+	// the standard path below.
 	isComplex := cls.UseHyDE && cls.UseMultiQuery
-	if (isComplex || runCompare || teamSel != nil) && streamMode {
-		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, dateLine, searchQuery, rawQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, anchor, graphDec, graphChunkIDs, bridgeChunks, answerHistory, teamSel, teamSelReason); handled {
+	deepChatAttempted := false
+	if shouldTryDeepChat(isComplex, runCompare, teamSel != nil, streamMode, turnPol) {
+		deepChatAttempted = true
+		if handled := h.tryDeepChat(ctx, w, r, chatID, kbID, lang, dateLine, searchQuery, rawQuery, cls.QueryType, kbSystemPrompt, reasoningLevel, body, anchor, graphDec, graphChunkIDs, bridgeChunks, answerHistory, teamSel, teamSelReason, turnPol); handled {
 			return
 		}
 		// Deep chat failed — fall through to standard path.
+	}
+
+	// W6-R16: "a forced orchestrator whose dependencies are missing falls back
+	// through the existing orchestrator-error → PrepareChatContext path" — and
+	// that fall-back has to be VISIBLE, or an operator who forces a route with
+	// missing dependencies sees a perfectly ordinary answer and no reason why.
+	// tryDeepChat's own event buffer is discarded when it returns false, so
+	// the event is re-emitted into the standard path's buffer below; the log
+	// line covers the non-streaming and the buffer-less cases.
+	policyFellThrough := deepChatAttempted && turnPol.opensDeepChatDispatch()
+	if policyFellThrough {
+		logctx.From(ctx).Warn("chat.orchestrator_policy.fallthrough",
+			"policy_rule", turnPol.gate.RuleIndex,
+			"orchestrator", turnPol.gate.Orchestrator,
+			"mode", turnPol.gate.Mode,
+			"kb_id", kbID,
+		)
 	}
 
 	// Buffer trajectory/CRAG events emitted during PrepareChatContext —
@@ -393,6 +427,16 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		collectEmit = func(data map[string]any) {
 			bufferedTrajectory = append(bufferedTrajectory, data)
 		}
+	}
+	if policyFellThrough {
+		idx := turnPol.gate.RuleIndex
+		emitTrajectory(collectEmit, TrajectoryEvent{
+			Stage:      "orchestrator_policy",
+			Decision:   "fallthrough",
+			Reason:     "forced orchestrator " + turnPol.gate.Orchestrator + " could not run; answering on the standard path",
+			Mode:       turnPol.gate.Mode,
+			PolicyRule: &idx,
+		}, nil)
 	}
 	params := ChatContextParams{
 		KbID:                  kbID,
@@ -472,19 +516,144 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		bufferedTrajectory: bufferedTrajectory,
 		chatStartTime:      time.Now(),
 		history:            answerHistory,
-		// policyRule stays nil here by construction: chat_orchestrator_policy
-		// is evaluated inside tryDeepChat, and this code is only reached when
-		// the turn never entered it (not complex / not streaming / no
-		// comparison or team) or when the orchestrator it picked ERRORED and
-		// fell through. In the fall-through case the forced route did not
-		// answer, so attributing the row to the rule would be a lie.
-		policyRule: nil,
+		// W6-R6: a rule that FORCED the standard route pinned this turn, so
+		// the agent_decisions row records it. standardPathRule() returns nil
+		// for every other case — including a fall-through from a failed
+		// orchestrator, where the forced route did not answer and claiming it
+		// did would corrupt the measurement (that row stays NULL, and the
+		// trajectory event above is where the fall-through is visible).
+		policyRule: standardPathPolicyRule(turnPol, deepChatAttempted),
 	}
 	if streamMode {
 		h.writeStreamingResponse(ctx, w, rp)
 		return
 	}
 	h.writeJSONResponse(ctx, w, rp)
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator policy (W6-R6) — resolved once per turn in SendMessage
+// ---------------------------------------------------------------------------
+
+// turnPolicy is the once-per-turn resolution of chat_orchestrator_policy,
+// handed from SendMessage into tryDeepChat so the document is read and the
+// signal bag built exactly once.
+//
+// `gate` is a PRE-decision: it answers "may this turn reach the deep-chat
+// dispatch at all", using the orchestrator flags read straight from
+// site_config. It deliberately knows nothing about the comparison / team /
+// corpus-table arms — those are re-evaluated (and win) inside
+// SelectOrchestratorWithPolicy, which is the authoritative decision for the
+// turn. The two agree by construction: same document, same signals, and
+// policyEnabledFromConfig builds the same map OrchestratorInputs.policyEnabled
+// does (pinned by TestPolicyEnabledMapsAgree).
+type turnPolicy struct {
+	policy  chatpolicy.OrchestratorPolicy
+	signals chatpolicy.Signals
+	gate    chatpolicy.Decision
+}
+
+// opensDeepChatDispatch reports whether the policy alone justifies entering
+// tryDeepChat for a turn the complexity classifier would not have sent there.
+//
+// A rule naming "standard" is deliberately excluded: the standard path is
+// where such a turn already goes, so widening the gate for it would only swap
+// PrepareChatContext for RunDeepChat — a routing change the operator did not
+// ask for. Its rule index is recorded on the standard path instead.
+func (tp turnPolicy) opensDeepChatDispatch() bool {
+	return tp.gate.Applied && tp.gate.Orchestrator != chatpolicy.OrchestratorStandard
+}
+
+// standardPathRule is the rule index the standard path should record: set only
+// when a rule FORCED the standard route for this turn. nil in every other
+// case, including a fall-through from a failed orchestrator (the forced route
+// did not answer, so the row must not claim it did).
+func (tp turnPolicy) standardPathRule() *int {
+	if !tp.gate.Applied || tp.gate.Orchestrator != chatpolicy.OrchestratorStandard {
+		return nil
+	}
+	idx := tp.gate.RuleIndex
+	return &idx
+}
+
+// shouldTryDeepChat is SendMessage's deep-chat entry gate, extracted so the
+// W6-R6 widening is directly testable (a condition written inline in a 300-line
+// handler is only reachable through an end-to-end turn).
+//
+// The first three arms are the pre-W6-R6 gate verbatim. The fourth is the
+// policy, and it can only ever ADD turns: with no policy, or with no matching
+// rule, or with a rule naming "standard", opensDeepChatDispatch() is false and
+// this function returns exactly what the original condition returned — which
+// is what keeps a lookup or enumeration turn out of tryDeepChat by default.
+//
+// streamMode still gates everything: tryDeepChat writes SSE, so a
+// non-streaming turn cannot use it no matter what the policy says. A rule
+// forcing a non-standard orchestrator on a non-streaming turn therefore does
+// not apply, and correctly records no rule index.
+func shouldTryDeepChat(isComplex, runCompare, teamSelected, streamMode bool, tp turnPolicy) bool {
+	return (isComplex || runCompare || teamSelected || tp.opensDeepChatDispatch()) && streamMode
+}
+
+// standardPathPolicyRule is what the standard path records in
+// agent_decisions.policy_rule. A rule that forced "standard" pinned the turn,
+// so it is recorded — but only when the deep-chat dispatch was never
+// attempted. When it WAS attempted and fell through, the route the rule named
+// did not answer; the row stays NULL and the fall-through is reported as a
+// trajectory event and a log line instead.
+func standardPathPolicyRule(tp turnPolicy, deepChatAttempted bool) *int {
+	if deepChatAttempted {
+		return nil
+	}
+	return tp.standardPathRule()
+}
+
+// policyEnabledFromConfig reads the six policy-nameable orchestrator flags
+// from site_config into the enabled map chatpolicy.Decide expects. It is the
+// reader-sourced twin of OrchestratorInputs.policyEnabled, which builds the
+// same map from already-resolved inputs inside tryDeepChat.
+func policyEnabledFromConfig(ctx context.Context, reader SiteConfigReader) map[string]bool {
+	planExecute := ChatPlanExecuteEnabled(ctx, reader)
+	return map[string]bool{
+		"drift":            ChatDriftEnabled(ctx, reader),
+		"longcontext":      ChatLongContextEnabled(ctx, reader),
+		"supervisor":       ChatSupervisorEnabled(ctx, reader),
+		"plan_execute":     planExecute,
+		"plan_execute_dag": planExecute,
+		"agentic":          ChatAgenticEnabled(ctx, reader),
+	}
+}
+
+// resolveTurnPolicy reads chat_orchestrator_policy and, when a policy exists,
+// builds the signal bag and the entry-gate decision.
+//
+// Everything past the read is skipped for an empty policy — the default, and
+// the fail-soft result of an unparseable stored document — so a deployment
+// without a policy pays one site_config read and neither of the two regex
+// classifiers, and every gate below behaves exactly as it did before W6-R6.
+func (h *Handler) resolveTurnPolicy(
+	ctx context.Context,
+	kbID, queryType, searchQuery, lang string,
+	body sendMessageRequest,
+	answerHistory []ai.ChatHistoryEntry,
+) turnPolicy {
+	tp := turnPolicy{
+		policy: ChatOrchestratorPolicy(ctx, h.siteConfigReader),
+		gate:   chatpolicy.Decision{RuleIndex: -1},
+	}
+	if len(tp.policy) == 0 {
+		return tp
+	}
+	tp.signals = chatpolicy.Signals{
+		QueryType:        queryType,
+		GlobalSynthesis:  IsGlobalSynthesisQuery(searchQuery),
+		Enumeration:      IsEnumerationQuery(searchQuery, lang),
+		RecencyListing:   IsRecencyListingQuery(searchQuery),
+		HasFileSelection: len(body.SelectedFileIDs) > 0,
+		HistoryTurns:     len(answerHistory),
+		KBID:             kbID,
+	}
+	tp.gate = chatpolicy.Decide(tp.policy, tp.signals, policyEnabledFromConfig(ctx, h.siteConfigReader))
+	return tp
 }
 
 // ---------------------------------------------------------------------------
@@ -507,6 +676,7 @@ func (h *Handler) tryDeepChat(
 	answerHistory []ai.ChatHistoryEntry,
 	teamSel *teamSelection,
 	teamSelReason string,
+	turnPol turnPolicy,
 ) bool {
 	ctx, span := observability.Tracer().Start(ctx, "chat.deep_chat")
 	defer span.End()
@@ -651,34 +821,19 @@ func (h *Handler) tryDeepChat(
 		AgenticEnabled:        agenticEnabled,
 	}
 
-	// W6-R6: the operator's per-query orchestrator policy. Read once per
-	// turn; nil (the default, and the fail-soft result of an unparseable
-	// stored document) leaves the ladder byte-identical.
+	// W6-R6: the operator's per-query orchestrator policy, resolved once per
+	// turn by SendMessage (resolveTurnPolicy) — it also gates whether this
+	// function is reached at all for a non-complex turn. Re-deciding it HERE
+	// rather than reusing turnPol.gate is deliberate: only this call site
+	// knows the comparison / team / corpus-table arms, and W6-R16 requires
+	// those to win over any rule.
 	//
-	// The signal bag is built only when a policy actually exists: two of its
-	// fields are regex classifiers over the query, and an empty policy must
-	// not pay for them. len() on a nil slice is 0, so this is the whole
-	// guard.
-	policy := ChatOrchestratorPolicy(ctx, h.siteConfigReader)
-	var policySignals chatpolicy.Signals
-	if len(policy) > 0 {
-		policySignals = chatpolicy.Signals{
-			QueryType:        queryType,
-			GlobalSynthesis:  orchIn.IsGlobalSynthesis,
-			Enumeration:      IsEnumerationQuery(searchQuery, lang),
-			RecencyListing:   IsRecencyListingQuery(searchQuery),
-			HasFileSelection: len(body.SelectedFileIDs) > 0,
-			HistoryTurns:     len(answerHistory),
-			KBID:             kbID,
-		}
-	}
-
 	// The corpus-table confirmation is an LLM call; SelectOrchestrator
 	// invokes this at most once, and only after every higher-priority gate
 	// has already failed and the cheap keyword classifier has already
 	// matched — preserving the original short-circuit that kept this call
 	// off the hot path.
-	orch, policyDec := SelectOrchestratorWithPolicy(orchIn, policy, policySignals, func() bool {
+	orch, policyDec := SelectOrchestratorWithPolicy(orchIn, turnPol.policy, turnPol.signals, func() bool {
 		return ai.ConfirmCorpusComparison(ctx, h.aiResolver, searchQuery, kbID, lang, ChatCorpusTableModel(ctx, h.siteConfigReader))
 	})
 

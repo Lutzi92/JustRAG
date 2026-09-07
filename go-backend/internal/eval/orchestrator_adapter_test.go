@@ -553,3 +553,75 @@ func TestPolicySignalsForQuestion(t *testing.T) {
 		t.Error("GlobalSynthesis = true on a recency-listing question")
 	}
 }
+
+// Q1 / DAG parity: production computes DAG as
+// `ChatPlanExecuteDAG(...) || policyDec.ForceDAG`, so on a deployment with
+// chat_plan_execute_dag on, a forced "plan_execute" rule runs the DAG planner.
+// The mirror has no separate DAG flag — the label drives its dispatch switch —
+// so it must promote the label. Without the promotion this measures the flat
+// planner while production runs the DAG one.
+func TestSelectOrchestrator_PolicyForcePlanExecuteHonoursDAGKey(t *testing.T) {
+	policy := `[{"when":{},"orchestrator":"plan_execute","mode":"force"}]`
+
+	on := &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": policy,
+		"chat_plan_execute_dag":    "true",
+	}}
+	got, _, _ := SelectOrchestrator(context.Background(), on, vector.QueryTypeLookup, "q",
+		chatpolicy.Signals{QueryType: vector.QueryTypeLookup})
+	if got != OrchestratorPlanExecuteDAG {
+		t.Fatalf("with chat_plan_execute_dag on: got %q, want %q", got, OrchestratorPlanExecuteDAG)
+	}
+
+	off := &stubSiteCfg{values: map[string]string{"chat_orchestrator_policy": policy}}
+	got, _, _ = SelectOrchestrator(context.Background(), off, vector.QueryTypeLookup, "q",
+		chatpolicy.Signals{QueryType: vector.QueryTypeLookup})
+	if got != OrchestratorPlanExecute {
+		t.Fatalf("with chat_plan_execute_dag off: got %q, want %q", got, OrchestratorPlanExecute)
+	}
+
+	// An explicit "plan_execute_dag" rule is unaffected by the key: it is the
+	// DAG route by name, which is why it is the label Task 10 should use when
+	// it wants the DAG planner unambiguously.
+	explicit := &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": `[{"when":{},"orchestrator":"plan_execute_dag","mode":"force"}]`,
+	}}
+	got, _, _ = SelectOrchestrator(context.Background(), explicit, vector.QueryTypeLookup, "q",
+		chatpolicy.Signals{QueryType: vector.QueryTypeLookup})
+	if got != OrchestratorPlanExecuteDAG {
+		t.Fatalf("explicit plan_execute_dag rule: got %q, want %q", got, OrchestratorPlanExecuteDAG)
+	}
+}
+
+// The three cases the two ladders are pinned to agree on (see
+// SelectOrchestrator's doc comment). Production's half lives in
+// internal/chat's shouldTryDeepChat / SelectOrchestratorWithPolicy tests;
+// this is the mirror's half, named so a reader can find both.
+func TestSelectOrchestrator_LadderAgreementCases(t *testing.T) {
+	lookupSig := chatpolicy.Signals{QueryType: vector.QueryTypeLookup}
+
+	// 1. force supervisor on a lookup turn.
+	cfg := &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": `[{"when":{"query_type":["lookup"]},"orchestrator":"supervisor","mode":"force"}]`,
+	}}
+	if got, _, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "q", lookupSig); got != OrchestratorSupervisor {
+		t.Errorf("force supervisor on lookup: got %q, want %q", got, OrchestratorSupervisor)
+	}
+
+	// 2. prefer supervisor, flag ON, on a lookup turn.
+	cfg = &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": `[{"when":{"query_type":["lookup"]},"orchestrator":"supervisor","mode":"prefer"}]`,
+		"chat_supervisor_enabled":  "true",
+	}}
+	if got, _, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "q", lookupSig); got != OrchestratorSupervisor {
+		t.Errorf("prefer supervisor (flag on) on lookup: got %q, want %q", got, OrchestratorSupervisor)
+	}
+
+	// 3. empty policy on a complex turn — the flag ladder, untouched.
+	cfg = &stubSiteCfg{values: map[string]string{"chat_agentic_enabled": "true"}}
+	got, reason, dec := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "q",
+		chatpolicy.Signals{QueryType: vector.QueryTypeComplexReasoning})
+	if got != OrchestratorAgentic || reason != "complex_reasoning_agentic_gate" || dec.Matched {
+		t.Errorf("empty policy on complex: got (%q, %q, %+v), want the untouched agentic gate", got, reason, dec)
+	}
+}
