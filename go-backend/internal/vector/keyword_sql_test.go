@@ -37,7 +37,7 @@ func TestBuildKeywordSQL_TsRankIsByteStable(t *testing.T) {
 	t.Parallel()
 	const want = `
 			SELECT id::text, content, COALESCE(contextual_prefix, ''), metadata::text, file_id::text,
-			       (ts_rank(vector_index, ((websearch_to_tsquery($2::regconfig, $3) || to_tsquery($2::regconfig, $4)))) * 1) AS score,
+			       ts_rank(vector_index, ((websearch_to_tsquery($2::regconfig, $3) || to_tsquery($2::regconfig, $4)))) AS score,
 			       COALESCE(parent_chunk_id::text, ''),
 			       COALESCE(node_kind, 'leaf'),
 			       COALESCE(tree_level, 0)
@@ -335,34 +335,6 @@ func TestBuildKeywordSQL_ModesShareCandidateSet(t *testing.T) {
 				t.Errorf("bm25 SQL does not contain the shared WHERE clause %q:\n%s", cc.whereClause, bmSQL)
 			}
 		})
-	}
-}
-
-// TestBuildKeywordSQL_TieredBoostAppliesInBothModes is W2-R7: the tiered
-// boost multiplier applies identically regardless of scoring mode (only
-// the column reference it tests against differs: bare vector_index for
-// ts_rank's unaliased FROM, c.vector_index for bm25's aliased `cand c`).
-func TestBuildKeywordSQL_TieredBoostAppliesInBothModes(t *testing.T) {
-	t.Parallel()
-
-	tsIn := fixedKeywordInput()
-	tsIn.TieredBoost = true
-	tsSQL, _, ok := buildKeywordSQL(tsIn)
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if !strings.Contains(tsSQL, "CASE WHEN vector_index @@") {
-		t.Errorf("ts_rank tiered-boost CASE missing:\n%s", tsSQL)
-	}
-
-	bmIn := bm25KeywordInput()
-	bmIn.TieredBoost = true
-	bmSQL, _, ok := buildKeywordSQL(bmIn)
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if !strings.Contains(bmSQL, "CASE WHEN c.vector_index @@") {
-		t.Errorf("bm25 tiered-boost CASE missing:\n%s", bmSQL)
 	}
 }
 

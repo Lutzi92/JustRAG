@@ -405,36 +405,6 @@ func TestLoadSiteConfig_Overrides(t *testing.T) {
 	}
 }
 
-// TestLoadSiteConfig_BM25TieredBoost pins the tiered-boost gate.
-// Default off; explicit "true" enables; bad values fall back to
-// default (false). Scoring impact is exercised by the keyword-SQL
-// shape tests; this one just verifies the site_config plumbing.
-func TestLoadSiteConfig_BM25TieredBoost(t *testing.T) {
-	t.Parallel()
-
-	// default
-	svc := NewSearchService(nil, nil, nil, WithSiteConfigReader(&stubSiteConfig{values: map[string]*string{}}))
-	if cfg := svc.loadSiteConfig(context.Background()); cfg.BM25TieredBoost {
-		t.Errorf("BM25TieredBoost: default must be false, got true")
-	}
-
-	// explicit true
-	svc = NewSearchService(nil, nil, nil, WithSiteConfigReader(&stubSiteConfig{values: map[string]*string{
-		"bm25_tiered_boost_enabled": strPtr("true"),
-	}}))
-	if cfg := svc.loadSiteConfig(context.Background()); !cfg.BM25TieredBoost {
-		t.Errorf("BM25TieredBoost: explicit true must be true")
-	}
-
-	// garbage falls back to default (false)
-	svc = NewSearchService(nil, nil, nil, WithSiteConfigReader(&stubSiteConfig{values: map[string]*string{
-		"bm25_tiered_boost_enabled": strPtr("perhaps"),
-	}}))
-	if cfg := svc.loadSiteConfig(context.Background()); cfg.BM25TieredBoost {
-		t.Errorf("BM25TieredBoost: garbage value must yield default (false)")
-	}
-}
-
 // TestLoadSiteConfig_BM25ScoringMode pins the ts_rank/bm25 mode + k1/b
 // plumbing: default ts_rank/1.2/0.75; any casing/whitespace of "bm25"
 // (case/whitespace-insensitive comparison) switches the mode; anything else

@@ -1443,8 +1443,8 @@ func effectiveSimpleArm(ctx context.Context, cfg, force bool) bool {
 
 // resolveKeywordArm resolves the BM25 scoring mode (including its
 // stats-availability fallback, per bm25ModeDecision) exactly once per
-// search and bundles it with the already-resolved simpleArm/tiered-boost/
-// k1/b settings into the keywordArmSettings every downstream keyword-arm
+// search and bundles it with the already-resolved simpleArm/k1/b
+// settings into the keywordArmSettings every downstream keyword-arm
 // fan-out (runPrimarySearches, runMultiQueryBM25Searches) reuses unchanged.
 // Records both keyword-arm-mode metrics. Extracted out of Search itself
 // purely to keep that function's statement count under the funlen limit.
@@ -1460,12 +1460,11 @@ func (s *SearchService) resolveKeywordArm(ctx context.Context, siteCfg KBVectorC
 	}
 	observability.RecordKeywordArmMode(string(keywordMode))
 	return keywordArmSettings{
-		SimpleArm:   simpleArm,
-		TieredBoost: siteCfg.BM25TieredBoost,
-		Mode:        keywordMode,
-		Dim:         dimensions,
-		K1:          siteCfg.BM25K1,
-		B:           siteCfg.BM25B,
+		SimpleArm: simpleArm,
+		Mode:      keywordMode,
+		Dim:       dimensions,
+		K1:        siteCfg.BM25K1,
+		B:         siteCfg.BM25B,
 	}
 }
 

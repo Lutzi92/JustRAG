@@ -158,8 +158,8 @@ func (s *SearchService) KeywordSearch(ctx context.Context, kbID, query string, l
 	}
 	pgConfig := PgTextSearchConfig(s.resolveKBLanguage(ctx, kbID))
 
-	// AP-B1 keyword_search tool path: read the simple-arm + tiered-boost +
-	// BM25 scoring-mode settings from site_config so the agent's tool
+	// AP-B1 keyword_search tool path: read the simple-arm + BM25
+	// scoring-mode settings from site_config so the agent's tool
 	// calls benefit from the same BM25 tuning as the main pipeline when
 	// operators enable them. Cached; no extra round-trip on the hot path.
 	// Same fail-soft mode resolution as Search(): a KB/dimension without
@@ -177,12 +177,11 @@ func (s *SearchService) KeywordSearch(ctx context.Context, kbID, query string, l
 	}
 	observability.RecordKeywordArmMode(string(mode))
 	arm := keywordArmSettings{
-		SimpleArm:   cfg.BM25SimpleArmEnabled,
-		TieredBoost: cfg.BM25TieredBoost,
-		Mode:        mode,
-		Dim:         dim,
-		K1:          cfg.BM25K1,
-		B:           cfg.BM25B,
+		SimpleArm: cfg.BM25SimpleArmEnabled,
+		Mode:      mode,
+		Dim:       dim,
+		K1:        cfg.BM25K1,
+		B:         cfg.BM25B,
 	}
 	rows, err := s.runKeywordSearch(ctx, tableName, query, kbID, pgConfig, fileIDs, limit, arm, "")
 	if err != nil {

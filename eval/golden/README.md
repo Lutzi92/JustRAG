@@ -341,7 +341,6 @@ default stays `[]`) policy live in
 | `--longcontext-mode flat\|map_reduce` | Per-run override for `chat_longcontext_mode` — which consumer the long-context orchestrator uses. Only has an effect together with `--longcontext on` (or a live-on flag). Empty = live site_config, whose **default is `map_reduce` since Wave 5** (W5-R1), so `--longcontext-mode flat` is now the one that overrides it. An unrecognised stored value normalises to `flat`. |
 | `--golden-query-type` | Forward each row's curated `query_type` into the retrieval pipeline instead of classifying the question. Default **off** so existing reports keep their historical shape. Does **not** affect orchestrator dispatch, which classifies independently — if a question fails to reach the intended orchestrator, rewrite the question, not the label. |
 | `--bm25-mode ts_rank\|bm25` | Per-run override for `bm25_scoring_mode`. Combine with `--refresh-bm25-stats` (recomputes the golden set's KBs' BM25 statistics first) whenever the KB hasn't had a recent refresh — without stats the arm silently falls back to `ts_rank` and the A/B measures nothing. |
-| `--bm25-tiered-boost on\|off` | Per-run override for `bm25_tiered_boost_enabled` (deprecated; see `docs/retrieval.md`). |
 | `--recency-boost on\|off` | Per-run override for `recency_boost_enabled`. |
 | `--rrf-weight-bm25 <f>` / `--rrf-weight-vector <f>` / `--rerank-blend-alpha <f>` | Per-run overrides for the fusion weights and the **global** reranker α. Per-route α overrides (`rerank_blend_alpha_lookup` etc.) are NOT overridden — set those in `site_configs` if you want to grid them. Used together with `--bm25-mode bm25` for the Wave-3 retune grid (`eval/golden/bm25-retune.acceptance.md`). |
 | `--keep-raw on\|off` | Multi-turn only: per-run override for `chat_condense_keep_raw_enabled`. |
@@ -1026,7 +1025,7 @@ full re-ingest.
 ### Running the A/B
 
 `cmd/eval` has no site_config to flip for `recency_boost_enabled` short of
-the same overlay mechanism the other ablation flags use (`--bm25-tiered-boost`
+the same overlay mechanism the other ablation flags use (`--bm25-mode`
 etc.): pass `--recency-boost on|off` (a vector-layer key, applied via the
 searchReader overlay — see `docs/retrieval.md`'s Recency prior section for
 the underlying mechanism). `chat_recency_listing_enabled` and
@@ -1113,7 +1112,7 @@ eval/fixtures/bm25-scale/seed-scale-kb.sh --drop
 `cmd/eval --print-keyword-sql "<query>" --kb-id <uuid> [--top-k 50]` is
 usable on its own: it prints one JSON document carrying the keyword arm's
 SQL for **both** scoring modes with the KB's real resolved settings (chunk
-table, text-search config, simple arm, tiered boost, k1/b, dim-keyed stats
+table, text-search config, simple arm, k1/b, dim-keyed stats
 tables), including a placeholder-free `executable_sql` per mode. It runs no
 search and needs no golden set.
 

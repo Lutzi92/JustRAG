@@ -166,11 +166,6 @@ var siteConfigParsers = map[string]siteConfigSetter{
 			cfg.BM25SimpleArmEnabled = b
 		}
 	},
-	"bm25_tiered_boost_enabled": func(cfg *KBVectorConfig, v string) {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.BM25TieredBoost = b
-		}
-	},
 	"bm25_scoring_mode": func(cfg *KBVectorConfig, v string) {
 		// Only a value that case/whitespace-insensitively equals "bm25"
 		// switches the mode; anything else (typos, "ts_rank", empty)

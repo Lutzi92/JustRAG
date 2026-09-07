@@ -105,7 +105,6 @@ var snapshotConfigKeys = []string{
 	// search code falls back to defaults (arm disabled, entity alpha
 	// inherits). A live eval would silently run with the prototype off.
 	"bm25_simple_arm_enabled",
-	"bm25_tiered_boost_enabled",
 	// Wave-2 Task 6: BM25 scoring mode (ts_rank | bm25) + its k1/b
 	// parameters. Same reasoning as the pair above — without these in
 	// the snapshot, an eval run silently measures ts_rank even when the
@@ -652,6 +651,30 @@ func intParam(q url.Values, name string, def, max int) int {
 }
 
 // ---------------------------------------------------------------------------
+// parseSortOrder — validates the sort/order query params (W7-R4) against a
+// fixed set, shared by ListRuns and ListRunsForKB. An empty value means
+// "unspecified" and resolves to eval.Store's own default (created_at /
+// desc); any other unrecognised value is a 400, never silently coerced —
+// the store itself only ever sees one of these validated values, so it
+// never has to interpolate caller-supplied text into SQL.
+// ---------------------------------------------------------------------------
+
+var validRunSort = map[string]bool{"": true, "created_at": true, "recall": true, "mrr": true}
+var validRunOrder = map[string]bool{"": true, "desc": true, "asc": true}
+
+func parseSortOrder(q url.Values) (sort, order string, err error) {
+	sort = q.Get("sort")
+	if !validRunSort[sort] {
+		return "", "", fmt.Errorf("invalid sort %q: must be one of created_at, recall, mrr", sort)
+	}
+	order = q.Get("order")
+	if !validRunOrder[order] {
+		return "", "", fmt.Errorf("invalid order %q: must be one of desc, asc", order)
+	}
+	return sort, order, nil
+}
+
+// ---------------------------------------------------------------------------
 // ListRuns — GET /api/admin/eval/runs
 // ---------------------------------------------------------------------------
 
@@ -718,11 +741,19 @@ func (h *Handler) ListRuns(w http.ResponseWriter, r *http.Request) {
 		kbIDPtr = &id
 	}
 
+	sort, order, err := parseSortOrder(q)
+	if err != nil {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	opts := eval.ListOpts{
 		Limit:  limit,
 		Offset: offset,
 		Status: status,
 		KBID:   kbIDPtr,
+		Sort:   sort,
+		Order:  order,
 	}
 
 	runs, total, err := h.store.List(ctx, opts)

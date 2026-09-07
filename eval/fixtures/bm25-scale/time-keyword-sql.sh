@@ -6,7 +6,7 @@
 #
 # The statements are NOT retyped here: `cmd/eval --print-keyword-sql <q>
 # --kb-id <id>` renders whatever the real builders produce for that KB
-# (chunk table, text-search config, simple arm, tiered boost, k1/b, dim-keyed
+# (chunk table, text-search config, simple arm, k1/b, dim-keyed
 # stats tables) and hands back an `executable_sql` with the placeholders
 # inlined. Run it against the ~100k-chunk synthetic KB
 # (eval/fixtures/bm25-scale/seed-scale-kb.sh) and against the ~1.8k-chunk
@@ -59,8 +59,7 @@ mkdir -p "$OUT_DIR"
 #   common — a high-document-frequency German term: many candidates, so the
 #            per-candidate scoring work (the bm25 tf/sc CTEs) dominates.
 #   phrase — a quoted phrase with no unquoted remainder: phraseto_tsquery and
-#            positional matching only, no websearch/OR-floor group (and, with
-#            no remainder, no tiered-boost CASE either).
+#            positional matching only, no websearch/OR-floor group.
 #
 # The defaults are PPM-Eval terms; override them for another corpus.
 SHAPES="rare common phrase"

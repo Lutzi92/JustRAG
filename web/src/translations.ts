@@ -1926,10 +1926,6 @@ export const translations = {
     // eval run table (Wave 6)
     evalTeam: { de: 'Team', en: 'Team' },
     evalScore: { de: 'Score', en: 'Score' },
-    // S10 (final review, parked as a full fix — client-side sort spans only
-    // the current page of runs, not the full `total`; this tooltip is the
-    // agreed minimal mitigation instead of moving the sort server-side).
-    evalScoreTitle: { de: 'Recall / MRR (%) — Sortierung gilt nur für die aktuell geladene Seite', en: 'Recall / MRR (%) — sort applies to the current page only' },
     evalTeamLastRun: { de: 'letzter Lauf', en: 'last run' },
 
     // orchestrator policy + tools by route (Wave 6)
@@ -1950,15 +1946,6 @@ export const translations = {
     policyPreviewEnumeration: { de: 'enumeration', en: 'enumeration' },
     policyPreviewComplex: { de: 'complex_reasoning', en: 'complex_reasoning' },
     policyPreviewGlobalSynthesis: { de: 'complex_reasoning + global_synthesis', en: 'complex_reasoning + global_synthesis' },
-
-    // ---------------------------------------------------------------
-    // T0-3 Tiered BM25 term-match boost
-    // ---------------------------------------------------------------
-    bm25TieredBoostEnabled: { de: 'BM25: Tiered Term-Match-Boost', en: 'BM25: tiered term-match boost' },
-    bm25TieredBoostEnabledHelp: {
-        de: 'Multipliziert den ts_rank des Sprachstemmer-Arms: Chunks, die die strikte websearch_to_tsquery-Form (alle Suchterme) erfüllen, erhalten ×100; Chunks, die nur die OR-of-Tokens-Recall-Floor-Variante treffen, erhalten ×10. Verbessert exakt-identifizierende Anfragen (Fehlercodes, Versionsstrings, Produktnamen). Single-Token-Anfragen sind ein No-Op (uniforme Skalierung, ordnungserhaltend). Externe Validierung: +7.5% NDCG. Standard: aus — vor Aktivierung onsite gegen Goldenset evaluieren.',
-        en: 'Multiplies the language-stemmer arm\'s ts_rank: chunks satisfying the strict websearch_to_tsquery form (all required terms) score ×100; chunks matching only the OR-of-tokens recall floor score ×10. Boosts exact-identifier queries (error codes, version strings, product names). Single-token queries are a no-op (uniform scaling, order-preserving). External validation: +7.5% NDCG. Default: off — validate against the golden set before enabling.',
-    },
 
     // ---------------------------------------------------------------
     // Wave-2 Task 6: BM25 scoring mode (ts_rank | bm25)

@@ -90,14 +90,14 @@ func clampBM25Params(k1, b float64) (float64, float64) {
 
 // keywordSQLInput bundles every value buildKeywordSQL needs to render the
 // keyword-arm SQL for one search. TableName/KbID/PgConfig/FileIDs/Limit/
-// SimpleArm/TieredBoost/NodeKindFilter carry the same meaning as the
-// former runKeywordSearch parameters of the same name. Mode/Dim/K1/B are
-// Task 6 additions consumed only when Mode == KeywordScoringBM25.
+// SimpleArm/NodeKindFilter carry the same meaning as the former
+// runKeywordSearch parameters of the same name. Mode/Dim/K1/B are Task 6
+// additions consumed only when Mode == KeywordScoringBM25.
 type keywordSQLInput struct {
 	TableName, Query, KbID, PgConfig string
 	FileIDs                          []string
 	Limit                            int
-	SimpleArm, TieredBoost           bool
+	SimpleArm                        bool
 	NodeKindFilter                   string
 	Mode                             KeywordScoringMode
 	Dim                              int
@@ -124,10 +124,6 @@ type keywordCandidateClause struct {
 	// simpleConfigParam is the 1-based placeholder index holding the
 	// literal "simple" when SimpleArm is on; 0 when it's off.
 	simpleConfigParam int
-	// websearchClause is the websearch_to_tsquery(...) clause built from
-	// the unquoted remainder; "" when the query was phrases/emails-only
-	// (no remainder), in which case the tiered boost is a no-op.
-	websearchClause string
 	// args holds every positional argument bound so far, in placeholder
 	// order ($1, $2, ...). Callers append further args (e.g. the bm25
 	// scoring-lexemes query text) after this slice.
@@ -142,11 +138,10 @@ type keywordCandidateClause struct {
 // sub-query keyword searches. Passed by value — deliberately not threaded
 // as four separate parameters through every call site.
 type keywordArmSettings struct {
-	SimpleArm   bool
-	TieredBoost bool
-	Mode        KeywordScoringMode
-	Dim         int
-	K1, B       float64
+	SimpleArm bool
+	Mode      KeywordScoringMode
+	Dim       int
+	K1, B     float64
 }
 
 // buildKeywordCandidateClause extracts phrases/remainder from in.Query and
@@ -200,10 +195,9 @@ func buildKeywordCandidateClause(in keywordSQLInput) (keywordCandidateClause, bo
 	}
 	filterClause += excludeCommunitySummaryClause(in.NodeKindFilter)
 
-	// websearchClause is hoisted so the tiered-boost CASE (applied to the
-	// score expression by both scoring builders) can reference it. Empty
-	// when remainder is empty — no strict-form text query to
-	// differentiate, so the boost is skipped for phrases-only queries.
+	// websearchClause is the websearch_to_tsquery(...) clause built from
+	// the unquoted remainder; it becomes the AND-required alternative of
+	// the websearch group below. Empty when remainder is empty.
 	var websearchClause string
 	var queryParts []string
 	if remainder != "" {
@@ -284,21 +278,8 @@ func buildKeywordCandidateClause(in keywordSQLInput) (keywordCandidateClause, bo
 		composed:          composed,
 		composedSimple:    composedSimple,
 		simpleConfigParam: simpleConfigParam,
-		websearchClause:   websearchClause,
 		args:              args,
 	}, true
-}
-
-// buildBoostExpr renders the tiered-boost CASE expression (W2-R7: applies
-// identically regardless of scoring mode). vectorIndexRef is the column
-// reference to test against — bare "vector_index" for the ts_rank direct
-// SELECT (unaliased FROM), "c.vector_index" for the bm25 variant's outer
-// SELECT (aliased FROM cand c).
-func buildBoostExpr(tieredBoost bool, websearchClause, vectorIndexRef string) string {
-	if tieredBoost && websearchClause != "" {
-		return fmt.Sprintf("CASE WHEN %s @@ %s THEN 100 ELSE 10 END", vectorIndexRef, websearchClause)
-	}
-	return "1"
 }
 
 // buildKeywordSQL renders the complete keyword-arm SQL (candidate WHERE
@@ -325,17 +306,17 @@ func buildKeywordSQL(in keywordSQLInput) (sql string, args []any, ok bool) {
 	return buildTsRankKeywordSQL(in, cc)
 }
 
-// buildTsRankKeywordSQL renders the default (today's) scoring mode. Byte-
-// identical to the pre-extraction runKeywordSearch output for the same
-// input — pinned by TestBuildKeywordSQL_TsRankIsByteStable.
+// buildTsRankKeywordSQL renders the default (today's) scoring mode. Pinned
+// byte-for-byte by TestBuildKeywordSQL_TsRankIsByteStable. Wave 7 dropped
+// the trailing "* <boost>" factor together with bm25_tiered_boost_enabled;
+// with the boost gone the factor was the constant 1, so the scores are
+// unchanged.
 func buildTsRankKeywordSQL(in keywordSQLInput, cc keywordCandidateClause) (string, []any, bool) {
-	boostExpr := buildBoostExpr(in.TieredBoost, cc.websearchClause, "vector_index")
-
 	var sqlText string
 	if cc.simpleConfigParam > 0 {
 		sqlText = fmt.Sprintf(`
 			SELECT id::text, content, COALESCE(contextual_prefix, ''), metadata::text, file_id::text,
-			       (ts_rank(vector_index, %s) * %s + COALESCE(ts_rank(vector_index_simple, %s), 0)) AS score,
+			       (ts_rank(vector_index, %s) + COALESCE(ts_rank(vector_index_simple, %s), 0)) AS score,
 			       COALESCE(parent_chunk_id::text, ''),
 			       COALESCE(node_kind, 'leaf'),
 			       COALESCE(tree_level, 0)
@@ -343,11 +324,11 @@ func buildTsRankKeywordSQL(in keywordSQLInput, cc keywordCandidateClause) (strin
 			WHERE %s
 			ORDER BY score DESC
 			LIMIT %d
-		`, cc.composed, boostExpr, cc.composedSimple, in.TableName, cc.whereClause, in.Limit)
+		`, cc.composed, cc.composedSimple, in.TableName, cc.whereClause, in.Limit)
 	} else {
 		sqlText = fmt.Sprintf(`
 			SELECT id::text, content, COALESCE(contextual_prefix, ''), metadata::text, file_id::text,
-			       (ts_rank(vector_index, %s) * %s) AS score,
+			       ts_rank(vector_index, %s) AS score,
 			       COALESCE(parent_chunk_id::text, ''),
 			       COALESCE(node_kind, 'leaf'),
 			       COALESCE(tree_level, 0)
@@ -355,7 +336,7 @@ func buildTsRankKeywordSQL(in keywordSQLInput, cc keywordCandidateClause) (strin
 			WHERE %s
 			ORDER BY score DESC
 			LIMIT %d
-		`, cc.composed, boostExpr, in.TableName, cc.whereClause, in.Limit)
+		`, cc.composed, in.TableName, cc.whereClause, in.Limit)
 	}
 	return sqlText, cc.args, true
 }
@@ -413,7 +394,7 @@ func buildBM25KeywordSQL(in keywordSQLInput, cc keywordCandidateClause) (string,
 	queryPlaceholder := fmt.Sprintf("$%d", queryParam)
 
 	ctes := bm25ArmCTE("", bm25ArmLang, "vector_index", "$2", queryPlaceholder, kbTable, termTable, k1Lit, bLit)
-	scoreExpr := fmt.Sprintf("COALESCE(sc.s, 0) * %s", buildBoostExpr(in.TieredBoost, cc.websearchClause, "c.vector_index"))
+	scoreExpr := "COALESCE(sc.s, 0)"
 	joinExpr := "LEFT JOIN sc ON sc.id = c.id"
 	if cc.simpleConfigParam > 0 {
 		simpleRegconfig := fmt.Sprintf("$%d", cc.simpleConfigParam)

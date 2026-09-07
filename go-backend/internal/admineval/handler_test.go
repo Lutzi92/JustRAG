@@ -731,6 +731,128 @@ func TestListRuns_KBIDFilter(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// W7-R4: server-side sort/order query params for ListRuns.
+// ---------------------------------------------------------------------------
+
+// TestListRuns_SortOrder_ForwardsValidValues verifies sort=recall&order=asc
+// is parsed and forwarded to the store's ListOpts verbatim.
+func TestListRuns_SortOrder_ForwardsValidValues(t *testing.T) {
+	store := &mockRunStore{listRuns: []eval.Run{}, listTotal: 0}
+	kbStore := &mockKBReader{name: "Test KB", found: true}
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs?sort=recall&order=asc", nil)
+	rec := httptest.NewRecorder()
+	h.ListRuns(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.listOpts.Sort != "recall" || store.listOpts.Order != "asc" {
+		t.Errorf("store called with Sort=%q Order=%q, want recall/asc", store.listOpts.Sort, store.listOpts.Order)
+	}
+}
+
+// TestListRuns_SortOrder_Unspecified verifies that omitting sort/order
+// forwards empty strings (the store's own created_at DESC default applies),
+// not some handler-invented default value.
+func TestListRuns_SortOrder_Unspecified(t *testing.T) {
+	store := &mockRunStore{listRuns: []eval.Run{}, listTotal: 0}
+	kbStore := &mockKBReader{name: "Test KB", found: true}
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs", nil)
+	rec := httptest.NewRecorder()
+	h.ListRuns(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.listOpts.Sort != "" || store.listOpts.Order != "" {
+		t.Errorf("store called with Sort=%q Order=%q, want empty/empty", store.listOpts.Sort, store.listOpts.Order)
+	}
+}
+
+// TestListRuns_SortOrder_InvalidSort400 verifies an unrecognised sort value
+// is rejected with 400 and never reaches the store.
+func TestListRuns_SortOrder_InvalidSort400(t *testing.T) {
+	store := &mockRunStore{listRuns: []eval.Run{}, listTotal: 0}
+	kbStore := &mockKBReader{name: "Test KB", found: true}
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs?sort=bogus", nil)
+	rec := httptest.NewRecorder()
+	h.ListRuns(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.listOpts != (eval.ListOpts{}) {
+		t.Errorf("store.List must not be called on an invalid sort; got listOpts=%+v", store.listOpts)
+	}
+}
+
+// TestListRuns_SortOrder_InvalidOrder400 verifies an unrecognised order
+// value is rejected with 400 and never reaches the store.
+func TestListRuns_SortOrder_InvalidOrder400(t *testing.T) {
+	store := &mockRunStore{listRuns: []eval.Run{}, listTotal: 0}
+	kbStore := &mockKBReader{name: "Test KB", found: true}
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs?sort=recall&order=bogus", nil)
+	rec := httptest.NewRecorder()
+	h.ListRuns(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.listOpts != (eval.ListOpts{}) {
+		t.Errorf("store.List must not be called on an invalid order; got listOpts=%+v", store.listOpts)
+	}
+}
+
+// TestListRunsForKB_SortOrder_ForwardsValidValues verifies the KB-scoped
+// list endpoint forwards sort/order the same way as the global one.
+func TestListRunsForKB_SortOrder_ForwardsValidValues(t *testing.T) {
+	store := &mockRunStore{listRuns: []eval.Run{}, listTotal: 0}
+	kbStore := &mockKBReader{name: "Test KB", found: true}
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/"+testKBID.String()+"/eval/runs?sort=mrr&order=desc", nil)
+	req.SetPathValue("id", testKBID.String())
+	rec := httptest.NewRecorder()
+	h.ListRunsForKB(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.listOpts.Sort != "mrr" || store.listOpts.Order != "desc" {
+		t.Errorf("store called with Sort=%q Order=%q, want mrr/desc", store.listOpts.Sort, store.listOpts.Order)
+	}
+}
+
+// TestListRunsForKB_SortOrder_InvalidSort400 verifies the KB-scoped list
+// endpoint rejects an unrecognised sort value with 400, matching the
+// global endpoint's validation.
+func TestListRunsForKB_SortOrder_InvalidSort400(t *testing.T) {
+	store := &mockRunStore{listRuns: []eval.Run{}, listTotal: 0}
+	kbStore := &mockKBReader{name: "Test KB", found: true}
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/"+testKBID.String()+"/eval/runs?sort=bogus", nil)
+	req.SetPathValue("id", testKBID.String())
+	rec := httptest.NewRecorder()
+	h.ListRunsForKB(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.listOpts != (eval.ListOpts{}) {
+		t.Errorf("store.List must not be called on an invalid sort; got listOpts=%+v", store.listOpts)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Task 10: GetRun tests
 // ---------------------------------------------------------------------------
 

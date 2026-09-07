@@ -274,9 +274,8 @@ one-step rollback** (`cmd/migrate` is up-only).
   flag is rejected with an explanation. Both inputs must put the same
   configuration on side A — the command warns but cannot verify it.
 
-- **Migration 0073 required** (RAG Wave 6) — now the highest migration in
-  this Unreleased block. One column, idempotent, **no backfill**: adds
-  `agent_decisions.policy_rule smallint` (nullable — which
+- **Migration 0073 required** (RAG Wave 6). One column, idempotent, **no
+  backfill**: adds `agent_decisions.policy_rule smallint` (nullable — which
   `chat_orchestrator_policy` rule, if any, pinned a turn's orchestrator).
   Compose applies it via the `migrate` one-shot service; **Kubernetes does
   not** — run `/app/migrate` out of the release image before
@@ -381,6 +380,41 @@ one-step rollback** (`cmd/migrate` is up-only).
 - **CI's integration-test package list gained `internal/adminagentmetrics`.**
   The step enumerates packages explicitly rather than globbing, and the
   new `policy_rule` integration test needed adding.
+- **Migration 0074 required** (RAG Wave 7) — now the highest migration in
+  this Unreleased block; **`bm25_tiered_boost_enabled` is removed.** The
+  key, its per-KB registry row, the keyword-arm CASE it rendered, the
+  `--bm25-tiered-boost` eval override and the admin checkbox are all gone.
+  0074 deletes any stored row from `site_configs` and `kb_site_configs`; its
+  Down is deliberately a no-op. Compose applies it via the `migrate`
+  one-shot service; **Kubernetes does not** — run `/app/migrate` out of the
+  release image before `kubectl apply`, per `docs/runbooks/release.md`.
+  The key shipped default **off** and was deprecated in 2026-09 after the
+  Wave-2 A/B measured it net negative on every route under `ts_rank` and
+  neutral under `bm25` (the grid in `docs/retrieval.md` §"Keyword arm
+  scoring: ts_rank vs BM25 (2026-09)", cells B and D — the Wave-3 retune
+  record ran with the boost off throughout and is not the retiring
+  measurement), so a deployment that left it unset sees no ranking change
+  at all — a deployment that had it **on** loses that boost and its ranking
+  changes on upgrade. As with every migration-carrying release there is no
+  one-step rollback.
+- **`cmd/eval --print-keyword-sql`'s JSON lost its `tiered_boost` field.**
+  A documented diagnostic output shape change; the rendered statements also
+  no longer carry the `* <boost>` factor (it was the constant `1` with the
+  boost off, so scores are unchanged). `eval/fixtures/bm25-scale/time-keyword-sql.sh`
+  reads only `executable_sql` and is unaffected.
+
+### Removed
+
+- **`bm25_tiered_boost_enabled` (deprecated 2026-09, Wave 3).** Removed end
+  to end: `siteconfig.kbConfigRegistry`, `vector.KBVectorConfig.BM25TieredBoost`
+  and its site-config parser, `buildBoostExpr` plus the CASE in both keyword
+  scoring modes, the `keyword_arm`/`keywordSQLInput` plumbing,
+  `keyword_sql_print.go`'s `tiered_boost` JSON field,
+  `cmd/eval --bm25-tiered-boost`, `admineval.snapshotConfigKeys`,
+  `pipeline/nodes.go`, the AdminAgentTab checkbox and its two translation
+  keys. Migration 0074 deletes the stored rows. The measurement that retired
+  it stays in `docs/retrieval.md` §"Keyword arm scoring: ts_rank vs BM25
+  (2026-09)" (the Wave-2 grid, cells B and D).
 
 ### Fixes
 
@@ -390,6 +424,24 @@ one-step rollback** (`cmd/migrate` is up-only).
   accepts the fractional-second component it was trying to catch); a page
   whose `version.when` is unparseable is now logged once per sync and treated
   as unchanged (previously silent, same "unchanged" outcome).
+- **Non-streaming chat turns now record an `agent_decisions` row.** The
+  non-streaming JSON response path (`writeJSONResponse`) previously recorded
+  nothing, leaving every `stream=false` standard-path turn invisible to the
+  admin agent-metrics panel. It now shares `recordStandardPathDecision` with
+  the streaming standard path, so the mode/outcome/latency computation cannot
+  drift between the two. No migration.
+- **Admin eval-run table's Score sort moved server-side.** Both list
+  endpoints (`GET /api/admin/eval/runs`, `GET /api/kb/{id}/eval/runs`) now
+  accept `sort` (`created_at` default | `recall` | `mrr`) and `order`
+  (`desc` default | `asc`) query params — validated against a fixed set,
+  400 on an unknown value — and order by the run's `report` aggregate
+  metrics with `NULLS LAST` (a run with no report, e.g. still queued or
+  failed, always sorts last) plus `created_at DESC` as the tiebreak. The
+  Score column header now refetches with these params (desc → asc → none,
+  resetting to the first page each time) instead of reordering only the
+  currently loaded page, which is what the previous client-side sort and
+  its "sort applies to the current page only" tooltip were mitigating. No
+  migration; the tooltip translation key is removed as unused.
 
 ## v0.10.0 — 2026-08-19
 
