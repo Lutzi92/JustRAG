@@ -5,11 +5,28 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/justrag/go-backend/internal/observability"
 )
 
 type scriptedCompleter struct {
 	responses []string
-	calls     int
+	// calls counts scripted responses actually consumed (pre-existing
+	// semantics — most tests rely on it to mean "N successful reads off
+	// responses").
+	calls int
+	// invocations counts every Complete call, including one made after the
+	// script is exhausted (which returns an error WITHOUT incrementing
+	// calls). Retry-boundedness tests ("never a third call") must assert on
+	// this, not on calls: a caller that ignores the "no more scripted
+	// responses" error and calls a third time would leave calls unchanged
+	// (still 2, since nothing new was consumed) while invocations would be
+	// 3 — the whole point of the assertion. Verified by mutation (task-4
+	// review B1): adding a real third completeJSON call left calls-based
+	// assertions green.
+	invocations int
 	// prompts records the user prompt passed on every Complete call, in
 	// order (including a call that runs out of scripted responses), so a
 	// retry test can inspect what the second call actually asked (W6-R4).
@@ -17,6 +34,7 @@ type scriptedCompleter struct {
 }
 
 func (s *scriptedCompleter) Complete(_ context.Context, prompt, _ string) (string, error) {
+	s.invocations++
 	s.prompts = append(s.prompts, prompt)
 	if s.calls >= len(s.responses) {
 		return "", errorsNew("no more scripted responses")
@@ -421,8 +439,8 @@ func TestFaithfulnessRetry_InvalidThenValidSucceeds(t *testing.T) {
 	if len(warnings) != 1 || warnings[0] != "retry:faithfulness" {
 		t.Errorf("expected [retry:faithfulness], got %v", warnings)
 	}
-	if completer.calls != 2 {
-		t.Errorf("expected exactly 2 calls, got %d", completer.calls)
+	if completer.invocations != 2 {
+		t.Errorf("expected exactly 2 calls, got %d", completer.invocations)
 	}
 	assertRetryPromptNamesTheFailure(t, completer, faithfulnessInvalidJSON, &struct {
 		Claims []struct {
@@ -444,8 +462,8 @@ func TestFaithfulnessRetry_InvalidTwiceFailsAfterOneRetry(t *testing.T) {
 	if !strings.Contains(err.Error(), "after retry") {
 		t.Errorf("expected error to mention 'after retry', got %v", err)
 	}
-	if completer.calls != 2 {
-		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.calls)
+	if completer.invocations != 2 {
+		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.invocations)
 	}
 }
 
@@ -461,8 +479,36 @@ func TestFaithfulnessRetry_ValidFirstNeedsNoRetry(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings, got %v", warnings)
 	}
+	if completer.invocations != 1 {
+		t.Errorf("expected exactly 1 call, got %d", completer.invocations)
+	}
+}
+
+// transportErrorCompleter always fails the underlying call with a transport
+// error (never a decoder failure): completeJSON's sketch treats that as
+// non-retryable ("return false, err" before any retry logic runs). Untested
+// before task-4 review N2 — mutation-verified: making the first call retry
+// on a transport error left the suite green without this test.
+type transportErrorCompleter struct {
+	calls int
+}
+
+func (c *transportErrorCompleter) Complete(_ context.Context, _, _ string) (string, error) {
+	c.calls++
+	return "", errorsNew("connection refused")
+}
+
+func TestFaithfulnessRetry_TransportErrorOnFirstCallDoesNotRetry(t *testing.T) {
+	completer := &transportErrorCompleter{}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	_, _, err := j.faithfulness(context.Background(), q, "answer", "context")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
 	if completer.calls != 1 {
-		t.Errorf("expected exactly 1 call, got %d", completer.calls)
+		t.Errorf("expected exactly 1 call (a transport error must not retry), got %d", completer.calls)
 	}
 }
 
@@ -487,8 +533,8 @@ func TestAnswerRelevanceRetry_InvalidThenValidSucceeds(t *testing.T) {
 	if len(warnings) != 1 || warnings[0] != "retry:answer_relevance" {
 		t.Errorf("expected [retry:answer_relevance], got %v", warnings)
 	}
-	if completer.calls != 2 {
-		t.Errorf("expected exactly 2 calls, got %d", completer.calls)
+	if completer.invocations != 2 {
+		t.Errorf("expected exactly 2 calls, got %d", completer.invocations)
 	}
 	assertRetryPromptNamesTheFailure(t, completer, answerRelevanceInvalidJSON, &struct {
 		Score     json.RawMessage `json:"score"`
@@ -508,8 +554,8 @@ func TestAnswerRelevanceRetry_InvalidTwiceFailsAfterOneRetry(t *testing.T) {
 	if !strings.Contains(err.Error(), "after retry") {
 		t.Errorf("expected error to mention 'after retry', got %v", err)
 	}
-	if completer.calls != 2 {
-		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.calls)
+	if completer.invocations != 2 {
+		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.invocations)
 	}
 }
 
@@ -525,8 +571,67 @@ func TestAnswerRelevanceRetry_ValidFirstNeedsNoRetry(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings, got %v", warnings)
 	}
-	if completer.calls != 1 {
-		t.Errorf("expected exactly 1 call, got %d", completer.calls)
+	if completer.invocations != 1 {
+		t.Errorf("expected exactly 1 call, got %d", completer.invocations)
+	}
+}
+
+// TestAnswerRelevanceRetry_RetriedThenScoreParseFailureStillWarns pins the
+// task-4 review's N3 finding: a retry that DID happen (the first response
+// was a decoder failure) but whose corrected JSON then fails the downstream
+// score parse (not a decoder failure — parseJudgeScore, not unmarshalStrict)
+// must still surface "retry:answer_relevance" in the returned warnings
+// alongside the error. Before the fix, the warning was built AFTER the
+// score-parse error return and so was silently dropped on this path.
+func TestAnswerRelevanceRetry_RetriedThenScoreParseFailureStillWarns(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{
+		answerRelevanceInvalidJSON,        // decoder failure -> triggers the retry
+		`{"score":"xyz","reasoning":"y"}`, // valid JSON, but an unparseable score
+	}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	_, warnings, err := j.answerRelevance(context.Background(), q, "answer")
+	if err == nil {
+		t.Fatal("expected an error (unparseable score)")
+	}
+	if len(warnings) != 1 || warnings[0] != "retry:answer_relevance" {
+		t.Errorf("expected [retry:answer_relevance] preserved alongside the error, got %v", warnings)
+	}
+	if completer.invocations != 2 {
+		t.Errorf("expected exactly 2 calls (the retry, not a second retry), got %d", completer.invocations)
+	}
+}
+
+// TestJudgeEvaluate_RetriedThenScoreParseFailureWarningReachesJudgeWarnings
+// is the Evaluate-level half: JudgeWarnings must carry the retry marker even
+// though AnswerRelevance itself is nil (the metric failed).
+func TestJudgeEvaluate_RetriedThenScoreParseFailureWarningReachesJudgeWarnings(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{
+		answerRelevanceInvalidJSON,
+		`{"score":"xyz","reasoning":"y"}`,
+	}}
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+	// Mismatched chunks/contents (1 vs 0) makes Evaluate take the
+	// "chunk/content length mismatch" branch for faithfulness, which
+	// records an error WITHOUT calling the completer — so the two scripted
+	// responses above are reserved for answer_relevance, the metric this
+	// test targets.
+	chunks := []RetrievedChunk{{FileID: "f1"}}
+
+	got := NewJudge(completer).Evaluate(context.Background(), q, "answer", chunks, nil)
+
+	if got.AnswerRelevance != nil {
+		t.Errorf("expected nil AnswerRelevance (score parse failed), got %v", *got.AnswerRelevance)
+	}
+	found := false
+	for _, w := range got.JudgeWarnings {
+		if w == "retry:answer_relevance" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected JudgeWarnings to contain retry:answer_relevance even though the metric errored, got %v", got.JudgeWarnings)
 	}
 }
 
@@ -551,8 +656,8 @@ func TestCoverageRetry_InvalidThenValidSucceeds(t *testing.T) {
 	if len(warnings) != 1 || warnings[0] != "retry:coverage" {
 		t.Errorf("expected [retry:coverage], got %v", warnings)
 	}
-	if completer.calls != 2 {
-		t.Errorf("expected exactly 2 calls, got %d", completer.calls)
+	if completer.invocations != 2 {
+		t.Errorf("expected exactly 2 calls, got %d", completer.invocations)
 	}
 	assertRetryPromptNamesTheFailure(t, completer, coverageInvalidJSON, &struct {
 		Covered []bool `json:"covered"`
@@ -571,8 +676,8 @@ func TestCoverageRetry_InvalidTwiceFailsAfterOneRetry(t *testing.T) {
 	if !strings.Contains(err.Error(), "after retry") {
 		t.Errorf("expected error to mention 'after retry', got %v", err)
 	}
-	if completer.calls != 2 {
-		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.calls)
+	if completer.invocations != 2 {
+		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.invocations)
 	}
 }
 
@@ -588,8 +693,78 @@ func TestCoverageRetry_ValidFirstNeedsNoRetry(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings, got %v", warnings)
 	}
-	if completer.calls != 1 {
-		t.Errorf("expected exactly 1 call, got %d", completer.calls)
+	if completer.invocations != 1 {
+		t.Errorf("expected exactly 1 call, got %d", completer.invocations)
+	}
+}
+
+// contextPrecisionInvalidJSON has a trailing comma inside the array. This
+// path had no dedicated retry-warning test (task-4 review N1): the other
+// three metrics' "retry:<metric>" strings were each pinned, leaving
+// context_precision the one warning constant of the four with no test able
+// to catch a typo in it.
+const contextPrecisionInvalidJSON = `{"relevant":[true,]}`
+
+func TestContextPrecisionRetry_InvalidThenValidSucceeds(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{
+		contextPrecisionInvalidJSON,
+		`{"relevant":[true]}`,
+	}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+	contents := []string{"c1"}
+
+	got, warnings, err := j.contextPrecision(context.Background(), q, contents)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 1.0 {
+		t.Errorf("expected 1.0, got %f", got)
+	}
+	if len(warnings) != 1 || warnings[0] != "retry:context_precision" {
+		t.Errorf("expected [retry:context_precision], got %v", warnings)
+	}
+	if completer.invocations != 2 {
+		t.Errorf("expected exactly 2 calls, got %d", completer.invocations)
+	}
+	assertRetryPromptNamesTheFailure(t, completer, contextPrecisionInvalidJSON, &struct {
+		Relevant []bool `json:"relevant"`
+	}{})
+}
+
+func TestContextPrecisionRetry_InvalidTwiceFailsAfterOneRetry(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{contextPrecisionInvalidJSON, contextPrecisionInvalidJSON}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+	contents := []string{"c1"}
+
+	_, _, err := j.contextPrecision(context.Background(), q, contents)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "after retry") {
+		t.Errorf("expected error to mention 'after retry', got %v", err)
+	}
+	if completer.invocations != 2 {
+		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.invocations)
+	}
+}
+
+func TestContextPrecisionRetry_ValidFirstNeedsNoRetry(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{`{"relevant":[true]}`}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+	contents := []string{"c1"}
+
+	_, warnings, err := j.contextPrecision(context.Background(), q, contents)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", warnings)
+	}
+	if completer.invocations != 1 {
+		t.Errorf("expected exactly 1 call, got %d", completer.invocations)
 	}
 }
 
@@ -612,6 +787,94 @@ func TestJudgeEvaluate_FaithfulnessRetryFailureRecordsErrorWithAfterRetry(t *tes
 	}
 	if !found {
 		t.Errorf("expected a faithfulness error containing 'after retry', got %v", got.JudgeErrors)
+	}
+}
+
+// TestFaithfulnessRetry_IncrementsMetricFromTheJudgePath asserts the
+// production call site (judge.go's completeJSON -> observability.
+// RecordJudgeRetry), not just the RecordJudgeRetry helper in isolation
+// (which internal/observability/metrics_test.go already covers). Reading
+// the counter through JudgeRetryTotalForTest before/after proves the judge
+// actually calls it, with the right label, exactly once per failed first
+// parse (task-4 review B2).
+func TestFaithfulnessRetry_IncrementsMetricFromTheJudgePath(t *testing.T) {
+	counter := observability.JudgeRetryTotalForTest()
+	before := testutil.ToFloat64(counter.WithLabelValues("faithfulness"))
+
+	completer := &scriptedCompleter{responses: []string{
+		faithfulnessInvalidJSON,
+		`{"claims":[{"text":"a","supported":true}]}`,
+	}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+	if _, _, err := j.faithfulness(context.Background(), q, "answer", "context"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	after := testutil.ToFloat64(counter.WithLabelValues("faithfulness"))
+	if after != before+1 {
+		t.Errorf("expected faithfulness retry counter +1, got before=%v after=%v", before, after)
+	}
+}
+
+// TestFaithfulnessRetry_CleanRunDoesNotIncrementMetric is the negative half
+// of the above: a first response that parses cleanly must not touch the
+// counter at all.
+func TestFaithfulnessRetry_CleanRunDoesNotIncrementMetric(t *testing.T) {
+	counter := observability.JudgeRetryTotalForTest()
+	before := testutil.ToFloat64(counter.WithLabelValues("faithfulness"))
+
+	completer := &scriptedCompleter{responses: []string{`{"claims":[{"text":"a","supported":true}]}`}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+	if _, _, err := j.faithfulness(context.Background(), q, "answer", "context"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	after := testutil.ToFloat64(counter.WithLabelValues("faithfulness"))
+	if after != before {
+		t.Errorf("expected no change on a clean run, got before=%v after=%v", before, after)
+	}
+}
+
+// TestFaithfulnessRetry_GermanQuestionGetsGermanRetryInstruction pins the
+// task-4 review's N4 localization fix: q.Language == "de" must produce a
+// German correction instruction (matching every SystemPrompt in
+// internal/prompts, which are already bilingual), not the English sketch
+// text tacked onto a German exchange.
+func TestFaithfulnessRetry_GermanQuestionGetsGermanRetryInstruction(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{
+		faithfulnessInvalidJSON,
+		`{"claims":[{"text":"a","supported":true}]}`,
+	}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "warum?", Language: "de"}
+
+	if _, _, err := j.faithfulness(context.Background(), q, "answer", "context"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(completer.prompts) != 2 {
+		t.Fatalf("expected 2 recorded prompts, got %d", len(completer.prompts))
+	}
+	retryPrompt := completer.prompts[1]
+	if !strings.Contains(retryPrompt, "kein gültiges JSON") {
+		t.Errorf("retry prompt missing German instruction: %s", retryPrompt)
+	}
+	if strings.Contains(retryPrompt, "was not valid JSON") {
+		t.Errorf("retry prompt leaked the English instruction for a German question: %s", retryPrompt)
+	}
+	var probe struct {
+		Claims []struct {
+			Text      string `json:"text"`
+			Supported bool   `json:"supported"`
+		} `json:"claims"`
+	}
+	wantErr := unmarshalStrict(faithfulnessInvalidJSON, &probe)
+	if wantErr == nil {
+		t.Fatal("test payload was not actually invalid JSON")
+	}
+	if !strings.Contains(retryPrompt, wantErr.Error()) {
+		t.Errorf("German retry prompt still missing the decoder error text %q: %s", wantErr.Error(), retryPrompt)
 	}
 }
 
