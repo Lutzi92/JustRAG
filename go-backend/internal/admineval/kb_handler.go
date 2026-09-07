@@ -344,18 +344,7 @@ func (h *Handler) ListRunsForKB(w http.ResponseWriter, r *http.Request) {
 	}
 	summaries := make([]RunSummary, 0, len(runs))
 	for _, run := range runs {
-		s := RunSummary{
-			ID: run.ID, Label: run.Label, Status: run.Status, CreatedAt: run.CreatedAt,
-			StartedAt: run.StartedAt, FinishedAt: run.FinishedAt, KBID: run.KBID,
-			JudgeEnabled: run.JudgeEnabled, ErrorMessage: run.ErrorMessage,
-		}
-		if name, _, kbErr := h.kbStore.GetKBInfo(ctx, run.KBID); kbErr == nil {
-			s.KBName = name
-		}
-		if len(run.Report) > 0 {
-			s.Aggregate, s.RouteMeanRecall = summarize(run.Report)
-		}
-		summaries = append(summaries, s)
+		summaries = append(summaries, h.summarizeRun(ctx, run))
 	}
 	httputil.WriteJSONCtx(ctx, w, http.StatusOK, ListRunsResponse{Runs: summaries, Total: total})
 }

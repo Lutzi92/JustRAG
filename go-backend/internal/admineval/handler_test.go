@@ -306,16 +306,22 @@ func TestCreateRun_Valid_201(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // fakeTeamLoader is a minimal eval.TeamLoaderForEval fake: err (if set) is
-// returned from LoadTeamForChat; otherwise a stub team loads successfully.
+// returned from LoadTeamForChat; otherwise a stub team loads successfully,
+// carrying name (defaulting to "Sec-Team" when unset for existing callers).
 type fakeTeamLoader struct {
-	err error
+	err  error
+	name string
 }
 
 func (f *fakeTeamLoader) LoadTeamForChat(_ context.Context, _, _ string) (*agentteams.TeamForChat, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &agentteams.TeamForChat{Team: agentteams.TeamRecord{ID: "team-1", Name: "Sec-Team"}}, nil
+	name := f.name
+	if name == "" {
+		name = "Sec-Team"
+	}
+	return &agentteams.TeamForChat{Team: agentteams.TeamRecord{ID: "team-1", Name: name}}, nil
 }
 
 var testTeamID = uuid.MustParse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
@@ -1414,5 +1420,153 @@ func TestUpdateGoldenSet_MalformedJSONIs400(t *testing.T) {
 	}
 	if gsStore.setScheduleCalled {
 		t.Fatal("must not call SetSchedule for an unparsable body")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 9: team/score columns — RunSummary.team_id / team_name (W6-R9)
+// ---------------------------------------------------------------------------
+
+// TestListRuns_TeamName_Resolved verifies a run carrying a TeamID resolves
+// its team name via the injected team loader and surfaces both fields.
+func TestListRuns_TeamName_Resolved(t *testing.T) {
+	run := eval.Run{
+		ID:     testRunID,
+		Status: "completed",
+		KBID:   testKBID,
+		TeamID: strPtr("team-1"),
+	}
+	store := &mockRunStore{listRuns: []eval.Run{run}, listTotal: 1}
+	kbStore := &mockKBReader{name: "Test KB", found: true}
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil, &fakeTeamLoader{name: "Recherche-Team"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs", nil)
+	rec := httptest.NewRecorder()
+	h.ListRuns(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	var resp ListRunsResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Runs) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(resp.Runs))
+	}
+	s := resp.Runs[0]
+	if s.TeamID == nil || *s.TeamID != "team-1" {
+		t.Errorf("TeamID = %v, want \"team-1\"", s.TeamID)
+	}
+	if s.TeamName != "Recherche-Team" {
+		t.Errorf("TeamName = %q, want %q", s.TeamName, "Recherche-Team")
+	}
+
+	// The raw JSON must actually carry both keys — a nil-vs-empty struct
+	// bug in the DTO would still pass the decoded-struct assertions above.
+	if !strings.Contains(body, `"team_id":"team-1"`) {
+		t.Errorf("expected raw JSON to contain team_id, got %s", body)
+	}
+	if !strings.Contains(body, `"team_name":"Recherche-Team"`) {
+		t.Errorf("expected raw JSON to contain team_name, got %s", body)
+	}
+}
+
+// TestListRuns_TeamName_OmittedWithoutTeam verifies a standard (non-team)
+// run omits both team_id and team_name from the JSON body entirely — they
+// are omitempty, so "present but empty" would be a regression.
+func TestListRuns_TeamName_OmittedWithoutTeam(t *testing.T) {
+	run := eval.Run{ID: testRunID, Status: "completed", KBID: testKBID}
+	store := &mockRunStore{listRuns: []eval.Run{run}, listTotal: 1}
+	kbStore := &mockKBReader{name: "Test KB", found: true}
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil, &fakeTeamLoader{name: "Recherche-Team"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs", nil)
+	rec := httptest.NewRecorder()
+	h.ListRuns(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `"team_id"`) {
+		t.Errorf("expected team_id to be omitted for a non-team run, got %s", body)
+	}
+	if strings.Contains(body, `"team_name"`) {
+		t.Errorf("expected team_name to be omitted for a non-team run, got %s", body)
+	}
+}
+
+// TestListRuns_TeamName_LoaderErrorLeavesEmptyName verifies a team-loader
+// error is swallowed (read-only listing, fail-soft) — team_id still
+// surfaces (the run IS a team run) but team_name stays empty and is
+// therefore omitted.
+func TestListRuns_TeamName_LoaderErrorLeavesEmptyName(t *testing.T) {
+	run := eval.Run{
+		ID:     testRunID,
+		Status: "completed",
+		KBID:   testKBID,
+		TeamID: strPtr("team-1"),
+	}
+	store := &mockRunStore{listRuns: []eval.Run{run}, listTotal: 1}
+	kbStore := &mockKBReader{name: "Test KB", found: true}
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil, &fakeTeamLoader{err: agentteams.ErrNotFound})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/eval/runs", nil)
+	rec := httptest.NewRecorder()
+	h.ListRuns(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp ListRunsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Runs) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(resp.Runs))
+	}
+	s := resp.Runs[0]
+	if s.TeamID == nil || *s.TeamID != "team-1" {
+		t.Errorf("TeamID = %v, want \"team-1\" (must survive a loader error)", s.TeamID)
+	}
+	if s.TeamName != "" {
+		t.Errorf("TeamName = %q, want empty (loader error swallowed)", s.TeamName)
+	}
+}
+
+// TestListRunsForKB_TeamName_Resolved verifies the KB-scoped list endpoint
+// resolves team names through the same shared summarizeRun helper as the
+// global list endpoint.
+func TestListRunsForKB_TeamName_Resolved(t *testing.T) {
+	run := eval.Run{
+		ID:     testRunID,
+		Status: "completed",
+		KBID:   testKBID,
+		TeamID: strPtr("team-1"),
+	}
+	store := &mockRunStore{listRuns: []eval.Run{run}, listTotal: 1}
+	kbStore := &mockKBReader{name: "Test KB", found: true}
+	h := NewHandler(store, kbStore, &mockSiteConfig{}, &mockEnqueuer{}, &mockGoldenSetStore{}, nil, &fakeTeamLoader{name: "Recherche-Team"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/"+testKBID.String()+"/eval/runs", nil)
+	req.SetPathValue("id", testKBID.String())
+	rec := httptest.NewRecorder()
+	h.ListRunsForKB(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp ListRunsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Runs) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(resp.Runs))
+	}
+	s := resp.Runs[0]
+	if s.TeamName != "Recherche-Team" {
+		t.Errorf("TeamName = %q, want %q", s.TeamName, "Recherche-Team")
 	}
 }

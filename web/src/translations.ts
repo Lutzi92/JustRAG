@@ -1916,6 +1916,12 @@ export const translations = {
     prev: { de: 'Zurück', en: 'Previous' },
     next: { de: 'Weiter', en: 'Next' },
 
+    // eval run table (Wave 6)
+    evalTeam: { de: 'Team', en: 'Team' },
+    evalScore: { de: 'Score', en: 'Score' },
+    evalScoreTitle: { de: 'Recall / MRR (%)', en: 'Recall / MRR (%)' },
+    evalTeamLastRun: { de: 'letzter Lauf', en: 'last run' },
+
     // ---------------------------------------------------------------
     // T0-3 Tiered BM25 term-match boost
     // ---------------------------------------------------------------
