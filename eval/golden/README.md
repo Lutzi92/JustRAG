@@ -525,6 +525,12 @@ The flat1-vs-flat2 control must stay inside a [0.35, 0.65] win rate — outside
 it the judge is unstable and the run is inconclusive. Cost is reported, not a
 veto. This replaces W4-R7 for all future runs.
 
+Worked example: `eval/golden/global-synthesis-de.acceptance.md` §4 (Wave 5
+re-measurement on the extended n=24 set) — all four sub-criteria pass
+(pooled win rate 0.9444, Wilson low 0.8186, pooled coverage delta +5.03 pp
+against a 1.39 pp band, control win rate 0.3636), so `chat_longcontext_mode`
+flips to `map_reduce`.
+
 ## Coverage judge — optional `expected_points`
 
 Faithfulness/answer-relevance/context-precision each grade some aspect of

@@ -1068,3 +1068,358 @@ Einführung von Eveeno - digitales Teilnehmendenmanagement
 - `.superpowers/sdd/2026-09-06-rag-sota-wave5/t9-append-rows.py` — the authored
   rows in source form, so the gitignored jsonl is reproducible from a tracked
   worktree artifact.
+
+## §4 Wave 5 re-measurement under the pooled rule (W5-R1, pre-registered 2026-09-06)
+
+### The rule, first
+
+**Ruling W5-R1** (registered 2026-09-06, *before* the extended set existed and
+*before* any run on it — see `eval/golden/README.md` § "Pooling two
+comparisons — `--pairwise-pool`" and `rulings.md`). Over the extended
+global-synthesis set (N ≥ 24 questions), two cross pairs are run
+(flat1 vs mr1, flat2 vs mr2) and the decisive pairs of the two are **pooled**
+(ties excluded from every rate). All four sub-criteria must pass:
+
+1. pooled `map_reduce` (B) win rate ≥ 0.60
+2. pooled Wilson lower bound (z = 1.96) > 0.50
+3. pooled mean coverage of `map_reduce` not below flat's mean coverage by
+   more than the flat1-vs-flat2 coverage band
+   (`band = |mean_cov(flat1) − mean_cov(flat2)|`)
+4. the control pair (flat1 vs flat2) win rate lands inside `[0.35, 0.65]`
+   (otherwise the judge is unstable on this set and the run is inconclusive)
+
+All four → `chat_longcontext_mode` default flips to `map_reduce` in Task 11
+(the route stays gated by `chat_longcontext_enabled`). Any failure → `flat`
+stays. Cost is reported, not a veto. This replaces the per-pair W4-R7 rule
+(§2) for all future runs. Nothing below changes the verdict after the fact;
+anything not in the four numbered criteria above is labelled **post hoc**.
+
+### Setup
+
+Same KB (`83262307-3a1b-49bc-bd08-3b925a868a92`, PPM-Eval) and the same
+unchanged site-config baseline as §1/§2 — no `site_configs` row was written;
+`chat_longcontext_enabled`/`chat_longcontext_mode` are supplied per run
+through the `--longcontext`/`--longcontext-mode` overlays, confirmed in each
+run's first log line, e.g. `t10-flat1.log`:
+`{"msg":"eval: applying chat site_config overlays for this
+run","overlays":{"chat_longcontext_enabled":"true","chat_longcontext_mode":"flat"}}`
+(and `"map_reduce"` for mr1/mr2). Fixture: `eval/golden/global-synthesis-de.jsonl`,
+**24 questions** (G01–G24, §3). Binary built once from commit `15c383a`
+(`.superpowers/sdd/2026-09-06-rag-sota-wave5/eval-wave5`). Model stack
+unchanged from §1/§2 (`jlu/gemma-4-26b-it` answer + all judges,
+`jlu-internal/gemma-4-26b-it-bulk` map-stage extractor, `jlu/jina-rerank`
+reranker, `jlu/qwen3-embedding` 4096-dim embedder). All four judged runs and
+three pairwise comparisons ran back-to-back on the dev stack with nothing
+else scheduled against it, per the runner's lock check.
+
+### Commands (exact, `t10-run.sh`)
+
+```bash
+export DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=rag_db
+export VECTOR_DB_HOST=localhost VECTOR_DB_PORT=5433 VECTOR_DB_USER=postgres VECTOR_DB_PASSWORD=postgres VECTOR_DB_NAME=rag_vector_db
+export JWT_SECRET=local-eval-acceptance-secret-0123456789abcdef
+export REDIS_HOST=localhost REDIS_PORT=6379 REDIS_PASSWORD=redis
+export S3_ENDPOINT=http://localhost:9000 S3_ACCESS_KEY=minioadmin S3_SECRET_KEY=minioadmin S3_BUCKET=rag-files S3_REGION=us-east-1
+
+# four judged runs, alternating flat / map_reduce, on the extended 24-question set
+eval-wave5 --golden eval/golden/global-synthesis-de.jsonl --production-context \
+  --orchestrator-dispatch=true --judge --longcontext on --longcontext-mode flat \
+  --output t10-flat1.json        # then mr1 (map_reduce), flat2, mr2, same shape
+
+# three pairwise comparisons (win rate is A's; A is always the first path named)
+eval-wave5 --pairwise-a t10-flat1.json --pairwise-b t10-mr1.json   --pairwise-out t10-pw-1.json
+eval-wave5 --pairwise-a t10-flat2.json --pairwise-b t10-mr2.json   --pairwise-out t10-pw-2.json
+eval-wave5 --pairwise-a t10-flat1.json --pairwise-b t10-flat2.json --pairwise-out t10-pw-ctrl.json
+
+# W5-R1's actual decision statistic: pool the two cross pairs
+eval-wave5 --pairwise-out t10-pw-pooled.json \
+  --pairwise-pool t10-pw-1.json t10-pw-2.json
+```
+
+Full driver: `.superpowers/sdd/2026-09-06-rag-sota-wave5/t10-run.sh`. Wall
+clock (`t10-run.log`): flat1 1558 s, mr1 1797 s, flat2 1244 s, mr2 1797 s —
+total ≈ 1 h 43 min for the four judged runs, plus the near-instant pairwise
+and pooling steps (file-only, no retrieval/judge calls).
+
+### Per-run validity table (n=24, k=10 per run)
+
+All four runs pass every validity check from the hand-off: `errors == 0`,
+every one of the 24 questions has `agent.orchestrator == "longcontext"`
+(`classified_query_type == "complex_reasoning"` throughout), and
+`judge.coverage` is present for all 24 (`coverage_n = 24`).
+
+| Run | errors | orchestrator=longcontext (24/24) | coverage n | mean coverage | mean faithfulness (n) | mean context precision | mean answer relevance | mean answer length (runes) | judge warnings | judge errors | wall time |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| flat1 | 0 | 24/24 | 24/24 | 0.5403 | 0.4642 (24) | 0.4500 | 1.0000 | 3031 | 3 | 0 | 1558 s |
+| mr1 | 0 | 24/24 | 24/24 | 0.5972 | 0.4615 (23) | 0.5458 | 1.0000 | 4082 | 1 | 1 | 1797 s |
+| flat2 | 0 | 24/24 | 24/24 | 0.5264 | 0.5694 (24) | 0.4500 | 1.0000 | 3207 | 3 | 0 | 1244 s |
+| mr2 | 0 | 24/24 | 24/24 | 0.5701 | 0.5327 (23) | 0.5250 | 1.0000 | 3938 | 1 | 1 | 1797 s |
+
+Answer relevance is fully saturated (24/24 at 1.000 in every run), consistent
+with §1/§2's finding that the judge has no discriminative power on this
+route — expected, not a criterion. Faithfulness and context precision remain
+diagnostic, not decision inputs, per W5-R1 (only coverage and the pairwise
+judge feed the decision).
+
+**Judge instrument faults, pre-existing and independent of mode (post hoc):**
+mr1 G05 and mr2 G09 each hit a faithfulness judge call whose response was a
+```` ```json ````-fenced object the strict decoder rejects (`judge_errors`;
+that question's faithfulness is simply absent from its run's mean, computed
+over the other 23 — the same failure mode documented in §1/§2). The
+recurring `context_precision: judge returned 11 booleans, expected 10 —
+truncated/padded` warning fired 8 times across the four runs (flat1
+G02/G07/G21; flat2 G02/G07/G23; mr1 G08; mr2 G22) — same pre-existing
+boolean-count quirk as §1/§2, zero effect beyond dropping that one question's
+context-precision score.
+
+**No degenerate-answer anomaly this wave** (unlike §2's flat1 G01, a 17337-rune
+answer with a ~15400-character garbage run): the longest answer in any of the
+four runs is mr1 G02 at 6638 runes, a normal length for a synthesis answer
+over 200 chunks. **`answer_degenerate_guard` (W5-R4) trajectory-event count:
+0 across all four runs** (`t10-analyse.py` §1b greps every run's JSON and log
+for the marker; none found). Note this eval mode does not run `--trajectory`,
+so there is no per-question trajectory array to scan — the grep is over the
+raw report/log text, which is where the marker would appear if the guard had
+fired via its own log line. The unrelated `rag.reranker.degenerate` WARN
+lines seen 18 times per run's log are a **pre-existing reranker-calibration**
+signal (score-distribution stddev below threshold) and have nothing to do
+with the W5-R4 answer guard — flagged here only because the substring match
+is easy to confuse.
+
+### Coverage — noise band + per-question table (all 24 questions)
+
+Noise band = `|mean_coverage(flat1) − mean_coverage(flat2)| = |0.5403 −
+0.5264| = 0.0139` (**1.39 pp**).
+
+| Q | flat1 | mr1 | flat2 | mr2 |
+|---|---|---|---|---|
+| G01 | 0.800 | 1.000 | 0.800 | 0.600 |
+| G02 | 0.667 | 0.833 | 0.667 | 0.833 |
+| G03 | 0.667 | 0.500 | 0.667 | 0.500 |
+| G04 | 0.333 | 0.333 | 0.500 | 0.500 |
+| G05 | 0.333 | 0.833 | 0.500 | 0.833 |
+| G06 | 1.000 | 0.500 | 0.500 | 0.750 |
+| G07 | 0.667 | 0.500 | 0.333 | 0.000 |
+| G08 | 0.667 | 0.500 | 0.500 | 0.667 |
+| G09 | 0.667 | 0.833 | 0.667 | 0.667 |
+| G10 | 0.667 | 0.667 | 0.500 | 0.667 |
+| G11 | 0.500 | 0.833 | 0.500 | 0.833 |
+| G12 | 0.500 | 0.500 | 0.500 | 0.500 |
+| G13 | 0.500 | 0.333 | 0.333 | 0.500 |
+| G14 | 0.500 | 0.500 | 0.667 | 0.833 |
+| G15 | 0.500 | 0.500 | 0.500 | 0.500 |
+| G16 | 0.500 | 0.500 | 0.500 | 0.500 |
+| G17 | 0.333 | 0.833 | 0.167 | 0.500 |
+| G18 | 0.333 | 0.833 | 0.500 | 0.500 |
+| G19 | 0.500 | 0.500 | 0.500 | 0.500 |
+| G20 | 0.500 | 0.667 | 0.667 | 0.667 |
+| G21 | 0.500 | 0.500 | 0.667 | 0.667 |
+| G22 | 0.500 | 0.500 | 0.333 | 0.167 |
+| G23 | 0.500 | 0.333 | 0.500 | 0.333 |
+| G24 | 0.333 | 0.500 | 0.667 | 0.667 |
+
+Cross-pair coverage deltas (map_reduce − flat, same run pair): pw1
+`mr1 − flat1 = 0.5972 − 0.5403 = +0.0569` (**+5.69 pp**, beyond the 1.39 pp
+band); pw2 `mr2 − flat2 = 0.5701 − 0.5264 = +0.0438` (**+4.38 pp**, also
+beyond the band). **Pooled** coverage: `mean(mr1, mr2) = 0.5837`,
+`mean(flat1, flat2) = 0.5333`, pooled delta `= +0.0503` (**+5.03 pp**) — this
+is the number W5-R1 sub-criterion 3 actually tests, and it clears the 1.39 pp
+band with room to spare in both cross pairs and pooled.
+
+### Map/reduce trajectory stats (mr1, mr2 logs)
+
+Both runs: 24 questions × 25 groups/question (`chat_longcontext_map_group_size`
+default 8, 200-chunk pool ÷ 8 = 25) = 600 groups/run, `dropped_findings = 0`
+throughout (no reduce-stage truncation, the W3-R7 fallback never needed to
+spill).
+
+| Run | groups | failed groups | findings | dropped findings |
+|---|---|---|---|---|
+| mr1 | 600 | 3 | 1867 | 0 |
+| mr2 | 600 | 1 | 1907 | 0 |
+
+The 4 failed groups (`longcontext.map_group_failed`, `error: "context
+deadline exceeded"`) landed on mr1 groups 19/1/14 and mr2 group 1 — the
+W3-R7 fallback (raw first-600-rune chunk text instead of an extracted
+finding) covered them; no question errored.
+
+### Pairwise comparisons (winner is from A's perspective)
+
+| Pair | A | B | wins(A) | ties | losses(A)=wins(B) | decisive | A win rate | A Wilson [lo,hi] | B (map_reduce) win rate | B Wilson [lo,hi] | tie rate | skipped/errors |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| pw1 | flat1 | mr1 | 1 | 3 | 20 | 21 | 0.0476 | [0.008, 0.227] | **0.9524** | **[0.773, 0.992]** | 0.125 | 0/0 |
+| pw2 | flat2 | mr2 | 1 | 8 | 14 | 15 | 0.0667 | [0.012, 0.298] | **0.9333** | **[0.702, 0.988]** | 0.348 | 1/1 |
+| ctrl | flat1 | flat2 | 4 | 13 | 7 | 11 | 0.3636 | [0.152, 0.646] | 0.6364 | [0.354, 0.848] | 0.542 | 0/0 |
+
+(B's Wilson interval is the exact complement of A's, `[1−hi(A), 1−lo(A)]`,
+confirmed by direct Wilson computation in `t10-analyse.py` §5.)
+
+**pw2's one skipped/errored pair:** G06's `(B,A)`-order judge call returned a
+```` ```json ````-fenced response the strict decoder rejected
+(`"note":"judge (B,A) failed: response is not valid JSON: ..."`); the pair
+contributes to neither wins/ties/losses nor the win-rate denominator — same
+pre-existing failure mode as §2's ctrl G05.
+
+**Control pair (flat1 vs flat2, sub-criterion 4):** win rate **0.3636**,
+inside `[0.35, 0.65]` — the judge is not systematically preferring one flat
+run over the identically-configured other, so the two cross-pair results
+below are not an artifact of judge instability. Widest Wilson interval of
+the three pairs (`[0.152, 0.646]`) and the highest tie rate (0.542, 13 of 24
+pairs) — a same-configuration comparison should be close to indistinguishable,
+and it is.
+
+### Per-question verdict table
+
+| Q | pw1 (flat1/mr1) | pw2 (flat2/mr2) | ctrl (flat1/flat2) |
+|---|---|---|---|
+| G01 | B | B | B |
+| G02 | B | B | A |
+| G03 | B | tie | B |
+| G04 | tie | tie | tie |
+| G05 | B | tie | tie |
+| G06 | A | skipped | tie |
+| G07 | tie | A | tie |
+| G08 | B | B | tie |
+| G09 | B | B | tie |
+| G10 | B | tie | B |
+| G11 | B | B | A |
+| G12 | B | B | tie |
+| G13 | B | B | tie |
+| G14 | B | B | B |
+| G15 | B | B | tie |
+| G16 | tie | tie | tie |
+| G17 | B | B | tie |
+| G18 | B | B | A |
+| G19 | B | B | B |
+| G20 | B | tie | B |
+| G21 | B | tie | B |
+| G22 | B | B | A |
+| G23 | B | tie | tie |
+| G24 | B | B | tie |
+
+map_reduce (B) wins the large majority of decisive pairs in both cross
+comparisons (20/21 in pw1, 14/15 in pw2); the control pair splits close to
+even with a heavy tie rate, exactly the expected signature of a judge that
+discriminates real mode differences but not noise between identical runs.
+
+### Three disagreement excerpts (both orders' reasoning, `agree_both_orders = false`)
+
+**pw1 G04** (winner recorded as `tie`):
+> **A-then-B order:** "Antwort A bietet eine bessere Übersicht über das
+> 'Gesamtbild', da sie die Modernisierung in zwei klare technologische
+> Säulen (RZ und Netzwerk) unterteilt und zusätzlich die strategische
+> Komponente (KI) als Abhängigkeit hervorhebt. Zudem ist die zeitliche
+> Einordnung in einer Tabelle deutlich übersichtlicher..."
+>
+> **B-then-A order:** "Antwort A ist präziser bei der Beschreibung der
+> zeitlichen Abhängigkeiten und nennt konkrete Daten (30.09.2026,
+> 01.07.2026), während Antwort B eher allgemeine Zeiträume (2024, 2025 etc.)
+> verwendet. Zudem geht Antwort A besser auf die spezifischen technischen
+> Abhängigkeiten ein..."
+
+Both orders pick "the answer shown first" — a textbook position-bias flip,
+correctly neutralised into a tie by the swap-and-require-agreement design
+rather than credited to either mode.
+
+**pw2 G03** (winner recorded as `tie`):
+> **A-then-B order:** "Antwort A erfüllt die Aufgabenstellung besser, da sie
+> im ersten Schritt die explizite Anforderung 'Vergleiche alle Vorhaben'
+> durch eine tabellarische Übersicht der einzelnen Vorhaben mit deren Fokus
+> umsetzt. Antwort B springt direkt zur Kategorisierung der Maßnahmen..."
+>
+> **B-then-A order:** "Antwort A ist besser, da sie die Anforderung
+> 'Vergleiche alle Vorhaben' umfassender erfüllt. Während Antwort B die
+> Vorhaben in einer Tabelle auflistet, geht Antwort A tiefer in die
+> inhaltliche Strukturierung der Maßnahmen ein..."
+
+Same signature as pw1 G04 — both orders prefer whichever answer is shown
+first, correctly resolved to a tie.
+
+**ctrl G04** (winner recorded as `tie`, between the two flat runs):
+> **A-then-B order:** "Antwort A bietet eine bessere Übersicht über die
+> zeitliche Einordnung durch die tabellarische Darstellung der Meilensteine
+> (2024-2028). Antwort B konzentriert sich eher auf die logische Abfolge der
+> Phasen..."
+>
+> **B-then-A order:** "Antwort A bietet eine etwas bessere Strukturierung
+> des 'Gesamtbildes', indem sie die drei Ebenen (Baulich, Netzwerk, Digitale
+> Dienste) klarer voneinander trennt... Antwort B ist zwar durch die Tabelle
+> übersichtlicher bei den Daten, aber Antwort A geht tiefer auf die logische
+> Kette der Abhängigkeiten ein."
+
+Both orders in the control pair also favour "first shown", consistent with
+the pw1/pw2 pattern above — position bias is a property of the judge on this
+question shape, resolved the same conservative way regardless of which two
+runs are being compared.
+
+### The pooled statistic (W5-R1's decision input)
+
+From `t10-pw-pooled.json` (B = map_reduce's view), and independently
+recomputed from `t10-pw-1.json` + `t10-pw-2.json` in `t10-analyse.py` §8
+(counts match exactly):
+
+- decisive pairs pooled = **36** (pw1: 21, pw2: 15), ties pooled = 11
+- **A (flat) wins = 2, B (map_reduce) wins = 34**
+- **pooled map_reduce win rate = 34/36 = 0.9444**
+- **pooled Wilson interval (z = 1.96) = [0.8186, 0.9846]**
+
+### Control check
+
+flat1-vs-flat2 win rate = **0.3636**, inside `[0.35, 0.65]` (see the pairwise
+table above) — the control passes, so the judge is not simply biased toward
+one of the two "flat" reports; the 34/36 pooled result is read as a real
+map_reduce preference rather than judge noise.
+
+### Cost (reported, not a veto)
+
+| | flat1 | flat2 | mean | mr1 | mr2 | mean | ratio (mr/flat) |
+|---|---|---|---|---|---|---|---|
+| wall time | 1558 s | 1244 s | 1401 s | 1797 s | 1797 s | 1797 s | **1.28×** |
+
+map_reduce's mean wall time (1797 s) is **1.28×** flat's (1401 s) — markedly
+cheaper, relatively, than §2's Wave-4 measurement (1.65×) at half the
+question count and the same 25-groups-per-question map stage; the absolute
+per-question map-stage cost (25 fast-tier calls) is unchanged, so the lower
+ratio here reflects flat1/flat2's wall time varying more between the two
+Wave-5 runs (1558 s vs 1244 s) than a genuine map_reduce speed-up — flat2 is
+simply the fastest of the four runs. This is reported per the rule; it does
+not veto the decision below.
+
+### Decision (W5-R1)
+
+| # | Sub-criterion | Value | Threshold | Pass? |
+|---|---|---|---|---|
+| 1 | pooled map_reduce win rate | 0.9444 | ≥ 0.60 | **yes** |
+| 2 | pooled Wilson lower bound | 0.8186 | > 0.50 | **yes** |
+| 3 | pooled coverage delta (mr − flat) | +5.03 pp | ≥ −1.39 pp (band) | **yes** |
+| 4 | control (flat1 vs flat2) win rate | 0.3636 | ∈ [0.35, 0.65] | **yes** |
+
+**All four sub-criteria pass. `chat_longcontext_mode` default flips to
+`map_reduce`** (Task 11 makes the site_config default change; the route
+stays gated behind `chat_longcontext_enabled`, unchanged). Applying W5-R1
+literally, exactly as pre-registered on 2026-09-06 before this set or any of
+these runs existed — no criterion was relaxed or reinterpreted after seeing
+the data.
+
+**Post hoc, supporting evidence (not part of the rule):** the per-question
+verdict table shows map_reduce winning the overwhelming majority of decisive
+pairs in *both* cross comparisons individually (20/21 and 14/15), not merely
+in the pooled tally — unlike §2's Wave-4 measurement, where pw1 (11
+decisive, 8/11 wins) missed the *per-pair* Wilson bar by one win while pw2
+(9 decisive, 8/9) cleared it; here both pairs clear the pooled bar and would
+also individually clear a per-pair 0.60/Wilson-low>0.50 bar (pw1: 20/21 =
+0.952, Wilson low 0.773; pw2: 14/15 = 0.933, Wilson low 0.702) — the larger
+set (24 vs 12 questions) resolved the under-powering §2 flagged, and the
+pooled and per-pair reads now agree.
+
+### Artifacts
+
+Under `.superpowers/sdd/2026-09-06-rag-sota-wave5/` (gitignored workspace):
+`t10-flat1.json`/`.log`, `t10-mr1.json`/`.log`, `t10-flat2.json`/`.log`,
+`t10-mr2.json`/`.log` (the four judged runs, n=24 each), `t10-pw-1.json`/`.log`,
+`t10-pw-2.json`/`.log`, `t10-pw-ctrl.json`/`.log` (the three pairwise
+comparisons), `t10-pw-pooled.json`/`.log` (the W5-R1 pooled statistic),
+`t10-run.sh`/`t10-run.log` (the driver + wall-time log), `t10-summary.py`
+(controller's quick summary) and `t10-analyse.py` (this record's source of
+truth — every number above is reproducible by running
+`python3 t10-analyse.py` from that directory).
