@@ -305,8 +305,19 @@ one-step rollback** (`cmd/migrate` is up-only).
     answer-time tool names (14 built-ins only) the catalog is filtered to
     on that route, enforced at both the catalog projection and the
     dispatch boundary (a prompt-injected model can still emit a call for a
-    tool hidden from its catalog). Composes as the intersection with any
-    per-agent allowlist. Trajectory event `answer_tools_route`.
+    tool hidden from its catalog). Wraps the `ToolDispatcher` interface, so
+    it composes structurally — not on any production path today — with a
+    per-agent allowlist into the intersection of the two, most-restrictive-
+    wins. **A turn with no classified query type (today: a
+    transform/reformat follow-up) gets NO answer tools once ANY route is
+    configured** — it cannot match a route key by name, so it is treated
+    as fully restricted rather than unrestricted. Trajectory event
+    `answer_tools_route` (`Decision: "unknown"` for that case).
+    **`rag.completion`'s `answer_tools_path` log field changes meaning**:
+    it now means "the tool loop actually ran," not merely "tools were
+    configured/enabled" — a route restriction or the unclassified-turn
+    case can leave `chat_answer_tools_enabled` true while this field reads
+    false. Update any dashboard that reads it as a simple flag mirror.
 - **`cmd/eval` gains two more flags.** `--policy '<json>'` (above) and
   `--chat-overlay key=value` (repeatable) — a generic per-run overlay for
   any OTHER chat-layer `site_config` key the same reader serves (used to

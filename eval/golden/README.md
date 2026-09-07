@@ -297,9 +297,11 @@ orchestrator predicate `chat.tryDeepChat` uses — Supervisor, Plan-Execute
 `chat_supervisor_enabled` / `chat_plan_execute_enabled` /
 `chat_agentic_enabled` gates. The report adds two fields:
 
-- **per-question** `agent`: `{orchestrator, specialist?, tools, hops?, plan?, dispatch_reason}`.
+- **per-question** `agent`: `{orchestrator, specialist?, tools, hops?, plan?, dispatch_reason}`, plus, since Wave 6 (Task 10), `llm_calls` — the count from a `CallCounter` wrapping every model-provider HTTP request (chat completion streamed or unary, embedding, rerank) made anywhere inside that question's `Search` call, classifier included.
 - **report-level** `orchestrator_aggregates`: same shape as `route_aggregates`,
   bucketed by which orchestrator handled the question.
+- **every `Aggregate` block** (top-level, per-route, per-orchestrator) also gains, since Wave 6, `mean_latency_ms` (always printed — 0 is a valid latency) and `mean_llm_calls` (a nullable pointer, `omitempty`, nil when no question in the bucket carried an `agent` trace at all). These are the cost half of the `query_type × orchestrator → recall/MRR/cost` measurement the `--policy` flag below exists to produce.
+- when at least one question's report carries `agent.policy_rule` (a matched `chat_orchestrator_policy` rule, see `--policy` below), the human summary gains an `Orchestrator policy:` block listing which rule(s) fired and how often.
 
 This is on by default so eval reflects what production actually runs. Two
 practical consequences:

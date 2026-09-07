@@ -1200,7 +1200,7 @@ different key).
 | cert-p01 | WID-SEC-2026-0104 | Fortinet FortiOS | UPDATE only | **yes** | **yes** |
 | cert-p02 | WID-SEC-2026-0106 | Ivanti Connect Secure | NEU only | **yes** | **yes** |
 | cert-p03 | WID-SEC-2026-0107 | Cisco IOS XE | NEU only | **yes** | **yes** |
-| cert-p04 | WID-SEC-2026-0108 | VMware ESXi | UPDATE only | **yes** | **yes** |
+| cert-p04 | WID-SEC-2026-0108 | VMware ESXi | NEU only | **yes** | **yes** |
 | cert-p05 | WID-SEC-2026-0109 | OpenSSL | UPDATE only | **yes** | **yes** |
 | cert-p06 | WID-SEC-2026-0113 | Citrix NetScaler | NEU only | **yes** | **yes** |
 | cert-p07 | WID-SEC-2026-0119 | Atlassian Confluence | UPDATE only | **yes** | **yes** |

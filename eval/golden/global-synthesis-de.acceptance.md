@@ -1464,6 +1464,15 @@ never a second time. One `--judge` run on the 24-question set, standard path
 (dispatch off, no long-context overlay — a plain judge-retry measurement, not
 a re-run of §4's flat/map_reduce A/B).
 
+**Comparability caveat.** The same hygiene-line change edited all four judge
+system prompts (`internal/prompts/eval_judge.go`). Judge **scores** (not just
+retry/failure counts) from Wave 6 onward are therefore not strictly
+byte-comparable to any pre-Wave-6 judge run on this fixture — including §2's
+and §4's flat/map_reduce judged runs and the pairwise comparisons that
+decided the `chat_longcontext_mode = map_reduce` default. Only the
+retry/failure tallies in this section are a like-for-like measurement across
+the change.
+
 **Tally definitions** (fixed for this section and any future re-run of it):
 
 - **retries** = `judge_warnings` entries starting with `retry:` (one per
