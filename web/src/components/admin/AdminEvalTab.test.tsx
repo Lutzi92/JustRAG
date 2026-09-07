@@ -81,10 +81,10 @@ describe('AdminEvalTab', () => {
     });
 
     // -----------------------------------------------------------------
-    // W6-R9: Team + Score columns on the run table
+    // W7-R4: Team + Score columns on the run table; server-side sort.
     // -----------------------------------------------------------------
 
-    it('renders the team name and formatted score, and reorders rows on Score header click', async () => {
+    it('renders the team name and formatted score, and refetches with sort/order params on Score header clicks', async () => {
         const runOne = {
             id: 'r1',
             label: 'Run One',
@@ -112,6 +112,10 @@ describe('AdminEvalTab', () => {
             aggregate: { count: 5, mean_recall: 0.9, mrr: 0.8 },
         };
 
+        // The runs list is server-sorted; the fake backend always returns
+        // the same order regardless of query params — this test asserts
+        // what the FE *sends*, not that it reorders the response itself
+        // (that responsibility moved to the server, W7-R4).
         mockedAxios.get.mockImplementation((url: string) => {
             if (url.endsWith('/golden-sets')) {
                 return Promise.resolve({ data: { golden_sets: [] } });
@@ -120,15 +124,6 @@ describe('AdminEvalTab', () => {
                 return Promise.resolve({ data: { jobs: [] } });
             }
             if (url.includes('/runs')) {
-                // S9 (final review): server order is [runTwo, runOne] —
-                // deliberately NOT ascending by mean_recall (runOne=0.5 <
-                // runTwo=0.9) — so the third ('none') click's "back to
-                // fetch order" assertion below (['Run Two', 'Run One'])
-                // differs from the second ('asc') click's assertion
-                // (['Run One', 'Run Two']). With the original same-as-asc
-                // fetch order, the third-click assertion was byte-identical
-                // to the second click's and could never fail; this ordering
-                // makes it a real check of the desc -> asc -> none cycle.
                 return Promise.resolve({ data: { runs: [runTwo, runOne], total: 2 } });
             }
             return Promise.resolve({ data: {} });
@@ -144,30 +139,41 @@ describe('AdminEvalTab', () => {
         expect(screen.getByText('50.0 / 30.0')).toBeInTheDocument();
         expect(screen.getByText('90.0 / 80.0')).toBeInTheDocument();
 
-        const rowLabelOrder = () =>
-            screen.getAllByRole('row')
-                .map(r => r.textContent || '')
-                .filter(text => text.includes('Run One') || text.includes('Run Two'))
-                .map(text => (text.includes('Run One') ? 'Run One' : 'Run Two'));
+        const runsUrls = () =>
+            mockedAxios.get.mock.calls
+                .map(([url]) => url as string)
+                .filter(url => typeof url === 'string' && url.includes('/runs'));
 
-        // Fetch order (server order): Run Two, then Run One.
-        expect(rowLabelOrder()).toEqual(['Run Two', 'Run One']);
+        // Initial fetch carries no sort/order — the backend's own
+        // created_at DESC default applies.
+        await waitFor(() => expect(runsUrls().length).toBeGreaterThanOrEqual(1));
+        expect(runsUrls()[0]).not.toMatch(/[?&]sort=/);
+        expect(runsUrls()[0]).not.toMatch(/[?&]order=/);
 
-        const scoreHeader = screen.getByText('Score');
+        // Re-query the header fresh before each click: a fetch flips
+        // listLoading true->false, which unmounts and remounts the whole
+        // <table> (including the header cell), so a DOM reference cached
+        // across clicks goes stale after the first one resolves. The
+        // header's accessible name also grows a sort-direction arrow after
+        // the first click, so match by regex rather than the exact string.
+        const getScoreHeader = () => screen.getByRole('columnheader', { name: /Score/ });
 
-        // First click: desc by mean_recall -> Run Two (0.9) before Run One (0.5).
-        fireEvent.click(scoreHeader);
-        expect(rowLabelOrder()).toEqual(['Run Two', 'Run One']);
+        // First click: desc.
+        fireEvent.click(getScoreHeader());
+        await waitFor(() => expect(runsUrls().length).toBeGreaterThanOrEqual(2));
+        expect(runsUrls().at(-1)).toMatch(/[?&]sort=recall&order=desc(&|$)/);
 
-        // Second click: asc -> Run One (0.5) before Run Two (0.9).
-        fireEvent.click(scoreHeader);
-        expect(rowLabelOrder()).toEqual(['Run One', 'Run Two']);
+        // Second click: asc.
+        fireEvent.click(getScoreHeader());
+        await waitFor(() => expect(runsUrls().length).toBeGreaterThanOrEqual(3));
+        expect(runsUrls().at(-1)).toMatch(/[?&]sort=recall&order=asc(&|$)/);
 
-        // Third click: back to original fetch order (Run Two, Run One) —
-        // NOT the same as the asc order above, so this fails if the 'none'
-        // leg of the sort cycle is dropped or broken.
-        fireEvent.click(scoreHeader);
-        expect(rowLabelOrder()).toEqual(['Run Two', 'Run One']);
+        // Third click: back to 'none' — no sort/order param at all.
+        fireEvent.click(getScoreHeader());
+        await waitFor(() => expect(runsUrls().length).toBeGreaterThanOrEqual(4));
+        const lastUrl = runsUrls().at(-1) as string;
+        expect(lastUrl).not.toMatch(/[?&]sort=/);
+        expect(lastUrl).not.toMatch(/[?&]order=/);
     });
 
     it('shows the last team run recall/MRR next to the team selector', async () => {

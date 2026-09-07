@@ -48,12 +48,22 @@ type Run struct {
 	Scheduled bool `json:"scheduled"`
 }
 
-// ListOpts controls filtering and pagination for List.
+// ListOpts controls filtering, sorting and pagination for List.
 type ListOpts struct {
 	Limit  int        // default 50 if <=0, max 200
 	Offset int        // default 0
 	Status string     // optional filter; empty = no filter
 	KBID   *uuid.UUID // optional filter
+	// Sort selects the ORDER BY column (W7-R4): "created_at" (default),
+	// "recall", or "mrr". Any value other than those two is treated as
+	// "created_at" — the store never string-interpolates caller-supplied
+	// text into SQL; rejecting an unrecognised value with 400 is the
+	// admineval handlers' job (they validate against a fixed map before
+	// this struct is built).
+	Sort string
+	// Order selects sort direction: "desc" (default) or "asc". Any other
+	// value is treated as "desc".
+	Order string
 }
 
 // ---------------------------------------------------------------------------
@@ -300,9 +310,34 @@ func clampLimit(l int) int {
 	return l
 }
 
-// List returns a paginated slice of runs sorted by created_at DESC together
-// with the total count of matching rows. The report column is intentionally
-// excluded; use Get to retrieve a full record with the report.
+// orderByClause returns the ORDER BY SQL fragment for List, resolved via a
+// fixed switch on Sort/Order (W7-R4) — never by interpolating the caller's
+// raw string. "recall"/"mrr" sort on the report's aggregate metrics, cast
+// to float8, with NULLS LAST in both directions (a run with no report —
+// queued, running, failed, or pre-report — sorts after every run that has
+// one, regardless of asc/desc) and created_at DESC as the tiebreak so runs
+// with an identical score stay in recency order. Any Sort value other than
+// "recall"/"mrr" (including the default "created_at" and anything
+// unrecognised) falls back to a plain created_at sort.
+func orderByClause(sort, order string) string {
+	dir := "DESC"
+	if order == "asc" {
+		dir = "ASC"
+	}
+	switch sort {
+	case "recall":
+		return fmt.Sprintf("ORDER BY (report->'aggregate'->>'mean_recall')::float8 %s NULLS LAST, created_at DESC", dir)
+	case "mrr":
+		return fmt.Sprintf("ORDER BY (report->'aggregate'->>'mrr')::float8 %s NULLS LAST, created_at DESC", dir)
+	default:
+		return fmt.Sprintf("ORDER BY created_at %s", dir)
+	}
+}
+
+// List returns a paginated slice of runs, sorted per opts.Sort/opts.Order
+// (default created_at DESC), together with the total count of matching
+// rows. The report column is intentionally excluded from the result; use
+// Get to retrieve a full record with the report.
 func (s *Store) List(ctx context.Context, opts ListOpts) ([]Run, int, error) {
 	limit := clampLimit(opts.Limit)
 	offset := opts.Offset
@@ -334,9 +369,9 @@ func (s *Store) List(ctx context.Context, opts ListOpts) ([]Run, int, error) {
 		       COUNT(*) OVER ()::int AS total_count
 		FROM eval_runs
 		%s
-		ORDER BY created_at DESC
+		%s
 		LIMIT $%d OFFSET $%d`,
-		where, len(args)-1, len(args),
+		where, orderByClause(opts.Sort, opts.Order), len(args)-1, len(args),
 	)
 
 	rows, err := s.pool.Query(ctx, listSQL, args...)

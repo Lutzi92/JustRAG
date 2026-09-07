@@ -116,8 +116,10 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
     const [offset, setOffset] = useState(0);
     const [statusFilter, setStatusFilter] = useState<string>('');
     const [listLoading, setListLoading] = useState(false);
-    // W6-R9: client-side sort on the Score column — cycles desc -> asc ->
-    // original (fetch) order on repeated header clicks.
+    // W7-R4: server-side sort on the Score column — cycles desc -> asc ->
+    // none (created_at DESC) on repeated header clicks, refetching with the
+    // corresponding sort/order query params (and offset reset to 0) rather
+    // than reordering the one already-fetched page.
     const [scoreSort, setScoreSort] = useState<'none' | 'desc' | 'asc'>('none');
 
     // State: compare
@@ -206,6 +208,10 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
     };
 
     // Fetch list — axios has a global Authorization header set by App.tsx; no per-call header needed.
+    // W7-R4: sort=recall is the only sort key the UI drives (the Score
+    // column blends mean_recall/mrr into one display, but the header cycle
+    // sorts on recall); 'none' omits both params so the backend falls back
+    // to its own created_at DESC default.
     const fetchRuns = useCallback(async () => {
         setListLoading(true);
         try {
@@ -213,6 +219,10 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
             params.set('limit', '50');
             params.set('offset', String(offset));
             if (statusFilter) params.set('status', statusFilter);
+            if (scoreSort !== 'none') {
+                params.set('sort', 'recall');
+                params.set('order', scoreSort);
+            }
             const response = await axios.get<ListRunsResponse>(
                 `${API_BASE_URL}${basePath}/runs?${params.toString()}`
             );
@@ -223,7 +233,7 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
         } finally {
             setListLoading(false);
         }
-    }, [basePath, offset, statusFilter, toast, t]);
+    }, [basePath, offset, statusFilter, scoreSort, toast, t]);
 
     // Poll while any run is queued/running
     const hasInFlight = useMemo(() => runs.some(r => r.status === 'queued' || r.status === 'running'), [runs]);
@@ -234,25 +244,11 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
         return () => clearInterval(interval);
     }, [fetchRuns, hasInFlight]);
 
-    // W6-R9: Score column sort — 'none' keeps the fetch (created_at desc)
-    // order; 'desc'/'asc' reorder by aggregate.mean_recall, with runs
-    // lacking an aggregate (in-flight/failed) sorted last regardless of
-    // direction.
-    const sortedRuns = useMemo(() => {
-        if (scoreSort === 'none') return runs;
-        const withScore: RunSummary[] = [];
-        const withoutScore: RunSummary[] = [];
-        for (const r of runs) {
-            (r.aggregate ? withScore : withoutScore).push(r);
-        }
-        withScore.sort((a, b) => {
-            const diff = (a.aggregate?.mean_recall ?? 0) - (b.aggregate?.mean_recall ?? 0);
-            return scoreSort === 'desc' ? -diff : diff;
-        });
-        return [...withScore, ...withoutScore];
-    }, [runs, scoreSort]);
-
+    // W7-R4: Score column header click cycles desc -> asc -> none, resetting
+    // to the first page each time (a sort change on page 2+ would otherwise
+    // show an offset into a differently-ordered result set).
     const toggleScoreSort = () => {
+        setOffset(0);
         setScoreSort(prev => (prev === 'none' ? 'desc' : prev === 'desc' ? 'asc' : 'none'));
     };
 
@@ -703,7 +699,6 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
                                 <th
                                     style={{ textAlign: 'right', padding: '0.5rem', cursor: 'pointer', userSelect: 'none' }}
                                     onClick={toggleScoreSort}
-                                    title={t('evalScoreTitle')}
                                 >
                                     {t('evalScore')}{scoreSort === 'desc' ? ' ▼' : scoreSort === 'asc' ? ' ▲' : ''}
                                 </th>
@@ -712,7 +707,7 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
                             </tr>
                         </thead>
                         <tbody>
-                            {sortedRuns.map(r => <RunRow key={r.id} run={r} onDelete={handleDelete} onExport={handleExport} onCompareWith={(cmpId) => { setCompareAId(r.id); setCompareBId(cmpId); setCompareMarkdown(''); }} runs={runs} />)}
+                            {runs.map(r => <RunRow key={r.id} run={r} onDelete={handleDelete} onExport={handleExport} onCompareWith={(cmpId) => { setCompareAId(r.id); setCompareBId(cmpId); setCompareMarkdown(''); }} runs={runs} />)}
                         </tbody>
                     </table>
                 )}
@@ -800,7 +795,7 @@ function RunRow({ run, onDelete, onExport, onCompareWith, runs }: { run: RunSumm
             <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{run.kb_name || run.kb_id.slice(0, 8)}</td>
             <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{run.team_name || (run.team_id ? run.team_id.slice(0, 8) : '—')}</td>
             <td style={{ padding: '0.5rem', textAlign: 'center' }}>{run.judge_enabled ? <Check size={14} /> : <X size={14} style={{ opacity: 0.3 }} />}</td>
-            <td style={{ padding: '0.5rem', textAlign: 'right', fontSize: '0.85rem' }} title={t('evalScoreTitle')}>
+            <td style={{ padding: '0.5rem', textAlign: 'right', fontSize: '0.85rem' }}>
                 {run.aggregate ? `${(run.aggregate.mean_recall * 100).toFixed(1)} / ${(run.aggregate.mrr * 100).toFixed(1)}` : '—'}
             </td>
             <td style={{ padding: '0.5rem' }}>

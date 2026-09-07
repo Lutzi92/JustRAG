@@ -331,11 +331,18 @@ func (h *Handler) ListRunsForKB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	sort, order, err := parseSortOrder(q)
+	if err != nil {
+		httputil.WriteErrorCtx(ctx, w, http.StatusBadRequest, err.Error())
+		return
+	}
 	opts := eval.ListOpts{
 		Limit:  intParam(q, "limit", 50, 200),
 		Offset: intParam(q, "offset", 0, 1_000_000),
 		Status: q.Get("status"),
 		KBID:   &kbID, // forced — ignore any body/query kb_id
+		Sort:   sort,
+		Order:  order,
 	}
 	runs, total, err := h.store.List(ctx, opts)
 	if err != nil {

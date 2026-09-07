@@ -425,6 +425,18 @@ one-step rollback** (`cmd/migrate` is up-only).
   admin agent-metrics panel. It now shares `recordStandardPathDecision` with
   the streaming standard path, so the mode/outcome/latency computation cannot
   drift between the two. No migration.
+- **Admin eval-run table's Score sort moved server-side.** Both list
+  endpoints (`GET /api/admin/eval/runs`, `GET /api/kb/{id}/eval/runs`) now
+  accept `sort` (`created_at` default | `recall` | `mrr`) and `order`
+  (`desc` default | `asc`) query params — validated against a fixed set,
+  400 on an unknown value — and order by the run's `report` aggregate
+  metrics with `NULLS LAST` (a run with no report, e.g. still queued or
+  failed, always sorts last) plus `created_at DESC` as the tiebreak. The
+  Score column header now refetches with these params (desc → asc → none,
+  resetting to the first page each time) instead of reordering only the
+  currently loaded page, which is what the previous client-side sort and
+  its "sort applies to the current page only" tooltip were mitigating. No
+  migration; the tooltip translation key is removed as unused.
 
 ## v0.10.0 — 2026-08-19
 

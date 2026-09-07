@@ -1926,10 +1926,6 @@ export const translations = {
     // eval run table (Wave 6)
     evalTeam: { de: 'Team', en: 'Team' },
     evalScore: { de: 'Score', en: 'Score' },
-    // S10 (final review, parked as a full fix — client-side sort spans only
-    // the current page of runs, not the full `total`; this tooltip is the
-    // agreed minimal mitigation instead of moving the sort server-side).
-    evalScoreTitle: { de: 'Recall / MRR (%) — Sortierung gilt nur für die aktuell geladene Seite', en: 'Recall / MRR (%) — sort applies to the current page only' },
     evalTeamLastRun: { de: 'letzter Lauf', en: 'last run' },
 
     // orchestrator policy + tools by route (Wave 6)
