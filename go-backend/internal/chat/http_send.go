@@ -523,6 +523,10 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		// did would corrupt the measurement (that row stays NULL, and the
 		// trajectory event above is where the fall-through is visible).
 		policyRule: standardPathPolicyRule(turnPol, deepChatAttempted),
+		// W6-R8: feeds the per-route answer-tool allowlist in
+		// writeStreamingResponse.
+		queryType:         cls.QueryType,
+		isGlobalSynthesis: IsGlobalSynthesisQuery(searchQuery),
 	}
 	if streamMode {
 		h.writeStreamingResponse(ctx, w, rp)
@@ -1272,7 +1276,31 @@ func (h *Handler) tryDeepChat(
 	// so it needs the same exclusion as a pure OrchTeam turn — not just
 	// "orch != OrchTeam", which teamAuthoredTurn is what makes this drop.
 	useAnswerTools := !teamAuthoredTurn(orch, comparisonTeamAnswered) && ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
+	// answerToolsDispatcher/catalog default to the unrestricted pair; a
+	// per-route allowlist (W6-R8) narrows both together below so the catalog
+	// projection and the dispatch boundary can never drift apart.
+	var answerToolsDispatcher ToolDispatcher = h.toolDispatcher
+	var catalog []ai.ChatTool
 	if useAnswerTools {
+		mcpDisp, _ := h.toolDispatcher.(*MCPDispatcher)
+		if mcpDisp != nil {
+			catalog = mcpDisp.AnswerToolCatalog(kbID)
+		}
+		byRoute := ChatAnswerToolsByRoute(ctx, h.siteConfigReader)
+		if allow, ok := byRoute.Allowlist(queryType, orchIn.IsGlobalSynthesis); ok {
+			answerToolsDispatcher, catalog = restrictToolsForRoute(h.toolDispatcher, catalog, allow, true)
+			emitTrajectory(func(pl map[string]any) { writeSSE(ctx, w, pl) }, TrajectoryEvent{
+				Stage:    "answer_tools_route",
+				Decision: answerToolsRouteDecision(byRoute, queryType, orchIn.IsGlobalSynthesis),
+				Findings: len(catalog),
+			}, nil)
+		}
+	}
+	// A route restriction can filter the catalog down to empty; running the
+	// tool loop with zero tools would be pointless scaffolding, so that case
+	// falls through to the plain streaming answer below instead.
+	runAnswerTools := shouldRunAnswerToolsLoop(useAnswerTools, catalog)
+	if runAnswerTools {
 		answerTrace := func(stage, decision, reason string, details map[string]any) {
 			payload := map[string]any{
 				"stage":    stage,
@@ -1284,11 +1312,6 @@ func (h *Handler) tryDeepChat(
 			}
 			writeSSE(ctx, w, payload)
 		}
-		mcpDisp, _ := h.toolDispatcher.(*MCPDispatcher)
-		var catalog []ai.ChatTool
-		if mcpDisp != nil {
-			catalog = mcpDisp.AnswerToolCatalog(kbID)
-		}
 		err = RunAnswerWithTools(genCtx, AnswerToolsParams{
 			AIResolver:      h.aiResolver,
 			KbID:            kbID,
@@ -1297,7 +1320,7 @@ func (h *Handler) tryDeepChat(
 			UserPrompt:      body.Message,
 			History:         answerHistory,
 			Tools:           catalog,
-			Dispatcher:      h.toolDispatcher,
+			Dispatcher:      answerToolsDispatcher,
 			MaxRounds:       ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
 			ReasoningEffort: reasoningLevel,
 			Temperature:     ChatAnswerTemperature(ctx, h.siteConfigReader),
@@ -1377,7 +1400,7 @@ func (h *Handler) tryDeepChat(
 		"low_confidence", len(chatCtx.Sources) < 3,
 		"stream", true,
 		"deep_chat", true,
-		"answer_tools_path", useAnswerTools,
+		"answer_tools_path", runAnswerTools,
 		"tool_calls", toolCallsThisTurn,
 	)
 	observability.RecordCompletion(true, time.Since(deepChatStart).Seconds())

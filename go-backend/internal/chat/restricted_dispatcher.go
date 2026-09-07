@@ -53,3 +53,25 @@ func (d *RestrictedDispatcher) AnswerToolCatalog(kbID string) []ai.ChatTool {
 	}
 	return out
 }
+
+// routeRestrictedDispatcher enforces a per-route answer-tool allowlist
+// (W6-R8, chat_answer_tools_by_route) at Dispatch — the same rationale as
+// RestrictedDispatcher above: hiding a tool from the catalog is not a
+// control, refusing its call is. Unlike RestrictedDispatcher, which wraps
+// *MCPDispatcher concretely, this wraps the ToolDispatcher interface so it
+// composes over either a plain MCPDispatcher or an already
+// agent-restricted one; wrapping a RestrictedDispatcher yields the
+// intersection of the two allowlists ("most restrictive wins" — each
+// layer only ever narrows what a call can reach).
+type routeRestrictedDispatcher struct {
+	inner   ToolDispatcher
+	allowed map[string]bool
+}
+
+// Dispatch satisfies ToolDispatcher.
+func (d *routeRestrictedDispatcher) Dispatch(ctx context.Context, kbID, name string, args json.RawMessage) (DispatchedToolResult, error) {
+	if !d.allowed[name] {
+		return DispatchedToolResult{}, fmt.Errorf("tool %q is not allowed for this route", name)
+	}
+	return d.inner.Dispatch(ctx, kbID, name, args)
+}
