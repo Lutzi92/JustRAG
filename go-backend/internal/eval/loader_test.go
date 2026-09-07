@@ -544,6 +544,42 @@ func TestParseGoldenSetContent_RejectsTurnsInJSONL(t *testing.T) {
 	}
 }
 
+// TestParseGoldenSetContent_ArrayPrecedence_ValidationBeforeLaterTurns pins
+// the array path's per-index priority: an earlier row's validation error
+// must win over a later row's turns error, exactly as the original single
+// loop (turns check, then validate, then duplicate-id, per row, in document
+// order) behaved before JSONL support existed. This is the reviewer's exact
+// two-row reproduction from task-3-review.md, guarding against a whole-array
+// turns pre-pass silently changing error precedence.
+func TestParseGoldenSetContent_ArrayPrecedence_ValidationBeforeLaterTurns(t *testing.T) {
+	raw := json.RawMessage(`[
+		{"id":"q1","question":"","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"]},
+		{"id":"conv2","kb_id":"kb-1","language":"en","turns":[
+			{"question":"Who leads the project?","kind":"corpus","must_cite_file_names":["f1"]}
+		]}
+	]`)
+	_, err := ParseGoldenSetContent(raw)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	const want = "validate question 1: missing question"
+	if err.Error() != want {
+		t.Errorf("got %q, want %q", err.Error(), want)
+	}
+}
+
+// TestParseGoldenSetContent_JSONLDuplicateID: the "duplicate ids rejected on
+// both shapes" claim in the doc comment needs a direct JSONL-path test, not
+// only the array-path TestParseGoldenSetContent_DuplicateID.
+func TestParseGoldenSetContent_JSONLDuplicateID(t *testing.T) {
+	content := `{"id":"q1","question":"Q?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"]}
+{"id":"q1","question":"Q2?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f2"]}`
+	_, err := ParseGoldenSetContent(json.RawMessage(content))
+	if err == nil || !strings.Contains(err.Error(), "duplicate id") {
+		t.Errorf("expected duplicate id error, got %v", err)
+	}
+}
+
 // TestParseGoldenSetContent_RealJSONLFixture is a one-off manual check
 // (controller ruling, Wave 6 Task 3): run the real 24-question
 // global-synthesis-de.jsonl set — which starts with '#' comment lines —

@@ -22,10 +22,17 @@ import (
 // the array when any question fails validation on the array path, or a
 // 1-based line number on the JSONL path.
 //
-// Multi-turn rows (turns) are rejected here on both shapes: ExpandTurns —
-// the only code that replays a conversation row into per-turn Questions
-// with History — is called exclusively by cmd/eval (see cmd/eval/main.go).
-// The DB/admin path this function backs (runner_inproc.go, the admin eval
+// Array path: unchanged in behaviour and error wording from before JSONL
+// support existed — validateContentQuestions still walks the array once,
+// per index in document order, checking turns then validation then
+// duplicate id for that row before moving to the next, so an earlier row's
+// validation error always wins over a later row's turns error, exactly as
+// the original single loop did.
+//
+// Multi-turn rows (turns) are rejected on both shapes: ExpandTurns — the
+// only code that replays a conversation row into per-turn Questions with
+// History — is called exclusively by cmd/eval (see cmd/eval/main.go). The
+// DB/admin path this function backs (runner_inproc.go, the admin eval
 // handlers) never calls ExpandTurns, so a turns row saved through the admin
 // UI would otherwise run silently as an empty top-level question instead of
 // the authored conversation. ParseGoldenSetJSONL itself (the file-upload
@@ -38,14 +45,16 @@ func ParseGoldenSetContent(raw json.RawMessage) ([]Question, error) {
 		if err := json.Unmarshal(trimmed, &qs); err != nil {
 			return nil, fmt.Errorf("parse golden set content: %w", err)
 		}
-		if err := rejectTurns(qs); err != nil {
-			return nil, err
-		}
 		return validateContentQuestions(qs)
 	}
 
 	// JSONL (the shape a file upload carries): '#' / blank lines skipped by
 	// the shared line parser, exactly as LoadGoldenSet does for cmd/eval.
+	// ParseGoldenSetJSONL already validates + de-dups per line as it scans
+	// (accepting turns rows, per its own doc comment), so once it returns a
+	// full list every row still needs the turns rejection this function
+	// adds — applied per row, in document order, via the same single-row
+	// check the array path uses.
 	qs, err := ParseGoldenSetJSONL(bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("parse golden set content: %w", err)
@@ -53,30 +62,38 @@ func ParseGoldenSetContent(raw json.RawMessage) ([]Question, error) {
 	if len(qs) == 0 {
 		return nil, errors.New("parse golden set content: no questions found (neither a JSON array nor JSONL rows)")
 	}
-	if err := rejectTurns(qs); err != nil {
-		return nil, err
+	for _, q := range qs {
+		if err := rejectTurnsRow(q); err != nil {
+			return nil, err
+		}
 	}
 	return qs, nil
 }
 
-// rejectTurns errors on the first question carrying turns — see the
-// ParseGoldenSetContent doc comment for why this function (unlike
-// ParseGoldenSetJSONL/LoadGoldenSet) refuses conversation rows outright.
-func rejectTurns(qs []Question) error {
-	for _, q := range qs {
-		if len(q.Turns) > 0 {
-			return fmt.Errorf("question %q: multi-turn rows (turns) are supported only by cmd/eval; the in-app eval runner cannot replay conversations", q.ID)
-		}
+// rejectTurnsRow errors when q carries turns — see the ParseGoldenSetContent
+// doc comment for why this function (unlike ParseGoldenSetJSONL/
+// LoadGoldenSet) refuses conversation rows outright. Shared, single-row
+// check so both the array-path loop and the JSONL-path loop produce the
+// identical message.
+func rejectTurnsRow(q Question) error {
+	if len(q.Turns) > 0 {
+		return fmt.Errorf("question %q: multi-turn rows (turns) are supported only by cmd/eval; the in-app eval runner cannot replay conversations", q.ID)
 	}
 	return nil
 }
 
 // validateContentQuestions re-validates and de-duplicates an array parsed
-// from the JSON-array shape. ParseGoldenSetJSONL already validates and
-// de-duplicates as it scans, so this is the array-path counterpart.
+// from the JSON-array shape. Reproduces the original (pre-JSONL-support)
+// single loop exactly: per index, in document order, turns-check then
+// validate then duplicate-id-check for that row, returning on the first
+// failure at that index — so an earlier row's validation error always takes
+// priority over a later row's turns error.
 func validateContentQuestions(qs []Question) ([]Question, error) {
 	seen := make(map[string]int, len(qs))
 	for i, q := range qs {
+		if err := rejectTurnsRow(q); err != nil {
+			return nil, err
+		}
 		if err := validateQuestion(q); err != nil {
 			return nil, fmt.Errorf("validate question %d: %w", i+1, err)
 		}
