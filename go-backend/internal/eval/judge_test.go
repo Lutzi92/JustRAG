@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -9,9 +10,14 @@ import (
 type scriptedCompleter struct {
 	responses []string
 	calls     int
+	// prompts records the user prompt passed on every Complete call, in
+	// order (including a call that runs out of scripted responses), so a
+	// retry test can inspect what the second call actually asked (W6-R4).
+	prompts []string
 }
 
-func (s *scriptedCompleter) Complete(_ context.Context, _, _ string) (string, error) {
+func (s *scriptedCompleter) Complete(_ context.Context, prompt, _ string) (string, error) {
+	s.prompts = append(s.prompts, prompt)
 	if s.calls >= len(s.responses) {
 		return "", errorsNew("no more scripted responses")
 	}
@@ -52,7 +58,12 @@ func TestJudgeEvaluate_HappyPath(t *testing.T) {
 func TestJudgeEvaluate_PartialFailureIsCapturedNotFatal(t *testing.T) {
 	completer := &scriptedCompleter{responses: []string{
 		`{"claims":[{"text":"X","supported":true}]}`,
-		`not json`, // answer relevance fails
+		// Valid JSON but an unparseable score — deliberately NOT a decoder
+		// failure, since W6-R4 gives a decoder failure one bounded retry
+		// that would consume the next scripted response (meant for
+		// context_precision below) rather than leaving this a single-call
+		// failure.
+		`{"score":"abc","reasoning":"x"}`,
 		`{"relevant":[true]}`,
 	}}
 	chunks := []RetrievedChunk{{FileID: "f1", Score: 0.9}}
@@ -96,7 +107,7 @@ func TestAnswerRelevance_AcceptsNumericStringScore(t *testing.T) {
 	j := NewJudge(&scriptedCompleter{responses: []string{`{"score":"5","reasoning":"x"}`}})
 	q := Question{ID: "q", Question: "why?", Language: "en"}
 
-	got, err := j.answerRelevance(context.Background(), q, "answer")
+	got, _, err := j.answerRelevance(context.Background(), q, "answer")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +120,7 @@ func TestAnswerRelevance_AcceptsNumericFloatString(t *testing.T) {
 	j := NewJudge(&scriptedCompleter{responses: []string{`{"score":"4.0","reasoning":"x"}`}})
 	q := Question{ID: "q", Question: "why?", Language: "en"}
 
-	got, err := j.answerRelevance(context.Background(), q, "answer")
+	got, _, err := j.answerRelevance(context.Background(), q, "answer")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -122,7 +133,7 @@ func TestAnswerRelevance_UnparseableScoreErrors(t *testing.T) {
 	j := NewJudge(&scriptedCompleter{responses: []string{`{"score":"abc","reasoning":"x"}`}})
 	q := Question{ID: "q", Question: "why?", Language: "en"}
 
-	_, err := j.answerRelevance(context.Background(), q, "answer")
+	_, _, err := j.answerRelevance(context.Background(), q, "answer")
 	if err == nil {
 		t.Fatal("expected error for unparseable score")
 	}
@@ -330,7 +341,7 @@ func TestAnswerRelevance_NullScoreErrors(t *testing.T) {
 	j := NewJudge(&scriptedCompleter{responses: []string{`{"score":null,"reasoning":"x"}`}})
 	q := Question{ID: "q", Question: "why?", Language: "en"}
 
-	if _, err := j.answerRelevance(context.Background(), q, "answer"); err == nil {
+	if _, _, err := j.answerRelevance(context.Background(), q, "answer"); err == nil {
 		t.Fatal("expected an error for a null score")
 	}
 }
@@ -375,5 +386,255 @@ func TestCoverage_NoExpectedPointsErrorsWithoutCallingTheCompleter(t *testing.T)
 	}
 	if completer.calls != 0 {
 		t.Errorf("expected no completer call, got %d", completer.calls)
+	}
+}
+
+// --- W6-R4 / W6-R17: judge JSON-hygiene retry ---
+//
+// The Wave-5 fix wave established that live judge parse failures are
+// brace-balanced objects the decoder rejects (a raw newline or unescaped
+// quote inside a string, or a trailing comma) — not truncation, not a code
+// fence. The judge now re-asks exactly once with the decoder error appended,
+// deterministically, and gives up after that: a second failure must not
+// trigger a third call.
+
+// faithfulnessInvalidJSON is brace-balanced (so unmarshalStrict does not
+// report it as truncated) but has a trailing comma before the closing `]`,
+// which the standard-library decoder rejects.
+const faithfulnessInvalidJSON = `{"claims":[{"text":"a","supported":true},]}`
+
+func TestFaithfulnessRetry_InvalidThenValidSucceeds(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{
+		faithfulnessInvalidJSON,
+		`{"claims":[{"text":"a","supported":true}]}`,
+	}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	got, warnings, err := j.faithfulness(context.Background(), q, "answer", "context")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 1.0 {
+		t.Errorf("expected 1.0, got %f", got)
+	}
+	if len(warnings) != 1 || warnings[0] != "retry:faithfulness" {
+		t.Errorf("expected [retry:faithfulness], got %v", warnings)
+	}
+	if completer.calls != 2 {
+		t.Errorf("expected exactly 2 calls, got %d", completer.calls)
+	}
+	assertRetryPromptNamesTheFailure(t, completer, faithfulnessInvalidJSON, &struct {
+		Claims []struct {
+			Text      string `json:"text"`
+			Supported bool   `json:"supported"`
+		} `json:"claims"`
+	}{})
+}
+
+func TestFaithfulnessRetry_InvalidTwiceFailsAfterOneRetry(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{faithfulnessInvalidJSON, faithfulnessInvalidJSON}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	_, _, err := j.faithfulness(context.Background(), q, "answer", "context")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "after retry") {
+		t.Errorf("expected error to mention 'after retry', got %v", err)
+	}
+	if completer.calls != 2 {
+		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.calls)
+	}
+}
+
+func TestFaithfulnessRetry_ValidFirstNeedsNoRetry(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{`{"claims":[{"text":"a","supported":true}]}`}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	_, warnings, err := j.faithfulness(context.Background(), q, "answer", "context")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", warnings)
+	}
+	if completer.calls != 1 {
+		t.Errorf("expected exactly 1 call, got %d", completer.calls)
+	}
+}
+
+// answerRelevanceInvalidJSON has a trailing comma after the score field.
+const answerRelevanceInvalidJSON = `{"score":"5",}`
+
+func TestAnswerRelevanceRetry_InvalidThenValidSucceeds(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{
+		answerRelevanceInvalidJSON,
+		`{"score":"5","reasoning":"x"}`,
+	}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	got, warnings, err := j.answerRelevance(context.Background(), q, "answer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 1.0 {
+		t.Errorf("expected 1.0, got %f", got)
+	}
+	if len(warnings) != 1 || warnings[0] != "retry:answer_relevance" {
+		t.Errorf("expected [retry:answer_relevance], got %v", warnings)
+	}
+	if completer.calls != 2 {
+		t.Errorf("expected exactly 2 calls, got %d", completer.calls)
+	}
+	assertRetryPromptNamesTheFailure(t, completer, answerRelevanceInvalidJSON, &struct {
+		Score     json.RawMessage `json:"score"`
+		Reasoning string          `json:"reasoning"`
+	}{})
+}
+
+func TestAnswerRelevanceRetry_InvalidTwiceFailsAfterOneRetry(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{answerRelevanceInvalidJSON, answerRelevanceInvalidJSON}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	_, _, err := j.answerRelevance(context.Background(), q, "answer")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "after retry") {
+		t.Errorf("expected error to mention 'after retry', got %v", err)
+	}
+	if completer.calls != 2 {
+		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.calls)
+	}
+}
+
+func TestAnswerRelevanceRetry_ValidFirstNeedsNoRetry(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{`{"score":"5","reasoning":"x"}`}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+
+	_, warnings, err := j.answerRelevance(context.Background(), q, "answer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", warnings)
+	}
+	if completer.calls != 1 {
+		t.Errorf("expected exactly 1 call, got %d", completer.calls)
+	}
+}
+
+// coverageInvalidJSON has a trailing comma inside the array.
+const coverageInvalidJSON = `{"covered":[true,]}`
+
+func TestCoverageRetry_InvalidThenValidSucceeds(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{
+		coverageInvalidJSON,
+		`{"covered":[true]}`,
+	}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en", ExpectedPoints: []string{"p1"}}
+
+	got, warnings, err := j.coverage(context.Background(), q, "answer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 1.0 {
+		t.Errorf("expected 1.0, got %f", got)
+	}
+	if len(warnings) != 1 || warnings[0] != "retry:coverage" {
+		t.Errorf("expected [retry:coverage], got %v", warnings)
+	}
+	if completer.calls != 2 {
+		t.Errorf("expected exactly 2 calls, got %d", completer.calls)
+	}
+	assertRetryPromptNamesTheFailure(t, completer, coverageInvalidJSON, &struct {
+		Covered []bool `json:"covered"`
+	}{})
+}
+
+func TestCoverageRetry_InvalidTwiceFailsAfterOneRetry(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{coverageInvalidJSON, coverageInvalidJSON}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en", ExpectedPoints: []string{"p1"}}
+
+	_, _, err := j.coverage(context.Background(), q, "answer")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "after retry") {
+		t.Errorf("expected error to mention 'after retry', got %v", err)
+	}
+	if completer.calls != 2 {
+		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.calls)
+	}
+}
+
+func TestCoverageRetry_ValidFirstNeedsNoRetry(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{`{"covered":[true]}`}}
+	j := NewJudge(completer)
+	q := Question{ID: "q", Question: "why?", Language: "en", ExpectedPoints: []string{"p1"}}
+
+	_, warnings, err := j.coverage(context.Background(), q, "answer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", warnings)
+	}
+	if completer.calls != 1 {
+		t.Errorf("expected exactly 1 call, got %d", completer.calls)
+	}
+}
+
+// TestJudgeEvaluate_FaithfulnessRetryFailureRecordsErrorWithAfterRetry pins
+// the JudgeErrors shape at the Evaluate level: a metric that fails twice
+// surfaces as one "<metric>: ... after retry ..." entry.
+func TestJudgeEvaluate_FaithfulnessRetryFailureRecordsErrorWithAfterRetry(t *testing.T) {
+	completer := &scriptedCompleter{responses: []string{faithfulnessInvalidJSON, faithfulnessInvalidJSON}}
+	q := Question{ID: "q", Question: "why?", Language: "en"}
+	chunks := []RetrievedChunk{{FileID: "f1"}}
+	contents := []string{"c1"}
+
+	got := NewJudge(completer).Evaluate(context.Background(), q, "answer", chunks, contents)
+
+	found := false
+	for _, e := range got.JudgeErrors {
+		if strings.HasPrefix(e, "faithfulness:") && strings.Contains(e, "after retry") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a faithfulness error containing 'after retry', got %v", got.JudgeErrors)
+	}
+}
+
+// assertRetryPromptNamesTheFailure checks that the second recorded prompt
+// (the retry) tells the model its previous reply was not valid JSON and
+// carries the actual decoder diagnostic — computed independently via
+// unmarshalStrict against the same invalid payload, rather than duplicating
+// the exact wording, so this test does not silently pass if the wording
+// changes but the diagnostic is dropped.
+func assertRetryPromptNamesTheFailure(t *testing.T, completer *scriptedCompleter, invalidPayload string, probe any) {
+	t.Helper()
+	if len(completer.prompts) != 2 {
+		t.Fatalf("expected 2 recorded prompts, got %d", len(completer.prompts))
+	}
+	retryPrompt := completer.prompts[1]
+	if !strings.Contains(retryPrompt, "was not valid JSON") {
+		t.Errorf("retry prompt missing 'was not valid JSON': %s", retryPrompt)
+	}
+	wantErr := unmarshalStrict(invalidPayload, probe)
+	if wantErr == nil {
+		t.Fatalf("test payload %q was not actually invalid JSON", invalidPayload)
+	}
+	if !strings.Contains(retryPrompt, wantErr.Error()) {
+		t.Errorf("retry prompt missing decoder error text %q: %s", wantErr.Error(), retryPrompt)
 	}
 }

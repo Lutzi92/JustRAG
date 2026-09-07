@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/prompts"
 )
 
@@ -36,17 +37,19 @@ func (j *Judge) Evaluate(ctx context.Context, q Question, answer string, chunks 
 		out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("faithfulness: chunk/content length mismatch: %d chunks vs %d contents", len(chunks), len(contents)))
 	} else {
 		contextText := assembleContextText(chunks, contents)
-		if f, err := j.faithfulness(ctx, q, answer, contextText); err != nil {
+		if f, warnings, err := j.faithfulness(ctx, q, answer, contextText); err != nil {
 			out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("faithfulness: %v", err))
 		} else {
 			out.Faithfulness = &f
+			out.JudgeWarnings = append(out.JudgeWarnings, warnings...)
 		}
 	}
 
-	if r, err := j.answerRelevance(ctx, q, answer); err != nil {
+	if r, warnings, err := j.answerRelevance(ctx, q, answer); err != nil {
 		out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("answer_relevance: %v", err))
 	} else {
 		out.AnswerRelevance = &r
+		out.JudgeWarnings = append(out.JudgeWarnings, warnings...)
 	}
 
 	if len(contents) == 0 {
@@ -70,24 +73,25 @@ func (j *Judge) Evaluate(ctx context.Context, q Question, answer string, chunks 
 	return out
 }
 
-func (j *Judge) faithfulness(ctx context.Context, q Question, answer, contextText string) (float64, error) {
+func (j *Judge) faithfulness(ctx context.Context, q Question, answer, contextText string) (float64, []string, error) {
 	sys := prompts.FaithfulnessSystemPrompt(q.Language)
 	user := prompts.FaithfulnessUserPrompt(q.Question, answer, contextText)
-	resp, err := j.completer.Complete(ctx, user, sys)
-	if err != nil {
-		return 0, err
-	}
 	var parsed struct {
 		Claims []struct {
 			Text      string `json:"text"`
 			Supported bool   `json:"supported"`
 		} `json:"claims"`
 	}
-	if err := unmarshalStrict(resp, &parsed); err != nil {
-		return 0, err
+	retried, err := j.completeJSON(ctx, "faithfulness", user, sys, &parsed)
+	if err != nil {
+		return 0, nil, err
+	}
+	var warnings []string
+	if retried {
+		warnings = append(warnings, "retry:faithfulness")
 	}
 	if len(parsed.Claims) == 0 {
-		return 1.0, nil
+		return 1.0, warnings, nil
 	}
 	supported := 0
 	for _, c := range parsed.Claims {
@@ -95,28 +99,29 @@ func (j *Judge) faithfulness(ctx context.Context, q Question, answer, contextTex
 			supported++
 		}
 	}
-	return float64(supported) / float64(len(parsed.Claims)), nil
+	return float64(supported) / float64(len(parsed.Claims)), warnings, nil
 }
 
-func (j *Judge) answerRelevance(ctx context.Context, q Question, answer string) (float64, error) {
+func (j *Judge) answerRelevance(ctx context.Context, q Question, answer string) (float64, []string, error) {
 	sys := prompts.AnswerRelevanceSystemPrompt(q.Language)
 	user := prompts.AnswerRelevanceUserPrompt(q.Question, answer)
-	resp, err := j.completer.Complete(ctx, user, sys)
-	if err != nil {
-		return 0, err
-	}
 	var parsed struct {
 		Score     json.RawMessage `json:"score"`
 		Reasoning string          `json:"reasoning"`
 	}
-	if err := unmarshalStrict(resp, &parsed); err != nil {
-		return 0, err
+	retried, err := j.completeJSON(ctx, "answer_relevance", user, sys, &parsed)
+	if err != nil {
+		return 0, nil, err
 	}
 	score, err := parseJudgeScore(parsed.Score)
 	if err != nil {
-		return 0, fmt.Errorf("score: %w", err)
+		return 0, nil, fmt.Errorf("score: %w", err)
 	}
-	return float64(score-1) / 4.0, nil
+	var warnings []string
+	if retried {
+		warnings = append(warnings, "retry:answer_relevance")
+	}
+	return float64(score-1) / 4.0, warnings, nil
 }
 
 // parseJudgeScore parses a judge-emitted "score" field that may arrive as a
@@ -169,17 +174,17 @@ func clampScore(f float64) int {
 func (j *Judge) contextPrecision(ctx context.Context, q Question, contents []string) (float64, []string, error) {
 	sys := prompts.ContextPrecisionSystemPrompt(q.Language)
 	user := prompts.ContextPrecisionUserPrompt(q.Question, contents)
-	resp, err := j.completer.Complete(ctx, user, sys)
-	if err != nil {
-		return 0, nil, err
-	}
 	var parsed struct {
 		Relevant []bool `json:"relevant"`
 	}
-	if err := unmarshalStrict(resp, &parsed); err != nil {
+	retried, err := j.completeJSON(ctx, "context_precision", user, sys, &parsed)
+	if err != nil {
 		return 0, nil, err
 	}
 	relevant, warnings := alignBooleans("context_precision", parsed.Relevant, len(contents))
+	if retried {
+		warnings = append(warnings, "retry:context_precision")
+	}
 	relevantCount := 0
 	for _, r := range relevant {
 		if r {
@@ -205,17 +210,17 @@ func (j *Judge) coverage(ctx context.Context, q Question, answer string) (float6
 	}
 	sys := prompts.CoverageSystemPrompt(q.Language)
 	user := prompts.CoverageUserPrompt(q.Question, answer, points)
-	resp, err := j.completer.Complete(ctx, user, sys)
-	if err != nil {
-		return 0, nil, err
-	}
 	var parsed struct {
 		Covered []bool `json:"covered"`
 	}
-	if err := unmarshalStrict(resp, &parsed); err != nil {
+	retried, err := j.completeJSON(ctx, "coverage", user, sys, &parsed)
+	if err != nil {
 		return 0, nil, err
 	}
 	covered, warnings := alignBooleans("coverage", parsed.Covered, len(points))
+	if retried {
+		warnings = append(warnings, "retry:coverage")
+	}
 	coveredCount := 0
 	for _, c := range covered {
 		if c {
@@ -223,6 +228,39 @@ func (j *Judge) coverage(ctx context.Context, q Question, answer string) (float6
 		}
 	}
 	return float64(coveredCount) / float64(len(points)), warnings, nil
+}
+
+// completeJSON asks the completer once, and on a JSON decoder failure
+// re-asks exactly once more with the decoder's own diagnostic appended
+// (W6-R4 / W6-R17): the Wave-5 fix wave established that live judge parse
+// failures are brace-balanced objects the decoder still rejects (a raw
+// newline or unescaped quote inside a string, or a trailing comma) — not
+// truncation and not a code fence, both of which unmarshalStrict already
+// tolerates without any retry. The retry is unconditional (no site_config
+// gate) and bounded to exactly one extra call regardless of outcome; the
+// parser itself (unmarshalStrict) stays strict — this wraps it, it does not
+// loosen it. judge identifies the caller for the rag_judge_retry_total
+// metric and the "retry:<judge>" warning the caller appends.
+func (j *Judge) completeJSON(ctx context.Context, judge, user, sys string, v any) (retried bool, err error) {
+	resp, err := j.completer.Complete(ctx, user, sys)
+	if err != nil {
+		return false, err
+	}
+	firstErr := unmarshalStrict(resp, v)
+	if firstErr == nil {
+		return false, nil
+	}
+	observability.RecordJudgeRetry(judge)
+	retryPrompt := user + "\n\nYour previous reply was not valid JSON: " + firstErr.Error() +
+		"\nReply with only the corrected JSON object — escape newlines inside strings, no trailing commas."
+	resp2, err := j.completer.Complete(ctx, retryPrompt, sys)
+	if err != nil {
+		return true, fmt.Errorf("%w (retry call failed: %v)", firstErr, err)
+	}
+	if err := unmarshalStrict(resp2, v); err != nil {
+		return true, fmt.Errorf("%v (after retry: %v)", firstErr, err)
+	}
+	return true, nil
 }
 
 // alignBooleans truncates or pads a judge-returned boolean slice to exactly

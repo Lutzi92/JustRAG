@@ -2786,3 +2786,47 @@ func RecordAnswerDegenerate(surface string) {
 func AnswerDegenerateTotalForTest() *prometheus.CounterVec {
 	return answerDegenerateTotal
 }
+
+// --- Judge JSON-hygiene retry (W6-R4 / W6-R17) -----------------------------
+
+var judgeRetryTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_judge_retry_total",
+		Help: "Per-metric counter for the judge's single bounded retry on a " +
+			"decoder failure (a brace-balanced object the JSON decoder still " +
+			"rejects — a raw newline or unescaped quote inside a string, or a " +
+			"trailing comma — not truncation and not a code fence, both of " +
+			"which the parser already tolerates without a retry). One " +
+			"increment per failed first attempt, regardless of whether the " +
+			"retry itself then succeeds or fails (a second failure is recorded " +
+			"separately in judge_errors as \"after retry\"). Shared by " +
+			"cmd/eval and the runtime RAGAS sampler, since both go through " +
+			"eval.Judge.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"judge"},
+)
+
+// judgeRetryKnownJudges bounds the label cardinality: an unrecognised value
+// records as "other" rather than minting a new series.
+var judgeRetryKnownJudges = map[string]bool{
+	"faithfulness":      true,
+	"answer_relevance":  true,
+	"context_precision": true,
+	"coverage":          true,
+}
+
+// RecordJudgeRetry increments the per-metric counter for one judge decoder
+// failure that triggered the single bounded retry.
+func RecordJudgeRetry(judge string) {
+	if !judgeRetryKnownJudges[judge] {
+		judge = "other"
+	}
+	judgeRetryTotal.WithLabelValues(judge).Inc()
+}
+
+// JudgeRetryTotalForTest exposes the judge-retry counter to other test
+// packages (internal/eval). Mirrors ConflictSurfacingTotalForTest.
+func JudgeRetryTotalForTest() *prometheus.CounterVec {
+	return judgeRetryTotal
+}
