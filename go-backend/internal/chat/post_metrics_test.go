@@ -13,20 +13,21 @@ import (
 // tests can assert recordAgentDecision forwards teamID/agentID faithfully
 // (Phase 2 AP-B4 follow-up: team/agent id telemetry).
 type fakeDecisionRecorder struct {
-	mu        sync.Mutex
-	called    bool
-	kbID      string
-	mode      string
-	outcome   string
-	hops      int
-	rounds    int
-	latencyMs int
-	toolCalls []ToolCallRecord
-	teamID    *string
-	agentID   *string
+	mu         sync.Mutex
+	called     bool
+	kbID       string
+	mode       string
+	outcome    string
+	hops       int
+	rounds     int
+	latencyMs  int
+	toolCalls  []ToolCallRecord
+	teamID     *string
+	agentID    *string
+	policyRule *int
 }
 
-func (f *fakeDecisionRecorder) Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []ToolCallRecord, teamID, agentID *string) {
+func (f *fakeDecisionRecorder) Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []ToolCallRecord, teamID, agentID *string, policyRule *int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.called = true
@@ -39,38 +40,41 @@ func (f *fakeDecisionRecorder) Record(ctx context.Context, kbID, mode, outcome s
 	f.toolCalls = toolCalls
 	f.teamID = teamID
 	f.agentID = agentID
+	f.policyRule = policyRule
 }
 
 // recordSnapshot is a lock-free copy of the fields recorded by
 // fakeDecisionRecorder — snapshot() returns one instead of copying the
 // struct (which embeds a sync.Mutex) directly.
 type recordSnapshot struct {
-	called    bool
-	kbID      string
-	mode      string
-	outcome   string
-	hops      int
-	rounds    int
-	latencyMs int
-	toolCalls []ToolCallRecord
-	teamID    *string
-	agentID   *string
+	called     bool
+	kbID       string
+	mode       string
+	outcome    string
+	hops       int
+	rounds     int
+	latencyMs  int
+	toolCalls  []ToolCallRecord
+	teamID     *string
+	agentID    *string
+	policyRule *int
 }
 
 func (f *fakeDecisionRecorder) snapshot() recordSnapshot {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return recordSnapshot{
-		called:    f.called,
-		kbID:      f.kbID,
-		mode:      f.mode,
-		outcome:   f.outcome,
-		hops:      f.hops,
-		rounds:    f.rounds,
-		latencyMs: f.latencyMs,
-		toolCalls: f.toolCalls,
-		teamID:    f.teamID,
-		agentID:   f.agentID,
+		called:     f.called,
+		kbID:       f.kbID,
+		mode:       f.mode,
+		outcome:    f.outcome,
+		hops:       f.hops,
+		rounds:     f.rounds,
+		latencyMs:  f.latencyMs,
+		toolCalls:  f.toolCalls,
+		teamID:     f.teamID,
+		agentID:    f.agentID,
+		policyRule: f.policyRule,
 	}
 }
 
@@ -95,7 +99,7 @@ func TestRecordAgentDecision_ForwardsTeamAndAgentID(t *testing.T) {
 	h := NewHandler(nil, nil, nil, WithDecisionRecorder(fake))
 
 	teamID := "team-123"
-	h.recordAgentDecision(context.Background(), "kb-1", "team", "answered", 2, 0, 42, &teamID, nil)
+	h.recordAgentDecision(context.Background(), "kb-1", "team", "answered", 2, 0, 42, &teamID, nil, nil)
 
 	snap := waitForRecord(t, fake)
 	if snap.teamID == nil || *snap.teamID != teamID {
@@ -113,7 +117,7 @@ func TestRecordAgentDecision_StandardPathForwardsNilIDs(t *testing.T) {
 	fake := &fakeDecisionRecorder{}
 	h := NewHandler(nil, nil, nil, WithDecisionRecorder(fake))
 
-	h.recordAgentDecision(context.Background(), "kb-1", "crag", "answered", 0, 0, 10, nil, nil)
+	h.recordAgentDecision(context.Background(), "kb-1", "crag", "answered", 0, 0, 10, nil, nil, nil)
 
 	snap := waitForRecord(t, fake)
 	if snap.teamID != nil {
@@ -133,7 +137,7 @@ func TestRecordAgentDecision_ForwardsAgentID(t *testing.T) {
 	h := NewHandler(nil, nil, nil, WithDecisionRecorder(fake))
 
 	agentID := "agent-456"
-	h.recordAgentDecision(context.Background(), "kb-1", "team", "answered", 0, 0, 42, nil, &agentID)
+	h.recordAgentDecision(context.Background(), "kb-1", "team", "answered", 0, 0, 42, nil, &agentID, nil)
 
 	snap := waitForRecord(t, fake)
 	if snap.agentID == nil || *snap.agentID != agentID {
@@ -194,4 +198,50 @@ func strPtrVal(a *string) string {
 		return "<nil>"
 	}
 	return *a
+}
+
+// W6-R6: the orchestrator-policy rule index reaches the recorder, and stays
+// nil when the flag ladder decided. Without the plumbing the first arm's
+// snapshot would carry nil and the test fails.
+func TestRecordAgentDecision_ForwardsPolicyRule(t *testing.T) {
+	fake := &fakeDecisionRecorder{}
+	h := NewHandler(nil, nil, nil, WithDecisionRecorder(fake))
+
+	rule := 2
+	h.recordAgentDecision(context.Background(), "kb-1", "supervisor", "answered", 0, 0, 42, nil, nil, &rule)
+
+	snap := waitForRecord(t, fake)
+	if snap.policyRule == nil || *snap.policyRule != rule {
+		t.Fatalf("policyRule = %v, want %d", snap.policyRule, rule)
+	}
+}
+
+// Rule 0 is an ordinary rule: it must survive as a pointer to 0, not collapse
+// into "no rule".
+func TestRecordAgentDecision_ForwardsPolicyRuleZero(t *testing.T) {
+	fake := &fakeDecisionRecorder{}
+	h := NewHandler(nil, nil, nil, WithDecisionRecorder(fake))
+
+	rule := 0
+	h.recordAgentDecision(context.Background(), "kb-1", "agentic", "answered", 0, 0, 7, nil, nil, &rule)
+
+	snap := waitForRecord(t, fake)
+	if snap.policyRule == nil {
+		t.Fatal("policyRule = nil, want a pointer to 0")
+	}
+	if *snap.policyRule != 0 {
+		t.Fatalf("policyRule = %d, want 0", *snap.policyRule)
+	}
+}
+
+func TestRecordAgentDecision_NilPolicyRuleStaysNil(t *testing.T) {
+	fake := &fakeDecisionRecorder{}
+	h := NewHandler(nil, nil, nil, WithDecisionRecorder(fake))
+
+	h.recordAgentDecision(context.Background(), "kb-1", "crag", "answered", 0, 0, 10, nil, nil, nil)
+
+	snap := waitForRecord(t, fake)
+	if snap.policyRule != nil {
+		t.Fatalf("policyRule = %v, want nil", snap.policyRule)
+	}
 }

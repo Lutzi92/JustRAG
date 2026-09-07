@@ -7,6 +7,18 @@ Each `.jsonl` file here is a curated list of questions used by the
 
 One JSON object per line. Blank lines and `#`-prefixed lines are ignored.
 
+This is also the shape the **admin UI / DB-backed eval runner** accepts, not
+only `cmd/eval`'s file loader. Since Wave 6 (W6-R3), `internal/eval.
+ParseGoldenSetContent` — the function behind a golden set saved through the
+admin UI and behind `eval_golden_sets.content` (the async / scheduled eval
+path) — auto-detects the shape from the first non-whitespace byte: `[` means
+the original JSON-array shape, anything else (including a bare `{` row) is
+parsed as JSONL with `#`/blank lines skipped, sharing the same line parser
+`cmd/eval`'s file loader uses. Either shape can therefore be pasted or
+uploaded through the admin UI directly. The one thing that stays
+**`cmd/eval`-only on both shapes** is a row carrying `turns` — see "Multi-turn
+set" below.
+
 Fields:
 
 | Field                | Type     | Description                                               |
@@ -285,9 +297,11 @@ orchestrator predicate `chat.tryDeepChat` uses — Supervisor, Plan-Execute
 `chat_supervisor_enabled` / `chat_plan_execute_enabled` /
 `chat_agentic_enabled` gates. The report adds two fields:
 
-- **per-question** `agent`: `{orchestrator, specialist?, tools, hops?, plan?, dispatch_reason}`.
+- **per-question** `agent`: `{orchestrator, specialist?, tools, hops?, plan?, dispatch_reason}`, plus, since Wave 6 (Task 10), `llm_calls` — the count from a `CallCounter` wrapping every model-provider HTTP request (chat completion streamed or unary, embedding, rerank) made anywhere inside that question's `Search` call, classifier included.
 - **report-level** `orchestrator_aggregates`: same shape as `route_aggregates`,
   bucketed by which orchestrator handled the question.
+- **every `Aggregate` block** (top-level, per-route, per-orchestrator) also gains, since Wave 6, `mean_latency_ms` (always printed — 0 is a valid latency) and `mean_llm_calls` (a nullable pointer, `omitempty`, nil when no question in the bucket carried an `agent` trace at all). These are the cost half of the `query_type × orchestrator → recall/MRR/cost` measurement the `--policy` flag below exists to produce.
+- when at least one question's report carries `agent.policy_rule` (a matched `chat_orchestrator_policy` rule, see `--policy` below), the human summary gains an `Orchestrator policy:` block listing which rule(s) fired and how often.
 
 This is on by default so eval reflects what production actually runs. Two
 practical consequences:
@@ -302,6 +316,17 @@ practical consequences:
 Pass `--orchestrator-dispatch=false` to reproduce pre-2026-05 retrieval-only
 behaviour (no dispatch, no new fields) — useful for diffing against
 historical reports.
+
+**Per-query orchestrator policy (Wave 6).** `--policy '<json>'` (see the
+Ablation flags table below) overlays `chat_orchestrator_policy` for one run,
+letting a rule route ANY query type — not only `complex_reasoning` — to a
+named orchestrator, `force` or `prefer`. It composes with
+`--orchestrator-dispatch=true`. The `query_type × orchestrator → recall / MRR
+/ cost` measurement on the PPM fixture (five forced cells: ladder,
+force-supervisor, force-plan_execute, force-plan_execute_dag, force-agentic;
+two repeats each) and the recommended (documentation-only — the shipped
+default stays `[]`) policy live in
+`eval/golden/orchestrator-policy.acceptance.md`.
 
 ### Ablation flags
 
@@ -321,13 +346,15 @@ historical reports.
 | `--rrf-weight-bm25 <f>` / `--rrf-weight-vector <f>` / `--rerank-blend-alpha <f>` | Per-run overrides for the fusion weights and the **global** reranker α. Per-route α overrides (`rerank_blend_alpha_lookup` etc.) are NOT overridden — set those in `site_configs` if you want to grid them. Used together with `--bm25-mode bm25` for the Wave-3 retune grid (`eval/golden/bm25-retune.acceptance.md`). |
 | `--keep-raw on\|off` | Multi-turn only: per-run override for `chat_condense_keep_raw_enabled`. |
 | `--conflict-surfacing on\|off` | Per-run override for `chat_conflict_surfacing_enabled` (W5-R7). `on` makes every turn whose assembled set spans ≥ 2 distinct files run the fast-tier conflict / supersession pass; the resulting report is written per question as `conflicts` in the JSON report — the same bare array a chat turn persists and streams (`claim, sourceA, sourceB, kind, newer, fileA, fileB`) — and the human summary gains a `Conflict surfacing:` block whenever at least one question carries an entry. Effective on the standard `PrepareChatContext` path and, under `--orchestrator-dispatch`, on the Supervisor path. Empty = live site_config. |
+| `--chat-overlay key=value` (repeatable) | W6-R18: a GENERIC per-run override for one chat-layer `site_config` key — any key read through the same reader `chat.PrepareChatContext` and the orchestrators use, not only the ones with a dedicated flag above. Repeat the flag for multiple keys (e.g. `--chat-overlay chat_conflict_max_chunks=30 --chat-overlay chat_conflict_timeout_ms=10000`). Each value is split at the FIRST `=`, so a value that itself contains `=` (e.g. a JSON blob) stays intact; a pair with no `=` or an empty key is a usage error (exit 2). Composes with — and takes precedence over — the three named chat-layer flags above for the same key (documented in `buildChatOverlays`, `cmd/eval/main.go`). Used to re-measure `chat_conflict_max_chunks` at its clamp maximum (30) without a `site_configs` mutation; see `eval/golden/cert-recency-de.acceptance.md` §"Conflict surfacing re-measured at `chat_conflict_max_chunks = 30`". Vector-layer keys are not affected — they keep their own dedicated flags. `--chat-overlay chat_orchestrator_policy=…` is rejected — use `--policy` below, which validates the document instead of passing it through raw. |
+| `--policy '<json>'` | W6-R6/R7: per-run overlay for `chat_orchestrator_policy` — a dedicated, VALIDATED flag rather than a `--chat-overlay` entry: the document is checked with the same `chatpolicy.ValidateOrchestratorPolicyJSON` the admin save path uses BEFORE the run starts (an invalid policy is a usage error, exit 2, never a silently ignored flag). Injected into the same chat-layer overlay map as `--conflict-surfacing`. Applies AFTER the comparison/team/corpus-table arms and before the flag ladder, so a rule can steer any query type, not only `complex_reasoning` — see `docs/agent-orchestration.md` §"Per-query orchestrator policy". Each question's report gains `agent.policy_rule` (the 0-based rule index, when a rule applied) and the human summary an `Orchestrator policy:` block whenever at least one question carried one. Empty (default) = live `chat_orchestrator_policy`, i.e. the ladder is unchanged. Used for the W6-R7/R7a query_type × orchestrator measurement — see `eval/golden/orchestrator-policy.acceptance.md`. |
 
 These are all per-run **overlays**: they wrap the site-config reader for that
 process only and never write `site_configs`.
-`--longcontext`/`--longcontext-mode`/`--conflict-surfacing` are chat-layer keys
-and share one overlay wrapper (`chatOverlayReader` in `cmd/eval/main.go`),
-chained after `--crag`; the vector-layer flags (`--bm25-mode`,
-`--recency-boost`, …) use the separate `overlaySiteConfig`.
+`--longcontext`/`--longcontext-mode`/`--conflict-surfacing`/`--chat-overlay`/`--policy`
+are chat-layer keys and share one overlay wrapper (`chatOverlayReader` in
+`cmd/eval/main.go`), chained after `--crag`; the vector-layer flags
+(`--bm25-mode`, `--recency-boost`, …) use the separate `overlaySiteConfig`.
 
 The conflict pass decides supersession DIRECTION from each source's
 `published_at`/`created_at` date line, so `cmd/eval` wires the same
@@ -886,13 +913,73 @@ NEU-labeled file once the name-marker arm fires — see
 `internal/chat/recency_listing.go`'s two-arm design — while a
 window-only phrasing like "Welche Meldungen wurden in den letzten 6 Tagen
 veröffentlicht?" is scoped to just that window's NEU files), 8 NEU/UPDATE
-product lookups (`must_cite` is the UPDATE file only — tests whether the
-recency boost/prior promotes the newer, more complete advisory over its
-near-duplicate NEU predecessor), 6 CVE/WID-id lookups (lexical/BM25
-exercise; two target a CVE that exists only in an UPDATE, not its NEU
-predecessor), 3 cross-advisory enumerations (`query_type: enumeration`),
-and 2 "newest for product" lookups (recency boost ranking a single file,
-deliberately phrased to avoid tripping the recency-listing classifier).
+**delta** questions (`cert-p01`..`cert-p08`, rewritten in Wave 6 — see
+"NEU/UPDATE pair questions (Wave 6 rewrite)" below), 6 CVE/WID-id lookups
+(lexical/BM25 exercise; two target a CVE that exists only in an UPDATE, not
+its NEU predecessor), 3 cross-advisory enumerations (`query_type:
+enumeration`), and 2 "newest for product" lookups (recency boost ranking a
+single file, deliberately phrased to avoid tripping the recency-listing
+classifier).
+
+#### NEU/UPDATE pair questions (Wave 6 rewrite)
+
+`cert-p01`..`cert-p08` originally asked "Was ist zu der Schwachstelle
+WID-SEC-2026-NNNN bei &lt;Produkt&gt; bekannt?" with `must_cite_file_names`
+set to the UPDATE file only — a promotion test (does the newer, more
+complete advisory outrank its near-duplicate NEU predecessor for an equally
+topical query), not a test that needs both halves in the assembled set.
+That phrasing was reused for the Wave-5 conflict-surfacing measurement
+(`eval/golden/cert-recency-de.acceptance.md` § "Conflict surfacing (Wave
+5)") and scored 0/8 there because a promotion query has no reason to
+retrieve both halves at once.
+
+Wave 6 rewrote all eight rows to instead **name the advisory and ask for the
+delta**: "Was hat sich an der Meldung WID-SEC-2026-NNNN zu &lt;Produkt&gt;
+gegenüber der ersten Fassung geändert?" (deliberately avoiding "neu" /
+"aktuell" / "kürzlich" / "new", which would trip the recency-listing
+classifier's name-marker arm, `internal/chat/recency_classifier.go`).
+`must_cite_file_names` now lists **both** halves (`["NEU …", "UPDATE …"]`,
+copied verbatim from `eval/fixtures/cert-advisories/manifest.tsv` column 3),
+and each row carries an `expected_points` array (1–2 points per pair) drawn
+from the fixture's own `Update: …` line, for the coverage judge. This is the
+pre-registered W6-R1 measurement's fixture; see the acceptance doc's
+"Conflict surfacing re-measured (Wave 6)" section for the result — even
+with the rewritten phrasing, `cert-on.json`'s `retrieved` (the report's
+default top-10 view) shows only one half of each pair for all 8. That
+view is **not** a second, narrower retrieval pass, though: `--top-k` never
+reaches `chat.PrepareChatContext` (it is applied as a report-side sort
++ slice, `internal/eval/production_adapter.go:141-207`), and the pipeline
+assembles the exact same 30-chunk pool at every `--top-k` value — an
+isolated diagnostic (`t1-out/pairs-isolated.log`) shows `"final_docs":30`
+for all 8 pair questions even at the eval CLI's default `--top-k 10`. So
+**both halves of every pair ARE in the one assembled set** (score-ranks 1
+and 15, split by a BM25-floor score-tie boundary,
+`BM25FloorMaxFilesFor(30)=15`, `go-backend/internal/vector/rrf.go:270`).
+The finding is that the conflict detector's own selection —
+`pickConflictSources` (`internal/chat/conflicts.go:399-411`) re-sorts by
+score and keeps only the top `chat_conflict_max_chunks` (default 12) —
+excludes score-rank 15 from its window; this is strongly indicated by
+direct source reading but not independently proven from a captured
+answer-time `sources` list (hedge spelled out in the acceptance record).
+This is **not** because the detector fails on this corpus: on the very
+same run, at the default cap of 12, the detector correctly flagged and
+directed 5 of these 8 exact NEU/UPDATE pairs through other questions
+(recency-listing, CVE-lookup, enumeration) whose own retrieval/addendum
+shape put both halves inside its 12-source window. So the finding is a
+**detector-window** finding specific to the pair questions' own
+retrieval-then-cap shape, not a property of question phrasing and not a
+detector limitation on this corpus — and it is the one the follow-up
+"Conflict surfacing re-measured at `chat_conflict_max_chunks = 30`"
+section (W6-R18) directly tests by raising the cap to its clamp maximum
+(via `--chat-overlay chat_conflict_max_chunks=30`, no `site_configs`
+mutation). The result confirms the hypothesis completely — all 8 pairs
+flag with the correct direction at cap 30 — but the PPM false-positive
+rate roughly **triples** at that cap (0.281 / 0.303 vs. 0.112 / 0.101 at
+the default 12), so the re-measurement still yields no recipe
+recommendation and no default change to either
+`chat_conflict_surfacing_enabled` or `chat_conflict_max_chunks`; see the
+acceptance record's "Result 1a", "Detector-window isolation" and the
+W6-R18 section for the full evidence and the decision.
 
 `kb_id` in the committed file is the placeholder
 `REPLACE_WITH_FIXTURE_KB_ID` (see "Ground truth by name, not by UUID"

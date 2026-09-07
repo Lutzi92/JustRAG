@@ -31,6 +31,11 @@ interface RunSummary {
     aggregate?: AggregateSummary;
     route_mean_recall?: Record<string, number>;
     error_message?: string;
+    // W6-R9: which runs dispatched through a user team instead of the
+    // standard orchestrator-dispatch adapter. team_name may be empty even
+    // when team_id is set (best-effort resolution on the backend).
+    team_id?: string;
+    team_name?: string;
 }
 
 interface ListRunsResponse {
@@ -111,6 +116,9 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
     const [offset, setOffset] = useState(0);
     const [statusFilter, setStatusFilter] = useState<string>('');
     const [listLoading, setListLoading] = useState(false);
+    // W6-R9: client-side sort on the Score column — cycles desc -> asc ->
+    // original (fetch) order on repeated header clicks.
+    const [scoreSort, setScoreSort] = useState<'none' | 'desc' | 'asc'>('none');
 
     // State: compare
     const [compareAId, setCompareAId] = useState<string>('');
@@ -225,6 +233,37 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
         const interval = setInterval(fetchRuns, 5000);
         return () => clearInterval(interval);
     }, [fetchRuns, hasInFlight]);
+
+    // W6-R9: Score column sort — 'none' keeps the fetch (created_at desc)
+    // order; 'desc'/'asc' reorder by aggregate.mean_recall, with runs
+    // lacking an aggregate (in-flight/failed) sorted last regardless of
+    // direction.
+    const sortedRuns = useMemo(() => {
+        if (scoreSort === 'none') return runs;
+        const withScore: RunSummary[] = [];
+        const withoutScore: RunSummary[] = [];
+        for (const r of runs) {
+            (r.aggregate ? withScore : withoutScore).push(r);
+        }
+        withScore.sort((a, b) => {
+            const diff = (a.aggregate?.mean_recall ?? 0) - (b.aggregate?.mean_recall ?? 0);
+            return scoreSort === 'desc' ? -diff : diff;
+        });
+        return [...withScore, ...withoutScore];
+    }, [runs, scoreSort]);
+
+    const toggleScoreSort = () => {
+        setScoreSort(prev => (prev === 'none' ? 'desc' : prev === 'desc' ? 'asc' : 'none'));
+    };
+
+    // W6-R9: the newest completed team run per team id, for the "last run"
+    // hint next to the team selector.
+    const lastTeamRunFor = useCallback((teamId: string): RunSummary | undefined => {
+        const candidates = runs.filter(r => r.status === 'completed' && r.team_id === teamId && r.aggregate);
+        if (candidates.length === 0) return undefined;
+        const timeOf = (r: RunSummary) => new Date(r.finished_at || r.started_at || r.created_at).getTime();
+        return candidates.reduce((newest, r) => (timeOf(r) > timeOf(newest) ? r : newest));
+    }, [runs]);
 
     const handleUpload = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -591,9 +630,13 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
                         style={{ padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                     >
                         <option value="">{t('evalTeamStandard')}</option>
-                        {kbTeams.map(tm => (
-                            <option key={tm.id} value={tm.id}>{tm.name}</option>
-                        ))}
+                        {kbTeams.map(tm => {
+                            const last = lastTeamRunFor(tm.id);
+                            const suffix = last && last.aggregate
+                                ? ` — ${t('evalTeamLastRun')}: Recall ${(last.aggregate.mean_recall * 100).toFixed(1)} % / MRR ${(last.aggregate.mrr * 100).toFixed(1)} %`
+                                : '';
+                            return <option key={tm.id} value={tm.id}>{tm.name}{suffix}</option>;
+                        })}
                     </select>
                 </div>
                 )}
@@ -655,13 +698,21 @@ export default function AdminEvalTab({ basePath = '/api/admin/eval', kbId }: Adm
                                 <th style={{ textAlign: 'left', padding: '0.5rem' }}>{t('evalStarted')}</th>
                                 <th style={{ textAlign: 'right', padding: '0.5rem' }}>{t('evalDuration')}</th>
                                 <th style={{ textAlign: 'left', padding: '0.5rem' }}>{t('evalKbName')}</th>
+                                <th style={{ textAlign: 'left', padding: '0.5rem' }}>{t('evalTeam')}</th>
                                 <th style={{ textAlign: 'center', padding: '0.5rem' }}>{t('evalJudge')}</th>
+                                <th
+                                    style={{ textAlign: 'right', padding: '0.5rem', cursor: 'pointer', userSelect: 'none' }}
+                                    onClick={toggleScoreSort}
+                                    title={t('evalScoreTitle')}
+                                >
+                                    {t('evalScore')}{scoreSort === 'desc' ? ' ▼' : scoreSort === 'asc' ? ' ▲' : ''}
+                                </th>
                                 <th style={{ textAlign: 'left', padding: '0.5rem' }}>{t('evalRecallPerRoute')}</th>
                                 <th style={{ textAlign: 'right', padding: '0.5rem' }}>{t('evalActions')}</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {runs.map(r => <RunRow key={r.id} run={r} onDelete={handleDelete} onExport={handleExport} onCompareWith={(cmpId) => { setCompareAId(r.id); setCompareBId(cmpId); setCompareMarkdown(''); }} runs={runs} />)}
+                            {sortedRuns.map(r => <RunRow key={r.id} run={r} onDelete={handleDelete} onExport={handleExport} onCompareWith={(cmpId) => { setCompareAId(r.id); setCompareBId(cmpId); setCompareMarkdown(''); }} runs={runs} />)}
                         </tbody>
                     </table>
                 )}
@@ -747,7 +798,11 @@ function RunRow({ run, onDelete, onExport, onCompareWith, runs }: { run: RunSumm
             <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{run.started_at ? new Date(run.started_at).toLocaleString() : '—'}</td>
             <td style={{ padding: '0.5rem', textAlign: 'right', fontSize: '0.85rem' }}>{duration}</td>
             <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{run.kb_name || run.kb_id.slice(0, 8)}</td>
+            <td style={{ padding: '0.5rem', fontSize: '0.85rem' }}>{run.team_name || (run.team_id ? run.team_id.slice(0, 8) : '—')}</td>
             <td style={{ padding: '0.5rem', textAlign: 'center' }}>{run.judge_enabled ? <Check size={14} /> : <X size={14} style={{ opacity: 0.3 }} />}</td>
+            <td style={{ padding: '0.5rem', textAlign: 'right', fontSize: '0.85rem' }} title={t('evalScoreTitle')}>
+                {run.aggregate ? `${(run.aggregate.mean_recall * 100).toFixed(1)} / ${(run.aggregate.mrr * 100).toFixed(1)}` : '—'}
+            </td>
             <td style={{ padding: '0.5rem' }}>
                 {run.route_mean_recall
                     ? Object.entries(run.route_mean_recall).map(([route, val]) => (

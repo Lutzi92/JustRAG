@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/prompts"
 )
 
@@ -36,14 +37,23 @@ func (j *Judge) Evaluate(ctx context.Context, q Question, answer string, chunks 
 		out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("faithfulness: chunk/content length mismatch: %d chunks vs %d contents", len(chunks), len(contents)))
 	} else {
 		contextText := assembleContextText(chunks, contents)
-		if f, err := j.faithfulness(ctx, q, answer, contextText); err != nil {
+		f, warnings, err := j.faithfulness(ctx, q, answer, contextText)
+		// Warnings are appended regardless of err: a retry that produced
+		// valid JSON but then failed a downstream semantic check (only
+		// answerRelevance's score parse can do that today) must still show
+		// "retry:<metric>" — the retry genuinely happened, independent of
+		// whether the metric ultimately errored (W6-R4 fix round, N3).
+		out.JudgeWarnings = append(out.JudgeWarnings, warnings...)
+		if err != nil {
 			out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("faithfulness: %v", err))
 		} else {
 			out.Faithfulness = &f
 		}
 	}
 
-	if r, err := j.answerRelevance(ctx, q, answer); err != nil {
+	r, warnings, err := j.answerRelevance(ctx, q, answer)
+	out.JudgeWarnings = append(out.JudgeWarnings, warnings...)
+	if err != nil {
 		out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("answer_relevance: %v", err))
 	} else {
 		out.AnswerRelevance = &r
@@ -51,43 +61,54 @@ func (j *Judge) Evaluate(ctx context.Context, q Question, answer string, chunks 
 
 	if len(contents) == 0 {
 		// skip context precision
-	} else if p, warnings, err := j.contextPrecision(ctx, q, contents); err != nil {
-		out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("context_precision: %v", err))
 	} else {
-		out.ContextPrecision = &p
+		p, warnings, err := j.contextPrecision(ctx, q, contents)
 		out.JudgeWarnings = append(out.JudgeWarnings, warnings...)
+		if err != nil {
+			out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("context_precision: %v", err))
+		} else {
+			out.ContextPrecision = &p
+		}
 	}
 
 	if len(q.ExpectedPoints) == 0 {
 		// skip coverage — no ground-truth points authored for this row (W4-R5)
-	} else if c, warnings, err := j.coverage(ctx, q, answer); err != nil {
-		out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("coverage: %v", err))
 	} else {
-		out.Coverage = &c
+		c, warnings, err := j.coverage(ctx, q, answer)
 		out.JudgeWarnings = append(out.JudgeWarnings, warnings...)
+		if err != nil {
+			out.JudgeErrors = append(out.JudgeErrors, fmt.Sprintf("coverage: %v", err))
+		} else {
+			out.Coverage = &c
+		}
 	}
 
 	return out
 }
 
-func (j *Judge) faithfulness(ctx context.Context, q Question, answer, contextText string) (float64, error) {
+func (j *Judge) faithfulness(ctx context.Context, q Question, answer, contextText string) (float64, []string, error) {
 	sys := prompts.FaithfulnessSystemPrompt(q.Language)
 	user := prompts.FaithfulnessUserPrompt(q.Question, answer, contextText)
-	resp, err := j.completer.Complete(ctx, user, sys)
-	if err != nil {
-		return 0, err
-	}
 	var parsed struct {
 		Claims []struct {
 			Text      string `json:"text"`
 			Supported bool   `json:"supported"`
 		} `json:"claims"`
 	}
-	if err := unmarshalStrict(resp, &parsed); err != nil {
-		return 0, err
+	retried, err := j.completeJSON(ctx, "faithfulness", user, sys, q.Language, &parsed)
+	// Built before the error return (N7): a retry happened whenever
+	// completeJSON's first attempt failed to decode, regardless of whether
+	// the retry itself then succeeded or failed too — "retry:<metric>"
+	// means "a retry was attempted", not "the retry worked".
+	var warnings []string
+	if retried {
+		warnings = append(warnings, "retry:faithfulness")
+	}
+	if err != nil {
+		return 0, warnings, err
 	}
 	if len(parsed.Claims) == 0 {
-		return 1.0, nil
+		return 1.0, warnings, nil
 	}
 	supported := 0
 	for _, c := range parsed.Claims {
@@ -95,28 +116,33 @@ func (j *Judge) faithfulness(ctx context.Context, q Question, answer, contextTex
 			supported++
 		}
 	}
-	return float64(supported) / float64(len(parsed.Claims)), nil
+	return float64(supported) / float64(len(parsed.Claims)), warnings, nil
 }
 
-func (j *Judge) answerRelevance(ctx context.Context, q Question, answer string) (float64, error) {
+func (j *Judge) answerRelevance(ctx context.Context, q Question, answer string) (float64, []string, error) {
 	sys := prompts.AnswerRelevanceSystemPrompt(q.Language)
 	user := prompts.AnswerRelevanceUserPrompt(q.Question, answer)
-	resp, err := j.completer.Complete(ctx, user, sys)
-	if err != nil {
-		return 0, err
-	}
 	var parsed struct {
 		Score     json.RawMessage `json:"score"`
 		Reasoning string          `json:"reasoning"`
 	}
-	if err := unmarshalStrict(resp, &parsed); err != nil {
-		return 0, err
+	retried, err := j.completeJSON(ctx, "answer_relevance", user, sys, q.Language, &parsed)
+	// Built before either error return (W6-R4 fix round, N3): a retry that
+	// produced valid JSON but then fails to parse as a score is still a
+	// retry that happened, and the caller (Evaluate) now appends warnings
+	// unconditionally, so this must not be lost on the error path.
+	var warnings []string
+	if retried {
+		warnings = append(warnings, "retry:answer_relevance")
+	}
+	if err != nil {
+		return 0, warnings, err
 	}
 	score, err := parseJudgeScore(parsed.Score)
 	if err != nil {
-		return 0, fmt.Errorf("score: %w", err)
+		return 0, warnings, fmt.Errorf("score: %w", err)
 	}
-	return float64(score-1) / 4.0, nil
+	return float64(score-1) / 4.0, warnings, nil
 }
 
 // parseJudgeScore parses a judge-emitted "score" field that may arrive as a
@@ -169,17 +195,22 @@ func clampScore(f float64) int {
 func (j *Judge) contextPrecision(ctx context.Context, q Question, contents []string) (float64, []string, error) {
 	sys := prompts.ContextPrecisionSystemPrompt(q.Language)
 	user := prompts.ContextPrecisionUserPrompt(q.Question, contents)
-	resp, err := j.completer.Complete(ctx, user, sys)
-	if err != nil {
-		return 0, nil, err
-	}
 	var parsed struct {
 		Relevant []bool `json:"relevant"`
 	}
-	if err := unmarshalStrict(resp, &parsed); err != nil {
-		return 0, nil, err
+	retried, err := j.completeJSON(ctx, "context_precision", user, sys, q.Language, &parsed)
+	// Built before the error return (N7): "retry:<metric>" means a retry was
+	// attempted, independent of whether it (or the downstream alignment
+	// below) then succeeded.
+	var warnings []string
+	if retried {
+		warnings = append(warnings, "retry:context_precision")
 	}
-	relevant, warnings := alignBooleans("context_precision", parsed.Relevant, len(contents))
+	if err != nil {
+		return 0, warnings, err
+	}
+	relevant, alignWarnings := alignBooleans("context_precision", parsed.Relevant, len(contents))
+	warnings = append(warnings, alignWarnings...)
 	relevantCount := 0
 	for _, r := range relevant {
 		if r {
@@ -205,17 +236,22 @@ func (j *Judge) coverage(ctx context.Context, q Question, answer string) (float6
 	}
 	sys := prompts.CoverageSystemPrompt(q.Language)
 	user := prompts.CoverageUserPrompt(q.Question, answer, points)
-	resp, err := j.completer.Complete(ctx, user, sys)
-	if err != nil {
-		return 0, nil, err
-	}
 	var parsed struct {
 		Covered []bool `json:"covered"`
 	}
-	if err := unmarshalStrict(resp, &parsed); err != nil {
-		return 0, nil, err
+	retried, err := j.completeJSON(ctx, "coverage", user, sys, q.Language, &parsed)
+	// Built before the error return (N7): "retry:<metric>" means a retry was
+	// attempted, independent of whether it (or the downstream alignment
+	// below) then succeeded.
+	var warnings []string
+	if retried {
+		warnings = append(warnings, "retry:coverage")
 	}
-	covered, warnings := alignBooleans("coverage", parsed.Covered, len(points))
+	if err != nil {
+		return 0, warnings, err
+	}
+	covered, alignWarnings := alignBooleans("coverage", parsed.Covered, len(points))
+	warnings = append(warnings, alignWarnings...)
 	coveredCount := 0
 	for _, c := range covered {
 		if c {
@@ -223,6 +259,56 @@ func (j *Judge) coverage(ctx context.Context, q Question, answer string) (float6
 		}
 	}
 	return float64(coveredCount) / float64(len(points)), warnings, nil
+}
+
+// completeJSON asks the completer once, and on a JSON decoder failure
+// re-asks exactly once more with the decoder's own diagnostic appended
+// (W6-R4 / W6-R17): the Wave-5 fix wave established that live judge parse
+// failures are brace-balanced objects the decoder still rejects (a raw
+// newline or unescaped quote inside a string, or a trailing comma) — not
+// truncation and not a code fence, both of which unmarshalStrict already
+// tolerates without any retry. The retry is unconditional (no site_config
+// gate) and bounded to exactly one extra call regardless of outcome; the
+// parser itself (unmarshalStrict) stays strict — this wraps it, it does not
+// loosen it. judge identifies the caller for the rag_judge_retry_total
+// metric and the "retry:<judge>" warning the caller appends. lang selects
+// the retry instruction's language (W6-R4 fix round): every judge system
+// prompt is already bilingual and every global-synthesis question is
+// German, so an English-only correction instruction tacked onto a German
+// user prompt under a German system prompt was the one piece of the
+// exchange not following the model's working language.
+func (j *Judge) completeJSON(ctx context.Context, judge, user, sys, lang string, v any) (retried bool, err error) {
+	resp, err := j.completer.Complete(ctx, user, sys)
+	if err != nil {
+		return false, err
+	}
+	firstErr := unmarshalStrict(resp, v)
+	if firstErr == nil {
+		return false, nil
+	}
+	observability.RecordJudgeRetry(judge)
+	retryPrompt := user + retryInstruction(lang, firstErr)
+	resp2, err := j.completer.Complete(ctx, retryPrompt, sys)
+	if err != nil {
+		return true, fmt.Errorf("%w (retry call failed: %v)", firstErr, err)
+	}
+	if err := unmarshalStrict(resp2, v); err != nil {
+		return true, fmt.Errorf("%v (after retry: %v)", firstErr, err)
+	}
+	return true, nil
+}
+
+// retryInstruction returns the localized correction instruction appended to
+// the retried user prompt, carrying firstErr's diagnostic. German for
+// lang == "de", English otherwise (mirrors every SystemPrompt function in
+// internal/prompts).
+func retryInstruction(lang string, firstErr error) string {
+	if lang == "de" {
+		return "\n\nDeine vorherige Antwort war kein gültiges JSON: " + firstErr.Error() +
+			"\nAntworte nur mit dem korrigierten JSON-Objekt — Zeilenumbrüche in Strings als \\n escapen, keine nachgestellten Kommas."
+	}
+	return "\n\nYour previous reply was not valid JSON: " + firstErr.Error() +
+		"\nReply with only the corrected JSON object — escape newlines inside strings, no trailing commas."
 }
 
 // alignBooleans truncates or pads a judge-returned boolean slice to exactly

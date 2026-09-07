@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/justrag/go-backend/internal/chat"
+	"github.com/justrag/go-backend/internal/vector"
 )
 
 // ask_kb's structured output carries the cited files' dates so the calling
@@ -102,5 +103,52 @@ func TestMapSourcesOmitsAbsentDates(t *testing.T) {
 	}
 	if strings.Contains(string(neither), "createdAt") || strings.Contains(string(neither), "publishedAt") {
 		t.Errorf("both date keys must be absent when unset, got %s", neither)
+	}
+}
+
+// contextParams is the extracted builder behind the inline
+// chat.ChatContextParams{} literal in Answer. Unlike publicapi/openaicompat,
+// this surface passes a real p.cfg site-config reader to PrepareChatContext,
+// so FileDates here is what lets the conflict / supersession detector render
+// real date lines instead of "unknown" on ask_kb turns (W6-R2).
+//
+// Mutation: drop the `FileDates: p.fileDates` line from contextParams →
+// this fails.
+func TestContextParamsCarriesFileDates(t *testing.T) {
+	lookup := stubDateLookup{}
+	p := &pipelineAnswerer{fileDates: lookup}
+
+	params := p.contextParams("kb-1", "the question", "de", "kb system prompt")
+
+	if params.FileDates == nil {
+		t.Fatal("params.FileDates is nil; contextParams did not thread p.fileDates")
+	}
+	if params.FileDates != lookup {
+		t.Errorf("params.FileDates = %#v, want the exact stub instance %#v", params.FileDates, lookup)
+	}
+}
+
+// Every pre-existing field on the literal — including the hardcoded
+// QueryTypeComplexReasoning — must still round-trip through the extracted
+// method.
+func TestContextParamsPreservesExistingFields(t *testing.T) {
+	p := &pipelineAnswerer{}
+
+	params := p.contextParams("kb-1", "the question", "de", "kb system prompt")
+
+	if params.KbID != "kb-1" {
+		t.Errorf("KbID = %q, want %q", params.KbID, "kb-1")
+	}
+	if params.SearchQuery != "the question" {
+		t.Errorf("SearchQuery = %q, want %q", params.SearchQuery, "the question")
+	}
+	if params.Language != "de" {
+		t.Errorf("Language = %q, want %q", params.Language, "de")
+	}
+	if params.KbSystemPrompt != "kb system prompt" {
+		t.Errorf("KbSystemPrompt = %q, want %q", params.KbSystemPrompt, "kb system prompt")
+	}
+	if params.QueryType != vector.QueryTypeComplexReasoning {
+		t.Errorf("QueryType = %q, want %q", params.QueryType, vector.QueryTypeComplexReasoning)
 	}
 }

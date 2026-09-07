@@ -53,6 +53,7 @@ Aggregate (k=%d, count=%d):
   mean_ndcg      = %.3f
   p50_recall     = %.3f
   p95_recall     = %.3f
+  mean_latency_ms = %.1f
 `,
 		rep.GeneratedAt.UTC().Format(time.RFC3339),
 		rep.GoldenPath,
@@ -67,9 +68,19 @@ Aggregate (k=%d, count=%d):
 		rep.Aggregate.MeanNDCG,
 		rep.Aggregate.P50Recall,
 		rep.Aggregate.P95Recall,
+		rep.Aggregate.MeanLatencyMs,
 	)
 	if err != nil {
 		return err
+	}
+	// mean_llm_calls (W6-R7) is printed only when at least one question
+	// carried an Agent trace — omitted otherwise (legacy retrieval-only
+	// adapters, or a pre-Wave-6 report) so the summary stays byte-stable
+	// for runs that never dispatch through an orchestrator.
+	if rep.Aggregate.MeanLLMCalls != nil {
+		if _, err := fmt.Fprintf(w, "  mean_llm_calls  = %.2f\n", *rep.Aggregate.MeanLLMCalls); err != nil {
+			return err
+		}
 	}
 	if rep.Aggregate.MeanFaithfulness != nil || rep.Aggregate.MeanAnswerRelevance != nil || rep.Aggregate.MeanContextPrecision != nil || rep.Aggregate.MeanCoverage != nil {
 		fmt.Fprintln(w)
@@ -102,8 +113,8 @@ Aggregate (k=%d, count=%d):
 				label = "unlabeled"
 			}
 			a := rep.RouteAggregates[r]
-			fmt.Fprintf(w, "  %-20s count=%-3d mean_recall=%.3f mean_precision=%.3f mrr=%.3f ndcg=%.3f\n",
-				label, a.Count, a.MeanRecall, a.MeanPrecision, a.MRR, a.MeanNDCG)
+			fmt.Fprintf(w, "  %-20s count=%-3d mean_recall=%.3f mean_precision=%.3f mrr=%.3f ndcg=%.3f latency_ms=%.1f%s\n",
+				label, a.Count, a.MeanRecall, a.MeanPrecision, a.MRR, a.MeanNDCG, a.MeanLatencyMs, meanLLMCallsSuffix(a.MeanLLMCalls))
 		}
 	}
 	if len(rep.TurnKindAggregates) > 0 {
@@ -134,8 +145,8 @@ Aggregate (k=%d, count=%d):
 				label = "unlabeled"
 			}
 			a := rep.OrchestratorAggregates[n]
-			fmt.Fprintf(w, "  %-20s count=%-3d mean_recall=%.3f mean_precision=%.3f mrr=%.3f ndcg=%.3f\n",
-				label, a.Count, a.MeanRecall, a.MeanPrecision, a.MRR, a.MeanNDCG)
+			fmt.Fprintf(w, "  %-20s count=%-3d mean_recall=%.3f mean_precision=%.3f mrr=%.3f ndcg=%.3f latency_ms=%.1f%s\n",
+				label, a.Count, a.MeanRecall, a.MeanPrecision, a.MRR, a.MeanNDCG, a.MeanLatencyMs, meanLLMCallsSuffix(a.MeanLLMCalls))
 		}
 	}
 	if rep.RoutingAccuracy != nil {
@@ -196,6 +207,28 @@ Aggregate (k=%d, count=%d):
 			flagged, len(rep.Questions), float64(flagged)/float64(len(rep.Questions)))
 		fmt.Fprintf(w, "  with_superseded_newer_known = %d\n", withNewer)
 	}
+	// Orchestrator policy (W6-R6). The per-question rule index lives on
+	// AgentTrace.PolicyRule in the JSON report; this block summarises it, and
+	// is printed ONLY when at least one question was routed by a rule — so a
+	// report from a run without a policy (every pre-Wave-6 report, and every
+	// run without --policy) keeps its exact previous text.
+	if byRule := PolicyRuleCounts(rep.Questions); len(byRule) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Orchestrator policy:")
+		rules := make([]int, 0, len(byRule))
+		for r := range byRule {
+			rules = append(rules, r)
+		}
+		sort.Ints(rules)
+		routed := 0
+		for _, r := range rules {
+			routed += byRule[r]
+		}
+		fmt.Fprintf(w, "  questions_routed_by_a_rule = %d/%d\n", routed, len(rep.Questions))
+		for _, r := range rules {
+			fmt.Fprintf(w, "  rule %-3d                   = %d\n", r, byRule[r])
+		}
+	}
 	if rep.DepthBuckets != nil {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "Depth buckets (k=%d, min_total_chunks=%d, eligible_questions=%d):\n",
@@ -210,6 +243,18 @@ Aggregate (k=%d, count=%d):
 		}
 	}
 	return nil
+}
+
+// meanLLMCallsSuffix renders the optional " llm_calls=N.NN" tail for a
+// per-route/per-orchestrator summary line. Empty when m is nil (no question
+// in that bucket carried an Agent trace), which is how a report with no
+// orchestrator dispatch — every pre-Wave-6 report, and every run against a
+// retrieval-only adapter — keeps its exact previous line text.
+func meanLLMCallsSuffix(m *float64) string {
+	if m == nil {
+		return ""
+	}
+	return fmt.Sprintf(" llm_calls=%.2f", *m)
 }
 
 // ConflictCounts summarises the W5-R7 conflict reports across a run.
@@ -238,4 +283,22 @@ func ConflictCounts(qs []QuestionReport) (flagged, withSupersededNewer int) {
 		}
 	}
 	return flagged, withSupersededNewer
+}
+
+// PolicyRuleCounts counts, per chat_orchestrator_policy rule index, how many
+// questions that rule actually routed (W6-R6). Questions the flag ladder
+// decided carry no rule and are absent from the map, so an empty result means
+// "no policy was in effect" and the printer stays silent.
+func PolicyRuleCounts(qs []QuestionReport) map[int]int {
+	var out map[int]int
+	for _, q := range qs {
+		if q.Agent == nil || q.Agent.PolicyRule == nil {
+			continue
+		}
+		if out == nil {
+			out = map[int]int{}
+		}
+		out[*q.Agent.PolicyRule]++
+	}
+	return out
 }

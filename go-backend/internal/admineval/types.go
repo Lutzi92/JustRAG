@@ -50,6 +50,13 @@ type RunSummary struct {
 	Aggregate       *AggregateSummary  `json:"aggregate,omitempty"`
 	RouteMeanRecall map[string]float64 `json:"route_mean_recall,omitempty"`
 	ErrorMessage    string             `json:"error_message,omitempty"`
+	// TeamID/TeamName (W6-R9) surface which runs dispatched through a user
+	// team instead of the standard orchestrator-dispatch adapter. TeamID
+	// mirrors eval.Run.TeamID verbatim; TeamName is resolved best-effort via
+	// the handler's teamLoader (errors swallowed — an unresolved name still
+	// leaves TeamID set, so the run is still identifiable as a team run).
+	TeamID   *string `json:"team_id,omitempty"`
+	TeamName string  `json:"team_name,omitempty"`
 }
 
 // ListRunsResponse is the body returned by GET /api/admin/eval/runs.

@@ -35,9 +35,24 @@ const trajectoryChunkPreview = 5
 //	longcontext_reduce — W3-R6: map stage done; Findings is the total handed to
 //	                   the synthesis prompt, Dropped how many the token budget
 //	                   cut from the tail
+//	orchestrator_policy — W6-R6: the chat_orchestrator_policy table matched
+//	                   this turn. Decision is the orchestrator the rule names
+//	                   (or "fallthrough" — emitted either when a prefer
+//	                   rule's flag is off, or when a forced orchestrator's
+//	                   dependencies were missing and it fell back through
+//	                   the orchestrator-error path), Mode the rule's
+//	                   force/prefer, PolicyRule its 0-based index. Not
+//	                   emitted when no rule matched, so its absence means
+//	                   "the flag ladder decided".
 //	conflict_surfacing — W5-R7: the conflict / supersession pass finished;
 //	                   Reason carries the outcome (found | none | timeout |
 //	                   error) and Findings the conflict count
+//	answer_tools_route — W6-R8: chat_answer_tools_by_route matched this
+//	                   turn's route. Decision is the route key that resolved
+//	                   (a query type, or "global_synthesis"), Findings the
+//	                   post-filter catalog size (Reason explains a 0). Not
+//	                   emitted when the document has no entry for this turn's
+//	                   route, so its absence means "no route restriction".
 type TrajectoryEvent struct {
 	Stage    string         `json:"stage"`
 	Step     int            `json:"step,omitempty"`
@@ -66,6 +81,11 @@ type TrajectoryEvent struct {
 	// the length in runes of the repeated run that tripped it.
 	Limit     int `json:"limit,omitempty"`
 	RunLength int `json:"run_length,omitempty"`
+	// PolicyRule is the 0-based chat_orchestrator_policy rule index that
+	// matched, on the orchestrator_policy event (W6-R6). A POINTER, not a
+	// plain int: rule 0 is a perfectly ordinary rule, and omitempty would
+	// erase it from the wire. nil everywhere else.
+	PolicyRule *int `json:"policy_rule,omitempty"`
 }
 
 // TrajChunkRef is the per-step chunk preview surfaced to the trajectory

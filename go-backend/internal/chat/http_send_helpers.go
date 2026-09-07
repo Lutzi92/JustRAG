@@ -540,6 +540,30 @@ type chatResponseParams struct {
 	// agentMode overrides the mode recorded in agent_decisions; empty means
 	// the legacy "crag" (standard path).
 	agentMode string
+	// policyRule is the chat_orchestrator_policy rule index that pinned this
+	// turn's route (W6-R6), recorded on the agent_decisions row. nil means
+	// the flag ladder decided (no rule matched, a prefer rule's flag was
+	// off, or the policy is empty). The standard-path constructor passes
+	// standardPathPolicyRule(turnPol, deepChatAttempted) — a non-nil rule
+	// index when a "force standard" (or matched "prefer standard") rule
+	// pinned this turn AND the deep-chat dispatch was never attempted for
+	// it; the deep-chat constructor records its own rule separately via
+	// recordAgentDecision inside tryDeepChat.
+	policyRule *int
+	// queryType is the classifier's verdict for this turn (cls.QueryType),
+	// used by the per-route answer-tool allowlist (W6-R8,
+	// chat_answer_tools_by_route). Empty on handleTransformFollowUp, which
+	// skips retrieval/classification entirely — resolveAnswerToolsRoute
+	// treats an empty query type as FULLY RESTRICTED (not "no restriction")
+	// whenever chat_answer_tools_by_route configures at least one route, so
+	// an unclassified turn can never be a classification-based escape hatch
+	// around an operator's restriction.
+	queryType string
+	// isGlobalSynthesis mirrors IsGlobalSynthesisQuery(searchQuery) at
+	// construction time; the "global_synthesis" route key wins over
+	// queryType's own entry only when this is true. False (the zero value)
+	// on handleTransformFollowUp for the same reason as queryType above.
+	isGlobalSynthesis bool
 }
 
 // handleTransformFollowUp answers a transform follow-up ("kannst du das als
@@ -659,7 +683,40 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		func(s string) { writeSSE(ctx, w, map[string]string{"reasoning": s}) },
 	)
 	useAnswerTools := ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
+	// answerToolsDispatcher/catalog default to the unrestricted pair; a
+	// per-route allowlist (W6-R8) narrows both together below so the catalog
+	// projection and the dispatch boundary can never drift apart.
+	var answerToolsDispatcher ToolDispatcher = h.toolDispatcher
+	var catalog []ai.ChatTool
 	if useAnswerTools {
+		mcpDisp, _ := h.toolDispatcher.(*MCPDispatcher)
+		if mcpDisp != nil {
+			catalog = mcpDisp.AnswerToolCatalog(p.kbID)
+		}
+		byRoute := ChatAnswerToolsByRoute(ctx, h.siteConfigReader)
+		if allow, ok, decision, reason := resolveAnswerToolsRoute(byRoute, p.queryType, p.isGlobalSynthesis); ok {
+			answerToolsDispatcher, catalog = restrictToolsForRoute(h.toolDispatcher, catalog, allow, true)
+			routeEvt := TrajectoryEvent{
+				Stage:    "answer_tools_route",
+				Decision: decision,
+				Reason:   reason,
+				Findings: len(catalog),
+			}
+			if routeEvt.Reason == "" && len(catalog) == 0 {
+				// Findings is omitempty, so a bare {stage, decision} frame
+				// cannot be told apart from "no findings key" — this is the
+				// one case an operator debugging a route restriction most
+				// wants to see (the loop is about to be skipped entirely).
+				routeEvt.Reason = "catalog empty; tool loop skipped"
+			}
+			emitTrajectory(func(pl map[string]any) { writeSSE(ctx, w, pl) }, routeEvt, nil)
+		}
+	}
+	// A route restriction can filter the catalog down to empty; running the
+	// tool loop with zero tools would be pointless scaffolding, so that case
+	// falls through to the plain streaming answer below instead.
+	runAnswerTools := shouldRunAnswerToolsLoop(useAnswerTools, catalog)
+	if runAnswerTools {
 		answerTrace := func(stage, decision, reason string, details map[string]any) {
 			payload := map[string]any{
 				"stage":    stage,
@@ -671,11 +728,6 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			}
 			writeSSE(ctx, w, payload)
 		}
-		mcpDisp, _ := h.toolDispatcher.(*MCPDispatcher)
-		var catalog []ai.ChatTool
-		if mcpDisp != nil {
-			catalog = mcpDisp.AnswerToolCatalog(p.kbID)
-		}
 		err := RunAnswerWithTools(genCtx, AnswerToolsParams{
 			AIResolver:      h.aiResolver,
 			KbID:            p.kbID,
@@ -684,7 +736,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			UserPrompt:      p.userMessage,
 			History:         p.history,
 			Tools:           catalog,
-			Dispatcher:      h.toolDispatcher,
+			Dispatcher:      answerToolsDispatcher,
 			MaxRounds:       ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
 			ReasoningEffort: p.reasoningLevel,
 			Temperature:     ChatAnswerTemperature(ctx, h.siteConfigReader),
@@ -760,7 +812,11 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		"source_count", len(sources),
 		"low_confidence", len(sources) < 3,
 		"stream", true,
-		"answer_tools_path", useAnswerTools,
+		// answer_tools_path means "the tool loop actually ran" (W6-R8
+		// fix round 1), not merely "tools were configured" — a route
+		// restriction (or fix-round-2's unknown-query-type case) can
+		// leave useAnswerTools true while this is false.
+		"answer_tools_path", runAnswerTools,
 		"tool_calls", toolCallsThisTurn,
 	)
 	p.span.SetAttributes(
@@ -831,7 +887,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	if mode == "" {
 		mode = "crag"
 	}
-	h.recordAgentDecision(ctx, p.kbID, mode, stdOutcome, 0, 0, time.Since(p.chatStartTime).Milliseconds(), nil, nil)
+	h.recordAgentDecision(ctx, p.kbID, mode, stdOutcome, 0, 0, time.Since(p.chatStartTime).Milliseconds(), nil, nil, p.policyRule)
 
 	writeSSEDone(ctx, w)
 	sseFinished = true

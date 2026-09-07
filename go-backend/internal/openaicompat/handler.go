@@ -96,6 +96,22 @@ func (h *Handler) SetSiteConfig(r chat.SiteConfigReader) {
 	h.siteConfig = r
 }
 
+// contextParams builds the chat.ChatContextParams for PrepareChatContext.
+// FileDates is threaded through even though this surface passes a nil
+// site-config reader below (so the conflict / supersession detector never
+// actually runs here yet, W6-R2): FileDates is read only by that detector,
+// so carrying it costs nothing today and keeps this surface uniform with
+// the web chat and MCP paths for whenever the reader is flipped.
+func (h *Handler) contextParams(kbID, searchQuery, kbSystemPrompt string) chat.ChatContextParams {
+	return chat.ChatContextParams{
+		KbID:           kbID,
+		SearchQuery:    searchQuery,
+		Language:       "en",
+		KbSystemPrompt: kbSystemPrompt,
+		FileDates:      h.fileDates,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // OpenAI wire types
 // ---------------------------------------------------------------------------
@@ -470,12 +486,7 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// ------------------------------------------------------------------
 	// 8. Run the RAG context pipeline.
 	// ------------------------------------------------------------------
-	params := chat.ChatContextParams{
-		KbID:           kbID,
-		SearchQuery:    searchQuery,
-		Language:       "en",
-		KbSystemPrompt: kbSystemPrompt,
-	}
+	params := h.contextParams(kbID, searchQuery, kbSystemPrompt)
 
 	// OpenAI-compat clients don't read site_configs — pass nil so CRAG is
 	// implicitly disabled here (its toggles only meaningfully apply via

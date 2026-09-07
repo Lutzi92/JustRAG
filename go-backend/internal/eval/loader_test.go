@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -436,5 +437,172 @@ func TestSpreadsheetGoldenSetParses(t *testing.T) {
 	}
 	if falseCount != 10 {
 		t.Errorf("tabular_expected=false count = %d, want 10", falseCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ParseGoldenSetContent: JSONL support (W6-R3)
+// ---------------------------------------------------------------------------
+
+// TestParseGoldenSetContent_JSONLWithComments: the in-app/DB path must accept
+// JSONL (the shape a file upload carries) with '#' comment and blank lines,
+// sharing ParseGoldenSetJSONL's line parser — and the same rows as a JSON
+// array must deep-equal the JSONL result.
+func TestParseGoldenSetContent_JSONLWithComments(t *testing.T) {
+	row1 := `{"id":"q1","question":"Q?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"]}`
+	row2 := `{"id":"q2","question":"Q2?","kb_id":"kb-1","language":"de","must_cite_file_ids":["f2"]}`
+	jsonl := "# header\n\n" + row1 + "\n" + row2
+
+	qs, err := ParseGoldenSetContent(json.RawMessage(jsonl))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(qs) != 2 {
+		t.Fatalf("got %d questions, want 2", len(qs))
+	}
+	if qs[0].ID != "q1" || qs[1].ID != "q2" {
+		t.Errorf("unexpected ids in order: %q, %q", qs[0].ID, qs[1].ID)
+	}
+
+	arr := "[" + row1 + "," + row2 + "]"
+	arrQs, err := ParseGoldenSetContent(json.RawMessage(arr))
+	if err != nil {
+		t.Fatalf("unexpected error (array form): %v", err)
+	}
+	if !reflect.DeepEqual(qs, arrQs) {
+		t.Errorf("JSONL and array forms of the same rows produced different results:\nJSONL: %+v\narray: %+v", qs, arrQs)
+	}
+}
+
+// TestParseGoldenSetContent_ArrayStillParses: the pre-existing array path,
+// including leading whitespace/newlines before the '[', keeps working.
+func TestParseGoldenSetContent_ArrayStillParses(t *testing.T) {
+	raw := json.RawMessage("\n  [\n" +
+		`{"id":"q1","question":"Q?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"]},` + "\n" +
+		`{"id":"q2","question":"Q2?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f2"]}` + "\n]\n")
+	qs, err := ParseGoldenSetContent(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(qs) != 2 {
+		t.Fatalf("got %d questions, want 2", len(qs))
+	}
+}
+
+// TestParseGoldenSetContent_BareObjectRowIsNotAComment: a single JSONL row
+// with no leading '#' (and no surrounding '[') must still parse as JSONL.
+func TestParseGoldenSetContent_BareObjectRowIsNotAComment(t *testing.T) {
+	raw := json.RawMessage(`{"id":"q1","question":"Q?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"]}`)
+	qs, err := ParseGoldenSetContent(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(qs) != 1 {
+		t.Fatalf("got %d questions, want 1", len(qs))
+	}
+}
+
+// TestParseGoldenSetContent_GarbageErrors: neither shape detector should
+// mistake malformed input for a valid empty result.
+func TestParseGoldenSetContent_GarbageErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{name: "only a comment", content: "# only a comment", wantErr: "no questions"},
+		{name: "truncated array", content: "[1,2", wantErr: ""},
+		{name: "truncated object", content: `{"id":`, wantErr: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseGoldenSetContent(json.RawMessage(tc.content))
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("expected error to contain %q, got: %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestParseGoldenSetContent_RejectsTurnsInJSONL: the "multi-turn rows are
+// supported only by cmd/eval" rejection (see TestParseGoldenSetContent_RejectsTurns
+// for the array form) must also fire on a turns row submitted as JSONL.
+func TestParseGoldenSetContent_RejectsTurnsInJSONL(t *testing.T) {
+	content := `{"id":"conv1","kb_id":"kb-1","language":"en","turns":[{"question":"Who leads the project?","kind":"corpus","must_cite_file_names":["f1"]},{"question":"And who leads it?","kind":"pronoun_ref","must_cite_file_names":["f1"]}]}`
+	_, err := ParseGoldenSetContent(json.RawMessage(content))
+	if err == nil {
+		t.Fatal("expected error for a multi-turn JSONL row, got nil")
+	}
+	if !strings.Contains(err.Error(), "supported only by cmd/eval") {
+		t.Errorf("expected cmd/eval-only rejection message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "conv1") {
+		t.Errorf("expected the offending question id in the error, got: %v", err)
+	}
+}
+
+// TestParseGoldenSetContent_ArrayPrecedence_ValidationBeforeLaterTurns pins
+// the array path's per-index priority: an earlier row's validation error
+// must win over a later row's turns error, exactly as the original single
+// loop (turns check, then validate, then duplicate-id, per row, in document
+// order) behaved before JSONL support existed. This is the reviewer's exact
+// two-row reproduction from task-3-review.md, guarding against a whole-array
+// turns pre-pass silently changing error precedence.
+func TestParseGoldenSetContent_ArrayPrecedence_ValidationBeforeLaterTurns(t *testing.T) {
+	raw := json.RawMessage(`[
+		{"id":"q1","question":"","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"]},
+		{"id":"conv2","kb_id":"kb-1","language":"en","turns":[
+			{"question":"Who leads the project?","kind":"corpus","must_cite_file_names":["f1"]}
+		]}
+	]`)
+	_, err := ParseGoldenSetContent(raw)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	const want = "validate question 1: missing question"
+	if err.Error() != want {
+		t.Errorf("got %q, want %q", err.Error(), want)
+	}
+}
+
+// TestParseGoldenSetContent_JSONLDuplicateID: the "duplicate ids rejected on
+// both shapes" claim in the doc comment needs a direct JSONL-path test, not
+// only the array-path TestParseGoldenSetContent_DuplicateID.
+func TestParseGoldenSetContent_JSONLDuplicateID(t *testing.T) {
+	content := `{"id":"q1","question":"Q?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f1"]}
+{"id":"q1","question":"Q2?","kb_id":"kb-1","language":"en","must_cite_file_ids":["f2"]}`
+	_, err := ParseGoldenSetContent(json.RawMessage(content))
+	if err == nil || !strings.Contains(err.Error(), "duplicate id") {
+		t.Errorf("expected duplicate id error, got %v", err)
+	}
+}
+
+// TestParseGoldenSetContent_RealJSONLFixture is a one-off manual check
+// (controller ruling, Wave 6 Task 3): run the real 24-question
+// global-synthesis-de.jsonl set — which starts with '#' comment lines —
+// through ParseGoldenSetContent and confirm the count. Skipped unless
+// EVAL_JSONL_PATH is set, so it is harmless in normal CI/test runs:
+//
+//	EVAL_JSONL_PATH=/path/to/eval/golden/global-synthesis-de.jsonl \
+//	  go test ./internal/eval -run TestParseGoldenSetContent_RealJSONLFixture -v
+func TestParseGoldenSetContent_RealJSONLFixture(t *testing.T) {
+	path := os.Getenv("EVAL_JSONL_PATH")
+	if path == "" {
+		t.Skip("EVAL_JSONL_PATH not set; skipping manual fixture check")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	qs, err := ParseGoldenSetContent(json.RawMessage(raw))
+	if err != nil {
+		t.Fatalf("ParseGoldenSetContent(%s): %v", path, err)
+	}
+	t.Logf("parsed %d questions from %s", len(qs), path)
+	if len(qs) != 24 {
+		t.Errorf("got %d questions, want 24", len(qs))
 	}
 }

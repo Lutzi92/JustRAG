@@ -20,6 +20,14 @@ type TrajectoryRecord struct {
 	RetrievalHits map[string]bool            `json:"retrieval_hits,omitempty"`
 	Score         *TrajectoryScore           `json:"score,omitempty"`
 	JudgeRaw      map[string]json.RawMessage `json:"judge_raw,omitempty"`
+	// PolicyRule is the chat_orchestrator_policy rule (W6-R6) that WOULD
+	// have pinned this question's route in production. Informational only:
+	// --trajectory runs each question through the mode the operator asked
+	// for, so the policy never changes what runs here — it is recorded so a
+	// policy measurement can join "which rule fired" onto the trajectory.
+	// nil (and absent from the JSONL) when no rule applies, which keeps a
+	// policy-free run's records byte-stable.
+	PolicyRule *int `json:"policy_rule,omitempty"`
 }
 
 // TrajectoryScore is the LLM-as-judge verdict on the agent's decisions for

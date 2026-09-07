@@ -3,12 +3,14 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/chat"
+	"github.com/justrag/go-backend/internal/chatpolicy"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -25,7 +27,7 @@ func (s *stubSiteCfg) GetSiteConfigValue(_ context.Context, key string) (*string
 
 func TestSelectOrchestrator_StandardWhenAllGatesOff(t *testing.T) {
 	cfg := &stubSiteCfg{values: map[string]string{}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
+	got, reason, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?", chatpolicy.Signals{})
 	if got != OrchestratorStandard {
 		t.Fatalf("got %q, want %q", got, OrchestratorStandard)
 	}
@@ -40,7 +42,7 @@ func TestSelectOrchestrator_StandardWhenNotComplexReasoning(t *testing.T) {
 		"chat_plan_execute_enabled": "true",
 		"chat_agentic_enabled":      "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "Wie hoch war der Etat 2024?")
+	got, reason, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "Wie hoch war der Etat 2024?", chatpolicy.Signals{})
 	if got != OrchestratorStandard {
 		t.Fatalf("got %q, want %q", got, OrchestratorStandard)
 	}
@@ -55,7 +57,7 @@ func TestSelectOrchestrator_SupervisorWinsWhenEnabled(t *testing.T) {
 		"chat_plan_execute_enabled": "true",
 		"chat_agentic_enabled":      "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
+	got, reason, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?", chatpolicy.Signals{})
 	if got != OrchestratorSupervisor {
 		t.Fatalf("got %q, want %q", got, OrchestratorSupervisor)
 	}
@@ -69,7 +71,7 @@ func TestSelectOrchestrator_PlanExecuteDAGWhenSupervisorOff(t *testing.T) {
 		"chat_plan_execute_enabled": "true",
 		"chat_plan_execute_dag":     "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
+	got, reason, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?", chatpolicy.Signals{})
 	if got != OrchestratorPlanExecuteDAG {
 		t.Fatalf("got %q, want %q", got, OrchestratorPlanExecuteDAG)
 	}
@@ -82,7 +84,7 @@ func TestSelectOrchestrator_PlanExecuteFlatWhenDAGOff(t *testing.T) {
 	cfg := &stubSiteCfg{values: map[string]string{
 		"chat_plan_execute_enabled": "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
+	got, reason, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?", chatpolicy.Signals{})
 	if got != OrchestratorPlanExecute {
 		t.Fatalf("got %q, want %q", got, OrchestratorPlanExecute)
 	}
@@ -95,7 +97,7 @@ func TestSelectOrchestrator_AgenticLast(t *testing.T) {
 	cfg := &stubSiteCfg{values: map[string]string{
 		"chat_agentic_enabled": "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
+	got, reason, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?", chatpolicy.Signals{})
 	if got != OrchestratorAgentic {
 		t.Fatalf("got %q, want %q", got, OrchestratorAgentic)
 	}
@@ -114,7 +116,7 @@ func TestSelectOrchestrator_DriftBeatsLongContext(t *testing.T) {
 		"chat_drift_enabled":       "true",
 		"chat_longcontext_enabled": "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Fasse alle Befunde aus diesen Dokumenten zusammen")
+	got, reason, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Fasse alle Befunde aus diesen Dokumenten zusammen", chatpolicy.Signals{})
 	if got != OrchestratorDrift {
 		t.Fatalf("got %q, want %q", got, OrchestratorDrift)
 	}
@@ -130,7 +132,7 @@ func TestSelectOrchestrator_DriftNeedsGlobalSynthesisQuery(t *testing.T) {
 		"chat_drift_enabled":      "true",
 		"chat_supervisor_enabled": "true",
 	}}
-	got, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
+	got, _, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?", chatpolicy.Signals{})
 	if got != OrchestratorSupervisor {
 		t.Fatalf("got %q, want %q", got, OrchestratorSupervisor)
 	}
@@ -139,7 +141,7 @@ func TestSelectOrchestrator_DriftNeedsGlobalSynthesisQuery(t *testing.T) {
 // A lookup query never reaches the drift gate.
 func TestSelectOrchestrator_DriftRequiresComplexReasoning(t *testing.T) {
 	cfg := &stubSiteCfg{values: map[string]string{"chat_drift_enabled": "true"}}
-	got, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "Fasse alle Befunde zusammen")
+	got, _, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "Fasse alle Befunde zusammen", chatpolicy.Signals{})
 	if got != OrchestratorStandard {
 		t.Fatalf("got %q, want %q", got, OrchestratorStandard)
 	}
@@ -154,7 +156,7 @@ func TestSelectOrchestrator_LongContextBeatsSupervisor(t *testing.T) {
 		"chat_longcontext_enabled": "true",
 		"chat_supervisor_enabled":  "true",
 	}}
-	got, reason := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Fasse alle Befunde aus diesen Dokumenten zusammen")
+	got, reason, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Fasse alle Befunde aus diesen Dokumenten zusammen", chatpolicy.Signals{})
 	if got != OrchestratorLongContext {
 		t.Fatalf("got %q, want %q", got, OrchestratorLongContext)
 	}
@@ -170,7 +172,7 @@ func TestSelectOrchestrator_LongContextNeedsGlobalSynthesisQuery(t *testing.T) {
 		"chat_longcontext_enabled": "true",
 		"chat_supervisor_enabled":  "true",
 	}}
-	got, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?")
+	got, _, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "Wie hoch war der Etat 2024?", chatpolicy.Signals{})
 	if got != OrchestratorSupervisor {
 		t.Fatalf("got %q, want %q", got, OrchestratorSupervisor)
 	}
@@ -179,7 +181,7 @@ func TestSelectOrchestrator_LongContextNeedsGlobalSynthesisQuery(t *testing.T) {
 // A lookup query never reaches the long-context gate.
 func TestSelectOrchestrator_LongContextRequiresComplexReasoning(t *testing.T) {
 	cfg := &stubSiteCfg{values: map[string]string{"chat_longcontext_enabled": "true"}}
-	got, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "Fasse alle Befunde zusammen")
+	got, _, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "Fasse alle Befunde zusammen", chatpolicy.Signals{})
 	if got != OrchestratorStandard {
 		t.Fatalf("got %q, want %q", got, OrchestratorStandard)
 	}
@@ -395,5 +397,331 @@ func TestOrchestratorDispatchAdapter_SupervisorFiresTabularRouterWithPerKBConfig
 		t.Fatalf("executor RowCap = %d, want 777 (a.siteCfg's per-KB override) — "+
 			"the adapter fell back to the router's own wiring-time cfgFn (RowCap 200) instead",
 			exec.lastOpts.RowCap)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// W6-R6: the eval mirror evaluates the same chat_orchestrator_policy table
+// ---------------------------------------------------------------------------
+
+// A "force" rule wins even with every orchestrator flag off — the same
+// semantics the production ladder has.
+func TestSelectOrchestrator_PolicyForceBeatsEveryFlagOff(t *testing.T) {
+	cfg := &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": `[{"when":{"query_type":["lookup"]},"orchestrator":"supervisor","mode":"force"}]`,
+	}}
+	got, reason, dec := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup,
+		"Wie hoch war der Etat 2024?", chatpolicy.Signals{QueryType: vector.QueryTypeLookup})
+
+	if got != OrchestratorSupervisor {
+		t.Fatalf("got %q, want %q", got, OrchestratorSupervisor)
+	}
+	if reason != "policy_rule_0_force" {
+		t.Fatalf("got reason %q, want policy_rule_0_force", reason)
+	}
+	if !dec.Applied || dec.RuleIndex != 0 {
+		t.Fatalf("decision = %+v, want Applied with RuleIndex 0", dec)
+	}
+}
+
+// "plan_execute_dag" maps 1:1 onto the eval label whose dispatch arm turns the
+// DAG on, so a forced DAG route measures the DAG planner.
+func TestSelectOrchestrator_PolicyForcePlanExecuteDAG(t *testing.T) {
+	cfg := &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": `[{"when":{},"orchestrator":"plan_execute_dag","mode":"force"}]`,
+	}}
+	got, reason, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning,
+		"Wie hoch war der Etat 2024?", chatpolicy.Signals{QueryType: vector.QueryTypeComplexReasoning})
+
+	if got != OrchestratorPlanExecuteDAG {
+		t.Fatalf("got %q, want %q", got, OrchestratorPlanExecuteDAG)
+	}
+	if reason != "policy_rule_0_force" {
+		t.Fatalf("got reason %q", reason)
+	}
+}
+
+// A "prefer" rule whose orchestrator is disabled falls through to the ladder,
+// and the decision still reports Matched so the report can tell the two
+// fall-throughs apart.
+func TestSelectOrchestrator_PolicyPreferNeedsFlag(t *testing.T) {
+	cfg := &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": `[{"when":{},"orchestrator":"drift","mode":"prefer"}]`,
+		"chat_agentic_enabled":     "true",
+	}}
+	got, reason, dec := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning,
+		"Wie hoch war der Etat 2024?", chatpolicy.Signals{QueryType: vector.QueryTypeComplexReasoning})
+
+	if got != OrchestratorAgentic {
+		t.Fatalf("got %q, want %q (drift is off, so the ladder decides)", got, OrchestratorAgentic)
+	}
+	if reason != "complex_reasoning_agentic_gate" {
+		t.Fatalf("got reason %q", reason)
+	}
+	if !dec.Matched || dec.Applied {
+		t.Fatalf("decision = %+v, want Matched && !Applied", dec)
+	}
+}
+
+// A "prefer" rule whose orchestrator IS enabled overrides the ladder's own
+// precedence: supervisor would win on this question, but the rule prefers
+// agentic.
+func TestSelectOrchestrator_PolicyPreferAppliesWhenEnabled(t *testing.T) {
+	cfg := &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy":  `[{"when":{},"orchestrator":"agentic","mode":"prefer"}]`,
+		"chat_supervisor_enabled":   "true",
+		"chat_plan_execute_enabled": "true",
+		"chat_agentic_enabled":      "true",
+	}}
+	got, reason, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning,
+		"Wie hoch war der Etat 2024?", chatpolicy.Signals{QueryType: vector.QueryTypeComplexReasoning})
+
+	if got != OrchestratorAgentic {
+		t.Fatalf("got %q, want %q", got, OrchestratorAgentic)
+	}
+	if reason != "policy_rule_0_prefer" {
+		t.Fatalf("got reason %q", reason)
+	}
+}
+
+// An empty / unset policy leaves the mirror exactly as it was: no rule can
+// match, and the decision reports the no-match sentinel.
+func TestSelectOrchestrator_EmptyPolicyLeavesMirrorUnchanged(t *testing.T) {
+	for _, raw := range []string{"", "[]", "   "} {
+		cfg := &stubSiteCfg{values: map[string]string{
+			"chat_orchestrator_policy": raw,
+			"chat_supervisor_enabled":  "true",
+		}}
+		got, reason, dec := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning,
+			"Wie hoch war der Etat 2024?", chatpolicy.Signals{QueryType: vector.QueryTypeComplexReasoning})
+		if got != OrchestratorSupervisor || reason != "complex_reasoning_supervisor_gate" {
+			t.Fatalf("policy %q: got (%q, %q), want the unchanged supervisor gate", raw, got, reason)
+		}
+		if dec.Matched || dec.RuleIndex != -1 {
+			t.Fatalf("policy %q: decision = %+v, want no match", raw, dec)
+		}
+	}
+}
+
+// An unparseable stored policy is fail-soft: the mirror runs the ladder rather
+// than erroring or silently rerouting.
+func TestSelectOrchestrator_UnparseablePolicyFallsBackToLadder(t *testing.T) {
+	cfg := &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": `[{"when":{},"orchestrator":"nope","mode":"force"}]`,
+		"chat_supervisor_enabled":  "true",
+	}}
+	got, reason, dec := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning,
+		"Wie hoch war der Etat 2024?", chatpolicy.Signals{QueryType: vector.QueryTypeComplexReasoning})
+	if got != OrchestratorSupervisor || reason != "complex_reasoning_supervisor_gate" {
+		t.Fatalf("got (%q, %q), want the unchanged supervisor gate", got, reason)
+	}
+	if dec.Matched {
+		t.Fatalf("decision = %+v, want no match", dec)
+	}
+}
+
+// PolicySignalsForQuestion resolves the signals the mirror can actually know,
+// and pins the two it deliberately cannot (file selection, history depth).
+func TestPolicySignalsForQuestion(t *testing.T) {
+	q := Question{
+		ID:       "Q1",
+		KbID:     "kb-42",
+		Question: "Fasse alle Befunde aus diesen Dokumenten zusammen",
+		Language: "de",
+	}
+	sig := PolicySignalsForQuestion(vector.QueryTypeComplexReasoning, q)
+
+	if sig.QueryType != vector.QueryTypeComplexReasoning {
+		t.Errorf("QueryType = %q", sig.QueryType)
+	}
+	if sig.KBID != "kb-42" {
+		t.Errorf("KBID = %q", sig.KBID)
+	}
+	if !sig.GlobalSynthesis {
+		t.Error("GlobalSynthesis = false; the question trips chat.IsGlobalSynthesisQuery")
+	}
+	if sig.HasFileSelection || sig.HistoryTurns != 0 {
+		t.Errorf("HasFileSelection=%v HistoryTurns=%d, want false/0 (eval has neither)", sig.HasFileSelection, sig.HistoryTurns)
+	}
+
+	recency := PolicySignalsForQuestion(vector.QueryTypeLookup, Question{
+		Question: "Welche neuen Meldungen gibt es?", Language: "de",
+	})
+	if !recency.RecencyListing {
+		t.Error("RecencyListing = false; the question trips chat.IsRecencyListingQuery")
+	}
+	if recency.GlobalSynthesis {
+		t.Error("GlobalSynthesis = true on a recency-listing question")
+	}
+}
+
+// Q1 / DAG parity: production computes DAG as
+// `ChatPlanExecuteDAG(...) || policyDec.ForceDAG`, so on a deployment with
+// chat_plan_execute_dag on, a forced "plan_execute" rule runs the DAG planner.
+// The mirror has no separate DAG flag — the label drives its dispatch switch —
+// so it must promote the label. Without the promotion this measures the flat
+// planner while production runs the DAG one.
+func TestSelectOrchestrator_PolicyForcePlanExecuteHonoursDAGKey(t *testing.T) {
+	policy := `[{"when":{},"orchestrator":"plan_execute","mode":"force"}]`
+
+	on := &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": policy,
+		"chat_plan_execute_dag":    "true",
+	}}
+	got, _, _ := SelectOrchestrator(context.Background(), on, vector.QueryTypeLookup, "q",
+		chatpolicy.Signals{QueryType: vector.QueryTypeLookup})
+	if got != OrchestratorPlanExecuteDAG {
+		t.Fatalf("with chat_plan_execute_dag on: got %q, want %q", got, OrchestratorPlanExecuteDAG)
+	}
+
+	off := &stubSiteCfg{values: map[string]string{"chat_orchestrator_policy": policy}}
+	got, _, _ = SelectOrchestrator(context.Background(), off, vector.QueryTypeLookup, "q",
+		chatpolicy.Signals{QueryType: vector.QueryTypeLookup})
+	if got != OrchestratorPlanExecute {
+		t.Fatalf("with chat_plan_execute_dag off: got %q, want %q", got, OrchestratorPlanExecute)
+	}
+
+	// An explicit "plan_execute_dag" rule is unaffected by the key: it is the
+	// DAG route by name, which is why it is the label Task 10 should use when
+	// it wants the DAG planner unambiguously.
+	explicit := &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": `[{"when":{},"orchestrator":"plan_execute_dag","mode":"force"}]`,
+	}}
+	got, _, _ = SelectOrchestrator(context.Background(), explicit, vector.QueryTypeLookup, "q",
+		chatpolicy.Signals{QueryType: vector.QueryTypeLookup})
+	if got != OrchestratorPlanExecuteDAG {
+		t.Fatalf("explicit plan_execute_dag rule: got %q, want %q", got, OrchestratorPlanExecuteDAG)
+	}
+}
+
+// The three cases the two ladders are pinned to agree on (see
+// SelectOrchestrator's doc comment). Production's half lives in
+// internal/chat's shouldTryDeepChat / SelectOrchestratorWithPolicy tests;
+// this is the mirror's half, named so a reader can find both.
+func TestSelectOrchestrator_LadderAgreementCases(t *testing.T) {
+	lookupSig := chatpolicy.Signals{QueryType: vector.QueryTypeLookup}
+
+	// 1. force supervisor on a lookup turn.
+	cfg := &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": `[{"when":{"query_type":["lookup"]},"orchestrator":"supervisor","mode":"force"}]`,
+	}}
+	if got, _, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "q", lookupSig); got != OrchestratorSupervisor {
+		t.Errorf("force supervisor on lookup: got %q, want %q", got, OrchestratorSupervisor)
+	}
+
+	// 2. prefer supervisor, flag ON, on a lookup turn.
+	cfg = &stubSiteCfg{values: map[string]string{
+		"chat_orchestrator_policy": `[{"when":{"query_type":["lookup"]},"orchestrator":"supervisor","mode":"prefer"}]`,
+		"chat_supervisor_enabled":  "true",
+	}}
+	if got, _, _ := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeLookup, "q", lookupSig); got != OrchestratorSupervisor {
+		t.Errorf("prefer supervisor (flag on) on lookup: got %q, want %q", got, OrchestratorSupervisor)
+	}
+
+	// 3. empty policy on a complex turn — the flag ladder, untouched.
+	cfg = &stubSiteCfg{values: map[string]string{"chat_agentic_enabled": "true"}}
+	got, reason, dec := SelectOrchestrator(context.Background(), cfg, vector.QueryTypeComplexReasoning, "q",
+		chatpolicy.Signals{QueryType: vector.QueryTypeComplexReasoning})
+	if got != OrchestratorAgentic || reason != "complex_reasoning_agentic_gate" || dec.Matched {
+		t.Errorf("empty policy on complex: got (%q, %q, %+v), want the untouched agentic gate", got, reason, dec)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// W6-R7: Search wraps the question's ctx with ai.WithCallCounter and copies
+// the count into AgentTrace.LLMCalls on every return path.
+// ---------------------------------------------------------------------------
+
+// isComplexServer starts an httptest server whose /chat/completions handler
+// always answers with the given isComplex verdict — every LLM call this
+// test's dispatch path makes (query-complexity classification, and whatever
+// downstream orchestrator/answer calls follow) gets this same canned
+// response.
+func isComplexServer(t *testing.T, isComplex bool) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": fmt.Sprintf(`{"isComplex":%v}`, isComplex)}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestOrchestratorDispatchAdapter_StandardBranchCopiesLLMCalls pins the
+// standard-branch half of the W6-R7 wiring
+// (orchestrator_adapter.go's `if orchestrator == OrchestratorStandard`
+// case): the question-complexity classifier call that ClassifyQueryTypeForEval
+// makes BEFORE branching happens inside the ctx that Search wrapped with
+// ai.WithCallCounter, so even a question that lands on the standard fallback
+// must show that call on its trace.
+//
+// "Vergleiche" trips the heuristic-complexity marker (forcing the LLM
+// classification call rather than a short-circuit); the server answers
+// isComplex:false, so the question resolves to lookup and dispatches to the
+// standard branch (a.prod.Search), not an orchestrator.
+//
+// Mutation guard: deleting `LLMCalls: callCounter.Count()` from the standard
+// branch's AgentTrace literal makes this FAIL — the zero value would read as
+// 0 even though at least one real call was made.
+func TestOrchestratorDispatchAdapter_StandardBranchCopiesLLMCalls(t *testing.T) {
+	srv := isComplexServer(t, false)
+	aiResolver := ai.NewConfigResolver(fakeClassifierAIConfigStore{baseURL: srv.URL, model: "test-model"})
+
+	siteCfg := &stubSiteCfg{values: map[string]string{}}
+	a := NewOrchestratorDispatchAdapter(aiResolver, fakeOneChunkSearcher{}, siteCfg, nil, EvalFlags{})
+
+	q := Question{ID: "q1", KbID: "kb1", Language: "de", Question: "Vergleiche die Etats 2023 und 2024."}
+
+	if _, err := a.Search(context.Background(), q, 5); err != nil {
+		t.Fatalf("a.Search: %v", err)
+	}
+
+	trace := a.AgentTraceForQuestion(q.ID)
+	if trace == nil {
+		t.Fatal("AgentTraceForQuestion returned nil")
+	}
+	if trace.Orchestrator != OrchestratorStandard {
+		t.Fatalf("Orchestrator = %q, want %q (test setup didn't land on the standard branch)", trace.Orchestrator, OrchestratorStandard)
+	}
+	if trace.LLMCalls < 1 {
+		t.Fatalf("LLMCalls = %d, want >= 1 (the classification call happened inside the wrapped ctx)", trace.LLMCalls)
+	}
+}
+
+// TestOrchestratorDispatchAdapter_SupervisorBranchCopiesLLMCalls pins the
+// orchestrator-branch half of the same wiring (the `trace.LLMCalls =
+// callCounter.Count()` line after BuildAgentTrace): a question that
+// dispatches to the Supervisor and succeeds must report a non-zero LLMCalls,
+// since the classification call and the Supervisor's own answer-path calls
+// both go through the same alwaysComplexServer.
+//
+// Mutation guard: deleting `trace.LLMCalls = callCounter.Count()` makes this
+// FAIL the same way as the standard-branch test above.
+func TestOrchestratorDispatchAdapter_SupervisorBranchCopiesLLMCalls(t *testing.T) {
+	srv := alwaysComplexServer(t)
+	aiResolver := ai.NewConfigResolver(fakeClassifierAIConfigStore{baseURL: srv.URL, model: "test-model"})
+
+	siteCfg := &stubSiteCfg{values: map[string]string{"chat_supervisor_enabled": "true"}}
+	a := NewOrchestratorDispatchAdapter(aiResolver, fakeOneChunkSearcher{}, siteCfg, nil, EvalFlags{})
+
+	q := Question{ID: "q1", KbID: "kb1", Language: "de", Question: "Vergleiche: wie viele Gebäude gibt es insgesamt?"}
+
+	if _, err := a.Search(context.Background(), q, 5); err != nil {
+		t.Fatalf("a.Search: %v (want the Supervisor branch to succeed with fakeOneChunkSearcher)", err)
+	}
+
+	trace := a.AgentTraceForQuestion(q.ID)
+	if trace == nil {
+		t.Fatal("AgentTraceForQuestion returned nil")
+	}
+	if trace.Orchestrator != OrchestratorSupervisor {
+		t.Fatalf("Orchestrator = %q, want %q (test setup didn't land on the Supervisor branch)", trace.Orchestrator, OrchestratorSupervisor)
+	}
+	if trace.LLMCalls < 1 {
+		t.Fatalf("LLMCalls = %d, want >= 1 (the classification + Supervisor calls happened inside the wrapped ctx)", trace.LLMCalls)
 	}
 }

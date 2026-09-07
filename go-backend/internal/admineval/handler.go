@@ -218,6 +218,14 @@ var snapshotConfigKeys = []string{
 	// entry), but it can truncate an answer, so a snapshotted eval run has
 	// to record the limit that was in force.
 	"chat_answer_degenerate_run_limit",
+	// Wave-6 Task 5 orchestrator policy table (W6-R6). Global-only, no
+	// registry entry, but it decides which orchestrator a turn takes — an
+	// eval run whose snapshot omitted it would silently measure the ladder
+	// while production ran the policy. The sibling key
+	// chat_answer_tools_by_route is deliberately NOT snapshotted: the
+	// in-app eval never runs the answer-tools loop, so snapshotting it
+	// would record a value nothing in that path reads.
+	"chat_orchestrator_policy",
 	// Retrieval/orchestrator registry keys (kb-workflow-editor Phase 2
 	// Task 3; cross-checked by snapshot_registry_test.go like the blocks
 	// above).
@@ -647,6 +655,50 @@ func intParam(q url.Values, name string, def, max int) int {
 // ListRuns — GET /api/admin/eval/runs
 // ---------------------------------------------------------------------------
 
+// summarizeRun builds a RunSummary for one eval.Run — KB name, aggregate
+// metrics parsed from the stored report, and (when the run carries a
+// TeamID) the team name resolved via h.teamLoader. Shared by ListRuns and
+// ListRunsForKB, which populated an identical loop body before this
+// extraction (W6-R9).
+func (h *Handler) summarizeRun(ctx context.Context, run eval.Run) RunSummary {
+	s := RunSummary{
+		ID:           run.ID,
+		Label:        run.Label,
+		Status:       run.Status,
+		CreatedAt:    run.CreatedAt,
+		StartedAt:    run.StartedAt,
+		FinishedAt:   run.FinishedAt,
+		KBID:         run.KBID,
+		JudgeEnabled: run.JudgeEnabled,
+		ErrorMessage: run.ErrorMessage,
+	}
+
+	// Populate KB name — errors are swallowed; empty name is acceptable.
+	if name, _, kbErr := h.kbStore.GetKBInfo(ctx, run.KBID); kbErr == nil {
+		s.KBName = name
+	}
+
+	// Populate aggregate metrics if report is present.
+	if len(run.Report) > 0 {
+		s.Aggregate, s.RouteMeanRecall = summarize(run.Report)
+	}
+
+	// Populate team id/name. TeamID is copied verbatim regardless of
+	// resolvability; TeamName resolution is best-effort (nil teamLoader or
+	// a load error both leave it empty, mirroring the fail-soft posture
+	// elsewhere in this handler for read-only listings).
+	if run.TeamID != nil {
+		s.TeamID = run.TeamID
+		if h.teamLoader != nil {
+			if team, tErr := h.teamLoader.LoadTeamForChat(ctx, *run.TeamID, run.KBID.String()); tErr == nil {
+				s.TeamName = team.Team.Name
+			}
+		}
+	}
+
+	return s
+}
+
 // ListRuns returns a paginated list of eval runs with optional status/KB filters.
 func (h *Handler) ListRuns(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -682,29 +734,7 @@ func (h *Handler) ListRuns(w http.ResponseWriter, r *http.Request) {
 
 	summaries := make([]RunSummary, 0, len(runs))
 	for _, run := range runs {
-		s := RunSummary{
-			ID:           run.ID,
-			Label:        run.Label,
-			Status:       run.Status,
-			CreatedAt:    run.CreatedAt,
-			StartedAt:    run.StartedAt,
-			FinishedAt:   run.FinishedAt,
-			KBID:         run.KBID,
-			JudgeEnabled: run.JudgeEnabled,
-			ErrorMessage: run.ErrorMessage,
-		}
-
-		// Populate KB name — errors are swallowed; empty name is acceptable.
-		if name, _, kbErr := h.kbStore.GetKBInfo(ctx, run.KBID); kbErr == nil {
-			s.KBName = name
-		}
-
-		// Populate aggregate metrics if report is present.
-		if len(run.Report) > 0 {
-			s.Aggregate, s.RouteMeanRecall = summarize(run.Report)
-		}
-
-		summaries = append(summaries, s)
+		summaries = append(summaries, h.summarizeRun(ctx, run))
 	}
 
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusOK, ListRunsResponse{

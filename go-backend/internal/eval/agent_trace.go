@@ -26,6 +26,21 @@ type AgentTrace struct {
 	// orchestrator that answered this question doesn't run the
 	// router (only the standard path and Supervisor do).
 	Tabular *TabularEvalTrace `json:"tabular,omitempty"`
+	// PolicyRule is the 0-based chat_orchestrator_policy rule index that
+	// pinned this question's orchestrator (W6-R6), mirroring
+	// agent_decisions.policy_rule on the production side. nil — and hence
+	// absent from the report JSON — when the flag ladder decided, so a run
+	// with no policy keeps its exact previous report bytes. A pointer
+	// because rule 0 is an ordinary rule.
+	PolicyRule *int `json:"policy_rule,omitempty"`
+	// LLMCalls is the count of model-provider requests (chat completions —
+	// streamed or unary — embeddings, and reranks; see ai.CallCounter's doc
+	// comment for the exact definition) made while answering this question,
+	// captured by wrapping the question's context with ai.WithCallCounter
+	// before dispatch. omitempty (0 is also the honest "no counter attached"
+	// value) so a report from before this field existed stays byte-stable,
+	// and so does a report from an adapter that never wraps a counter.
+	LLMCalls int `json:"llm_calls,omitempty"`
 }
 
 // TabularEvalTrace mirrors chat.TabularTrace's eval-relevant fields (no

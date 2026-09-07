@@ -1453,3 +1453,120 @@ comparisons), `t10-pw-pooled.json`/`.log` (the W5-R1 pooled statistic),
 (controller's quick summary) and `t10-analyse.py` (this record's source of
 truth — every number above is reproducible by running
 `python3 t10-analyse.py` from that directory).
+
+## Judge retry (Wave 6)
+
+Task 4 (W6-R4 / W6-R17): judge system prompts gained a JSON-hygiene line
+("escape newlines inside strings; no trailing commas"), and
+`eval.Judge.completeJSON` now re-asks exactly once, with the decoder's own
+diagnostic appended, on a decoder failure — never on a transport error, and
+never a second time. One `--judge` run on the 24-question set, standard path
+(dispatch off, no long-context overlay — a plain judge-retry measurement, not
+a re-run of §4's flat/map_reduce A/B).
+
+**Comparability caveat.** The same hygiene-line change edited all four judge
+system prompts (`internal/prompts/eval_judge.go`). Judge **scores** (not just
+retry/failure counts) from Wave 6 onward are therefore not strictly
+byte-comparable to any pre-Wave-6 judge run on this fixture — including §2's
+and §4's flat/map_reduce judged runs and the pairwise comparisons that
+decided the `chat_longcontext_mode = map_reduce` default. Only the
+retry/failure tallies in this section are a like-for-like measurement across
+the change.
+
+**Tally definitions** (fixed for this section and any future re-run of it):
+
+- **retries** = `judge_warnings` entries starting with `retry:` (one per
+  metric per question where the FIRST decode attempt failed and a retry was
+  attempted — counted regardless of whether that retry then succeeded or
+  failed, per ruling N7 from the code review's fix round).
+- **remaining failures** = `judge_errors` entries containing the string
+  `after retry` (a retry was attempted and its own response also failed to
+  decode — the only way a metric can still error after this change, aside
+  from a transport error on the very first call, which never retries).
+
+### Command (exact)
+
+```bash
+.superpowers/sdd/2026-09-07-rag-sota-wave6/run-eval.sh \
+  --golden eval/golden/global-synthesis-de.jsonl \
+  --production-context --orchestrator-dispatch=false --judge \
+  --output .superpowers/sdd/2026-09-07-rag-sota-wave6/t4-out/gs-judge.json
+```
+
+Run from the worktree root; binary `eval-wave6`, freshly built by
+`run-eval.sh`. `errors = 0` (all 24 questions answered and judged
+successfully). Wall time 20 m 38 s. Model stack unchanged from §1–§4
+(`jlu/gemma-4-26b-it` answer + all four judges).
+
+### Results
+
+| Metric | Retries (attempted) | Remaining failures (`after retry`) |
+|---|---|---|
+| faithfulness | 0 | 0 |
+| answer_relevance | 0 | 0 |
+| context_precision | 0 | 0 |
+| coverage | 0 | 0 |
+| **Total** | **0** | **0** |
+
+`*_n` this run (24 questions): `faithfulness_n = 24`, `answer_relevance_n =
+24`, `context_precision_n = 23`, `coverage_n = 24`.
+
+**No decoder failure occurred on this run at all**, so the retry path was
+never exercised (0 retries is a true zero, not a bounded-but-untriggered
+count — every one of the **95** judge calls that reached `unmarshalStrict`
+(24 questions × 4 metrics = 96 attempted, minus G17's context_precision
+call, which failed in transport and never reached the decoder — see below)
+parsed on the first attempt). This is consistent with, though not proof of,
+the hygiene-line prompt change (W6-R4a) working: Wave 5 §4's four judged
+runs on this exact set (before the hygiene line existed) hit **2 decoder
+failures in 384 judge calls** (four runs × 24 questions × 4 metrics; mr1
+G05, mr2 G09 — see §4's "Judge instrument faults" note and its results
+table above), a **≈0.5%** baseline rate across all metrics — equivalently
+2 failures in the **96 faithfulness calls** specifically (both failures
+were faithfulness; ≈2% *for that one metric*, per §4's `mean faithfulness
+(n)` column showing `flat1 (24) / mr1 (23) / flat2 (24) / mr2 (23)`). This
+run's 0/95 (all metrics) or 0/24 (faithfulness alone) is within sampling
+noise of either baseline and is not itself a significant result — recorded
+as the observed count, not claimed as a rate change.
+
+The one `context_precision_n = 23` (not 24) is **not** a retry-path
+casualty: the single `judge_errors` entry this run recorded is a
+**transport** error (`ai: all 3 attempts failed: ... context deadline
+exceeded`, question G17) — the sketch's `if err != nil { return false, err
+}` branch, which fires before `unmarshalStrict` ever runs and therefore
+never retries. That the transport-error path stayed a single call, with no
+`retry:context_precision` warning attached, is itself evidence the "a
+transport error must not retry" guarantee (task-4 review N2) holds in
+production, not only in the mutation-tested unit test. The 12
+`judge_warnings` entries this run recorded are all **pre-existing**
+`context_precision` boolean-count tolerance warnings (W4-R1, e.g.
+`context_precision: judge returned 9 booleans, expected 10 —
+truncated/padded`; the same tolerance also applies to `coverage`, but none
+of the 12 are `coverage` this run) — unrelated to W6-R4, present before
+this task and unchanged by it.
+
+### Comparison to the Wave-5 baseline
+
+Wave 5 §4 (`t10-flat1/mr1/flat2/mr2`, same 24-question fixture, `--judge`,
+pre-W6-R4 binary) recorded, per the table above: flat1 3 warnings/0 errors,
+mr1 1 warning/1 error, flat2 3 warnings/0 errors, mr2 1 warning/1 error — 2
+of 4 runs each carried exactly one unretried decoder-failure `judge_errors`
+entry (mr1 G05, mr2 G09). This Wave-6 run's `judge_errors` count (1, and a
+transport error, not a decoder failure) and `judge_warnings` count (12, all
+pre-existing boolean-count warnings, 0 retry warnings) are not directly
+comparable rates to §4's, since §4 ran `--orchestrator-dispatch=true` with a
+`chat_longcontext_mode` overlay (the long-context orchestrator's map-reduce
+stage adds 25 extra fast-tier calls per question, none of them judge calls,
+so it does not change the judge call count, but the retrieved-context
+shape it feeds the judges does differ from the standard-path pool this run
+used) — recorded here as the two comparable data points (judge decoder
+failure counts, both pre- and post-hygiene-line), not as a controlled A/B.
+
+### Artifacts
+
+`.superpowers/sdd/2026-09-07-rag-sota-wave6/t4-out/gs-judge.json` (full
+report, gitignored workspace) and its accompanying run log (background task
+`bhzrnaqys` in the controller's session; the earlier attempt in the same
+session, task `bebsydnd8`, failed on an unrelated transient build break in
+`internal/chat` from another implementer's concurrent, uncommitted work —
+not this task's code, and not present in the run recorded above).

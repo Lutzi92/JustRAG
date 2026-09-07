@@ -578,3 +578,44 @@ func TestRecordTabularRouterNormalisesOutcomes(t *testing.T) {
 		t.Errorf("error delta = %v, want 1 (unrecognized outcome must normalize to error)", got)
 	}
 }
+
+// TestRecordJudgeRetry_KnownJudgesIncrementByLabel asserts each of the four
+// known judge names increments its own series (mirrors
+// TestRecordAdaptiveRoutingDecision_IncrementsByAction).
+func TestRecordJudgeRetry_KnownJudgesIncrementByLabel(t *testing.T) {
+	beforeFaithfulness := testutil.ToFloat64(judgeRetryTotal.WithLabelValues("faithfulness"))
+	beforeRelevance := testutil.ToFloat64(judgeRetryTotal.WithLabelValues("answer_relevance"))
+	beforePrecision := testutil.ToFloat64(judgeRetryTotal.WithLabelValues("context_precision"))
+	beforeCoverage := testutil.ToFloat64(judgeRetryTotal.WithLabelValues("coverage"))
+
+	RecordJudgeRetry("faithfulness")
+	RecordJudgeRetry("faithfulness")
+	RecordJudgeRetry("answer_relevance")
+	RecordJudgeRetry("context_precision")
+	RecordJudgeRetry("coverage")
+
+	if got := testutil.ToFloat64(judgeRetryTotal.WithLabelValues("faithfulness")) - beforeFaithfulness; got != 2 {
+		t.Errorf("faithfulness delta = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(judgeRetryTotal.WithLabelValues("answer_relevance")) - beforeRelevance; got != 1 {
+		t.Errorf("answer_relevance delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(judgeRetryTotal.WithLabelValues("context_precision")) - beforePrecision; got != 1 {
+		t.Errorf("context_precision delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(judgeRetryTotal.WithLabelValues("coverage")) - beforeCoverage; got != 1 {
+		t.Errorf("coverage delta = %v, want 1", got)
+	}
+}
+
+// TestRecordJudgeRetry_UnknownJudgeNormalizesToOther asserts an
+// unrecognized judge name is recorded under "other" rather than minting a
+// new label series (mirrors the tabular-router unknown-outcome test).
+func TestRecordJudgeRetry_UnknownJudgeNormalizesToOther(t *testing.T) {
+	before := testutil.ToFloat64(judgeRetryTotal.WithLabelValues("other"))
+	RecordJudgeRetry("pairwise")
+	after := testutil.ToFloat64(judgeRetryTotal.WithLabelValues("other"))
+	if after != before+1 {
+		t.Errorf("unknown judge did not normalize to 'other': before=%v after=%v", before, after)
+	}
+}

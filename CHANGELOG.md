@@ -274,6 +274,114 @@ one-step rollback** (`cmd/migrate` is up-only).
   flag is rejected with an explanation. Both inputs must put the same
   configuration on side A — the command warns but cannot verify it.
 
+- **Migration 0073 required** (RAG Wave 6) — now the highest migration in
+  this Unreleased block. One column, idempotent, **no backfill**: adds
+  `agent_decisions.policy_rule smallint` (nullable — which
+  `chat_orchestrator_policy` rule, if any, pinned a turn's orchestrator).
+  Compose applies it via the `migrate` one-shot service; **Kubernetes does
+  not** — run `/app/migrate` out of the release image before
+  `kubectl apply`, per `docs/runbooks/release.md`. A release carrying a
+  migration has **no one-step rollback**.
+- **New `site_config` keys (Wave 6), both GLOBAL-ONLY and both default to
+  the empty/no-op value, so no deployment's behaviour changes until an
+  operator writes one:**
+  - `chat_orchestrator_policy` (default `[]`) — an ordered table of routing
+    rules `{when: {...}, orchestrator: drift|longcontext|supervisor|
+    plan_execute|plan_execute_dag|agentic|standard, mode: force|prefer}`,
+    evaluated after the comparison/team/corpus-table arms and before the
+    flag ladder, so a rule can route ANY query type (not only
+    `complex_reasoning`, which is all the ladder itself ever dispatches).
+    `force` ignores the named orchestrator's feature flag; `prefer` only
+    applies when that flag is already on. An empty policy leaves the ladder
+    byte-for-byte unchanged (pinned by a frozen-ladder test). Validated at
+    save time (`internal/siteconfig.ValidateGlobalValues`); the admin Agent
+    panel gained a JSON editor with a rule-preview table. Trajectory event
+    `orchestrator_policy`; recorded per turn in the new
+    `agent_decisions.policy_rule` column when a rule actually applied.
+    `cmd/eval --policy '<json>'` measures a candidate policy against a
+    golden set without touching `site_configs`.
+  - `chat_answer_tools_by_route` (default `{}`) — maps a route (`lookup` /
+    `enumeration` / `complex_reasoning` / `global_synthesis`) to the
+    answer-time tool names (14 built-ins only) the catalog is filtered to
+    on that route, enforced at both the catalog projection and the
+    dispatch boundary (a prompt-injected model can still emit a call for a
+    tool hidden from its catalog). Wraps the `ToolDispatcher` interface, so
+    it composes structurally — not on any production path today — with a
+    per-agent allowlist into the intersection of the two, most-restrictive-
+    wins. **A turn with no classified query type (today: a
+    transform/reformat follow-up) gets NO answer tools once ANY route is
+    configured** — it cannot match a route key by name, so it is treated
+    as fully restricted rather than unrestricted. Trajectory event
+    `answer_tools_route` (`Decision: "unknown"` for that case).
+    **`rag.completion`'s `answer_tools_path` log field changes meaning**:
+    it now means "the tool loop actually ran," not merely "tools were
+    configured/enabled" — a route restriction or the unclassified-turn
+    case can leave `chat_answer_tools_enabled` true while this field reads
+    false. Update any dashboard that reads it as a simple flag mirror.
+- **`cmd/eval` gains two more flags.** `--policy '<json>'` (above) and
+  `--chat-overlay key=value` (repeatable) — a generic per-run overlay for
+  any OTHER chat-layer `site_config` key the same reader serves (used to
+  re-test `chat_conflict_max_chunks` without a dedicated flag);
+  `--chat-overlay chat_orchestrator_policy=…` is rejected in favour of
+  `--policy`, which validates.
+- **Judge decoder failures now get one bounded retry, not a dropped
+  sample.** A JSON decoder failure (a brace-balanced-but-invalid object —
+  a raw newline, an unescaped quote, or a trailing comma inside a string;
+  not truncation, not fences) re-asks the judge exactly once with the
+  decoder's own error appended, localized to the question's language. The
+  parser itself is unchanged — this is a retry, not a new tolerance. Every
+  attempted retry, success or failure, is recorded in `judge_warnings` as
+  `retry:<metric>` and increments the new metric
+  `rag_judge_retry_total{judge}`. **Not eval-only:** the same
+  `internal/eval.Judge` backs the runtime RAGAS sampler and the in-app /
+  scheduled eval runner, so both inherit the retry and the metric too.
+  Measured on the 24-question global-synthesis set: 0 retries, 0 remaining
+  failures (the baseline being replaced is 2 decoder failures in 384 judge
+  calls across the Wave 4/5 measurement runs).
+- **`internal/eval.ParseGoldenSetContent` (the admin UI / DB-backed golden
+  set path) now accepts JSONL, not only a JSON array.** The shape is
+  auto-detected from the first non-whitespace byte (`[` = array, else
+  JSONL with `#`/blank-line comments skipped, sharing the same line parser
+  `cmd/eval`'s file loader uses), so a set authored as JSONL can be pasted
+  or uploaded through the admin UI directly. A row carrying `turns`
+  (multi-turn conversations) is still rejected on both shapes — only
+  `cmd/eval` can replay one.
+- **`FileDates` now threads through `publicapi` and `openaicompat`, not
+  only `mcpserver`.** Both surfaces' `ChatContextParams` carry a real
+  `FileDateLookup`, but neither is load-bearing yet for conflict
+  surfacing: both surfaces deliberately run `PrepareChatContext` with a
+  **nil site-config reader** (they read `site_config` for exactly one
+  other thing, the degenerate-run-guard limit), so
+  `chat_conflict_surfacing_enabled` always evaluates false there and the
+  gate can never fire on those two surfaces regardless of the per-KB
+  setting. `mcpserver` passes a real reader, so its `FileDates` is
+  load-bearing: with the flag on for a KB, `ask_kb`'s supersession
+  direction now resolves from real dates instead of always `unknown`.
+- **Conflict surfacing re-measured on the fixed detector — still no
+  recommendation to enable it, at any cap.** The 8 CERT NEU/UPDATE pair
+  questions were rewritten to name the advisory and ask for the delta
+  since the first version, with both halves in `must_cite_file_names`. At
+  the default cap (`chat_conflict_max_chunks = 12`) both halves ARE in the
+  assembled retrieval pool, but the non-cited half sits at score rank ≈15
+  — outside the detector's 12-source window — so 0 of 8 pairs flag (a
+  **detector-window** finding, not a retrieval finding: the earlier
+  hypothesis that MMR discards a half does not hold once measured
+  directly). Forcing the cap to its clamp maximum (30) makes all 8 of 8
+  flag with the correct direction, but the PPM false-positive rate roughly
+  triples (0.281 / 0.303 vs 0.112 / 0.101 at cap 12, two runs each).
+  Neither cap passes both pre-registered criteria at once.
+  `chat_conflict_surfacing_enabled` stays default OFF and
+  `chat_conflict_max_chunks` stays default 12 — **no default change**.
+  Record: `eval/golden/cert-recency-de.acceptance.md`.
+- **Admin eval-run table gains sortable Team and Score columns, no
+  migration.** Both are read out of each run's existing `report` JSONB
+  (`eval_runs`, migration 0038) rather than a new column; the team
+  selector also shows the last completed run's score next to each team
+  name.
+- **CI's integration-test package list gained `internal/adminagentmetrics`.**
+  The step enumerates packages explicitly rather than globbing, and the
+  new `policy_rule` integration test needed adding.
+
 ### Fixes
 
 - **Confluence `isPageUpdated` routes through `VersionWhen()`; dead fallback

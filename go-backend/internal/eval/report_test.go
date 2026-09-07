@@ -274,3 +274,171 @@ func TestWriteHumanSummary_OmitsOrchestratorBlockWhenAbsent(t *testing.T) {
 		t.Errorf("'Orchestrators:' must be absent when OrchestratorAggregates is nil:\n%s", buf.String())
 	}
 }
+
+// W6-R6: the human summary gains an "Orchestrator policy" block only when at
+// least one question was routed by a rule — a report from a run without a
+// policy must keep its exact previous text.
+func TestWriteHumanSummary_PolicyRuleSection(t *testing.T) {
+	rule0, rule2 := 0, 2
+	rep := Report{Questions: []QuestionReport{
+		{Agent: &AgentTrace{Orchestrator: OrchestratorSupervisor, PolicyRule: &rule0}},
+		{Agent: &AgentTrace{Orchestrator: OrchestratorSupervisor, PolicyRule: &rule0}},
+		{Agent: &AgentTrace{Orchestrator: OrchestratorAgentic, PolicyRule: &rule2}},
+		{Agent: &AgentTrace{Orchestrator: OrchestratorStandard}},
+	}}
+	var buf bytes.Buffer
+	if err := WriteHumanSummary(&buf, rep); err != nil {
+		t.Fatalf("WriteHumanSummary: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"Orchestrator policy:",
+		"questions_routed_by_a_rule = 3/4",
+		"rule 0",
+		"rule 2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestWriteHumanSummary_NoPolicySectionWithoutRules(t *testing.T) {
+	rep := Report{Questions: []QuestionReport{
+		{Agent: &AgentTrace{Orchestrator: OrchestratorStandard}},
+		{},
+	}}
+	var buf bytes.Buffer
+	if err := WriteHumanSummary(&buf, rep); err != nil {
+		t.Fatalf("WriteHumanSummary: %v", err)
+	}
+	if strings.Contains(buf.String(), "Orchestrator policy") {
+		t.Fatalf("policy section printed for a run without a policy:\n%s", buf.String())
+	}
+}
+
+func TestPolicyRuleCounts(t *testing.T) {
+	if got := PolicyRuleCounts(nil); got != nil {
+		t.Fatalf("PolicyRuleCounts(nil) = %v, want nil", got)
+	}
+	zero := 0
+	got := PolicyRuleCounts([]QuestionReport{
+		{Agent: &AgentTrace{PolicyRule: &zero}},
+		{Agent: &AgentTrace{}},
+		{},
+	})
+	if len(got) != 1 || got[0] != 1 {
+		t.Fatalf("PolicyRuleCounts = %v, want {0:1} (rule 0 must not read as absent)", got)
+	}
+}
+
+// TestAggregate_MeanLatencyAndLLMCalls pins the W6-R7 cost fields: two
+// questions with latency_ms 100/300 and agent.llm_calls 2/4 must produce
+// mean_latency_ms=200 and mean_llm_calls=3 on the aggregate — the exact
+// example from the task brief.
+func TestAggregate_MeanLatencyAndLLMCalls(t *testing.T) {
+	reports := []QuestionReport{
+		{
+			Metrics:   PerQuestionMetrics{K: 10, RecallAtK: 1.0},
+			LatencyMs: 100,
+			Agent:     &AgentTrace{Orchestrator: OrchestratorStandard, LLMCalls: 2},
+		},
+		{
+			Metrics:   PerQuestionMetrics{K: 10, RecallAtK: 1.0},
+			LatencyMs: 300,
+			Agent:     &AgentTrace{Orchestrator: OrchestratorStandard, LLMCalls: 4},
+		},
+	}
+	agg := Aggregate(reports, 10)
+	if !floatsNearlyEqual(agg.MeanLatencyMs, 200) {
+		t.Errorf("MeanLatencyMs = %f, want 200", agg.MeanLatencyMs)
+	}
+	if agg.MeanLLMCalls == nil {
+		t.Fatal("MeanLLMCalls is nil, want a value")
+	}
+	if !floatsNearlyEqual(*agg.MeanLLMCalls, 3) {
+		t.Errorf("MeanLLMCalls = %f, want 3", *agg.MeanLLMCalls)
+	}
+}
+
+// TestAggregate_MeanLLMCallsNilWithoutAnyAgentTrace pins the byte-stability
+// contract: when no question carries an Agent trace at all (legacy
+// retrieval-only adapters, or a pre-Wave-6 report), MeanLLMCalls stays nil
+// rather than reading as a misleading 0 — distinct from "traced with zero
+// calls".
+func TestAggregate_MeanLLMCallsNilWithoutAnyAgentTrace(t *testing.T) {
+	reports := []QuestionReport{
+		{Metrics: PerQuestionMetrics{K: 10, RecallAtK: 1.0}, LatencyMs: 50},
+		{Metrics: PerQuestionMetrics{K: 10, RecallAtK: 1.0}, LatencyMs: 150},
+	}
+	agg := Aggregate(reports, 10)
+	if agg.MeanLLMCalls != nil {
+		t.Errorf("MeanLLMCalls = %v, want nil", *agg.MeanLLMCalls)
+	}
+	if !floatsNearlyEqual(agg.MeanLatencyMs, 100) {
+		t.Errorf("MeanLatencyMs = %f, want 100 (latency is independent of Agent presence)", agg.MeanLatencyMs)
+	}
+}
+
+// TestWriteHumanSummary_PrintsMeanLatencyAndLLMCalls pins the printed
+// summary contract: the top-level aggregate always prints mean_latency_ms,
+// and prints mean_llm_calls only when the aggregate carries one.
+func TestWriteHumanSummary_PrintsMeanLatencyAndLLMCalls(t *testing.T) {
+	m := 3.5
+	rep := Report{
+		Questions: []QuestionReport{{Metrics: PerQuestionMetrics{K: 10, RecallAtK: 1.0}}},
+		Aggregate: AggregateMetrics{K: 10, Count: 1, MeanRecall: 1.0, MeanLatencyMs: 123.4, MeanLLMCalls: &m},
+	}
+	var buf bytes.Buffer
+	if err := WriteHumanSummary(&buf, rep); err != nil {
+		t.Fatalf("WriteHumanSummary: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"mean_latency_ms = 123.4", "mean_llm_calls  = 3.50"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestWriteHumanSummary_OmitsMeanLLMCallsWhenNil pins the omission half of
+// the same contract: an aggregate with no LLM-call data must not print the
+// mean_llm_calls line at all, so a pre-Wave-6 / retrieval-only report's
+// summary is unaffected by this field's introduction.
+func TestWriteHumanSummary_OmitsMeanLLMCallsWhenNil(t *testing.T) {
+	rep := Report{
+		Questions: []QuestionReport{{Metrics: PerQuestionMetrics{K: 10, RecallAtK: 1.0}}},
+		Aggregate: AggregateMetrics{K: 10, Count: 1, MeanRecall: 1.0},
+	}
+	var buf bytes.Buffer
+	if err := WriteHumanSummary(&buf, rep); err != nil {
+		t.Fatalf("WriteHumanSummary: %v", err)
+	}
+	if strings.Contains(buf.String(), "mean_llm_calls") {
+		t.Fatalf("mean_llm_calls printed with a nil aggregate value:\n%s", buf.String())
+	}
+}
+
+// TestWriteHumanSummary_OrchestratorLineCarriesLatencyAndLLMCalls pins the
+// per-orchestrator table line: it must carry latency_ms always and
+// llm_calls only when that bucket's MeanLLMCalls is non-nil.
+func TestWriteHumanSummary_OrchestratorLineCarriesLatencyAndLLMCalls(t *testing.T) {
+	m := 5.0
+	rep := Report{
+		Questions: []QuestionReport{{Agent: &AgentTrace{Orchestrator: "supervisor"}}},
+		Aggregate: AggregateMetrics{K: 10, Count: 1},
+		OrchestratorAggregates: map[string]AggregateMetrics{
+			"supervisor": {K: 10, Count: 1, MeanRecall: 1.0, MeanLatencyMs: 42.0, MeanLLMCalls: &m},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteHumanSummary(&buf, rep); err != nil {
+		t.Fatalf("WriteHumanSummary: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"latency_ms=42.0", "llm_calls=5.00"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("orchestrator line is missing %q:\n%s", want, out)
+		}
+	}
+}

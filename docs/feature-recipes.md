@@ -759,7 +759,7 @@ Migration **0072** (`messages.conflicts jsonb`). After the final chunk set is as
 
 Fail-soft throughout: a timeout or an error yields no addendum and no badge, only a trajectory event. Trajectory `conflict_surfacing`; metric `rag_conflict_surfacing_total{outcome}` with `found | none | skipped_single_file | timeout | error` — `none` exists precisely so a flag rate has a denominator.
 
-**Caveat on the API surfaces.** `internal/publicapi`, `internal/openaicompat` and `internal/mcpserver` reach `PrepareChatContext` too, so with the flag on they get the **addendum** (the answer is better) but no SSE frame and no persisted blob — they never call `AddMessage`. They also thread no `FileDateLookup`, so supersession direction there is always `unknown`.
+**Caveat on the API surfaces.** `internal/publicapi`, `internal/openaicompat` and `internal/mcpserver` reach `PrepareChatContext` too, so with the flag on they get the **addendum** (the answer is better) but no SSE frame and no persisted blob — they never call `AddMessage`. Since Wave 6 (W6-R2) all three thread a real `FileDateLookup` into `ChatContextParams.FileDates`, but it is only **load-bearing on `internal/mcpserver`**: `internal/publicapi` and `internal/openaicompat` deliberately run `PrepareChatContext` with a **nil site-config reader** (they read `site_config` for exactly one other thing — the degenerate-run guard's limit), so `ChatConflictSurfacingEnabled` always evaluates to its default `false` there regardless of the per-KB setting, and this gate can never fire on those two surfaces at all today. `internal/mcpserver` passes a real reader, so once a KB has the flag on, its `ask_kb` MCP tool gets supersession direction resolved from real dates rather than always `unknown`.
 
 **Measured in Wave 5 — both gates fail, so there is NO recommendation to enable this, not even for RSS/CERT-shaped KBs.** Record: `eval/golden/cert-recency-de.acceptance.md` § "Conflict surfacing (Wave 5)"; the rules were stated before the numbers.
 
@@ -770,11 +770,22 @@ Fail-soft throughout: a timeout or an error yields no addendum and no badge, onl
 
 The 0/8 is a **fixture property, not evidence against the mechanism**: for none of the eight pair questions are both halves of the queried pair in the assembled set, because MMR near-duplicate suppression keeps at most one — the same limitation the Wave-2 section of that acceptance file already recorded, and those questions were authored to measure *which half survives*. On the pairs the detector actually saw, it hit **12 of 37** opportunities with direction correct **12 of 12** and **zero invented pairs** (31 entries across two runs, every one naming a genuine NEU/UPDATE pair of the corpus). The 0.124, by contrast, is genuine evidence against enabling it broadly — all 13 entries were `contradiction`, none `superseded`, and the ones inspected are two documents about the same project agreeing in different words.
 
-**That 0.124 was measured BEFORE the detector fix in this release and is an UPPER BOUND.** Two of the 13 entries paired a file **with itself** (duplicate chunks of one document), and one CERT entry reported the same pair twice with opposite `newer` directions. Both defects are **fixed in this release** (Wave-5 final fix wave): a conflict whose two sources resolve to the same file id is dropped, and mirrored entries collapse into one whose direction is re-decided from the file dates (unknown when the dates cannot settle it). The corrected rate can therefore only be lower — but it has not been measured. **Re-measuring the fixed detector is a roadmap item**; until then the 0.124 must not be used in either direction.
+**That 0.124 was measured BEFORE the detector fix in this release and was an UPPER BOUND.** Two of the 13 entries paired a file **with itself** (duplicate chunks of one document), and one CERT entry reported the same pair twice with opposite `newer` directions. Both defects were **fixed in the Wave-5 release** (Wave-5 final fix wave): a conflict whose two sources resolve to the same file id is dropped, and mirrored entries collapse into one whose direction is re-decided from the file dates (unknown when the dates cannot settle it).
 
-Cost when on: one extra fast-tier call over ≤ 12 sources, **+631 ms / +268 ms** per turn across two runs. Retrieval is untouched — the on/off runs are identical to three decimals on recall, precision, MRR and nDCG, which is the direct demonstration that the pass is strictly post-retrieval.
+**Re-measured in Wave 6 on the fixed detector — still no recommendation to enable it, at any cap.** The eight CERT pair questions were rewritten to name the advisory and ask for the change since the first version ("Was hat sich an WID-SEC-2026-0104 … gegenüber der ersten Fassung geändert?"), with `must_cite_file_names` now listing **both** the NEU and the UPDATE half, so a retrieval failure to assemble both is measurable rather than baked into the question. At the **default cap** (`chat_conflict_max_chunks = 12`), both halves of every pair are in fact present in the assembled 30-chunk retrieval pool, but the queried pair's non-cited half sits at score rank ≈15 — **outside** the detector's 12-source window, which re-sorts the capped list by score and simply never sees it — so **0 of 8 pairs flag**. This is a **detector-window finding, not a retrieval finding**: the earlier Wave-5/6 hypothesis that MMR discards one half was re-checked directly against the assembled pool and does not hold at the eval harness's `--top-k`, which never reaches `PrepareChatContext` (`--top-k` is a report-side cut, applied after retrieval).
 
-**Measuring it yourself:** `cmd/eval --production-context --conflict-surfacing on|off` overlays the key for one run without touching `site_configs`, and each question's report carries `conflicts` (the same bare array). `cmd/eval` wires its own `FileDateLookup`; without one every date line reads "unknown" and the supersession half of the measurement is vacuous.
+Forcing the cap to its clamp maximum (`chat_conflict_max_chunks = 30`, via `cmd/eval --chat-overlay chat_conflict_max_chunks=30` — no `site_configs` mutation) makes **all 8 of 8 pairs flag**, direction correct in all 8 (`newer` = the UPDATE half). But the PPM false-positive rate, re-measured at the same cap on two runs, rises to **0.281 / 0.303** — roughly **3×** the cap-12 rate (0.112 / 0.101, itself the corrected, post-fix version of the Wave-5 upper bound) — because a 30-source detector call sees far more benign cross-document agreement to potentially misclassify as `contradiction`.
+
+| Criterion (pre-registered, W6-R1 / W6-R18) | Threshold | Cap 12 | Cap 30 | Met |
+|---|---|---|---|---|
+| CERT NEU/UPDATE pairs flagged, direction = UPDATE | ≥ 6 of 8 | 0 of 8 | **8 of 8** | cap 30 only |
+| PPM false-positive flag rate (two runs) | ≤ 0.10 | 0.112 / 0.101 | 0.281 / 0.303 | no, either cap |
+
+**Neither cap passes both criteria at once — no recipe recommendation at any cap.** The default stays `chat_conflict_surfacing_enabled = false` and `chat_conflict_max_chunks = 12`; do not raise the cap to make NEU/UPDATE pairs flag, since the false-positive cost more than triples. Records: `eval/golden/cert-recency-de.acceptance.md` §§ "Conflict surfacing re-measured (Wave 6)" (the pair rewrite + cap-12 result) and "Conflict surfacing re-measured at `chat_conflict_max_chunks = 30`" (the cap-30 result).
+
+Cost when on: one extra fast-tier call over ≤ `chat_conflict_max_chunks` sources. **Wave 5** measured **+631 ms / +268 ms** per turn across two runs at the default cap, with the on/off runs **identical to three decimals** on recall, precision, MRR and nDCG — the direct demonstration that the pass is strictly post-retrieval. **Wave 6**'s re-measurement (same default cap, the rewritten CERT pair questions above) found **+585.1 ms**; MRR was again identical (0.873 both runs), but recall/precision/nDCG differed **in the third decimal** (recall 0.700 `on` vs 0.708 `off`) — the same CRAG-grader run-to-run non-determinism the Wave-2 and Wave-5 sections of `eval/golden/cert-recency-de.acceptance.md` already document on this fixture, not evidence the pass touches retrieval (see that file, the section immediately above this one, and its `:974-975`).
+
+**Measuring it yourself:** `cmd/eval --production-context --conflict-surfacing on|off` overlays the key for one run without touching `site_configs`, and each question's report carries `conflicts` (the same bare array). `cmd/eval` wires its own `FileDateLookup`; without one every date line reads "unknown" and the supersession half of the measurement is vacuous. `cmd/eval --chat-overlay chat_conflict_max_chunks=<n>` (repeatable, W6-R18) overlays any other chat-layer key read through the same reader, e.g. to re-test a different cap.
 
 ## Ingest prompt-injection screening
 
@@ -804,6 +815,82 @@ It changes nothing about the corpus: ingestion, chunking, embedding and retrieva
 Hits are logged at **Info with a 120-rune preview**, never at Warn with the full snippet: on a security-advisory or documentation corpus a hit is expected background noise, and a Warn stream of quoted attacker text is both alert fatigue and untrusted text in an operator's terminal. The full snippet lives in the column, where the UI renders it as a plain-string tooltip.
 
 **Expect false positives, by design.** A document that legitimately quotes instructions — prompt-engineering documentation, an incident report reproducing an attack — gets a badge. A badge is all it gets.
+
+## Per-query orchestrator policy
+
+```
+chat_orchestrator_policy = []    # global-only, JSON array of rules, default [] = ladder unchanged
+```
+
+No migration for the key itself; `agent_decisions.policy_rule` (nullable smallint, no backfill) comes from migration **0073**. Enablement is trivial — the key defaults to `[]`, and `[]` means the flag ladder is byte-for-byte unchanged (W6-R10, pinned by a frozen-ladder test) — but the document itself needs care, since it can force a route past its own feature flag.
+
+**Example document** (the admin editor's own placeholder):
+
+```json
+[
+  {"when": {"query_type": ["lookup"]}, "orchestrator": "standard", "mode": "force"},
+  {"when": {"global_synthesis": true}, "orchestrator": "longcontext", "mode": "prefer"}
+]
+```
+
+Read top to bottom, first match wins: every `lookup` turn is pinned to the standard path regardless of any other flag (defensive — e.g. suppressing an experimental orchestrator for the cheapest, highest-volume query class); every global-synthesis turn prefers `longcontext` **only if** `chat_longcontext_enabled` is already on, otherwise it falls through to the ordinary ladder.
+
+**`force` vs `prefer`:**
+- `force` ignores the named orchestrator's own feature flag. Use it to route a query class regardless of deployment-wide settings — e.g. "every turn naming this support KB should go through Plan-Execute" via `kb_ids`. If the forced orchestrator's dependencies are missing (KG community summaries never built, no attachment store, etc.) the attempt fails and falls back through the ordinary orchestrator-error → `PrepareChatContext` path; nothing crashes, but check the fall-through event below before assuming the rule is doing what you think.
+- `prefer` only applies when the named orchestrator's flag is already on. Use it to change **precedence** among orchestrators that are already enabled — e.g. running DRIFT and long-context both on, but wanting global-synthesis `complex_reasoning` turns from KB X specifically to prefer Plan-Execute instead of whichever the ladder would otherwise pick.
+- `standard` (either mode) names the ladder's own no-orchestrator outcome. A `force standard` rule pins a turn to the standard route without needing to turn every other orchestrator off; it does not, and cannot, pull a complex turn off the deep-chat dispatch path onto the non-streaming `PrepareChatContext` path (the corpus-table arm can only be resolved from inside that dispatch).
+- `plan_execute_dag` forces `OrchPlanExecute` with the DAG shape for that turn — a shorthand for "route here, and use the DAG planner", without needing `chat_plan_execute_dag` on deployment-wide.
+
+**Verify a policy before trusting it in production:**
+1. **Preview** — paste the document into the admin Agent panel's policy editor; the preview table beneath it shows which rule (if any) each of the four canonical query shapes (lookup / enumeration / complex_reasoning / complex_reasoning+global_synthesis) would hit, with the resulting orchestrator and mode. Catches an ordering mistake (an earlier broad rule shadowing a later specific one) before you save.
+2. **Trajectory event** — a real turn that hits an applied rule streams an `orchestrator_policy` trajectory event carrying the rule index, the mode, and the orchestrator; a **fall-through** (a forced rule whose orchestrator could not run) streams a second such event with `Decision: "fallthrough"` and is logged at Warn as `chat.orchestrator_policy.fallthrough`.
+3. **`agent_decisions.policy_rule`** — the persisted 0-based rule index for turns where the policy actually applied; NULL means the flag ladder decided (no rule matched, a `prefer` rule's flag was off, the policy is empty, or a forced rule fell through). Query it directly to audit which rule is firing in production:
+   ```sql
+   SELECT policy_rule, mode, count(*) FROM agent_decisions
+   WHERE kb_id = '<uuid>' AND created_at > now() - interval '1 day'
+   GROUP BY policy_rule, mode ORDER BY 1;
+   ```
+4. **`cmd/eval --policy '<json>'`** — measure a candidate policy against a golden set before shipping it: `cmd/eval --golden <set> --production-context --orchestrator-dispatch=true --policy '<json>'`. The document is validated with the same parser the save path uses (invalid JSON is a usage error, exit 2), and each question's report gains `agent.policy_rule`. W6-R7/R7a measured `query_type × orchestrator → recall / MRR / cost` on the PPM fixture across five forced cells (ladder, force-supervisor, force-plan_execute, force-plan_execute_dag, force-agentic); the table, the noise band, and the recommended (documentation-only — the shipped default stays `[]`) policy for that fixture live in `eval/golden/orchestrator-policy.acceptance.md`.
+
+## Per-route answer-tool sets
+
+```
+chat_answer_tools_by_route = {}    # global-only, JSON object keyed by route, default {} = no restriction
+```
+
+No migration. Requires `chat_answer_tools_enabled = true` (the master gate for the answer-time tool loop) to have any visible effect — this key only narrows an already-on catalog, it never turns the loop on by itself.
+
+**Example document** (the admin editor's own placeholder):
+
+```json
+{
+  "lookup": ["kb_search", "chunk_read"],
+  "complex_reasoning": ["kb_search", "keyword_search", "chunk_read", "document_outline"]
+}
+```
+
+`lookup` turns get a minimal two-tool catalog; `complex_reasoning` turns get four; every other route (`enumeration`, and `complex_reasoning` turns that are also global-synthesis, since `global_synthesis` is a separate key that wins over `complex_reasoning` when present) is unrestricted, because the document says nothing about it. An entry with an **empty** list (`"enumeration": []`) is a real restriction — no tools at all on that route, and the answer-tools loop is skipped entirely rather than run with an empty catalog — which is different from the route being **absent** from the document (no restriction). **`null` and `[]` both mean "no tools on this route"**: `AnswerToolsByRoute` is a Go `map[string][]string`, and `encoding/json` decodes a `null` map value into a nil (empty) slice, so `{"enumeration": null}` is byte-identical server-side to `{"enumeration": []}` — the route key is still present in the document, so `Allowlist` still reports a real restriction, not "no restriction". The admin editor's client-side validator accepts `null` the same way, matching the server.
+
+Only the 14 built-in MCP tool names are recognized (`chunk_read`, `calculator`, `keyword_search`, `kb_search`, `web_search`, `code_exec`, `memory_read`, `memory_write`, `recent_documents`, `count_mentions`, `document_outline`, `sql_query`, `table_query`, `graph_search`) — a remote or per-KB registered MCP tool cannot be route-scoped in v1, and naming one is a save-time 400. **`code_exec` is one of the 14 recognized names but is rejected too, with an explicit message**: `MCPDispatcher.AnswerToolCatalog` never includes it in the answer-time catalog in the first place, so naming it in a route would otherwise validate and then silently leave that route with an empty catalog (no tools at all) — the save-time 400 catches the trap instead of an operator discovering it in production. It stays in the recognized-name list only so the `internal/mcp/builtin` registry cross-check test still has something to pin it against.
+
+**How the restriction is enforced — twice, deliberately:** the catalog handed to the model is filtered to the allowlist (so the model doesn't see tools it can't use), **and** the dispatch boundary refuses a call for any tool outside the allowlist even if the model somehow names it anyway (a prompt-injected model can emit a call for a tool it never saw listed — hiding it from the catalog is a hint, not a control). This mirrors the existing per-agent `RestrictedDispatcher`: `routeRestrictedDispatcher` wraps the `ToolDispatcher` interface rather than the concrete `*MCPDispatcher`, so it *composes structurally* with an already agent-restricted dispatcher into the **intersection** of the two allowlists, most-restrictive-wins — but no production path wraps one over the other today (answer tools are off on team-authored turns, and every answer-tools call site starts from the plain `*MCPDispatcher`), so this is a property of the design, not a composition any live turn currently exercises.
+
+**Unclassified turns get no tools once ANY route is restricted.** A turn with no classified query type — today, a reformat/transform follow-up, which skips retrieval and classification entirely — cannot match a configured route key by name, but it is **not** therefore left unrestricted: `resolveAnswerToolsRoute` treats it as fully restricted (an empty allowlist, `Decision: "unknown"` on the trajectory event) the moment the document configures at least one route, regardless of which. An operator who locks down `lookup` alone still gets no answer tools on a reformat follow-up — an unclassified turn is deliberately not a loophole around that intent. An entirely empty document (`{}`, no routes configured) is unaffected — this rule only ever narrows, and only when there is something to narrow against.
+
+**Verify:**
+1. **Trajectory event** — a restricted turn streams an `answer_tools_route` event naming which route key resolved the restriction (`lookup` vs. `global_synthesis`, following `Allowlist`'s own precedence), or `"unknown"` for the unclassified-turn case above.
+2. **`rag.completion`'s `answer_tools_path` log field** changed meaning alongside this key: it now means "the tool loop actually ran," not merely "tools were configured" — a route restriction (or the unclassified-turn case) can leave `chat_answer_tools_enabled` true while this field reads false, because the filtered catalog came back empty and the turn fell through to a plain streaming answer. Update any dashboard that reads it as a simple mirror of the enable flag.
+3. **Operator SQL (not measured on dev, W6-R8a)** — the dev fixture runs answer tools off and the eval harness never exercises the answer-tools loop, so there is no eval-harness before/after number for this key. Verify a change in production instead:
+   ```sql
+   SELECT mode, count(*) AS decisions,
+          avg(jsonb_array_length(coalesce(tool_calls, '[]'))) AS mean_tool_calls
+   FROM agent_decisions
+   WHERE kb_id = '<uuid>' AND created_at > '<before the change>'
+   GROUP BY mode;
+   ```
+   run once before and once after flipping the key, per KB, and compare the mean tool-call
+   count per mode (`jsonb_array_length` must be aggregated or grouped, never selected bare
+   alongside a `GROUP BY mode`).
 
 ## KB permission model — rights matrix (Phase 1)
 

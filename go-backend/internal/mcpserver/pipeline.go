@@ -33,6 +33,22 @@ func WithFileDates(l chat.FileDateLookup) PipelineOption {
 	return func(p *pipelineAnswerer) { p.fileDates = l }
 }
 
+// contextParams builds the chat.ChatContextParams for PrepareChatContext.
+// Unlike publicapi/openaicompat, this surface passes a real p.cfg
+// site-config reader below, so FileDates here is what lets the conflict /
+// supersession detector render real date lines instead of "unknown" on
+// ask_kb turns (W6-R2).
+func (p *pipelineAnswerer) contextParams(kbID, question, language, kbSystemPrompt string) chat.ChatContextParams {
+	return chat.ChatContextParams{
+		KbID:           kbID,
+		SearchQuery:    question, // stateless: the question IS the query (no follow-up condense)
+		Language:       language,
+		KbSystemPrompt: kbSystemPrompt,
+		QueryType:      vector.QueryTypeComplexReasoning,
+		FileDates:      p.fileDates,
+	}
+}
+
 // NewPipelineAnswerer builds the production Answerer. It runs the real
 // site-config-driven RAG pipeline (CRAG / enumeration / contextual prefix /
 // sufficient-context gate / citation validation via PrepareChatContext) and
@@ -51,13 +67,7 @@ func (p *pipelineAnswerer) Answer(ctx context.Context, kbID, question, language 
 		kbSystemPrompt = *sp
 	}
 
-	chatCtx, err := chat.PrepareChatContext(ctx, p.aiResolver, p.searchSvc, p.cfg, chat.ChatContextParams{
-		KbID:           kbID,
-		SearchQuery:    question, // stateless: the question IS the query (no follow-up condense)
-		Language:       language,
-		KbSystemPrompt: kbSystemPrompt,
-		QueryType:      vector.QueryTypeComplexReasoning,
-	})
+	chatCtx, err := chat.PrepareChatContext(ctx, p.aiResolver, p.searchSvc, p.cfg, p.contextParams(kbID, question, language, kbSystemPrompt))
 	if err != nil {
 		return AnswerResult{}, fmt.Errorf("prepare context: %w", err)
 	}

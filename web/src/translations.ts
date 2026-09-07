@@ -1769,6 +1769,13 @@ export const translations = {
     contextWindowSize: { de: 'Kontextfenster-Größe', en: 'Context Window Size' },
     contextWindowSizeHelp: { de: 'Anzahl der benachbarten Chunks, die zusätzlich geladen werden (Standard: 1 = ±1 Chunk). Setzen Sie 0 zum Deaktivieren.', en: 'Number of neighboring chunks loaded additionally (default: 1 = ±1 chunk). Set 0 to disable.' },
     saveSettings: { de: 'Einstellungen speichern', en: 'Save Settings' },
+    // S2 (final review): Save is disabled by a JSON error in the policy /
+    // tools-by-route editor, both inside the "multistep" Section, which is
+    // closed by default and unmounted while closed — without this hint an
+    // operator sees a dead Save button with no visible cause anywhere on
+    // screen. "{{section}}" is replaced with the localized section title
+    // (agentSectionMultiStep) at the call site.
+    saveDisabledPolicyErrorHint: { de: 'Speichern deaktiviert: JSON-Fehler in der Sektion „{{section}}" beheben.', en: 'Save disabled: fix the JSON error(s) in the "{{section}}" section.' },
 
     // Site Settings Tab
     siteSettings: { de: 'Website-Einstellungen', en: 'Site Settings' },
@@ -1915,6 +1922,34 @@ export const translations = {
     evalDownload: { de: 'Herunterladen', en: 'Download' },
     prev: { de: 'Zurück', en: 'Previous' },
     next: { de: 'Weiter', en: 'Next' },
+
+    // eval run table (Wave 6)
+    evalTeam: { de: 'Team', en: 'Team' },
+    evalScore: { de: 'Score', en: 'Score' },
+    // S10 (final review, parked as a full fix — client-side sort spans only
+    // the current page of runs, not the full `total`; this tooltip is the
+    // agreed minimal mitigation instead of moving the sort server-side).
+    evalScoreTitle: { de: 'Recall / MRR (%) — Sortierung gilt nur für die aktuell geladene Seite', en: 'Recall / MRR (%) — sort applies to the current page only' },
+    evalTeamLastRun: { de: 'letzter Lauf', en: 'last run' },
+
+    // orchestrator policy + tools by route (Wave 6)
+    chatOrchestratorPolicy: { de: 'Orchestrator-Policy', en: 'Orchestrator policy' },
+    chatOrchestratorPolicyHelp: {
+        de: 'Geordnete Regeln {when, orchestrator, mode} als JSON-Liste, ausgewertet NACH Vergleich/Team/Tabellen-Routing (diese gewinnen immer zuerst, eine Regel kann sie nie überstimmen) und VOR der Flag-Rangfolge. force wählt den Orchestrator auch bei ausgeschaltetem Flag; prefer nur bei eingeschaltetem Flag — ist das Flag aus, fällt die Regel auf die Rangfolge zurück (Vorschau: „→ Rangfolge (Flag aus)"). Leer = unveränderte Rangfolge.',
+        en: 'Ordered rules {when, orchestrator, mode} as a JSON list, evaluated AFTER comparison/team/corpus-table routing (those always win first — a rule can never override them) and BEFORE the flag ladder. force selects the orchestrator even with its flag off; prefer only when that flag is already on — with the flag off, the rule falls through to the ladder instead (shown in the preview as "→ ladder (flag off)"). Empty = the ladder is unchanged.',
+    },
+    chatOrchestratorPolicyPreview: { de: 'Policy-Vorschau', en: 'Policy preview' },
+    chatOrchestratorPolicyNoRule: { de: '— (Rangfolge)', en: '— (ladder)' },
+    chatOrchestratorPolicyFlagOff: { de: '→ Rangfolge (Flag aus)', en: '→ ladder (flag off)' },
+    chatAnswerToolsByRoute: { de: 'Antwort-Tools pro Route', en: 'Answer tools by route' },
+    chatAnswerToolsByRouteHelp: {
+        de: 'JSON-Objekt Route → erlaubte Antwort-Werkzeuge. Fehlende Route = keine Einschränkung; leere Liste (oder null) = keine Werkzeuge auf dieser Route. Ausnahme: Eine Anfrage ohne erkannten Query-Type (z. B. eine Umformulierungs-Folgefrage) gilt als voll eingeschränkt, sobald IRGENDEINE Route konfiguriert ist — auch eine, die selbst nicht genannt wird. Komponiert strukturell mit der Agenten-Allowlist (restriktivste gewinnt), sofern beide denselben Dispatcher betreffen.',
+        en: 'JSON object mapping route → allowed answer tools. A missing route means no restriction; an empty list (or null) means no tools on that route. Exception: a turn with no classified query type (e.g. a reformat follow-up) is treated as FULLY restricted the moment ANY route is configured — even one it does not itself name. Composes structurally with the agent allowlist (most restrictive wins) wherever both apply to the same dispatcher.',
+    },
+    policyPreviewLookup: { de: 'lookup', en: 'lookup' },
+    policyPreviewEnumeration: { de: 'enumeration', en: 'enumeration' },
+    policyPreviewComplex: { de: 'complex_reasoning', en: 'complex_reasoning' },
+    policyPreviewGlobalSynthesis: { de: 'complex_reasoning + global_synthesis', en: 'complex_reasoning + global_synthesis' },
 
     // ---------------------------------------------------------------
     // T0-3 Tiered BM25 term-match boost
