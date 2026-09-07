@@ -13,8 +13,7 @@ import (
 // ---------------------------------------------------------------------------
 //
 // The keyword arm's SQL is assembled at query time from a dozen inputs (KB
-// language, simple arm, tiered boost, scoring mode, dim-keyed stats tables,
-// k1/b). Reproducing it by hand for an EXPLAIN — the only way to measure what
+// language, simple arm, scoring mode, dim-keyed stats tables, k1/b). Reproducing it by hand for an EXPLAIN — the only way to measure what
 // the candidate CTE costs at corpus scale — is error-prone and drifts the
 // moment the builder changes. RenderKeywordArmSQL renders the REAL builders'
 // output for a given KB + query, for BOTH scoring modes, without executing

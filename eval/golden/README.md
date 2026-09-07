@@ -1112,7 +1112,7 @@ eval/fixtures/bm25-scale/seed-scale-kb.sh --drop
 `cmd/eval --print-keyword-sql "<query>" --kb-id <uuid> [--top-k 50]` is
 usable on its own: it prints one JSON document carrying the keyword arm's
 SQL for **both** scoring modes with the KB's real resolved settings (chunk
-table, text-search config, simple arm, tiered boost, k1/b, dim-keyed stats
+table, text-search config, simple arm, k1/b, dim-keyed stats
 tables), including a placeholder-free `executable_sql` per mode. It runs no
 search and needs no golden set.
 

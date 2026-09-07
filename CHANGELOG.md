@@ -274,9 +274,8 @@ one-step rollback** (`cmd/migrate` is up-only).
   flag is rejected with an explanation. Both inputs must put the same
   configuration on side A — the command warns but cannot verify it.
 
-- **Migration 0073 required** (RAG Wave 6) — now the highest migration in
-  this Unreleased block. One column, idempotent, **no backfill**: adds
-  `agent_decisions.policy_rule smallint` (nullable — which
+- **Migration 0073 required** (RAG Wave 6). One column, idempotent, **no
+  backfill**: adds `agent_decisions.policy_rule smallint` (nullable — which
   `chat_orchestrator_policy` rule, if any, pinned a turn's orchestrator).
   Compose applies it via the `migrate` one-shot service; **Kubernetes does
   not** — run `/app/migrate` out of the release image before
@@ -381,19 +380,23 @@ one-step rollback** (`cmd/migrate` is up-only).
 - **CI's integration-test package list gained `internal/adminagentmetrics`.**
   The step enumerates packages explicitly rather than globbing, and the
   new `policy_rule` integration test needed adding.
-- **Migration 0074 required; `bm25_tiered_boost_enabled` is removed.** The
+- **Migration 0074 required** (RAG Wave 7) — now the highest migration in
+  this Unreleased block; **`bm25_tiered_boost_enabled` is removed.** The
   key, its per-KB registry row, the keyword-arm CASE it rendered, the
   `--bm25-tiered-boost` eval override and the admin checkbox are all gone.
   0074 deletes any stored row from `site_configs` and `kb_site_configs`; its
-  Down is deliberately a no-op. The key shipped default **off** and was
-  deprecated in 2026-09 after the Wave-2 A/B measured it net negative on
-  every route under `ts_rank` and neutral under `bm25` (the grid in
-  `docs/retrieval.md` §"Keyword arm scoring: ts_rank vs BM25 (2026-09)",
-  cells B and D — the Wave-3 retune record ran with the boost off
-  throughout and is not the retiring measurement), so a deployment that left it
-  unset sees no ranking change at all — a deployment that had it **on**
-  loses that boost and its ranking changes on upgrade. As with every
-  migration-carrying release there is no one-step rollback.
+  Down is deliberately a no-op. Compose applies it via the `migrate`
+  one-shot service; **Kubernetes does not** — run `/app/migrate` out of the
+  release image before `kubectl apply`, per `docs/runbooks/release.md`.
+  The key shipped default **off** and was deprecated in 2026-09 after the
+  Wave-2 A/B measured it net negative on every route under `ts_rank` and
+  neutral under `bm25` (the grid in `docs/retrieval.md` §"Keyword arm
+  scoring: ts_rank vs BM25 (2026-09)", cells B and D — the Wave-3 retune
+  record ran with the boost off throughout and is not the retiring
+  measurement), so a deployment that left it unset sees no ranking change
+  at all — a deployment that had it **on** loses that boost and its ranking
+  changes on upgrade. As with every migration-carrying release there is no
+  one-step rollback.
 - **`cmd/eval --print-keyword-sql`'s JSON lost its `tiered_boost` field.**
   A documented diagnostic output shape change; the rendered statements also
   no longer carry the `* <boost>` factor (it was the constant `1` with the

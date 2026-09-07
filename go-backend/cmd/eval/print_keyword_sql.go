@@ -23,8 +23,8 @@ import (
 // Added for the Wave-3 Task-7 scale check: measuring what the keyword-arm
 // candidate CTE costs at 100k chunks means running EXPLAIN (ANALYZE, BUFFERS)
 // on the statement production actually sends, and that statement is assembled
-// from a dozen resolved inputs (KB language, simple arm, tiered boost, dim-
-// keyed stats tables, k1/b). Retyping it by hand would measure a statement
+// from a dozen resolved inputs (KB language, simple arm, dim-keyed stats
+// tables, k1/b). Retyping it by hand would measure a statement
 // that drifts from the builders the next time they change.
 
 // validateKeywordSQLFlags checks the flag combination for the diagnostic
