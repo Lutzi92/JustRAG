@@ -218,6 +218,14 @@ var snapshotConfigKeys = []string{
 	// entry), but it can truncate an answer, so a snapshotted eval run has
 	// to record the limit that was in force.
 	"chat_answer_degenerate_run_limit",
+	// Wave-6 Task 5 orchestrator policy table (W6-R6). Global-only, no
+	// registry entry, but it decides which orchestrator a turn takes — an
+	// eval run whose snapshot omitted it would silently measure the ladder
+	// while production ran the policy. The sibling key
+	// chat_answer_tools_by_route is deliberately NOT snapshotted: the
+	// in-app eval never runs the answer-tools loop, so snapshotting it
+	// would record a value nothing in that path reads.
+	"chat_orchestrator_policy",
 	// Retrieval/orchestrator registry keys (kb-workflow-editor Phase 2
 	// Task 3; cross-checked by snapshot_registry_test.go like the blocks
 	// above).

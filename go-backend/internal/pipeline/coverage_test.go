@@ -344,6 +344,14 @@ var ignoredKeys = map[string]string{
 	"chat_conflict_model":             "conflict / supersession pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_tabular_router_*",
 	"chat_conflict_max_chunks":        "conflict / supersession pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_tabular_router_*",
 	"chat_conflict_timeout_ms":        "conflict / supersession pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_tabular_router_*",
+
+	// Routing policy documents (Wave-6, W6-R6 / W6-R8): these two keys do not
+	// switch a stage on or off — they decide WHICH orchestrator a turn takes
+	// and WHICH tools the answer node may call. Neither is a node; drawing
+	// them would mean drawing the dispatch ladder itself, a separate design
+	// decision.
+	"chat_orchestrator_policy":   "routing policy table, not a pipeline stage (W6-R6)",
+	"chat_answer_tools_by_route": "per-route tool allowlist, a property of the answer node (W6-R8)",
 }
 
 // TestEveryPipelineFlagIsDrawnOrIgnored is the anti-drift guard (spec §4.4).

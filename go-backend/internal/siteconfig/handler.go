@@ -162,6 +162,15 @@ func (h *Handler) UpdateSiteConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Reject a batch whose value for a validated GLOBAL-ONLY JSON key does not
+	// parse (W6-R14). Unconditional — unlike the conflict check above, each
+	// value is self-contained and needs no view of the existing table, so a
+	// store read error can never let a broken policy through.
+	if err := ValidateGlobalValues(kvs); err != nil {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, httputil.SanitizeError(err))
+		return
+	}
+
 	rows, err := h.store.UpdateSiteConfigsBatch(ctx, kvs)
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "Failed to update site config")

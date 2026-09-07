@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/justrag/go-backend/internal/ai"
+	"github.com/justrag/go-backend/internal/chatpolicy"
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/siteconfig"
 )
@@ -1906,4 +1907,46 @@ func ChatConflictMaxChunks(ctx context.Context, reader SiteConfigReader) int {
 // "chat_conflict_timeout_ms".
 func ChatConflictTimeoutMs(ctx context.Context, reader SiteConfigReader) int {
 	return readInt(ctx, reader, "chat_conflict_timeout_ms", defaultConflictTimeoutMs, 1000, 30000)
+}
+
+// ---------------------------------------------------------------------------
+// Routing policy documents (Wave 6, W6-R6 / W6-R8 / W6-R13 / W6-R14)
+// ---------------------------------------------------------------------------
+
+// ChatOrchestratorPolicy reads chat_orchestrator_policy (global-only, default
+// empty = the flag ladder is unchanged). The value is an ordered rule table;
+// see internal/chatpolicy for the shape and the force/prefer semantics.
+//
+// An unparseable stored value is treated as empty and logged. The save path
+// validates through the same parser (siteconfig.ValidateGlobalValues), so this
+// is defence in depth for a value written straight into the table — never a
+// silent route change: falling back to "no policy" leaves the ladder exactly
+// where it was.
+func ChatOrchestratorPolicy(ctx context.Context, reader SiteConfigReader) chatpolicy.OrchestratorPolicy {
+	raw := readString(ctx, reader, "chat_orchestrator_policy")
+	p, err := chatpolicy.ParseOrchestratorPolicy(raw)
+	if err != nil {
+		logctx.From(ctx).Warn("chat_orchestrator_policy: unparseable value, ignoring the policy",
+			"error", err)
+		return nil
+	}
+	return p
+}
+
+// ChatAnswerToolsByRoute reads chat_answer_tools_by_route (global-only,
+// default empty = the answer-tool catalog is not route-filtered). See
+// internal/chatpolicy for the route precedence.
+//
+// Same fail-soft contract as ChatOrchestratorPolicy, and the direction of the
+// fallback matters here too: an empty map imposes NO restriction, so a broken
+// document can never silently strip the catalog down to nothing.
+func ChatAnswerToolsByRoute(ctx context.Context, reader SiteConfigReader) chatpolicy.AnswerToolsByRoute {
+	raw := readString(ctx, reader, "chat_answer_tools_by_route")
+	m, err := chatpolicy.ParseAnswerToolsByRoute(raw)
+	if err != nil {
+		logctx.From(ctx).Warn("chat_answer_tools_by_route: unparseable value, ignoring the tool map",
+			"error", err)
+		return nil
+	}
+	return m
 }
