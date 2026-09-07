@@ -1922,6 +1922,24 @@ export const translations = {
     evalScoreTitle: { de: 'Recall / MRR (%)', en: 'Recall / MRR (%)' },
     evalTeamLastRun: { de: 'letzter Lauf', en: 'last run' },
 
+    // orchestrator policy + tools by route (Wave 6)
+    chatOrchestratorPolicy: { de: 'Orchestrator-Policy', en: 'Orchestrator policy' },
+    chatOrchestratorPolicyHelp: {
+        de: 'Geordnete Regeln {when, orchestrator, mode} als JSON-Liste. force wählt den Orchestrator auch bei ausgeschaltetem Flag, prefer nur bei eingeschaltetem. Leer = unveränderte Rangfolge.',
+        en: 'Ordered rules {when, orchestrator, mode} as a JSON list. force selects the orchestrator even with its flag off, prefer only when it is on. Empty = the ladder is unchanged.',
+    },
+    chatOrchestratorPolicyPreview: { de: 'Policy-Vorschau', en: 'Policy preview' },
+    chatOrchestratorPolicyNoRule: { de: '— (Rangfolge)', en: '— (ladder)' },
+    chatAnswerToolsByRoute: { de: 'Antwort-Tools pro Route', en: 'Answer tools by route' },
+    chatAnswerToolsByRouteHelp: {
+        de: 'JSON-Objekt Route → erlaubte Antwort-Werkzeuge. Fehlende Route = keine Einschränkung; leere Liste = keine Werkzeuge auf dieser Route. Schneidet sich mit der Agenten-Allowlist (restriktivste gewinnt).',
+        en: 'JSON object mapping route → allowed answer tools. A missing route means no restriction; an empty list means no tools on that route. Intersects with the agent allowlist (the most restrictive wins).',
+    },
+    policyPreviewLookup: { de: 'lookup', en: 'lookup' },
+    policyPreviewEnumeration: { de: 'enumeration', en: 'enumeration' },
+    policyPreviewComplex: { de: 'complex_reasoning', en: 'complex_reasoning' },
+    policyPreviewGlobalSynthesis: { de: 'complex_reasoning + global_synthesis', en: 'complex_reasoning + global_synthesis' },
+
     // ---------------------------------------------------------------
     // T0-3 Tiered BM25 term-match boost
     // ---------------------------------------------------------------
