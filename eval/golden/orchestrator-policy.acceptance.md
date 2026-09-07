@@ -349,7 +349,8 @@ inapplicable to the dev stack used for this measurement.
 - `--policy` overlay confirmed present in every forced cell's log
   (`"eval: applying chat site_config overlays for this run"`), and each
   forced cell's `questions_routed_by_a_rule` matches (89/89, or 86/89 for
-  `plan_execute-1` accounting for its 2 errors + 1 fallback).
+  `plan_execute-1` accounting for its 2 errors + 1 fallback, or 87/89 for
+  `plan_execute-2` accounting for its own 2 errors with no fallback).
 - No `site_configs` row was written by this measurement (every override is a
   `cmd/eval` flag); confirmed by re-reading the same read-only SQL after the
   run and getting the identical result.
