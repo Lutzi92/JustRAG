@@ -44,6 +44,12 @@ const trajectoryChunkPreview = 5
 //	conflict_surfacing — W5-R7: the conflict / supersession pass finished;
 //	                   Reason carries the outcome (found | none | timeout |
 //	                   error) and Findings the conflict count
+//	answer_tools_route — W6-R8: chat_answer_tools_by_route matched this
+//	                   turn's route. Decision is the route key that resolved
+//	                   (a query type, or "global_synthesis"), Findings the
+//	                   post-filter catalog size (Reason explains a 0). Not
+//	                   emitted when the document has no entry for this turn's
+//	                   route, so its absence means "no route restriction".
 type TrajectoryEvent struct {
 	Stage    string         `json:"stage"`
 	Step     int            `json:"step,omitempty"`

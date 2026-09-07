@@ -88,11 +88,21 @@ func TestRestrictToolsForRoute_ComposesWithAgentRestriction(t *testing.T) {
 		t.Fatalf("expected the intersection catalog [kb_search], got %#v", out)
 	}
 
-	if _, err := disp.Dispatch(context.Background(), "kb1", "calculator", json.RawMessage(`{}`)); err == nil {
-		t.Fatalf("expected calculator to be refused (not in the route allowlist)")
+	// calculator is refused by the OUTER route wrapper (it's not in the
+	// route allowlist) before the call ever reaches the inner agent
+	// wrapper — asserting the exact error text is load-bearing here: the
+	// inner NewMCPDispatcher(nil) also errors on every call (unknown
+	// tool, nil registry), so a bare "err == nil" check would pass even
+	// if the route guard were removed entirely and the call fell straight
+	// through to the inner dispatcher.
+	if _, err := disp.Dispatch(context.Background(), "kb1", "calculator", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "not allowed for this route") {
+		t.Fatalf("expected calculator refused by the route wrapper (not allowed for this route), got %v", err)
 	}
-	if _, err := disp.Dispatch(context.Background(), "kb1", "chunk_read", json.RawMessage(`{}`)); err == nil {
-		t.Fatalf("expected chunk_read to be refused (not in the agent allowlist)")
+	// chunk_read passes the route wrapper (it IS in the route allowlist)
+	// and is refused one layer down by the inner RestrictedDispatcher's
+	// own agent allowlist — a different, equally specific error text.
+	if _, err := disp.Dispatch(context.Background(), "kb1", "chunk_read", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "not allowed for this agent") {
+		t.Fatalf("expected chunk_read refused by the inner agent wrapper (not allowed for this agent), got %v", err)
 	}
 }
 

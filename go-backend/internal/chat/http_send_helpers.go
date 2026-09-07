@@ -690,11 +690,19 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		byRoute := ChatAnswerToolsByRoute(ctx, h.siteConfigReader)
 		if allow, ok := byRoute.Allowlist(p.queryType, p.isGlobalSynthesis); ok {
 			answerToolsDispatcher, catalog = restrictToolsForRoute(h.toolDispatcher, catalog, allow, true)
-			emitTrajectory(func(pl map[string]any) { writeSSE(ctx, w, pl) }, TrajectoryEvent{
+			routeEvt := TrajectoryEvent{
 				Stage:    "answer_tools_route",
 				Decision: answerToolsRouteDecision(byRoute, p.queryType, p.isGlobalSynthesis),
 				Findings: len(catalog),
-			}, nil)
+			}
+			if len(catalog) == 0 {
+				// Findings is omitempty, so a bare {stage, decision} frame
+				// cannot be told apart from "no findings key" — this is the
+				// one case an operator debugging a route restriction most
+				// wants to see (the loop is about to be skipped entirely).
+				routeEvt.Reason = "catalog empty; tool loop skipped"
+			}
+			emitTrajectory(func(pl map[string]any) { writeSSE(ctx, w, pl) }, routeEvt, nil)
 		}
 	}
 	// A route restriction can filter the catalog down to empty; running the
