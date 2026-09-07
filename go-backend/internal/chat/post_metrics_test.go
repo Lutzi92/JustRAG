@@ -2,11 +2,15 @@ package chat
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/justrag/go-backend/internal/agentteams"
+	"github.com/justrag/go-backend/internal/vector"
 )
 
 // fakeDecisionRecorder captures the arguments of the last Record call so
@@ -328,5 +332,72 @@ func TestRecordStandardPathDecision_OutcomeFromEvents(t *testing.T) {
 	snap := waitForRecord(t, fake)
 	if snap.outcome != "abstained" {
 		t.Errorf("outcome = %q, want abstained", snap.outcome)
+	}
+}
+
+// TestSendMessage_NonStreamingStandardPath_RecordsAgentDecision is the fix
+// for the Task-2 review's blocking finding: the three
+// TestRecordStandardPathDecision_* cases above call the extracted helper
+// directly, so they stay green even if writeJSONResponse's call to it were
+// deleted — they verify the helper's logic, not that the non-streaming
+// handler actually invokes it. This test drives the real handler,
+// SendMessage with stream=false (the query param SendMessage reads —
+// no "?stream=true" on the request), all the way to writeJSONResponse,
+// adapting the wiringConfigResolver/wiringSearcher-style harness from
+// comparison_team_wiring_test.go (an httptest server standing in for the
+// AI provider, and a Searcher fake keyed by query string) plus
+// fakeDecisionRecorder. Mutation-tested: temporarily removing the
+// recordStandardPathDecision call at http_send_helpers.go's writeJSONResponse
+// makes this test fail with "decisionRecorder.Record was never called";
+// restored before committing — see the fix-round-1 report.
+func TestSendMessage_NonStreamingStandardPath_RecordsAgentDecision(t *testing.T) {
+	aiResolver := wiringConfigResolver(t)
+
+	searcher := wiringSearcher{byQuery: map[string][]vector.SearchChunk{
+		"hello": {{ID: "c1", FileID: "f1", FileName: "f1.md", Content: "some content"}},
+	}}
+
+	fake := &fakeDecisionRecorder{}
+	// citation_validation_enabled defaults to true and factcheck_in_chat
+	// defaults to true too (FactcheckEnabled's zero-reader fallback is
+	// true, but a real reader with the key absent also reads true) — both
+	// would fire extra LLM calls against the same canned httptest
+	// response, which is harmless for THIS test's assertion but is exactly
+	// the "aren't faked" complexity the original report cited, so turn
+	// them off explicitly the way wiringSiteConfig does for factcheck.
+	cfg := &fakeSiteConfigReader{values: map[string]*string{
+		"citation_validation_enabled": strPtr("false"),
+		"factcheck_in_chat":           strPtr("false"),
+	}}
+
+	h := NewHandler(newMockStore(), aiResolver, searcher,
+		WithSiteConfigReader(cfg),
+		WithDecisionRecorder(fake),
+	)
+
+	body := `{"message": "hello"}`
+	r := httptest.NewRequest(http.MethodPost, "/api/kb/kb1/chat", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r = injectUser(r, "user1")
+	r.SetPathValue("id", "kb1")
+	// No "?stream=true" — SendMessage reads streamMode from the query
+	// string, not the body, so this is what routes to writeJSONResponse.
+
+	w := httptest.NewRecorder()
+	h.SendMessage(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from the non-streaming standard path, got %d: %s", w.Code, w.Body.String())
+	}
+
+	snap := waitForRecord(t, fake)
+	if snap.mode != "crag" {
+		t.Errorf("mode = %q, want crag (standard path, no agentMode override)", snap.mode)
+	}
+	if snap.outcome != "answered" {
+		t.Errorf("outcome = %q, want answered (no orchestrator trajectory on the standard path)", snap.outcome)
+	}
+	if snap.teamID != nil || snap.agentID != nil {
+		t.Errorf("teamID/agentID = %v/%v, want nil/nil", snap.teamID, snap.agentID)
 	}
 }

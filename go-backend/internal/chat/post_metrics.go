@@ -75,8 +75,11 @@ func agentOutcomeFromEvents(events []map[string]any) (outcome string, hops int, 
 // event (agentOutcomeFromEvents) and defaults to "answered" when that
 // event never fired, and latency is measured from p.chatStartTime.
 // events is normally p.bufferedTrajectory — passed explicitly so callers
-// stay in control of which buffer they hand in (the non-streaming path
-// only ever populates one for the transform-follow-up branch).
+// stay in control of which buffer they hand in. On the non-streaming path
+// it is always nil today: both the CRAG branch (http_send.go's
+// collectEmit) and the transform-follow-up branch (handleTransformFollowUp)
+// only populate the buffer `if streamMode`, so outcome falls back to
+// "answered" on every non-streaming standard-path turn regardless of mode.
 func (h *Handler) recordStandardPathDecision(ctx context.Context, p chatResponseParams, events []map[string]any) {
 	outcome, _, _ := agentOutcomeFromEvents(events)
 	if outcome == "" {
