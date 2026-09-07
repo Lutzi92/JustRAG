@@ -515,6 +515,11 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var fullResponse, fullReasoning string
+		// sentLen is how much of fullResponse has reached the client. The
+		// guard needs it: the trip chunk is buffered but not forwarded, so
+		// the client is missing whatever legitimate text preceded the run
+		// inside it, and chat.GuardStreamedAnswer streams that back.
+		sentLen := 0
 		var streamErr error
 		for event := range events {
 			if event.Done {
@@ -531,6 +536,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 				writeSSE(w, map[string]string{"content": event.Content})
+				sentLen = len(fullResponse)
 			}
 			if event.Reasoning != "" {
 				fullReasoning += event.Reasoning
@@ -538,7 +544,12 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if tracker.Tripped() {
-			guarded, appended := chat.GuardAnswerText(ctx, h.siteConfig, fullResponse, lang, "api_v1")
+			// The FORCED guard, on the tracker's own limit: the completion
+			// was cancelled, so the answer is truncated whether or not a
+			// second detection over the buffer re-finds the run, and the
+			// limit that fired is the one to strip against (no second
+			// site_config read).
+			guarded, appended := chat.GuardStreamedAnswer(fullResponse, fullResponse[:sentLen], tracker.Limit(), lang, "api_v1")
 			fullResponse = guarded
 			if appended != "" {
 				writeSSE(w, map[string]string{"content": appended})

@@ -24,6 +24,7 @@ const LABELS = {
             answer: 'Antwort',
             refine_start: 'Faktencheck läuft',
             refine_complete: 'Antwort korrigiert',
+            answer_degenerate_guard: 'Antwort gekürzt',
             teamRoute: 'Team-Router',
             teamSynthesis: 'Synthese',
         } as Record<string, string>,
@@ -32,6 +33,9 @@ const LABELS = {
             plural: 'Schritte',
             findings: 'neue Treffer',
             chunks: 'Belege',
+            runLength: 'Wiederholung',
+            limit: 'Grenze',
+            runes: 'Zeichen',
         },
     },
     en: {
@@ -44,6 +48,7 @@ const LABELS = {
             answer: 'Answer',
             refine_start: 'Fact-checking',
             refine_complete: 'Answer corrected',
+            answer_degenerate_guard: 'Answer truncated',
             teamRoute: 'Team-Router',
             teamSynthesis: 'Synthesis',
         } as Record<string, string>,
@@ -52,6 +57,9 @@ const LABELS = {
             plural: 'steps',
             findings: 'new chunks',
             chunks: 'sources',
+            runLength: 'repetition',
+            limit: 'limit',
+            runes: 'characters',
         },
     },
 };
@@ -72,6 +80,8 @@ function stageIcon(stage: string) {
         case 'refine_start':
         case 'refine_complete':
             return <Edit3 size={14} aria-hidden="true" />;
+        case 'answer_degenerate_guard':
+            return <AlertTriangle size={14} aria-hidden="true" />;
         default:
             return <ArrowRight size={14} aria-hidden="true" />;
     }
@@ -140,6 +150,18 @@ function renderRow(
                 )}
                 {evt.reason && (
                     <span style={{ display: 'block', opacity: 0.6, marginTop: '0.15rem' }}>{evt.reason}</span>
+                )}
+                {/* The degenerate-answer guard (W5-R4) carries the two numbers that
+                    explain the truncation: how long the repeated run had grown and
+                    the limit it crossed. Without them the row only says the answer
+                    was cut, which is exactly the question a reader then asks. */}
+                {evt.stage === 'answer_degenerate_guard' && (typeof evt.run_length === 'number' || typeof evt.limit === 'number') && (
+                    <span data-testid="degenerate-guard-detail" style={{ display: 'block', opacity: 0.6, marginTop: '0.15rem', fontSize: '0.75rem' }}>
+                        {[
+                            typeof evt.run_length === 'number' ? `${labels.events.runLength}: ${evt.run_length} ${labels.events.runes}` : null,
+                            typeof evt.limit === 'number' ? `${labels.events.limit}: ${evt.limit}` : null,
+                        ].filter(Boolean).join(' · ')}
+                    </span>
                 )}
                 {evt.stage === 'refine_complete' && evt.diff && evt.diff.length > 0 && (
                     <span

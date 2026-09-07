@@ -115,6 +115,77 @@ func TestUnmarshalStrict_GarbageStillErrors(t *testing.T) {
 	}
 }
 
+// The three judge samples that failed on the Wave-5 Task-10 runs (t10-pw-2
+// G06, t10-mr1 G05, t10-mr2 G09) all reported the plain "response is not
+// valid JSON", which by construction rules OUT truncation (that is a distinct
+// error, see above) and a code fence (that parses). What is left is a
+// brace-balanced object the decoder still rejects — and the recorded
+// 120-byte preview could not say which of the candidate shapes it was,
+// because the offending byte sits past the preview and the decoder's own
+// error was dropped. It is carried now, so one occurrence is enough to name
+// the cause.
+func TestUnmarshalStrict_BalancedButInvalidNamesTheCause(t *testing.T) {
+	var v struct {
+		Winner string `json:"winner"`
+	}
+	cases := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "raw newline inside a string",
+			payload: "```json\n{\"winner\":\"A\",\"reasoning\":\"Zeile eins\nZeile zwei\"}\n```",
+			want:    "invalid character '\\n' in string literal",
+		},
+		{
+			name:    "unescaped quote inside a string",
+			payload: "```json\n{\"winner\":\"A\",\"reasoning\":\"Die Frage nach der \"Auflösung\" ist offen\"}\n```",
+			want:    "after object key:value pair",
+		},
+		{
+			name:    "trailing comma",
+			payload: "```json\n{\"winner\":\"A\",\"reasoning\":\"ok\",}\n```",
+			want:    "looking for beginning of object key string",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := unmarshalStrict(tc.payload, &v)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if strings.Contains(err.Error(), "truncated JSON") {
+				t.Errorf("reported as truncation, which it is not: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error does not name the cause %q: %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// The preview must reach far enough into a realistic judge reply to show the
+// offending character, and must cut on runes: a byte cut through German prose
+// renders as an escape exactly where the reader is looking.
+func TestUnmarshalStrict_PreviewIsWideAndRuneSafe(t *testing.T) {
+	var v struct {
+		Winner string `json:"winner"`
+	}
+	// The invalid byte sits ~200 runes in — past the old 120-BYTE preview.
+	payload := "```json\n{\"winner\":\"A\",\"reasoning\":\"" + strings.Repeat("ä", 200) + "\nzweite Zeile\"}\n```"
+	err := unmarshalStrict(payload, &v)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "in string literal") {
+		t.Errorf("error does not name the cause: %v", err)
+	}
+	if !strings.Contains(err.Error(), strings.Repeat("ä", 100)) {
+		t.Errorf("preview is too narrow or byte-cut mid-rune: %v", err)
+	}
+}
+
 func TestUnmarshalStrict_ProseWrappedObjectStillParses(t *testing.T) {
 	// Pre-existing tolerance (the RAGAS sampler relies on it): an object
 	// embedded in prose must keep parsing.

@@ -133,6 +133,12 @@ export interface TrajectoryEvent {
     // Set whenever the refine pass actually changed the answer. Use this to
     // rebuild message content — the word-level diff is newline-lossy.
     refined_text?: string;
+    // answer_degenerate_guard: the configured run limit
+    // (chat_answer_degenerate_run_limit) and the length the repeated run had
+    // reached when the guard cut the completion, both in runes. Omitted by the
+    // backend when zero, so both are optional.
+    limit?: number;
+    run_length?: number;
 }
 
 export interface TableColumn {

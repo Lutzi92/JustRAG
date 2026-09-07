@@ -2,6 +2,7 @@ package openaicompat
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/justrag/go-backend/internal/chat"
@@ -110,5 +111,60 @@ func TestBuildCitations(t *testing.T) {
 func TestBuildCitationsWithoutSources(t *testing.T) {
 	if got := buildCitations(nil); got != nil {
 		t.Errorf("buildCitations(nil) = %+v, want nil", got)
+	}
+}
+
+// The annotations ride the CLOSING chunk and their indices are rune offsets
+// into the answer — which the client only ever holds as the concatenation of
+// the content deltas it received. A degenerate-run trip is the one place the
+// two can come apart: the chunk that trips the guard is buffered (so its
+// text is in the guarded answer the annotations are computed over) but not
+// forwarded, so any citation in the text preceding the run inside that chunk
+// would land at a different offset in the client's copy.
+//
+// This drives the streaming loop's exact guard sequence over the production
+// helpers — chat.RunTracker + chat.GuardStreamedAnswer + buildAnnotations —
+// and checks every annotation against the CLIENT's assembled text.
+func TestAnnotationOffsetsMatchClientTextAfterADegenerateTrip(t *testing.T) {
+	// The trip chunk opens with real text carrying a citation and only then
+	// collapses into the run: that prefix is what the client used to miss.
+	chunks := []string{
+		"Größe laut Handbuch [1]. ",
+		"Nachtrag [2]: " + strings.Repeat("_", 600) + " weiterer Text",
+	}
+
+	tracker := chat.NewRunTracker(400)
+	var buffered, client strings.Builder
+	for _, c := range chunks {
+		buffered.WriteString(c)
+		if tracker.Feed(c) {
+			break
+		}
+		client.WriteString(c)
+	}
+	if !tracker.Tripped() {
+		t.Fatal("the guard did not trip — the fixture no longer exercises the trip path")
+	}
+
+	guarded, appended := chat.GuardStreamedAnswer(
+		buffered.String(), client.String(), tracker.Limit(), "de", "openai_compat")
+	client.WriteString(appended)
+
+	if client.String() != guarded {
+		t.Fatalf("client text != annotated text:\n client = %q\nguarded = %q", client.String(), guarded)
+	}
+	annotations := buildAnnotations(guarded, testSources())
+	if len(annotations) != 2 {
+		t.Fatalf("annotations: got %d, want 2 (one per marker)", len(annotations))
+	}
+	clientRunes := []rune(client.String())
+	for _, a := range annotations {
+		idx := a.FileCitation.Index
+		if idx < 0 || idx >= len(clientRunes) {
+			t.Fatalf("annotation index %d is outside the client's %d-rune text", idx, len(clientRunes))
+		}
+		if clientRunes[idx] != '[' {
+			t.Errorf("client text at annotation index %d is %q, want '[' — the offsets drifted", idx, clientRunes[idx])
+		}
 	}
 }

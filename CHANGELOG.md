@@ -246,9 +246,15 @@ one-step rollback** (`cmd/migrate` is up-only).
   halves of the queried pair; on pairs the detector did see, 12 of 37
   opportunities hit with direction correct 12/12 and zero invented pairs), and
   a 0.124 false-positive flag rate on the PPM set against a ≤ 0.10 bar. **That
-  0.124 is an upper bound** — two of the thirteen entries paired a file with
-  itself, a detector defect fixed afterwards — so it must be re-measured before
-  it is used either way. Cost when on: one extra fast-tier call and
+  0.124 was measured BEFORE the detector fix in this release and is an upper
+  bound** — two of the thirteen entries paired a file with itself (duplicate
+  chunks of one document), and a third reported the same pair twice with
+  opposite `newer` directions; both defects are fixed in this release (Wave-5
+  final fix wave: a conflict whose two sources resolve to the same file id is
+  dropped, and mirrored duplicates collapse into one entry whose direction is
+  re-decided from the file dates). Re-measuring the fixed detector is a
+  roadmap item; until that happens the rate must not be used in either
+  direction. Cost when on: one extra fast-tier call and
   +631 / +268 ms per turn; retrieval is untouched (identical to three decimals
   on/off). Record: `eval/golden/cert-recency-de.acceptance.md`.
 - **Reminder: `internal/eval.Judge` is shared with the RAGAS sampler.** Any

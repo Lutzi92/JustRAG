@@ -17,6 +17,16 @@ import (
 // retrieval set is over-reporting rather than finding more.
 const maxDetectedConflicts = 10
 
+// maxConflictClaimRunes caps one claim. The claim is model-authored free
+// text that is persisted on the message and rendered into the ANSWER system
+// prompt; it is meant to be one sentence naming what the two sources
+// disagree about. Capping it here — at the only place the value is created —
+// means every downstream consumer (the JSONB blob, the SSE frame, the FE
+// badge, the prompt addendum) inherits the bound instead of having to
+// re-derive it. The addendum applies the same 300 to text that reaches it by
+// any other route.
+const maxConflictClaimRunes = 300
+
 // conflictKinds / conflictNewer are the closed value sets the parser
 // accepts. Anything else drops the row rather than reaching the prompt: a
 // downstream addendum built from an unrecognised kind would render a
@@ -80,6 +90,21 @@ var sourceConflictSpec = &StructuredSpec{
 	}`),
 }
 
+// truncateRunesTo cuts s to at most max runes. Unlike truncateForLog it
+// counts RUNES and appends nothing: the result is stored and rendered, not
+// logged, and a byte cut would split a German multi-byte rune.
+func truncateRunesTo(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		// len(s) <= max in bytes implies <= max runes.
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max])
+}
+
 // DetectSourceConflicts asks a fast-tier LLM which of the supplied numbered
 // sources disagree with each other, and which of a disagreeing pair is the
 // newer document (W5-R7).
@@ -138,7 +163,7 @@ func DetectSourceConflicts(ctx context.Context, resolver *ConfigResolver, kbID, 
 		if len(out.Conflicts) >= maxDetectedConflicts {
 			break
 		}
-		c.Claim = strings.TrimSpace(c.Claim)
+		c.Claim = truncateRunesTo(strings.TrimSpace(c.Claim), maxConflictClaimRunes)
 		if c.Claim == "" {
 			continue
 		}

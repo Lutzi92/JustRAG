@@ -76,7 +76,15 @@ type RunTracker struct {
 	// chunk boundary. Without it every chunk would restart the count and a
 	// run split across chunks — which is how a provider always delivers
 	// one — would never trip.
-	carry []rune
+	//
+	// A fixed RING, not a slice: this is the hot loop of the guard (it sees
+	// every rune of every streamed answer), and the append-then-reslice form
+	// it replaces reallocated the backing array roughly once per four runes,
+	// i.e. thousands of allocations per answer for a window that never grows.
+	// carry[i%maxPatternRunes] holds the i-th rune fed; `seen` is the total
+	// count, so the rune p positions back is carry[(seen-p)%maxPatternRunes].
+	carry [maxPatternRunes]rune
+	seen  int
 
 	// cur[p] is the length of the maximal region ending at the last rune
 	// seen that is periodic with period p. cur[0] is unused.
@@ -109,14 +117,17 @@ func (t *RunTracker) Feed(chunk string) bool {
 		return t.tripped
 	}
 	for _, r := range chunk {
+		// have is how much history the ring actually holds — below
+		// maxPatternRunes only at the very start of a stream.
+		have := min(t.seen, maxPatternRunes)
 		for p := 1; p <= maxPatternRunes; p++ {
-			if len(t.carry) >= p && t.carry[len(t.carry)-p] == r {
+			if have >= p && t.carry[(t.seen-p)%maxPatternRunes] == r {
 				t.cur[p]++
 			} else {
 				// The region restarts. Its first p runes are the pattern
 				// itself, so a fresh region is p runes long (or fewer while
 				// the stream is still shorter than p).
-				t.cur[p] = min(len(t.carry)+1, p)
+				t.cur[p] = min(have+1, p)
 			}
 			if t.cur[p] > t.limit {
 				t.tripped = true
@@ -124,10 +135,8 @@ func (t *RunTracker) Feed(chunk string) bool {
 				return true
 			}
 		}
-		t.carry = append(t.carry, r)
-		if len(t.carry) > maxPatternRunes {
-			t.carry = t.carry[len(t.carry)-maxPatternRunes:]
-		}
+		t.carry[t.seen%maxPatternRunes] = r
+		t.seen++
 	}
 	return false
 }
@@ -243,6 +252,57 @@ func applyDegenerateGuard(text string, limit int, lang string, force bool) (guar
 	return clean + appended, appended
 }
 
+// GuardStreamedAnswer applies the guard to a streaming answer whose
+// RunTracker TRIPPED. It is the counterpart of GuardAnswerText for the
+// surfaces that stream (public API, OpenAI-compat, and the two web paths via
+// answerGuard.finish), and it differs from it in three ways that all follow
+// from the trip having already happened:
+//
+//   - the strip is FORCED. The completion was cancelled, so the answer is
+//     truncated whether or not the buffered tail still holds a region
+//     StripDegenerateRun re-detects; the notice and the metric are what tell
+//     the reader (and the operator) that it was cut, and they must not
+//     depend on a second, independent detection agreeing with the tracker.
+//   - the limit is the TRACKER's limit, passed in. Re-reading
+//     chat_answer_degenerate_run_limit here would be a second site_config
+//     read per tripped turn, and — if an operator changed the key mid-stream
+//     — a different limit than the one that actually fired.
+//   - it returns the content the client still has to be SENT, not just the
+//     notice. The chunk that trips the guard is buffered but not forwarded,
+//     so any legitimate text preceding the run INSIDE that chunk is part of
+//     the persisted (and, on OpenAI-compat, annotated) answer while the
+//     client never saw it — every citation marker in that prefix would then
+//     sit at a different offset in the client's assembled text than in the
+//     annotations computed over the guarded answer. Forwarding the missing
+//     prefix ahead of the notice closes that gap.
+//
+// sent is the text already forwarded to the client, which is always a prefix
+// of buffered.
+func GuardStreamedAnswer(buffered, sent string, limit int, lang, surface string) (guarded, appended string) {
+	guarded, appended = applyDegenerateGuard(buffered, limit, lang, true)
+	observability.RecordAnswerDegenerate(surface)
+	if pending := pendingClientText(guarded, appended, sent); pending != "" {
+		appended = pending + appended
+	}
+	return guarded, appended
+}
+
+// pendingClientText returns the part of the guarded answer's BODY (the
+// guarded text minus the appended notice) that the client has not been sent.
+//
+// It is empty in the common case, where the run began in an earlier chunk
+// and the body therefore ends before everything the client already holds.
+// The HasPrefix check is what keeps this honest: the client's text can only
+// be extended, never rewritten, so a body that does not start with what was
+// already sent yields nothing rather than a bogus splice.
+func pendingClientText(guarded, appended, sent string) string {
+	body := strings.TrimSuffix(guarded, appended)
+	if len(body) <= len(sent) || !strings.HasPrefix(body, sent) {
+		return ""
+	}
+	return body[len(sent):]
+}
+
 // GuardAnswerText applies the degenerate-run guard to a FINISHED answer —
 // the post-hoc form used by the non-streaming surfaces (public API,
 // OpenAI-compat, KB-as-MCP-server, the web JSON branch), which have no
@@ -271,6 +331,11 @@ type answerGuard struct {
 	cancel  context.CancelFunc
 	lang    string
 	surface string
+	// sentBytes is how much of the buffered answer has been forwarded to
+	// the client. Everything forwarded is a prefix of the buffer, so this
+	// one counter is enough for finish to work out what the client is still
+	// missing (see pendingClientText).
+	sentBytes int
 }
 
 func newAnswerGuard(limit int, lang, surface string, cancel context.CancelFunc) *answerGuard {
@@ -295,12 +360,15 @@ func (g *answerGuard) feed(content string) bool {
 }
 
 // finish produces the answer to persist: the buffered text with the
-// degenerate run removed and the notice appended, plus the suffix to stream
-// as the final content frame. Records the metric.
+// degenerate run removed and the notice appended, plus the content to stream
+// as the final frame — the trip chunk's un-forwarded pre-run prefix (usually
+// empty) followed by the notice. Records the metric.
 func (g *answerGuard) finish(text string) (guarded, appended string) {
-	guarded, appended = applyDegenerateGuard(text, g.tracker.Limit(), g.lang, true)
-	observability.RecordAnswerDegenerate(g.surface)
-	return guarded, appended
+	sent := text
+	if g.sentBytes < len(sent) {
+		sent = sent[:g.sentBytes]
+	}
+	return GuardStreamedAnswer(text, sent, g.tracker.Limit(), g.lang, g.surface)
 }
 
 // recordTrajectory emits the answer_degenerate_guard trajectory event so the
@@ -334,6 +402,7 @@ func newGuardedEmit(
 			responseBuf.WriteString(e.Content)
 			if !g.feed(e.Content) {
 				sendContent(e.Content)
+				g.sentBytes += len(e.Content)
 			}
 		}
 		if e.Reasoning != "" {

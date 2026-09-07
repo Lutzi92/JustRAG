@@ -642,6 +642,12 @@ func (h *Handler) streamResponse(
 	// Accumulate the answer so the closing chunk can carry citation
 	// annotations, whose indices are offsets into the finished text.
 	var fullResponse strings.Builder
+	// sentLen is how much of the buffered answer has reached the client. The
+	// annotations in the closing chunk are offsets into the guarded text, so
+	// the client's assembled text has to carry every rune of it — including
+	// the pre-run prefix of the trip chunk, which is buffered but not
+	// forwarded and which chat.GuardStreamedAnswer streams back below.
+	sentLen := 0
 	var streamErr error
 	for event := range events {
 		if event.Done {
@@ -669,12 +675,17 @@ func (h *Handler) streamResponse(
 					},
 				},
 			})
+			sentLen = fullResponse.Len()
 		}
 	}
 
 	answerText := fullResponse.String()
 	if tracker.Tripped() {
-		guarded, appended := chat.GuardAnswerText(ctx, h.siteConfig, answerText, "en", "openai_compat")
+		// The FORCED guard, on the tracker's own limit: the completion was
+		// cancelled, so the answer is truncated whether or not a second
+		// detection over the buffer re-finds the run, and the limit that
+		// fired is the one to strip against (no second site_config read).
+		guarded, appended := chat.GuardStreamedAnswer(answerText, answerText[:sentLen], tracker.Limit(), "en", "openai_compat")
 		answerText = guarded
 		if appended != "" {
 			writeSSEChunk(w, completionChunk{

@@ -128,6 +128,26 @@ func TestRunTracker_ProseDoesNotTrip(t *testing.T) {
 	}
 }
 
+// The tracker sees every rune of every streamed answer, so its boundary
+// carry must not allocate per rune. The append-then-reslice form it started
+// with reallocated the backing array about once per four runes — thousands
+// of allocations for a window of four. A fixed ring makes Feed allocation-
+// free, which is what this pins: the only allocation left in the measured
+// body is the tracker itself.
+func TestRunTracker_FeedDoesNotAllocatePerRune(t *testing.T) {
+	// Prose, so the tracker never trips and actually walks every rune.
+	text := strings.Repeat("Die Beitragshöhe richtet sich nach dem Einkommen. ", 2000) // ~100k runes
+	got := testing.AllocsPerRun(3, func() {
+		tr := NewRunTracker(400)
+		if tr.Feed(text) {
+			t.Fatal("prose tripped the guard")
+		}
+	})
+	if got > 2 {
+		t.Errorf("Feed over ~100k runes allocated %.0f times, want <= 2 (the tracker itself)", got)
+	}
+}
+
 func TestRunTracker_LimitZeroDisables(t *testing.T) {
 	tr := NewRunTracker(0)
 	if tr.Feed(strings.Repeat("_", 100000)) {
@@ -338,6 +358,79 @@ func TestGuardedEmit_ReasoningIsNotGuarded(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// GuardStreamedAnswer (the tripped-stream form used by every streaming
+// surface)
+// ---------------------------------------------------------------------------
+
+// The tracker tripped, so the answer IS truncated — the notice and the
+// metric must not depend on a second, independent detection agreeing. This
+// is the case the API streams got wrong by calling the post-hoc
+// GuardAnswerText: a buffer whose degenerate region does not survive into
+// the text passed to the strip (here: nothing periodic at all) came out
+// unannotated, and the reader saw an answer that simply stopped.
+func TestGuardStreamedAnswer_ForcesTheNoticeOnATrippedStream(t *testing.T) {
+	const buffered = "Die Antwort bricht hier ab."
+	guarded, appended := GuardStreamedAnswer(buffered, buffered, 400, "de", "api_v1")
+	if appended == "" {
+		t.Fatal("appended = \"\" — a tripped stream must always get the notice")
+	}
+	if !strings.HasSuffix(guarded, DegenerateNotice("de")) {
+		t.Errorf("guarded = %q, want the notice appended", guarded)
+	}
+	if !strings.HasPrefix(guarded, buffered) {
+		t.Errorf("guarded = %q, want the buffered text kept", guarded)
+	}
+}
+
+// The chunk that trips the guard is buffered but not forwarded, so any
+// legitimate text ahead of the run inside it is in the persisted answer and
+// not in the client's. It is streamed BEFORE the notice, which is what keeps
+// the client's assembled text identical to the guarded answer — and every
+// citation offset computed over the latter valid in the former.
+func TestGuardStreamedAnswer_ForwardsTheUnsentPreRunPrefix(t *testing.T) {
+	sent := "Erster Teil [1]. "
+	tripChunk := "Zweiter Teil [2]: " + strings.Repeat("_", 500)
+	guarded, appended := GuardStreamedAnswer(sent+tripChunk, sent, 400, "de", "api_v1")
+
+	if !strings.HasPrefix(appended, "Zweiter Teil [2]:") {
+		t.Errorf("appended = %q, want it to lead with the un-forwarded pre-run prefix", appended)
+	}
+	if client := sent + appended; client != guarded {
+		t.Errorf("client text != guarded answer:\n client = %q\nguarded = %q", client, guarded)
+	}
+}
+
+// The usual case: the run started in an earlier chunk, so the client already
+// holds MORE text than the guarded answer and there is nothing to forward
+// but the notice. Nothing may be spliced back in.
+func TestGuardStreamedAnswer_RunStartedEarlierForwardsOnlyTheNotice(t *testing.T) {
+	sent := "Antwort. " + strings.Repeat("_", 400)
+	guarded, appended := GuardStreamedAnswer(sent+strings.Repeat("_", 50), sent, 400, "de", "web")
+	if appended != "\n\n"+DegenerateNotice("de") {
+		t.Errorf("appended = %q, want only the notice", appended)
+	}
+	if strings.Contains(guarded, "____") {
+		t.Errorf("guarded = %q, want the run stripped", guarded)
+	}
+}
+
+// GuardStreamedAnswer must use the limit it is GIVEN (the tracker's), never
+// a fresh site_config read: with an operator changing the key mid-stream the
+// two can differ, and the value that fired is the only one whose strip
+// matches what the client was cut off at.
+func TestGuardStreamedAnswer_UsesTheSuppliedLimit(t *testing.T) {
+	buffered := "Antwort. " + strings.Repeat("-", 120)
+	guarded, _ := GuardStreamedAnswer(buffered, buffered, 100, "de", "web")
+	if strings.Contains(guarded, "----") {
+		t.Errorf("guarded = %q, want the 120-rune run stripped at limit 100", guarded)
+	}
+	guarded2, _ := GuardStreamedAnswer(buffered, buffered, 400, "de", "web")
+	if !strings.Contains(guarded2, strings.Repeat("-", 120)) {
+		t.Errorf("guarded = %q, want the run KEPT at limit 400", guarded2)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // GuardAnswerText (the post-hoc, non-streaming surfaces)
 // ---------------------------------------------------------------------------
 
@@ -414,28 +507,58 @@ func (s *stubSiteConfigReader) GetSiteConfigValue(_ context.Context, key string)
 
 // The point of the guard is not that the client stops rendering — it is that
 // the PROVIDER stops generating (and billing). This drives the real
-// ai.StreamCompletionWithHistory against a server that would happily stream
-// 2000 chunks of `_`, and asserts the server was cut off. Remove the
-// cancelGen() in answerGuard.feed and the server runs to completion (or
-// wedges on a full socket, which the deadline below turns into a failure
-// rather than a hang).
+// ai.StreamCompletionWithHistory against a server that streams `_` forever,
+// and asserts the server was cut off BY THE CANCELLATION.
+//
+// The assertion is deliberately not "the server wrote fewer than N frames":
+// that was load-flaky (it failed 5/5 under -cpu=1), because a handler that
+// gets the CPU first can push a bounded body into the socket buffers before
+// the reader ever runs, and then the counter proves nothing. So the body is
+// unbounded — the handler cannot reach an end on its own — and it records
+// WHY it stopped. Only "the request context was cancelled" passes; a write
+// error with a live context (a deadline, a broken pipe for another reason)
+// and the iteration cap are separate, named failures. Remove the cancelGen()
+// in answerGuard.feed and the handler runs until the cap, which fails.
 func TestDegenerateGuard_CancelStopsTheProviderStream(t *testing.T) {
-	const totalChunks = 2000
+	// A hard bound so a regression fails instead of hanging the suite. It is
+	// far beyond any socket buffer (~18 MB of frames), so it is never reached
+	// while the guard works.
+	const maxFrames = 200000
 	var written atomic.Int64
+	var exit atomic.Value // "ctx" | "write_error" | "frame_cap"
 	handlerDone := make(chan struct{})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(handlerDone)
-		// Bound a write that blocks on a socket nobody drains any more, so
-		// a regression fails the test instead of hanging the suite.
-		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(3 * time.Second))
+		// Bound a write that blocks on a socket nobody drains any more, so a
+		// regression fails the test instead of hanging the suite. Generous:
+		// the cancel is what should end this, not the deadline.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(10 * time.Second))
 		w.Header().Set("Content-Type", "text/event-stream")
 		frame := `data: {"choices":[{"delta":{"content":"` + strings.Repeat("_", 50) + `"}}]}` + "\n\n"
-		for i := 0; i < totalChunks; i++ {
+		// cancelled reports whether the request context is done, waiting a
+		// moment first: a blocked write fails the instant the client drops
+		// the connection, which can be marginally before the server's own
+		// read loop cancels the request context.
+		cancelled := func() bool {
+			select {
+			case <-r.Context().Done():
+				return true
+			case <-time.After(2 * time.Second):
+				return false
+			}
+		}
+		for i := 0; i < maxFrames; i++ {
 			if r.Context().Err() != nil {
+				exit.Store("ctx")
 				return
 			}
 			if _, err := io.WriteString(w, frame); err != nil {
+				if cancelled() {
+					exit.Store("ctx")
+				} else {
+					exit.Store("write_error")
+				}
 				return
 			}
 			if f, ok := w.(http.Flusher); ok {
@@ -443,6 +566,7 @@ func TestDegenerateGuard_CancelStopsTheProviderStream(t *testing.T) {
 			}
 			written.Add(1)
 		}
+		exit.Store("frame_cap")
 		_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	}))
 	defer srv.Close()
@@ -461,14 +585,17 @@ func TestDegenerateGuard_CancelStopsTheProviderStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start stream: %v", err)
 	}
+	// Keep draining the channel after the trip instead of abandoning it. An
+	// abandoned stream stalls the socket, the handler's write eventually
+	// fails, and the connection teardown cancels the request context — which
+	// looks exactly like the guard's own cancel and makes the assertion below
+	// pass with the cancel removed. Draining leaves cancellation as the only
+	// thing that can stop the provider.
 	for e := range events {
 		if e.Done {
 			break
 		}
 		emit(ai.StreamEvent{Content: e.Content, Reasoning: e.Reasoning})
-		if guard.tripped() {
-			break
-		}
 	}
 
 	if !guard.tripped() {
@@ -476,11 +603,12 @@ func TestDegenerateGuard_CancelStopsTheProviderStream(t *testing.T) {
 	}
 	select {
 	case <-handlerDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the provider handler never returned — the guard did not cancel the completion")
 	}
-	if n := written.Load(); n >= totalChunks {
-		t.Errorf("provider wrote all %d chunks; the guard's cancel did not stop generation", n)
+	if got, _ := exit.Load().(string); got != "ctx" {
+		t.Errorf("the provider handler stopped because %q after %d frames; want %q — only a cancelled request context proves the guard stopped generation",
+			got, written.Load(), "ctx")
 	}
 	if n := strings.Count(strings.Join(sent, ""), "_"); n > 450 {
 		t.Errorf("the client was sent %d run runes, want the stream to stop at the trip", n)

@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/justrag/go-backend/internal/ai"
@@ -164,7 +165,7 @@ func detectConflictsWith(ctx context.Context, detect detectSourceConflictsFn, re
 		return nil
 	}
 
-	report := buildConflictReport(findings, picked)
+	report := buildConflictReport(findings, picked, dates)
 	if report == nil {
 		observability.RecordConflictSurfacing("none")
 		emitConflictTrajectory(in.Emit, "none", 0)
@@ -177,45 +178,180 @@ func detectConflictsWith(ctx context.Context, detect detectSourceConflictsFn, re
 	return report
 }
 
-// buildConflictReport resolves the model's source numbers back to file
-// names. A row whose index is not in the picked set is dropped a second
-// time here: ai.DetectSourceConflicts validated against the same numbering,
-// so this is a belt-and-braces guard that also gives the name lookup a
-// total function.
-func buildConflictReport(f *ai.ConflictFindings, picked []ChatSource) *ConflictReport {
+// buildConflictReport resolves the model's source numbers back to files and
+// drops the two shapes the Wave-5 Task-5 measurement showed the detector
+// producing, neither of which is a conflict between two documents:
+//
+//   - a pair whose two sources are DUPLICATE CHUNKS OF ONE FILE (2 of the 13
+//     PPM entries, Q018 and Q096). ai.DetectSourceConflicts rejects equal
+//     source INDICES, and detectConflictsWith requires ≥ 2 distinct files in
+//     the whole set — but neither check sees a self-pair inside a set that
+//     also carries a third file, which is the common case. A document
+//     disagreeing with itself is a different finding (a badly written
+//     document) and is not what the badge claims, so it is dropped;
+//   - MIRRORED duplicates: the same disagreement reported once as (a, b) and
+//     once as (b, a) (cert-n01). They are one conflict. The first survives;
+//     when the two directions disagree about which side is newer, the kept
+//     entry's direction is re-decided from the DATES (later date wins) and
+//     falls back to "unknown" when the dates cannot settle it — keeping
+//     whichever order the model emitted first is how the one wrong-direction
+//     entry in the measurement got its direction.
+//
+// A row whose index is not in the picked set is dropped a second time here:
+// ai.DetectSourceConflicts validated against the same numbering, so that
+// part is a belt-and-braces guard which also gives the lookup a total
+// function.
+func buildConflictReport(f *ai.ConflictFindings, picked []ChatSource, dates map[string]FileDates) *ConflictReport {
 	if f == nil || len(f.Conflicts) == 0 {
 		return nil
 	}
-	byIdx := make(map[int]string, len(picked))
+	byIdx := make(map[int]ChatSource, len(picked))
 	for _, s := range picked {
-		byIdx[s.Index] = s.FileName
+		byIdx[s.Index] = s
 	}
-	out := &ConflictReport{}
+	var kept []pendingConflict
+	seen := make(map[conflictPairKey]int, len(f.Conflicts))
 	for _, c := range f.Conflicts {
-		nameA, okA := byIdx[c.SourceA]
-		nameB, okB := byIdx[c.SourceB]
+		a, okA := byIdx[c.SourceA]
+		b, okB := byIdx[c.SourceB]
 		if !okA || !okB {
 			continue
 		}
-		out.Conflicts = append(out.Conflicts, MessageConflict{
-			Claim:   c.Claim,
-			SourceA: c.SourceA,
-			SourceB: c.SourceB,
-			Kind:    c.Kind,
-			Newer:   c.Newer,
-			FileA:   nameA,
-			FileB:   nameB,
-		})
+		if a.FileID != "" && a.FileID == b.FileID {
+			continue
+		}
+		entry := pendingConflict{
+			conflict: MessageConflict{
+				Claim:   c.Claim,
+				SourceA: c.SourceA,
+				SourceB: c.SourceB,
+				Kind:    c.Kind,
+				Newer:   c.Newer,
+				FileA:   a.FileName,
+				FileB:   b.FileName,
+			},
+			a: a,
+			b: b,
+		}
+		key := newConflictPairKey(a, b, c.Kind)
+		if pos, dup := seen[key]; dup {
+			reconcileConflictNewer(&kept[pos], entry, dates)
+			continue
+		}
+		seen[key] = len(kept)
+		kept = append(kept, entry)
 	}
-	if len(out.Conflicts) == 0 {
+	if len(kept) == 0 {
 		return nil
+	}
+	out := &ConflictReport{Conflicts: make([]MessageConflict, len(kept))}
+	for i, k := range kept {
+		out.Conflicts[i] = k.conflict
 	}
 	return out
 }
 
+// pendingConflict is one surviving entry together with the two sources it
+// was resolved from, so a later mirrored duplicate can be reconciled against
+// the same files without a second index lookup.
+type pendingConflict struct {
+	conflict MessageConflict
+	a, b     ChatSource
+}
+
+// conflictPairKey identifies one disagreement independently of the order the
+// model named its two sides in.
+type conflictPairKey struct{ lo, hi, kind string }
+
+// newConflictPairKey keys on the FILES, not the chunk indices: two chunks of
+// file X against two chunks of file Y are one disagreement between X and Y,
+// however the model paired them up. A source without a file id (which the
+// same-file check above cannot judge either) falls back to its citation
+// index, so ID-less sources never collapse into each other.
+func newConflictPairKey(a, b ChatSource, kind string) conflictPairKey {
+	ka, kb := conflictPartyKey(a), conflictPartyKey(b)
+	if ka > kb {
+		ka, kb = kb, ka
+	}
+	return conflictPairKey{lo: ka, hi: kb, kind: kind}
+}
+
+func conflictPartyKey(s ChatSource) string {
+	if s.FileID != "" {
+		return "f:" + s.FileID
+	}
+	return "i:" + strconv.Itoa(s.Index)
+}
+
+// reconcileConflictNewer folds a mirrored duplicate into the entry already
+// kept. Agreement (including two "unknown"s) changes nothing. Disagreement
+// is settled by the file dates — the same date lines the detector was shown
+// — and, when those cannot settle it, by demoting the direction to
+// "unknown": the two reports cancel out, and asserting a supersession
+// direction the evidence does not support is the one outcome worse than
+// asserting none.
+func reconcileConflictNewer(kept *pendingConflict, dup pendingConflict, dates map[string]FileDates) {
+	if conflictNewerFile(*kept) == conflictNewerFile(dup) {
+		return
+	}
+	da := effectiveConflictDate(dates[kept.a.FileID])
+	db := effectiveConflictDate(dates[kept.b.FileID])
+	switch {
+	case kept.a.FileID == "" || kept.b.FileID == "" || da.IsZero() || db.IsZero() || da.Equal(db):
+		kept.conflict.Newer = "unknown"
+	case da.After(db):
+		kept.conflict.Newer = "a"
+	default:
+		kept.conflict.Newer = "b"
+	}
+}
+
+// conflictNewerFile names the file an entry claims is the newer one, or ""
+// for "unknown" — the comparable form of Newer, which is relative to each
+// entry's own a/b ordering and therefore not comparable across a mirror.
+func conflictNewerFile(c pendingConflict) string {
+	switch c.conflict.Newer {
+	case "a":
+		return c.a.FileID
+	case "b":
+		return c.b.FileID
+	default:
+		return ""
+	}
+}
+
+// effectiveConflictDate is the date the detector was shown for a file:
+// published_at where the origin carries one, else the ingest timestamp.
+// Mirrors renderConflictDateLine so the reconciliation cannot disagree with
+// the date line the model read.
+func effectiveConflictDate(d FileDates) time.Time {
+	if d.PublishedAt != nil {
+		return *d.PublishedAt
+	}
+	return d.CreatedAt
+}
+
+// conflictClaimCap / conflictNameCap bound one rendered claim and one
+// rendered file name inside the answer-prompt addendum. A claim is a
+// sentence about a disagreement and a name is a file name; anything longer
+// is either a model that misunderstood the task or a document trying to
+// spend the answer prompt's budget on itself.
+const (
+	conflictClaimCap = 300
+	conflictNameCap  = 200
+)
+
 // ConflictAddendumText renders the report as the answer-prompt block, or ""
 // when there is nothing to say. Nil-safe so call sites can append
 // unconditionally.
+//
+// Claim is model-authored and FileA/FileB come from file names a user (or an
+// external source) chose, and all three land verbatim in the ANSWER system
+// prompt. They are therefore sanitised exactly like the long-context
+// findings block (sanitizeFindingText): newlines collapse so an entry cannot
+// forge a second bullet or a line outside the list, an instruction-shaped
+// string is replaced by the filtered marker instead of being rendered, and
+// each is capped so one entry cannot crowd out the rest of the prompt.
 func ConflictAddendumText(lang string, report *ConflictReport) string {
 	if report == nil || len(report.Conflicts) == 0 {
 		return ""
@@ -223,16 +359,23 @@ func ConflictAddendumText(lang string, report *ConflictReport) string {
 	entries := make([]prompts.ConflictAddendumEntry, len(report.Conflicts))
 	for i, c := range report.Conflicts {
 		entries[i] = prompts.ConflictAddendumEntry{
-			Claim: c.Claim,
+			Claim: sanitizeConflictText(c.Claim, conflictClaimCap, lang),
 			IdxA:  c.SourceA,
 			IdxB:  c.SourceB,
-			FileA: c.FileA,
-			FileB: c.FileB,
+			FileA: sanitizeConflictText(c.FileA, conflictNameCap, lang),
+			FileB: sanitizeConflictText(c.FileB, conflictNameCap, lang),
 			Kind:  c.Kind,
 			Newer: c.Newer,
 		}
 	}
 	return prompts.ConflictAddendum(lang, entries)
+}
+
+// sanitizeConflictText applies the findings-block sanitiser and then the
+// per-field rune cap. Truncation runs LAST so a filtered marker is never cut
+// in half, and so the cap bounds what actually reaches the prompt.
+func sanitizeConflictText(s string, maxRunes int, lang string) string {
+	return truncateRunes(sanitizeFindingText(s, lang), maxRunes)
 }
 
 // distinctFileCount counts distinct non-empty file ids.

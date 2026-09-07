@@ -567,15 +567,21 @@ document given different `[N]` numbers. `ai.DetectSourceConflicts` rejects a
 self-pair only when the two *indices* are equal, and the ≥ 2-distinct-files
 gate is applied to the whole set, not per entry, so "one document contradicts
 itself" survives validation. That is exactly the category error the gate's
-own comment says it exists to prevent. Worth a follow-up fix (drop entries
-whose two sources share a `FileID`) before this flag is ever recommended.
+own comment says it exists to prevent. **Fixed in this release** (Wave-5
+final fix wave): `buildConflictReport` now drops any entry whose two sources
+resolve to the same `FileID`, and collapses mirrored `(a, b)` / `(b, a)`
+entries into one whose `newer` is re-decided from the file dates.
 
 **Therefore the 0.124 PPM flag rate above is an UPPER BOUND, not a point
-estimate.** 2 of the 13 entries were same-file pairs, removed by the
-final-wave detector fix, so the corrected rate can only be lower — never
-higher. It is reported as measured because that is what this run produced,
-but **the rate must be re-measured on the fixed detector before it is used
-to recommend, or to keep rejecting, this flag.** The decision below stands
+estimate.** It was measured BEFORE the detector fix. 2 of the 13 entries were
+same-file pairs and one CERT entry (`cert-n01`) was a mirrored duplicate with
+the wrong direction; both are **fixed in this release** (Wave-5 final fix
+wave — same-file pairs dropped, mirrored entries collapsed with the direction
+re-decided from the file dates), so the corrected rate can only be lower —
+never higher. It is reported as measured because that is what this run
+produced, but **the rate must be re-measured on the fixed detector before it
+is used to recommend, or to keep rejecting, this flag**; that re-measurement
+is a roadmap item, not part of this release. The decision below stands
 on its own regardless: 0.124 exceeds the 0.10 bar, and the CERT criterion
 fails independently of it.
 

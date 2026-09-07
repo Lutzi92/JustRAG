@@ -1173,10 +1173,23 @@ diagnostic, not decision inputs, per W5-R1 (only coverage and the pairwise
 judge feed the decision).
 
 **Judge instrument faults, pre-existing and independent of mode (post hoc):**
-mr1 G05 and mr2 G09 each hit a faithfulness judge call whose response was a
-```` ```json ````-fenced object the strict decoder rejects (`judge_errors`;
-that question's faithfulness is simply absent from its run's mean, computed
-over the other 23 — the same failure mode documented in §1/§2). The
+mr1 G05 and mr2 G09 each hit a faithfulness judge call whose response the
+strict decoder rejected (`judge_errors`; that question's faithfulness is
+simply absent from its run's mean, computed over the other 23).
+
+> **Diagnosis correction (Wave-5 final fix wave).** The `` ```json `` fence
+> visible in the recorded preview is **not** the cause. The binary these runs
+> used already carried the Wave-4 balanced-object scanner, under which a
+> fenced complete object parses (verified by replay) and a truncated one
+> reports the distinct `truncated JSON` error. Both of these reported the
+> plain `response is not valid JSON`, which leaves exactly one class: a
+> **brace-balanced object the JSON decoder still rejects** — a raw newline
+> inside a string, an unescaped `"` inside a string, or a trailing comma. The
+> recorded 120-byte preview cannot say which, because the offending byte sits
+> past it and the decoder's own error was dropped. That is fixed: the error
+> now carries the decoder's message (which names the character and its
+> offset) and a 400-rune, rune-safe preview, so one further occurrence
+> identifies the shape. No parser tolerance was added on a guess. The
 recurring `context_precision: judge returned 11 booleans, expected 10 —
 truncated/padded` warning fired 8 times across the four runs (flat1
 G02/G07/G21; flat2 G02/G07/G23; mr1 G08; mr2 G22) — same pre-existing
@@ -1266,15 +1279,21 @@ finding) covered them; no question errored.
 confirmed by direct Wilson computation in `t10-analyse.py` §5.)
 
 **pw2's one skipped/errored pair:** G06's `(B,A)`-order judge call returned a
-```` ```json ````-fenced response the strict decoder rejected
+response the strict decoder rejected
 (`"note":"judge (B,A) failed: response is not valid JSON: ..."`); the pair
-contributes to neither wins/ties/losses nor the win-rate denominator — same
-pre-existing failure mode as §2's ctrl G05.
+contributes to neither wins/ties/losses nor the win-rate denominator. The
+`` ```json `` fence in the preview is not the cause — see the diagnosis
+correction under "Judge instrument faults" above; the same brace-balanced-but-
+invalid class as mr1 G05 / mr2 G09.
 
 **Control pair (flat1 vs flat2, sub-criterion 4):** win rate **0.3636**,
-inside `[0.35, 0.65]` — the judge is not systematically preferring one flat
-run over the identically-configured other, so the two cross-pair results
-below are not an artifact of judge instability. Widest Wilson interval of
+inside `[0.35, 0.65]` — but only just: the margin to the lower floor is
+**0.3636 − 0.35 = 0.014**, i.e. a single verdict's worth on an 11-decisive-pair
+denominator (one flipped decisive pair moves the rate by ~0.09). The control
+therefore passes, and it passes *narrowly*; a re-run of this design should not
+treat "control inside the band" as a comfortable result. The judge is not
+systematically preferring one flat run over the identically-configured other,
+so the two cross-pair results below are not an artifact of judge instability. Widest Wilson interval of
 the three pairs (`[0.152, 0.646]`) and the highest tie rate (0.542, 13 of 24
 pairs) — a same-configuration comparison should be close to indistinguishable,
 and it is.

@@ -33,6 +33,28 @@ func TestDetectSourceConflicts_ParsesFindings(t *testing.T) {
 	}
 }
 
+// The claim is model-authored free text that is persisted (messages.conflicts)
+// and rendered into the answer system prompt. It is a sentence about a
+// disagreement; a kilobyte of it is a model that misunderstood the task, so it
+// is capped at the source rather than at every consumer.
+func TestDetectSourceConflicts_CapsClaimLength(t *testing.T) {
+	long := strings.Repeat("ä", 900)
+	r := newTestResolverWithCompletion(t, func(_ context.Context, _ *ConfigResolver, _, _, _, _ string) (*CompletionResult, error) {
+		return &CompletionResult{Content: `{"conflicts":[{"claim":"` + long + `","source_a":1,"source_b":2,"kind":"superseded","newer":"b"}]}`}, nil
+	})
+
+	got, err := DetectSourceConflicts(context.Background(), r, "kb", "q", conflictInputs(), "de", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.Conflicts) != 1 {
+		t.Fatalf("conflicts: got %d, want 1", len(got.Conflicts))
+	}
+	if n := len([]rune(got.Conflicts[0].Claim)); n != maxConflictClaimRunes {
+		t.Errorf("claim runes: got %d, want %d", n, maxConflictClaimRunes)
+	}
+}
+
 func TestDetectSourceConflicts_EmptyList(t *testing.T) {
 	r := newTestResolverWithCompletion(t, func(_ context.Context, _ *ConfigResolver, _, _, _, _ string) (*CompletionResult, error) {
 		return &CompletionResult{Content: "```json\n{\"conflicts\": []}\n```"}, nil
