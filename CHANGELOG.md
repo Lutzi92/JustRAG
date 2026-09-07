@@ -386,9 +386,11 @@ one-step rollback** (`cmd/migrate` is up-only).
   `--bm25-tiered-boost` eval override and the admin checkbox are all gone.
   0074 deletes any stored row from `site_configs` and `kb_site_configs`; its
   Down is deliberately a no-op. The key shipped default **off** and was
-  deprecated in 2026-09 after the Wave-3 A/B measured it net negative on
-  every route under `ts_rank` and neutral under `bm25`
-  (`eval/golden/bm25-retune.acceptance.md`), so a deployment that left it
+  deprecated in 2026-09 after the Wave-2 A/B measured it net negative on
+  every route under `ts_rank` and neutral under `bm25` (the grid in
+  `docs/retrieval.md` §"Keyword arm scoring: ts_rank vs BM25 (2026-09)",
+  cells B and D — the Wave-3 retune record ran with the boost off
+  throughout and is not the retiring measurement), so a deployment that left it
   unset sees no ranking change at all — a deployment that had it **on**
   loses that boost and its ranking changes on upgrade. As with every
   migration-carrying release there is no one-step rollback.
@@ -408,8 +410,8 @@ one-step rollback** (`cmd/migrate` is up-only).
   `cmd/eval --bm25-tiered-boost`, `admineval.snapshotConfigKeys`,
   `pipeline/nodes.go`, the AdminAgentTab checkbox and its two translation
   keys. Migration 0074 deletes the stored rows. The measurement that retired
-  it stays in `eval/golden/bm25-retune.acceptance.md` and
-  `docs/retrieval.md`.
+  it stays in `docs/retrieval.md` §"Keyword arm scoring: ts_rank vs BM25
+  (2026-09)" (the Wave-2 grid, cells B and D).
 
 ### Fixes
 

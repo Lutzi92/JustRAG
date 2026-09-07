@@ -310,11 +310,11 @@ func main() {
 		overlays["rrf_weight_bm25"] = strconv.FormatFloat(*rrfWeightBM25Override, 'f', -1, 64)
 	}
 	// bm25_scoring_mode is an internal/vector site_config key (read via
-	// KBVectorConfig, not chat.SiteConfigReader),
-	// so they go through the same searchReader overlay as the rerank/RRF
-	// knobs above rather than the chat-level cragOverrideReader pattern —
-	// wrapping siteReader would have no effect on vector.SearchService's
-	// mode resolution.
+	// KBVectorConfig, not chat.SiteConfigReader), so it goes through the
+	// same searchReader overlay as the rerank/RRF knobs above rather than
+	// the chat-level cragOverrideReader pattern — wrapping siteReader
+	// would have no effect on vector.SearchService's mode resolution.
+	// recency_boost_enabled just below is the same kind of key.
 	if *bm25ModeOverride != "" {
 		overlays["bm25_scoring_mode"] = *bm25ModeOverride
 	}
