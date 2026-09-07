@@ -16,9 +16,22 @@ import (
 // fakeDecisionRecorder captures the arguments of the last Record call so
 // tests can assert recordAgentDecision forwards teamID/agentID faithfully
 // (Phase 2 AP-B4 follow-up: team/agent id telemetry).
+//
+// done signals Record's completion — Fix round 2 (Task 2, W7-R3): under the
+// full-module test run (`go test ./... -count=1`, host loaded by other
+// packages' eval/race suites) a polling-based wait timed out even though
+// Record was eventually called, because recordAgentDecision dispatches it
+// via safego.GoCtx on a DETACHED goroutine (fire-and-forget by design, see
+// recordAgentDecision's doc comment) that can sit unscheduled for longer
+// than a short poll bound under host contention. done is deliberately left
+// as its nil zero value by every existing `&fakeDecisionRecorder{}` call
+// site (no constructor needed) — waitChan lazily allocates it under the
+// same mutex Record uses, so construction stays backward compatible.
 type fakeDecisionRecorder struct {
 	mu         sync.Mutex
 	called     bool
+	closed     bool // guards double-close of done when Record fires more than once
+	done       chan struct{}
 	kbID       string
 	mode       string
 	outcome    string
@@ -45,6 +58,27 @@ func (f *fakeDecisionRecorder) Record(ctx context.Context, kbID, mode, outcome s
 	f.teamID = teamID
 	f.agentID = agentID
 	f.policyRule = policyRule
+	if f.done == nil {
+		f.done = make(chan struct{})
+	}
+	if !f.closed {
+		f.closed = true
+		close(f.done)
+	}
+}
+
+// waitChan lazily creates (if needed) and returns the channel Record closes.
+// Safe to call before OR after Record: if Record already ran and closed it,
+// the returned channel is already closed and a receive on it proceeds
+// immediately; if Record hasn't run yet, Record finds this same channel
+// (not nil, since waitChan created and stored it) and closes it in place.
+func (f *fakeDecisionRecorder) waitChan() chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.done == nil {
+		f.done = make(chan struct{})
+	}
+	return f.done
 }
 
 // recordSnapshot is a lock-free copy of the fields recorded by
@@ -87,15 +121,27 @@ func (f *fakeDecisionRecorder) snapshot() recordSnapshot {
 // goroutine, so the assertion can't happen synchronously.
 func waitForRecord(t *testing.T, f *fakeDecisionRecorder) recordSnapshot {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if snap := f.snapshot(); snap.called {
-			return snap
-		}
-		time.Sleep(time.Millisecond)
+	// Fix round 2 (Task 2, W7-R3): channel-based wait, not a bounded poll
+	// on a shared counter. recordAgentDecision's Record call runs on a
+	// detached fire-and-forget goroutine (safego.GoCtx); a tight poll loop
+	// both burns CPU that goroutine needs to get scheduled AND, under a
+	// loaded host (concurrent -race suites elsewhere in a full `go test
+	// ./...` run), can simply run out its short deadline before the
+	// goroutine is ever scheduled — that is what timed out here, not a
+	// production ordering bug (verified: recordStandardPathDecision is
+	// still called synchronously, before the response is written, on
+	// every path that reaches it). A channel select parks this goroutine
+	// without spinning and wakes immediately on close, and 15s is
+	// generous enough to survive realistic host contention without
+	// masking a genuine regression (a real "never called" bug still fails,
+	// just after a longer wait).
+	select {
+	case <-f.waitChan():
+		return f.snapshot()
+	case <-time.After(15 * time.Second):
+		t.Fatal("decisionRecorder.Record was never called")
+		return recordSnapshot{}
 	}
-	t.Fatal("decisionRecorder.Record was never called")
-	return recordSnapshot{}
 }
 
 func TestRecordAgentDecision_ForwardsTeamAndAgentID(t *testing.T) {
