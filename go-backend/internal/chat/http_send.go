@@ -1421,6 +1421,40 @@ func (h *Handler) tryDeepChat(
 		observability.RecordLowConfidence()
 	}
 
+	result := h.finishDeepChatAnswer(ctx, w, chatID, kbID, lang, body, userMsg.ID, chatCtx, fullResponse, &reasoningBuf, orch, comparisonTeamAnswered, teamSel, progressEvents, deepChatStart, policyRule)
+	// finishDeepChatAnswer calls writeSSEDone on every one of its own return
+	// paths (funlen extraction of the former tail of this function, which
+	// did the same inline) — sseFinished is a local of THIS function, so it
+	// has to be set here rather than inside the extracted method.
+	sseFinished = true
+	return result
+}
+
+// finishDeepChatAnswer persists the assembled deep-chat answer, streams the
+// terminal SSE frames (aiMessageId, structuredTable, follow-ups,
+// verification), records the trace id, and logs the agent-decision outcome
+// row. Extracted from the tail of tryDeepChat (funlen) — pure extraction, no
+// behaviour change: every log line, trajectory/SSE frame and early return is
+// identical to the inline version. Always returns true (tryDeepChat's own
+// return value on every path through this block); the caller still owns
+// sseFinished, since that variable belongs to tryDeepChat's own deferred
+// writeSSEDone guard.
+func (h *Handler) finishDeepChatAnswer(
+	ctx context.Context,
+	w http.ResponseWriter,
+	chatID, kbID, lang string,
+	body sendMessageRequest,
+	userMsgID string,
+	chatCtx *ChatContext,
+	fullResponse string,
+	reasoningBuf *strings.Builder,
+	orch Orchestrator,
+	comparisonTeamAnswered bool,
+	teamSel *teamSelection,
+	progressEvents []map[string]any,
+	deepChatStart time.Time,
+	policyRule *int,
+) bool {
 	// Save AI message.
 	var reasoningPtr *string
 	if reasoningBuf.Len() > 0 {
@@ -1435,7 +1469,7 @@ func (h *Handler) tryDeepChat(
 		Content:         fullResponse,
 		Sources:         chatCtx.Sources,
 		Reasoning:       reasoningPtr,
-		ParentMessageID: &userMsg.ID,
+		ParentMessageID: &userMsgID,
 		StructuredTable: chatCtx.StructuredTable,
 		Conflicts:       ConflictsForWire(chatCtx.Conflicts),
 		TeamID:          decTeamID,
@@ -1444,7 +1478,6 @@ func (h *Handler) tryDeepChat(
 	if err != nil {
 		writeSSE(ctx, w, map[string]string{"error": "failed to save AI message"})
 		writeSSEDone(ctx, w)
-		sseFinished = true
 		return true
 	}
 
@@ -1506,7 +1539,6 @@ func (h *Handler) tryDeepChat(
 	h.recordAgentDecision(ctx, kbID, mode, outcome, hops, rounds, time.Since(deepChatStart).Milliseconds(), decTeamID, decAgentID, policyRule)
 
 	writeSSEDone(ctx, w)
-	sseFinished = true
 	return true
 }
 
