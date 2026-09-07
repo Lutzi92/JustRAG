@@ -1504,15 +1504,21 @@ successfully). Wall time 20 m 38 s. Model stack unchanged from §1–§4
 
 **No decoder failure occurred on this run at all**, so the retry path was
 never exercised (0 retries is a true zero, not a bounded-but-untriggered
-count — every one of the 96 judge calls that reached `unmarshalStrict`
-[24 questions × 4 metrics, minus the skips below] parsed on the first
-attempt). This is consistent with, though not proof of, the hygiene-line
-prompt change (W6-R4a) working: Wave 5 §4's four judged runs on this exact
-set (before the hygiene line existed) hit **2 decoder failures in 96 judge
-calls** (mr1 G05, mr2 G09 — see §4's "Judge instrument faults" note above),
-a ≈2% baseline rate; a single 24-question run landing at 0/96 is within
-sampling noise of that baseline and is not itself a significant result —
-recorded as the observed count, not claimed as a rate change.
+count — every one of the **95** judge calls that reached `unmarshalStrict`
+(24 questions × 4 metrics = 96 attempted, minus G17's context_precision
+call, which failed in transport and never reached the decoder — see below)
+parsed on the first attempt). This is consistent with, though not proof of,
+the hygiene-line prompt change (W6-R4a) working: Wave 5 §4's four judged
+runs on this exact set (before the hygiene line existed) hit **2 decoder
+failures in 384 judge calls** (four runs × 24 questions × 4 metrics; mr1
+G05, mr2 G09 — see §4's "Judge instrument faults" note and its results
+table above), a **≈0.5%** baseline rate across all metrics — equivalently
+2 failures in the **96 faithfulness calls** specifically (both failures
+were faithfulness; ≈2% *for that one metric*, per §4's `mean faithfulness
+(n)` column showing `flat1 (24) / mr1 (23) / flat2 (24) / mr2 (23)`). This
+run's 0/95 (all metrics) or 0/24 (faithfulness alone) is within sampling
+noise of either baseline and is not itself a significant result — recorded
+as the observed count, not claimed as a rate change.
 
 The one `context_precision_n = 23` (not 24) is **not** a retry-path
 casualty: the single `judge_errors` entry this run recorded is a
@@ -1523,11 +1529,12 @@ never retries. That the transport-error path stayed a single call, with no
 `retry:context_precision` warning attached, is itself evidence the "a
 transport error must not retry" guarantee (task-4 review N2) holds in
 production, not only in the mutation-tested unit test. The 12
-`judge_warnings` entries this run recorded are all the **pre-existing**
-`context_precision`/`coverage` boolean-count tolerance warnings (W4-R1,
-e.g. `context_precision: judge returned 9 booleans, expected 10 —
-truncated/padded`) — unrelated to W6-R4, present before this task and
-unchanged by it.
+`judge_warnings` entries this run recorded are all **pre-existing**
+`context_precision` boolean-count tolerance warnings (W4-R1, e.g.
+`context_precision: judge returned 9 booleans, expected 10 —
+truncated/padded`; the same tolerance also applies to `coverage`, but none
+of the 12 are `coverage` this run) — unrelated to W6-R4, present before
+this task and unchanged by it.
 
 ### Comparison to the Wave-5 baseline
 
