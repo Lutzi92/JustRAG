@@ -154,3 +154,93 @@ func TestAnswerToolsRouteDecision(t *testing.T) {
 		t.Fatalf("non-global-synthesis turn must use the query type even when a global_synthesis key exists: got %q", got)
 	}
 }
+
+// TestResolveAnswerToolsRoute covers the Task 7 fix-round-2 controller
+// ruling: an unknown query type (queryType == "", e.g. a transform
+// follow-up that skipped classification) must be treated as FULLY
+// RESTRICTED once the document configures at least one route — never as
+// "no restriction", which would hand that turn the unrestricted catalog on
+// a KB whose every other route is locked down. An empty document leaves
+// behaviour unchanged either way.
+func TestResolveAnswerToolsRoute(t *testing.T) {
+	nonEmpty := map[string][]string{"lookup": {"kb_search"}}
+	empty := map[string][]string{}
+	var nilMap map[string][]string
+
+	cases := []struct {
+		name           string
+		byRoute        map[string][]string
+		queryType      string
+		globalSynth    bool
+		wantOk         bool
+		wantAllowLen   int
+		wantDecision   string
+		wantReasonNote bool // true: expect a non-empty Reason
+	}{
+		{
+			name:           "unknown query type + non-empty map -> fully restricted",
+			byRoute:        nonEmpty,
+			queryType:      "",
+			globalSynth:    false,
+			wantOk:         true,
+			wantAllowLen:   0,
+			wantDecision:   "unknown",
+			wantReasonNote: true,
+		},
+		{
+			name:         "unknown query type + empty map -> unchanged (no restriction)",
+			byRoute:      empty,
+			queryType:    "",
+			globalSynth:  false,
+			wantOk:       false,
+			wantAllowLen: 0,
+			wantDecision: "",
+		},
+		{
+			name:         "unknown query type + nil map -> unchanged (no restriction)",
+			byRoute:      nilMap,
+			queryType:    "",
+			globalSynth:  false,
+			wantOk:       false,
+			wantAllowLen: 0,
+			wantDecision: "",
+		},
+		{
+			name:         "known query type delegates to Allowlist as before",
+			byRoute:      nonEmpty,
+			queryType:    "lookup",
+			globalSynth:  false,
+			wantOk:       true,
+			wantAllowLen: 1,
+			wantDecision: "lookup",
+		},
+		{
+			name:         "known query type with no matching entry -> no restriction",
+			byRoute:      nonEmpty,
+			queryType:    "enumeration",
+			globalSynth:  false,
+			wantOk:       false,
+			wantAllowLen: 0,
+			wantDecision: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			allow, ok, decision, reason := resolveAnswerToolsRoute(tc.byRoute, tc.queryType, tc.globalSynth)
+			if ok != tc.wantOk {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOk)
+			}
+			if len(allow) != tc.wantAllowLen {
+				t.Fatalf("len(allow) = %d, want %d (allow=%#v)", len(allow), tc.wantAllowLen, allow)
+			}
+			if decision != tc.wantDecision {
+				t.Fatalf("decision = %q, want %q", decision, tc.wantDecision)
+			}
+			gotReason := reason != ""
+			if gotReason != tc.wantReasonNote {
+				t.Fatalf("reason non-empty = %v, want %v (reason=%q)", gotReason, tc.wantReasonNote, reason)
+			}
+		})
+	}
+}

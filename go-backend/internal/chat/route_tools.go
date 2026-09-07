@@ -60,3 +60,35 @@ func answerToolsRouteDecision(byRoute chatpolicy.AnswerToolsByRoute, queryType s
 	}
 	return queryType
 }
+
+// resolveAnswerToolsRoute resolves chat_answer_tools_by_route for one turn:
+// the allowlist, whether a restriction applies (mirrors
+// AnswerToolsByRoute.Allowlist's ok — branch on it, not on len(allow)), and
+// the answer_tools_route trajectory event's Decision/Reason.
+//
+// Folds in the controller ruling from Task 7 fix round 2: a turn whose
+// query type is unknown (queryType == "" — e.g. a transform follow-up,
+// which skips retrieval/classification entirely and so was never given a
+// route) is treated as FULLY RESTRICTED whenever the document configures
+// at least one route (len(byRoute) > 0). Rationale: an operator who
+// restricts any route intends "no free-form tool use except where I said
+// so", and an unclassified turn must not be a classification-based escape
+// hatch around that intent — without this, a message the transform
+// classifier accepts got the FULL, unrestricted catalog on a KB whose
+// every other route was locked down. An EMPTY document (no routes
+// configured at all) is unaffected: this ruling only ever narrows, and
+// only when there is something configured to narrow against.
+func resolveAnswerToolsRoute(byRoute chatpolicy.AnswerToolsByRoute, queryType string, globalSynthesis bool) (allow []string, ok bool, decision, reason string) {
+	if queryType == "" {
+		if len(byRoute) == 0 {
+			return nil, false, "", ""
+		}
+		return []string{}, true, "unknown",
+			"unknown query type (e.g. a transform follow-up, which skips retrieval/classification); treated as fully restricted because chat_answer_tools_by_route configures at least one route"
+	}
+	allow, ok = byRoute.Allowlist(queryType, globalSynthesis)
+	if !ok {
+		return allow, ok, "", ""
+	}
+	return allow, ok, answerToolsRouteDecision(byRoute, queryType, globalSynthesis), ""
+}

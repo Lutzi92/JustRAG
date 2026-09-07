@@ -1287,14 +1287,15 @@ func (h *Handler) tryDeepChat(
 			catalog = mcpDisp.AnswerToolCatalog(kbID)
 		}
 		byRoute := ChatAnswerToolsByRoute(ctx, h.siteConfigReader)
-		if allow, ok := byRoute.Allowlist(queryType, orchIn.IsGlobalSynthesis); ok {
+		if allow, ok, decision, reason := resolveAnswerToolsRoute(byRoute, queryType, orchIn.IsGlobalSynthesis); ok {
 			answerToolsDispatcher, catalog = restrictToolsForRoute(h.toolDispatcher, catalog, allow, true)
 			routeEvt := TrajectoryEvent{
 				Stage:    "answer_tools_route",
-				Decision: answerToolsRouteDecision(byRoute, queryType, orchIn.IsGlobalSynthesis),
+				Decision: decision,
+				Reason:   reason,
 				Findings: len(catalog),
 			}
-			if len(catalog) == 0 {
+			if routeEvt.Reason == "" && len(catalog) == 0 {
 				// Findings is omitempty, so a bare {stage, decision} frame
 				// cannot be told apart from "no findings key" — this is the
 				// one case an operator debugging a route restriction most
@@ -1408,6 +1409,10 @@ func (h *Handler) tryDeepChat(
 		"low_confidence", len(chatCtx.Sources) < 3,
 		"stream", true,
 		"deep_chat", true,
+		// answer_tools_path means "the tool loop actually ran" (W6-R8
+		// fix round 1), not merely "tools were configured" — a route
+		// restriction (or fix-round-2's unknown-query-type case) can
+		// leave useAnswerTools true while this is false.
 		"answer_tools_path", runAnswerTools,
 		"tool_calls", toolCallsThisTurn,
 	)
