@@ -313,7 +313,7 @@ historical reports.
 | `--crag on\|off` | Force CRAG on/off regardless of KB config (production-context mode only). |
 | `--enumeration on\|off` | Force enumeration pre-pass on/off regardless of `IsEnumerationQuery` (production-context mode only). |
 | `--longcontext on\|off` | Per-run override for `chat_longcontext_enabled`. `on` puts `OrchLongContext` at the top of the eval orchestrator ladder, so a global-synthesis set can be measured on a deployment where the flag is off. Empty = live site_config. |
-| `--longcontext-mode flat\|map_reduce` | Per-run override for `chat_longcontext_mode` — which consumer the long-context orchestrator uses. Only has an effect together with `--longcontext on` (or a live-on flag). Empty = live site_config. |
+| `--longcontext-mode flat\|map_reduce` | Per-run override for `chat_longcontext_mode` — which consumer the long-context orchestrator uses. Only has an effect together with `--longcontext on` (or a live-on flag). Empty = live site_config, whose **default is `map_reduce` since Wave 5** (W5-R1), so `--longcontext-mode flat` is now the one that overrides it. An unrecognised stored value normalises to `flat`. |
 | `--golden-query-type` | Forward each row's curated `query_type` into the retrieval pipeline instead of classifying the question. Default **off** so existing reports keep their historical shape. Does **not** affect orchestrator dispatch, which classifies independently — if a question fails to reach the intended orchestrator, rewrite the question, not the label. |
 | `--bm25-mode ts_rank\|bm25` | Per-run override for `bm25_scoring_mode`. Combine with `--refresh-bm25-stats` (recomputes the golden set's KBs' BM25 statistics first) whenever the KB hasn't had a recent refresh — without stats the arm silently falls back to `ts_rank` and the A/B measures nothing. |
 | `--bm25-tiered-boost on\|off` | Per-run override for `bm25_tiered_boost_enabled` (deprecated; see `docs/retrieval.md`). |
@@ -739,12 +739,16 @@ That is not a failure of this task — see
 ## Global-synthesis set (Wave 3 Task 4)
 
 `global-synthesis-de.jsonl` — **gitignored** (derived from the JLU
-Confluence corpus; the question text names real internal projects). 12
+Confluence corpus; the question text names real internal projects). **24**
 German questions against the `PPM-Eval` KB
 (`83262307-3a1b-49bc-bd08-3b925a868a92`, 297 files / 1815 chunks), all
-`query_type: "global_synthesis"`. It exists to measure the long-context
-orchestrator (`OrchLongContext`, ruling W3-R5) and to A/B its two
-consumers, `chat_longcontext_mode = flat` vs `map_reduce` (W3-R6).
+`query_type: "global_synthesis"` — G01–G12 from Wave 3, G13–G24 added in
+Wave 5 under ruling W5-R2 (6 `expected_points` each, every point verified
+against a source chunk fragment; curation record in the acceptance file §3).
+It exists to measure the long-context orchestrator (`OrchLongContext`, ruling
+W3-R5) and to A/B its two consumers, `chat_longcontext_mode = flat` vs
+`map_reduce` (W3-R6). The n=24 size is what made the pooled rule W5-R1
+adequately powered, and that run flipped the default to `map_reduce`.
 
 **Two gates have to fire for a question to reach that orchestrator**, and
 the set is authored so both do, deterministically where possible:
@@ -833,7 +837,13 @@ seeing the result.
 Wave 5 did both: the set grew to **24 questions** (G13–G24 authored under
 ruling W5-R2, curation record in `global-synthesis-de.acceptance.md` §3), and
 the rule was re-registered on the pooled pairs as **W5-R1** — see "Pooling two
-comparisons — `--pairwise-pool`" above for the rule text and the command.
+comparisons — `--pairwise-pool`" above for the rule text and the command. All
+four sub-criteria passed (pooled win rate 0.9444 over 36 decisive pairs,
+Wilson low 0.8186, coverage +5.03 pp against a 1.39 pp band, control 0.3636),
+so **`chat_longcontext_mode` now defaults to `map_reduce`** — record in
+`global-synthesis-de.acceptance.md` §4. Cost, reported and not a veto: 1.28×
+wall time. A run that wants the old consumer must pass `--longcontext-mode
+flat` explicitly.
 
 ## CERT recency set (Wave 2 Task 8)
 

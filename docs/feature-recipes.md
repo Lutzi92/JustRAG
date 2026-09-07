@@ -253,7 +253,7 @@ Drops chunks judged to lack DIRECT evidence (distinct from reranker topicality);
 chat_longcontext_enabled          = true         # gate; CAUTION: per-turn LLM cost up to ~30× when it fires
 chat_longcontext_max_tokens       = 100000       # 10k..500k; chat-layer truncation budget for the wide pool
 chat_longcontext_top_k            = 200          # 50..500; size of the wide chunk pool (global-only)
-chat_longcontext_mode             = flat         # flat (default) | map_reduce
+chat_longcontext_mode             = map_reduce   # map_reduce (default since Wave 5) | flat
 chat_longcontext_map_group_size   = 8            # [2,32] chunks per map-stage extraction call (map_reduce only)
 chat_longcontext_map_concurrency  = 6            # [1,32] simultaneous map calls per turn (map_reduce only)
 chat_longcontext_map_model        = <small>      # optional; falls through model_tier_fast -> KB chat model
@@ -263,9 +263,9 @@ Fires on `complex_reasoning` + the `IsGlobalSynthesisQuery` classifier (EN+DE "s
 
 **It is an orchestrator since Wave 3.** `OrchLongContext` sits directly below DRIFT and above the Supervisor in the ladder (`internal/chat/orchestrator_select.go`). Before that the route existed only as a branch inside `PrepareChatContext`, which a streaming `complex_reasoning` turn never reaches — those all go through `tryDeepChat` — so the route was configured, documented, metered and unreachable for exactly the query class it targets. DRIFT still wins when both are on: it is the more specific answer for a KB that has KG community summaries. Both consumers (`flat` and `map_reduce`) live in one shared file, `internal/chat/longcontext_consume.go`, driven by the orchestrator and by the `PrepareChatContext` branch that the non-streaming surfaces still use.
 
-**`map_reduce` (opt-in).** The token-budgeted pool is grouped in score order into `_map_group_size` chunk groups, each rendered with its ORIGINAL `[N]` headers so no index remapping is needed. One structured fast-tier call per group extracts `{source_idx, claim, quote}` findings (`_map_model`, up to `_map_concurrency` in flight, 45 s per group under a 180 s whole-stage deadline). The answer prompt then carries a fenced `FINDINGS` block plus the bare source headers — no chunk bodies. `Sources` and `FinalChunks` stay the full pool, so `[N]` citations, the citation validator and eval recall keep working; the accepted cost is that a chunk no finding surfaced cannot be cited. Fail-soft: a group whose extraction fails or panics contributes its chunks' first 600 runes as fallback findings, and an all-empty map degrades to `flat` (`outcome="map_empty"`). `map_reduce` is **skipped on abstain** in `PrepareChatContext`, like ECoRAG compression, multipass extraction and the sufficient-context gate.
+**`map_reduce` (the default since Wave 5).** The token-budgeted pool is grouped in score order into `_map_group_size` chunk groups, each rendered with its ORIGINAL `[N]` headers so no index remapping is needed. One structured fast-tier call per group extracts `{source_idx, claim, quote}` findings (`_map_model`, up to `_map_concurrency` in flight, 45 s per group under a 180 s whole-stage deadline). The answer prompt then carries a fenced `FINDINGS` block plus the bare source headers — no chunk bodies. `Sources` and `FinalChunks` stay the full pool, so `[N]` citations, the citation validator and eval recall keep working; the accepted cost is that a chunk no finding surfaced cannot be cited. Fail-soft: a group whose extraction fails or panics contributes its chunks' first 600 runes as fallback findings, and an all-empty map degrades to `flat` (`outcome="map_empty"`). `map_reduce` is **skipped on abstain** in `PrepareChatContext`, like ECoRAG compression, multipass extraction and the sufficient-context gate.
 
-**Default stays `flat`.** Task-4 judge A/B on `eval/golden/global-synthesis-de.jsonl` (12 German global-synthesis questions on the PPM-Eval KB, gitignored; full tables in `eval/golden/global-synthesis-de.acceptance.md`), three runs — flat, map_reduce, flat repeat — 12/12 questions dispatched to `longcontext`, 0 errors:
+**Wave 3 kept `flat` (superseded — see the Wave-5 decision below).** Task-4 judge A/B on `eval/golden/global-synthesis-de.jsonl` (12 German global-synthesis questions on the PPM-Eval KB, gitignored; full tables in `eval/golden/global-synthesis-de.acceptance.md`), three runs — flat, map_reduce, flat repeat — 12/12 questions dispatched to `longcontext`, 0 errors:
 
 | Run | answer relevance | faithfulness | context precision | ctx-assembly latency | wall |
 |---|---|---|---|---|---|
@@ -275,7 +275,7 @@ Fires on `complex_reasoning` + the `IsGlobalSynthesisQuery` classifier (EN+DE "s
 
 The decision rule was "adopt `map_reduce` iff mean answer relevance improves beyond the noise band AND faithfulness does not drop beyond it". Its primary arm turned out to be **unsatisfiable on this route**: the Likert answer-relevance judge sees only question + answer and scores a 3000–5000-character structured German synthesis 5/5 by construction — every question in every run. Faithfulness moved −4.8 pp, which is 0.34 × the ≈0.14 standard error of a 12-question mean (individual questions swing up to a full point between two runs of the *identical* configuration), i.e. no detectable difference rather than a regression. The one noise-exceeding effect is **context precision 0.409 → 0.600 (+19.1 pp, 3.5 × SE)** — the findings block behaving as designed — but that metric was explicitly de-scoped for this route, so it is grounds for keeping `map_reduce` available, not for making it the default. Cost, measured: 6.2× the context-assembly latency and **25 extra fast-tier calls per turn** at the default group size on a 200-chunk pool.
 
-**Re-measured in Wave 4 with instruments that can see this route — and the default still stays `flat`.** The Wave-3 rule died on its instrument, so Wave 4 first built two: the **coverage judge** (`expected_points` on each golden row → `coverage = covered / len(points)`, reported as `mean_coverage` + `coverage_n`) and the **pairwise preference judge** (`--pairwise-a A.json --pairwise-b B.json`, every pair judged in both orders, counted only when both orders agree). Then four judged runs (flat ×2, map_reduce ×2, 12 questions each, all 12 dispatched to `longcontext`, 0 errors) and three pairwise comparisons — two cross pairs plus a flat-vs-flat control. Full tables in `eval/golden/global-synthesis-de.acceptance.md` §2:
+**Re-measured in Wave 4 with instruments that can see this route — and the default still stayed `flat` then (superseded in Wave 5, below).** The Wave-3 rule died on its instrument, so Wave 4 first built two: the **coverage judge** (`expected_points` on each golden row → `coverage = covered / len(points)`, reported as `mean_coverage` + `coverage_n`) and the **pairwise preference judge** (`--pairwise-a A.json --pairwise-b B.json`, every pair judged in both orders, counted only when both orders agree). Then four judged runs (flat ×2, map_reduce ×2, 12 questions each, all 12 dispatched to `longcontext`, 0 errors) and three pairwise comparisons — two cross pairs plus a flat-vs-flat control. Full tables in `eval/golden/global-synthesis-de.acceptance.md` §2:
 
 | Pair | map_reduce win rate | Wilson low | coverage delta | verdict |
 |---|---|---|---|---|
@@ -285,11 +285,24 @@ The decision rule was "adopt `map_reduce` iff mean answer relevance improves bey
 
 Mean coverage: flat 0.5625 / 0.5458, map_reduce 0.6319 / 0.5736 — up in **both** cross pairs, against a 1.67 pp flat-vs-flat band. Pooled over both cross pairs, map_reduce takes **16 of 20 decisive pairs** (0.800, Wilson [0.584, 0.919]) with a +4.86 pp coverage delta. But W4-R7 was pre-registered **per pair**, and pw1's Wilson lower bound (0.434) misses 0.50 by one win — at 9–11 decisive pairs the bar needs 8–9 wins, so the rule is under-powered at 12 questions. Relaxing it to the pooled statistic after seeing pw1 miss is exactly the post-hoc softening the pre-registration exists to prevent. **`map_reduce` is therefore measured favourably but is not the default**; cost is **1.65×** wall time (938 s vs 570 s per 12 questions). Before the next attempt: grow the set to 24–36 questions, or re-register the rule on the pooled pairs *first*.
 
+**Wave 5 did both, and the default flipped to `map_reduce`.** W5-R1 was pre-registered on 2026-09-06 — pooled decisive cross pairs over N ≥ 24 questions, pooled map_reduce win rate ≥ 0.60 with the pooled Wilson lower bound > 0.50, pooled coverage not below flat's beyond the flat-vs-flat band, and a flat-vs-flat control inside [0.35, 0.65] — **before** the extended set was authored and before any of these runs existed. The set then grew to **24** questions (G01–G12 byte-identical, G13–G24 new, 6 `expected_points` each, every point verified against a source chunk fragment; curation record in `eval/golden/global-synthesis-de.acceptance.md` §3). Four judged runs (flat ×2, map_reduce ×2; 0 errors, 24/24 dispatched to `longcontext`, 24/24 coverage present in every run) plus the same three pairwise comparisons, pooled with `--pairwise-pool`. Record: acceptance §4.
+
+| W5-R1 sub-criterion | measured | threshold | pass |
+|---|---|---|---|
+| pooled map_reduce win rate | **0.9444** (34 of 36 decisive) | ≥ 0.60 | yes |
+| pooled Wilson lower bound | **0.8186** (interval [0.819, 0.985]) | > 0.50 | yes |
+| pooled coverage delta | **+5.03 pp** (0.5837 vs 0.5333) | ≥ −1.39 pp (the flat-vs-flat band) | yes |
+| flat-vs-flat control win rate | **0.3636** | inside [0.35, 0.65] | yes |
+
+Both cross pairs also clear a per-pair bar this time (pw1 0.952 of 21 decisive, pw2 0.933 of 15), so the pooled and per-pair reads agree — reported as supporting evidence, not as part of the rule. **Cost, reported and never a veto: 1.28× wall time** (1797 s vs 1401 s per 24 questions); the per-question map-stage cost is unchanged at 25 fast-tier calls, the lower ratio comes from one unusually fast flat run. Two diagnostics that are *not* decision inputs and are worth knowing before you enable this: **faithfulness came out marginally lower** for map_reduce (0.461 / 0.533 vs flat's 0.464 / 0.569 — the findings block is a lossy intermediate, and a claim whose quote did not survive extraction has less to be faithful to), and answer relevance is saturated at 1.000 on every run, which is why it is not used here at all. One pairwise pair (G06) and two faithfulness judge calls failed to parse (code-fenced JSON, a pre-existing judge failure mode) and were excluded per the existing convention; they do not change any of the four criteria.
+
+**The default flip, precisely.** An **unset** `chat_longcontext_mode` now reads `map_reduce`. An **unrecognised** value (a typo) still normalises to `flat` and logs a warning — the safe fallback must never be the mode that fans out a fast-tier call per chunk group. To keep the old behaviour, set the key **explicitly**: `chat_longcontext_mode = flat`. The route itself is still gated by `chat_longcontext_enabled` (default off), so a deployment that never enabled long-context sees no change at all; the flip matters the moment that gate goes on.
+
 **Before enabling `map_reduce` broadly:** 25 concurrent-capped calls per turn is bounded per turn but not per deployment — set `AI_MAX_CONCURRENT_REQUESTS` to the backend's safe ceiling first. Observed live on the A/B: two groups on one question hit the 45 s per-group budget, took the fallback path, and produced 207 findings instead of the usual 33–156 — designed degradation, no error surfaced, no evidence dropped.
 
 **Telemetry change (upgrade note).** `rag_longcontext_route_total` gained a `mode` label and now also emits `outcome="considered"` (gate on, turn eligible, classifier did not fire) and `outcome="map_empty"`. Dashboards or alerts keyed on the old label set break. An orchestrator error that falls through to `PrepareChatContext` re-evaluates the same turn and can therefore count it twice — documented in the metric's help text. Trajectory events: `longcontext_route`, `longcontext_map` (per group), `longcontext_reduce`.
 
-**Measuring it.** `cmd/eval --production-context --longcontext on|off --longcontext-mode flat|map_reduce` overlays both keys for one run without touching `site_configs`; `--golden-query-type` feeds the golden row's own `query_type` into retrieval. Do **not** decide this route on answer relevance — it saturates. Use the two Wave-4 instruments instead: curate `expected_points` on each golden row (2–6 short statements, authored from the cited source chunks, never from a model answer) so `--judge` reports `mean_coverage` + `coverage_n`, and compare two judged reports with `--pairwise-a A.json --pairwise-b B.json [--pairwise-out out.json]`. Always run the same-mode control pair as well — the tie rate on it is what tells you how much discriminative power the judge has at the margin you are measuring. See `docs/agent-orchestration.md` for the mechanism and `eval/golden/README.md` §"Global-synthesis set" for how the fixture's DE triggers are authored (the umlauts are load-bearing — the classifier is a lower-cased substring test).
+**Measuring it.** `cmd/eval --production-context --longcontext on|off --longcontext-mode flat|map_reduce` overlays both keys for one run without touching `site_configs` (since the live default is `map_reduce`, a flat run needs the explicit `--longcontext-mode flat`); `--golden-query-type` feeds the golden row's own `query_type` into retrieval. Do **not** decide this route on answer relevance — it saturates. Use the two Wave-4 instruments instead: curate `expected_points` on each golden row (2–6 short statements, authored from the cited source chunks, never from a model answer) so `--judge` reports `mean_coverage` + `coverage_n`, and compare two judged reports with `--pairwise-a A.json --pairwise-b B.json [--pairwise-out out.json]`, and pool two such comparisons with `[--pairwise-out pooled.json] --pairwise-pool a.json b.json` (**flags before the positional paths** — Go's flag parser stops at the first positional, and a trailing flag is rejected rather than silently ignored; both inputs must put the same configuration on side A, which the command warns about but cannot verify). Always run the same-mode control pair as well — the tie rate on it is what tells you how much discriminative power the judge has at the margin you are measuring. See `docs/agent-orchestration.md` for the mechanism and `eval/golden/README.md` §"Global-synthesis set" for how the fixture's DE triggers are authored (the umlauts are load-bearing — the classifier is a lower-cased substring test).
 
 ## Late chunking (Jina-style)
 
@@ -707,6 +720,90 @@ Threaded on the standard `PrepareChatContext` path and the Supervisor path (both
 **When to flip it on:** the mechanism exists because query condensation can drop a named entity or literal phrase the condensed rewrite paraphrases away (classic multi-turn lookup failure mode) — the raw lane gives BM25/vector a second, unparaphrased shot at it.
 
 **Measured, stays OFF (Wave 2, Task 4/9).** Scored against `eval/golden/multi-turn-de.jsonl` (18 conversations / 45 turns, KB `PPM-Eval`, gitignored — JLU-internal) with `--keep-raw off|on` plus a same-flag noise repeat; see `eval/golden/multi-turn-de.acceptance.md`. The `pronoun_ref` turn kind (n=12) is the one the mechanism should help — every other turn kind scored byte-identical across all three runs (no condensation on the opening turn; `answer_ref` bypasses condensation entirely). Result: `pronoun_ref` recall OFF 0.833 / ON 0.806 / OFF-repeat 0.806 (2.8 pp noise band), and MRR OFF 0.833 / ON 0.767 / OFF-repeat 0.833 — keep-raw ON regressed MRR by 6.7 pp, more than double the noise band and in the wrong direction. The decision rule (flip ON only if `on − off` on `pronoun_ref` recall exceeds the noise band, with no route losing more than the noise band) fails outright: `on − off` is **negative**, not merely below the bar. The MTRAG "rewrite ⊕ raw" gain did not replicate on this fixture. Caveats worth weighing before revisiting: single run per cell (no variance estimate beyond the one noise repeat), 12-question `pronoun_ref` bucket, and LLM-condensation non-determinism (temperature > 0 on the condenser call) as a confound alongside the flag itself. **Default stays off.**
+
+## RAGAS sample persistence
+
+```
+ragas_sampling_enabled       = true    # the pre-existing gate; persistence follows it, it has no gate of its own
+ragas_sampling_rate          = <rate>  # unchanged
+ragas_samples_retention_days = 90      # 1..3650, global-only; bounds the new table
+```
+
+Migration **0072**. Before Wave 5 the background RAGAS sampler was Prometheus-only: a bad faithfulness score could be *alerted on* but never *attributed* — there was no way to ask which turn produced it. The sampler task now writes one `ragas_samples` row per sample (message id, KB id, faithfulness / answer relevance / context precision / coverage — all nullable, so a judge that failed is recorded as a row with nil scores and its `judge_errors`, not dropped — plus `judge_model` and `sampled_at`). `coverage` is always nil on this path: the coverage judge needs `expected_points`, which a sampled production turn does not have.
+
+A store error is **logged and swallowed**, deliberately: returning it would make asynq retry the task and re-run the three *paid* judge prompts only to write the same row.
+
+**Nightly aggregate + prune** — the `ragas_daily` maintenance loop (24 h tick, first pass 10 min after worker start, gated on `WORKER_MAINTENANCE`, i.e. the same single-replica gate every other maintenance loop uses). It publishes `rag_ragas_daily_mean{kb,metric}` and `rag_ragas_daily_n{kb}` over a **fixed 24 h window** (not the tick interval, so shortening the tick does not silently change what `_daily_` means) and prunes rows older than the retention. Two orderings are load-bearing:
+
+- the gauges are reset **only after** the aggregate query succeeds — a failed query keeps the previous snapshot instead of publishing zeros;
+- the prune runs **even when the aggregate failed** — retention is a storage bound, not a reporting feature.
+
+`N` counts every sample; the means skip NULLs, so `N` is deliberately *not* their denominator. Both gauges share **one** 500-KB cardinality budget with an `overflow` bucket: its *value* is last-write-wins across every KB past the cap and is therefore meaningless — only its presence is information (per-KB numbers for those KBs are in the admin overview). Retention is read fresh on each pass, so the knob is retunable without a worker restart.
+
+**Admin surface.** The KB overview row gains `ragas: {n24h, faithfulness, answerRelevance, contextPrecision}` over the trailing 24 h; the key is **absent** (not zeroed) for a KB with no sample in the window, and individual scores are omitted rather than sent as null. The matching column is **hidden by default** and renders `5 · F 0.61 / AR 0.98 / CP 0.47`, or a bare `—` when there is nothing. `internal/ragassamples`, `internal/worker/ragas_daily.go`, `internal/adminkboverview`.
+
+**Operator note.** A `0` in the retention field would mean "delete every sample on tonight's pass", so the reader treats an out-of-range value as *invalid* and falls back to 90 rather than clamping to the nearest bound.
+
+## Conflict / supersession surfacing
+
+```
+chat_conflict_surfacing_enabled = false    # gate; default OFF, per-KB — MEASURED, and the measurement says leave it off
+chat_conflict_model             = <small>  # optional; falls through model_tier_fast -> KB chat model
+chat_conflict_max_chunks        = 12       # [2,30] sources compared in the single detector call, top-scoring first
+chat_conflict_timeout_ms        = 6000     # [1000,30000]; on expiry: no addendum, no badge, one trajectory event
+```
+
+Migration **0072** (`messages.conflicts jsonb`). After the final chunk set is assembled — on the standard `PrepareChatContext` path **and** on the Supervisor path, mirroring the tabular router's dual wiring and running right after it — one structured fast-tier call compares the turn's own numbered sources and returns pairs that contradict each other or supersede one another, deciding `newer` from each source's date line **alone** (it is explicitly told not to guess). Gates, in order: the flag; the turn is not already abstaining (there is nothing to reconcile for an answer about to decline); and — checked on the **capped** list, since the cap can collapse a two-file set into a one-file one — at least **2 distinct files**. The gate short-circuits before the date lookup, so an ineligible turn costs no query and no call.
+
+**One wire shape, everywhere.** `conflicts` is the **bare array** of `{claim, sourceA, sourceB, kind: "contradiction"|"superseded", newer: "a"|"b"|"unknown", fileA, fileB}` on the SSE frame (emitted immediately after `sources`), in the non-streaming response body, in the `messages.conflicts` column, and on a reloaded message — `message.conflicts[0].claim` reads the same live and after reload. The key is **omitted** when there is nothing to report, so "absent means nothing to report" holds on every surface and a turn without conflicts streams exactly the frames it streamed before this existed. Frontend: a badge next to the confidence chip with a details popover (claim, `fileA vs. fileB`, kind label, and `neuer: <file>` / `newer: <file>` when the direction is known).
+
+Fail-soft throughout: a timeout or an error yields no addendum and no badge, only a trajectory event. Trajectory `conflict_surfacing`; metric `rag_conflict_surfacing_total{outcome}` with `found | none | skipped_single_file | timeout | error` — `none` exists precisely so a flag rate has a denominator.
+
+**Caveat on the API surfaces.** `internal/publicapi`, `internal/openaicompat` and `internal/mcpserver` reach `PrepareChatContext` too, so with the flag on they get the **addendum** (the answer is better) but no SSE frame and no persisted blob — they never call `AddMessage`. They also thread no `FileDateLookup`, so supersession direction there is always `unknown`.
+
+**Measured in Wave 5 — both gates fail, so there is NO recommendation to enable this, not even for RSS/CERT-shaped KBs.** Record: `eval/golden/cert-recency-de.acceptance.md` § "Conflict surfacing (Wave 5)"; the rules were stated before the numbers.
+
+| Criterion | Threshold | Measured | Met |
+|---|---|---|---|
+| CERT NEU/UPDATE pairs flagged with `newer` = the UPDATE | ≥ 6 of 8 | **0 of 8** | no |
+| False-positive flag rate on the PPM set (no known conflicts) | ≤ 0.10 | **0.124** (11 of 89 turns) | no |
+
+The 0/8 is a **fixture property, not evidence against the mechanism**: for none of the eight pair questions are both halves of the queried pair in the assembled set, because MMR near-duplicate suppression keeps at most one — the same limitation the Wave-2 section of that acceptance file already recorded, and those questions were authored to measure *which half survives*. On the pairs the detector actually saw, it hit **12 of 37** opportunities with direction correct **12 of 12** and **zero invented pairs** (31 entries across two runs, every one naming a genuine NEU/UPDATE pair of the corpus). The 0.124, by contrast, is genuine evidence against enabling it broadly — all 13 entries were `contradiction`, none `superseded`, and the ones inspected are two documents about the same project agreeing in different words.
+
+**That 0.124 is an UPPER BOUND.** Two of the 13 entries paired a file **with itself** (duplicate chunks of one document) — a detector defect fixed after the measurement — so the corrected rate can only be lower. Re-measure before making any recommendation from it.
+
+Cost when on: one extra fast-tier call over ≤ 12 sources, **+631 ms / +268 ms** per turn across two runs. Retrieval is untouched — the on/off runs are identical to three decimals on recall, precision, MRR and nDCG, which is the direct demonstration that the pass is strictly post-retrieval.
+
+**Measuring it yourself:** `cmd/eval --production-context --conflict-surfacing on|off` overlays the key for one run without touching `site_configs`, and each question's report carries `conflicts` (the same bare array). `cmd/eval` wires its own `FileDateLookup`; without one every date line reads "unknown" and the supersession half of the measurement is vacuous.
+
+## Ingest prompt-injection screening
+
+```
+ingest_screening_enabled     = true    # kill switch; default ON — it is a FLAG, not a filter
+ingest_screening_window_runes = 600    # [100,5000]; sliding window, step = window/2
+```
+
+Migration **0072** (`files.injection_flag`, `files.injection_detail`). One `promptsafety.ScreenText` pass over the parsed text of every externally sourced file, **before chunking**. Screened origins: `rss`, `confluence`, `git`, `crawl`. **Not** screened: user uploads (their own content) and spreadsheets (row records are not prose — an explicit guard, not a parse-branch accident, since a spreadsheet with no tabular ingester wired falls through the same branch a PDF takes).
+
+It changes nothing about the corpus: ingestion, chunking, embedding and retrieval are byte-for-byte identical whether the screen fires or not, and answer-time spotlighting is unchanged. The kill switch is checked **before** the origin lookup, so `false` costs exactly zero store calls.
+
+**The rule set is not `LooksLikeInstruction`.** That heuristic carries an `https?://` alternative; an external document without a single URL barely exists, so inheriting it would flag essentially everything, which is informationally identical to flagging nothing. Screening therefore uses its own `screenRules` — the same alternatives **minus the URL one** — and `LooksLikeInstruction` plus its existing callers are untouched. The rule names are a **persisted contract** (they land in the column and the UI reads them): `ignore_previous`, `disregard`, `system_prompt`, `role_override`, `assistant_turn`, `chat_template`, `do_not_follow`, `new_instructions`. First hit in a window wins.
+
+**Three states, and the difference matters** — the flag alone cannot distinguish "clean" from "never looked at":
+
+| `injection_detail` | `injection_flag` | meaning |
+|---|---|---|
+| `NULL` | false | **never screened** — ingested before 0072, a non-screened origin, or the kill switch was off |
+| `{"screened_at": …}` only | false | **screened and clean** |
+| carries `"rule"` (`{rule, position, snippet, screened_at}`) | true | **screened and flagged** |
+
+`position` is a **rune** offset; `snippet` is capped at 300 runes. A clean re-ingest **clears** a stale finding down to the screened_at-only form (an upstream page fixed, or the pattern set changed) — the badge would otherwise be permanent. That UPDATE is conditional on the verdict actually changing, so an RSS/Confluence/git sweep does not rewrite every unchanged row on every poll purely to store a newer timestamp nothing reads.
+
+**Surfaces.** Metric `rag_ingest_injection_flag_total{origin}`. `GET /api/kb/{id}/files` rows carry `injectionFlag` (always present) and `injectionDetail` (omitted when the column is NULL, so a client branches on presence). The admin KB overview row carries `injectionFlagged` (a count, always present). The sidebar shows a per-file badge **and** a header summary count — `rss`, `confluence` and `git` files are folded into their feed/source rows and have no per-file row at all, so the badge alone would be invisible for three of the four screened origins.
+
+Hits are logged at **Info with a 120-rune preview**, never at Warn with the full snippet: on a security-advisory or documentation corpus a hit is expected background noise, and a Warn stream of quoted attacker text is both alert fatigue and untrusted text in an operator's terminal. The full snippet lives in the column, where the UI renders it as a plain-string tooltip.
+
+**Expect false positives, by design.** A document that legitimately quotes instructions — prompt-engineering documentation, an incident report reproducing an attack — gets a badge. A badge is all it gets.
 
 ## KB permission model — rights matrix (Phase 1)
 

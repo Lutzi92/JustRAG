@@ -107,6 +107,11 @@ the band.
 **Recommendation: keep `chat_longcontext_mode = flat` as the default.**
 `map_reduce` stays a documented opt-in.
 
+> **SUPERSEDED by §4 (Wave 5, 2026-09-07).** This section's verdict stood
+> until the pooled rule W5-R1 was pre-registered and the set grew to 24
+> questions; the default is now `map_reduce`. The Wave-3 numbers below are
+> unchanged and remain the record of what was measured at the time.
+
 The brief's decision rule — adopt `map_reduce` for the route iff *mean answer
 relevance improves beyond the noise band* **and** *mean faithfulness does not
 drop beyond it* — fails on both arms:
@@ -463,6 +468,12 @@ above.
 (`--longcontext-mode map_reduce` / the site_config, gated by
 `chat_longcontext_enabled` as before); Task 9 does **not** flip the default
 this wave.
+
+> **SUPERSEDED by §4 (Wave 5, 2026-09-07).** The Wave-4 verdict was
+> "measured favourably, under-powered set, per-pair rule missed by one
+> win". Wave 5 executed both remedies this section named — re-register
+> on the pooled statistic first, then grow the set — and the default
+> flipped to `map_reduce`. The Wave-4 numbers below are unchanged.
 
 **Cost, reported per W4-R7 (does not veto):** map_reduce's mean wall time
 (938 s = mean of 925 s, 951 s) is **1.65×** flat's (570 s = mean of 575 s,

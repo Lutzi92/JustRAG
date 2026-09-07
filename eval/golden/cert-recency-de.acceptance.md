@@ -570,6 +570,15 @@ itself" survives validation. That is exactly the category error the gate's
 own comment says it exists to prevent. Worth a follow-up fix (drop entries
 whose two sources share a `FileID`) before this flag is ever recommended.
 
+**Therefore the 0.124 PPM flag rate above is an UPPER BOUND, not a point
+estimate.** 2 of the 13 entries were same-file pairs, removed by the
+final-wave detector fix, so the corrected rate can only be lower — never
+higher. It is reported as measured because that is what this run produced,
+but **the rate must be re-measured on the fixed detector before it is used
+to recommend, or to keep rejecting, this flag.** The decision below stands
+on its own regardless: 0.124 exceeds the 0.10 bar, and the CERT criterion
+fails independently of it.
+
 ## Decision
 
 Gate from the brief (W5-R7): recommend the flag in the recipe **for RSS KBs
@@ -579,7 +588,7 @@ rate is ≤ 10 %.
 | Criterion | Threshold | Measured | Met? |
 |---|---|---|---|
 | pairs flagged with newer=UPDATE | ≥ 6/8 | **0/8** | no |
-| PPM flag rate | ≤ 0.10 | **0.124** | no |
+| PPM flag rate | ≤ 0.10 | **0.124** (an upper bound — see the same-file-pair defect above) | no |
 
 **Decision: no recipe recommendation, and no default flip.**
 `chat_conflict_surfacing_enabled` stays **OFF**, exactly as Task 3 shipped it.

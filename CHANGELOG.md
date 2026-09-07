@@ -139,14 +139,134 @@ one-step rollback** (`cmd/migrate` is up-only).
   long-context) and reports `agent.orchestrator = "drift"`. A deployment with
   `chat_drift_enabled` on was previously evaluating those questions through
   long-context instead.
-- **No `site_config` default was flipped, no re-ingest is required, and
-  `queryCacheSchemaVersion` is unchanged this wave.** Both Wave-4 measurement
-  tasks concluded "keep the default": `chat_longcontext_mode` stays `flat`
+- **Wave 4 flipped no `site_config` default**, required no re-ingest and left
+  `queryCacheSchemaVersion` unchanged (Wave 5 does flip one — see below). Both
+  Wave-4 measurement tasks concluded "keep the default": `chat_longcontext_mode` stays `flat`
   (map_reduce raised coverage in both cross pairs and won 16 of 20 pooled
   decisive pairs, but the pre-registered per-pair rule missed on one pair at
   n=12) and `bm25_scoring_mode` stays `ts_rank` (on the plan-execute path with
   dispatch on, `complex_reasoning` MRR is −4.7 pp against a 2.6 pp band over 3
   repeats).
+
+- **Migration 0072 required** (RAG Wave 5, trust surfaces) — now the highest
+  migration in this Unreleased block. One file, idempotent, **no backfill**:
+  adds the `ragas_samples` table (plus a `(kb_id, sampled_at DESC)` index on
+  the table it creates empty, so the README's `CONCURRENTLY` rule for
+  already-large tables does not apply), `messages.conflicts jsonb`,
+  `files.injection_flag boolean NOT NULL DEFAULT FALSE` (metadata-only on
+  PG 11+, so no rewrite of a large `files` table) and `files.injection_detail
+  jsonb`. Compose applies it via the `migrate` one-shot service; **Kubernetes
+  does not** — run `/app/migrate` out of the release image before
+  `kubectl apply`, per `docs/runbooks/release.md`. A release carrying a
+  migration has **no one-step rollback**.
+- **DEFAULT CHANGED: `chat_longcontext_mode` flips from `flat` to
+  `map_reduce`.** This is the one default this wave moves. The rule was
+  pre-registered as **W5-R1 on 2026-09-06**, before the measurement set was
+  extended and before any of the runs existed, and all four of its criteria
+  passed on 24 questions: pooled `map_reduce` win rate **0.9444** (34 of 36
+  decisive judge pairs) with a pooled Wilson lower bound of **0.8186**
+  (> 0.50), pooled coverage **+5.03 pp** (0.5837 vs 0.5333) against a 1.39 pp
+  same-mode band, and a flat-vs-flat control at **0.3636**, inside the
+  required [0.35, 0.65] window. Cost, reported and never a veto: **1.28× wall
+  time**, i.e. the ~25 extra fast-tier calls per turn are unchanged. Record:
+  `eval/golden/global-synthesis-de.acceptance.md` §4.
+  - **Who is affected:** only deployments with `chat_longcontext_enabled` on
+    (still default off) *and* a `chat_longcontext_mode` row that was never
+    written. The route is otherwise unreachable, so most deployments see no
+    behaviour change at all.
+  - **The fallback rule is deliberately asymmetric.** An **unset** key now
+    reads `map_reduce`; an **unrecognised** value (a typo) still normalises to
+    `flat` and logs a warning — the safe fallback must never be the mode that
+    fans out a fast-tier call per chunk group.
+  - **To keep the previous behaviour, set the key explicitly:**
+    `chat_longcontext_mode = flat` (globally, or as a per-KB override).
+  - Before leaving the new default in place on a busy deployment, set
+    `AI_MAX_CONCURRENT_REQUESTS` to the backend's safe ceiling: the per-turn
+    map fan-out is bounded, the deployment-wide product of fan-outs is not.
+  - Two diagnostics, neither a decision input: faithfulness came out
+    marginally *lower* for `map_reduce` (0.461 / 0.533 vs 0.464 / 0.569 — a
+    findings block is a lossy intermediate), and answer relevance is saturated
+    at 1.000 on this route and unusable as a signal.
+- **New `site_config` keys (Wave 5).** `ragas_samples_retention_days` (90,
+  range 1–3650, global-only); `chat_conflict_surfacing_enabled` (**false**,
+  per-KB) + `chat_conflict_model` (fast-tier chain) + `chat_conflict_max_chunks`
+  (12, 2–30) + `chat_conflict_timeout_ms` (6000, 1000–30000);
+  `ingest_screening_enabled` (**true** — it is a flag, not a filter, and the
+  key is its kill switch) + `ingest_screening_window_runes` (600, 100–5000);
+  `chat_answer_degenerate_run_limit` (400 runes, `0` disables, otherwise
+  clamped to 50–100000, global-only). Only `ingest_screening_enabled` is
+  on by default, and it changes nothing about the corpus.
+- **The RAGAS sampler now persists what it scores.** With
+  `ragas_sampling_enabled` on, each sample writes one `ragas_samples` row
+  (nullable scores, `judge_model`, judge errors) so a bad score can be
+  attributed to a turn instead of only alerted on. A nightly `ragas_daily`
+  maintenance pass (24 h, `WORKER_MAINTENANCE`) publishes the new gauges
+  `rag_ragas_daily_mean{kb,metric}` and `rag_ragas_daily_n{kb}` over the
+  trailing 24 h and prunes past the retention. **Both gauges share one 500-KB
+  cardinality budget with an `overflow` series whose value is meaningless**
+  (last-write-wins across every KB past the cap) — alert on its *presence*,
+  never on its number. Nothing to run; the table starts empty and fills at the
+  existing sampling rate.
+- **Ingest prompt-injection screening ships ON.** Every newly ingested file
+  from an external source (`rss`, `confluence`, `git`, `crawl`) is screened
+  once before chunking and the verdict recorded on the `files` row. Uploads and
+  spreadsheets are never screened. **It is a flag, not a filter**: chunking,
+  embedding, retrieval and answer-time behaviour are byte-for-byte unchanged,
+  and there is no quarantine. Expect **badges on documents that legitimately
+  quote instructions** (prompt-engineering docs, incident reports) — a badge is
+  all that happens. New metric `rag_ingest_injection_flag_total{origin}`; kill
+  switch `ingest_screening_enabled=false` (checked before any store call, so
+  off is genuinely free). No backfill: files ingested before 0072 read as
+  "never screened" (`injection_detail IS NULL`) until their next re-ingest,
+  which is a third state distinct from "screened and clean".
+- **Degenerate-answer guard ships ON, on every answer surface.** When a
+  streaming answer collapses into a repeated character or a repeated ≤ 4-rune
+  pattern longer than `chat_answer_degenerate_run_limit` (400 runes), the
+  completion is aborted, the run is stripped, and a one-line notice is
+  appended in the answer language; non-streaming surfaces strip post hoc. New
+  metric `rag_answer_degenerate_total{surface}` (`web|api_v1|openai_compat|mcp`)
+  — **alert on any non-zero rate**: the guard contains the symptom, it does not
+  fix the model. 400 sits well above any realistic Markdown table rule (~300),
+  so normal answers cannot trip it; `0` disables it everywhere.
+- **Additive API fields (no client breaks; every one is omitted when unset).**
+  `GET /api/admin/kb-overview` rows gain `ragas: {n24h, faithfulness,
+  answerRelevance, contextPrecision}` (24 h window, key absent when the KB has
+  no sample) and `injectionFlagged` (an int, always present).
+  `GET /api/kb/{id}/files` rows gain `injectionFlag` (bool, always present) and
+  `injectionDetail` (object, omitted when NULL). Chat gains `conflicts` — a
+  **bare array** of `{claim, sourceA, sourceB, kind, newer, fileA, fileB}` on
+  the SSE frame right after `sources`, on the non-streaming body, in
+  `messages.conflicts` and on reload; the key is omitted entirely when there is
+  nothing to report, so a turn without conflicts streams exactly the frames it
+  streamed before. `conflicts` only ever appears with
+  `chat_conflict_surfacing_enabled` on, which is off by default.
+- **Conflict / supersession surfacing ships OFF and the measurement says leave
+  it off.** Both pre-stated gates failed on the Wave-5 fixture run: 0 of 8 CERT
+  NEU/UPDATE pairs flagged (a fixture property — MMR never assembles both
+  halves of the queried pair; on pairs the detector did see, 12 of 37
+  opportunities hit with direction correct 12/12 and zero invented pairs), and
+  a 0.124 false-positive flag rate on the PPM set against a ≤ 0.10 bar. **That
+  0.124 is an upper bound** — two of the thirteen entries paired a file with
+  itself, a detector defect fixed afterwards — so it must be re-measured before
+  it is used either way. Cost when on: one extra fast-tier call and
+  +631 / +268 ms per turn; retrieval is untouched (identical to three decimals
+  on/off). Record: `eval/golden/cert-recency-de.acceptance.md`.
+- **Reminder: `internal/eval.Judge` is shared with the RAGAS sampler.** Any
+  judge-parsing change in this block (see the Wave-4 tolerance entry above)
+  affects the runtime RAGAS sampler and the in-app / scheduled eval runner as
+  well as `cmd/eval`, and now shows up in `ragas_samples` rows too — a judge
+  that fails to parse is persisted as a row with nil scores and its
+  `judge_errors`, not dropped.
+- **`cmd/eval` gains two flags.** `--conflict-surfacing on|off` overlays
+  `chat_conflict_surfacing_enabled` for one run (no `site_configs` mutation)
+  and records each question's `conflicts` array in the JSON report.
+  `[--pairwise-out pooled.json] --pairwise-pool a.json b.json` pools two
+  finished pairwise results over their decisive pairs, recomputing (never
+  averaging) the win rate and printing Wilson bounds from both perspectives.
+  **Flag ordering is load-bearing:** Go's flag parser stops at the first
+  positional argument, so other flags must precede the two paths; a trailing
+  flag is rejected with an explanation. Both inputs must put the same
+  configuration on side A — the command warns but cannot verify it.
 
 ### Fixes
 
