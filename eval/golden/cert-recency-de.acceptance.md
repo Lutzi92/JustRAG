@@ -1254,11 +1254,12 @@ Both rates are roughly **2.5–3×** the cap-12 measurement's 0.112/0.101.
 The two cap30 runs' flagged sets overlap heavily with each other (23 of
 25/27 ids in common — run 1 uniquely flags `Q031`/`Q055`, run 2 uniquely
 flags `Q032`/`Q087`/`Q093`/`Q094`), and mostly, but **not entirely**,
-superset the cap-12 run's flagged questions: `Q012`, `Q013`, `Q023`,
-`Q030`, `Q071`, `Q085`, `Q091`, `Q095` all recur at cap30 alongside a
-large new set (`Q010`, `Q011`, `Q021`, `Q027`, `Q028`, `Q046`, `Q047`,
+superset the cap-12 run's flagged questions: `Q012`, `Q013`, `Q030`,
+`Q071`, `Q085`, `Q091`, `Q095` all recur at cap30 alongside a large new
+set (`Q010`, `Q011`, `Q021`, `Q023`, `Q027`, `Q028`, `Q046`, `Q047`,
 `Q051`, `Q052`, `Q056`, `Q059`, `Q063`, `Q067`, `Q096`, `Q098` and
-others) — but `Q038`, `Q062` and `Q084` (all flagged at cap12) do **not**
+others — `Q023` fired in neither cap-12 run and only appears starting at
+cap30) — but `Q038`, `Q062` and `Q084` (all flagged at cap12) do **not**
 appear in the cap30 run-1 flagged set at all, showing the wider source
 list does not just add findings, it also changes which pairs the
 fast-tier call happens to surface (consistent with the same run-to-run

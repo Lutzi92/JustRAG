@@ -7,6 +7,18 @@ Each `.jsonl` file here is a curated list of questions used by the
 
 One JSON object per line. Blank lines and `#`-prefixed lines are ignored.
 
+This is also the shape the **admin UI / DB-backed eval runner** accepts, not
+only `cmd/eval`'s file loader. Since Wave 6 (W6-R3), `internal/eval.
+ParseGoldenSetContent` — the function behind a golden set saved through the
+admin UI and behind `eval_golden_sets.content` (the async / scheduled eval
+path) — auto-detects the shape from the first non-whitespace byte: `[` means
+the original JSON-array shape, anything else (including a bare `{` row) is
+parsed as JSONL with `#`/blank lines skipped, sharing the same line parser
+`cmd/eval`'s file loader uses. Either shape can therefore be pasted or
+uploaded through the admin UI directly. The one thing that stays
+**`cmd/eval`-only on both shapes** is a row carrying `turns` — see "Multi-turn
+set" below.
+
 Fields:
 
 | Field                | Type     | Description                                               |
@@ -303,6 +315,17 @@ Pass `--orchestrator-dispatch=false` to reproduce pre-2026-05 retrieval-only
 behaviour (no dispatch, no new fields) — useful for diffing against
 historical reports.
 
+**Per-query orchestrator policy (Wave 6).** `--policy '<json>'` (see the
+Ablation flags table below) overlays `chat_orchestrator_policy` for one run,
+letting a rule route ANY query type — not only `complex_reasoning` — to a
+named orchestrator, `force` or `prefer`. It composes with
+`--orchestrator-dispatch=true`. The `query_type × orchestrator → recall / MRR
+/ cost` measurement on the PPM fixture (five forced cells: ladder,
+force-supervisor, force-plan_execute, force-plan_execute_dag, force-agentic;
+two repeats each) and the recommended (documentation-only — the shipped
+default stays `[]`) policy live in
+`eval/golden/orchestrator-policy.acceptance.md`.
+
 ### Ablation flags
 
 | Flag | Effect |
@@ -321,11 +344,12 @@ historical reports.
 | `--rrf-weight-bm25 <f>` / `--rrf-weight-vector <f>` / `--rerank-blend-alpha <f>` | Per-run overrides for the fusion weights and the **global** reranker α. Per-route α overrides (`rerank_blend_alpha_lookup` etc.) are NOT overridden — set those in `site_configs` if you want to grid them. Used together with `--bm25-mode bm25` for the Wave-3 retune grid (`eval/golden/bm25-retune.acceptance.md`). |
 | `--keep-raw on\|off` | Multi-turn only: per-run override for `chat_condense_keep_raw_enabled`. |
 | `--conflict-surfacing on\|off` | Per-run override for `chat_conflict_surfacing_enabled` (W5-R7). `on` makes every turn whose assembled set spans ≥ 2 distinct files run the fast-tier conflict / supersession pass; the resulting report is written per question as `conflicts` in the JSON report — the same bare array a chat turn persists and streams (`claim, sourceA, sourceB, kind, newer, fileA, fileB`) — and the human summary gains a `Conflict surfacing:` block whenever at least one question carries an entry. Effective on the standard `PrepareChatContext` path and, under `--orchestrator-dispatch`, on the Supervisor path. Empty = live site_config. |
-| `--chat-overlay key=value` (repeatable) | W6-R18: a GENERIC per-run override for one chat-layer `site_config` key — any key read through the same reader `chat.PrepareChatContext` and the orchestrators use, not only the ones with a dedicated flag above. Repeat the flag for multiple keys (e.g. `--chat-overlay chat_conflict_max_chunks=30 --chat-overlay chat_conflict_timeout_ms=10000`). Each value is split at the FIRST `=`, so a value that itself contains `=` (e.g. a JSON blob) stays intact; a pair with no `=` or an empty key is a usage error (exit 2). Composes with — and takes precedence over — the three named chat-layer flags above for the same key (documented in `buildChatOverlays`, `cmd/eval/main.go`). Used to re-measure `chat_conflict_max_chunks` at its clamp maximum (30) without a `site_configs` mutation; see `eval/golden/cert-recency-de.acceptance.md` §"Conflict surfacing re-measured at `chat_conflict_max_chunks = 30`". Vector-layer keys are not affected — they keep their own dedicated flags. |
+| `--chat-overlay key=value` (repeatable) | W6-R18: a GENERIC per-run override for one chat-layer `site_config` key — any key read through the same reader `chat.PrepareChatContext` and the orchestrators use, not only the ones with a dedicated flag above. Repeat the flag for multiple keys (e.g. `--chat-overlay chat_conflict_max_chunks=30 --chat-overlay chat_conflict_timeout_ms=10000`). Each value is split at the FIRST `=`, so a value that itself contains `=` (e.g. a JSON blob) stays intact; a pair with no `=` or an empty key is a usage error (exit 2). Composes with — and takes precedence over — the three named chat-layer flags above for the same key (documented in `buildChatOverlays`, `cmd/eval/main.go`). Used to re-measure `chat_conflict_max_chunks` at its clamp maximum (30) without a `site_configs` mutation; see `eval/golden/cert-recency-de.acceptance.md` §"Conflict surfacing re-measured at `chat_conflict_max_chunks = 30`". Vector-layer keys are not affected — they keep their own dedicated flags. `--chat-overlay chat_orchestrator_policy=…` is rejected — use `--policy` below, which validates the document instead of passing it through raw. |
+| `--policy '<json>'` | W6-R6/R7: per-run overlay for `chat_orchestrator_policy` — a dedicated, VALIDATED flag rather than a `--chat-overlay` entry: the document is checked with the same `chatpolicy.ValidateOrchestratorPolicyJSON` the admin save path uses BEFORE the run starts (an invalid policy is a usage error, exit 2, never a silently ignored flag). Injected into the same chat-layer overlay map as `--conflict-surfacing`. Applies AFTER the comparison/team/corpus-table arms and before the flag ladder, so a rule can steer any query type, not only `complex_reasoning` — see `docs/agent-orchestration.md` §"Per-query orchestrator policy". Each question's report gains `agent.policy_rule` (the 0-based rule index, when a rule applied) and the human summary an `Orchestrator policy:` block whenever at least one question carried one. Empty (default) = live `chat_orchestrator_policy`, i.e. the ladder is unchanged. Used for the W6-R7/R7a query_type × orchestrator measurement — see `eval/golden/orchestrator-policy.acceptance.md`. |
 
 These are all per-run **overlays**: they wrap the site-config reader for that
 process only and never write `site_configs`.
-`--longcontext`/`--longcontext-mode`/`--conflict-surfacing`/`--chat-overlay`
+`--longcontext`/`--longcontext-mode`/`--conflict-surfacing`/`--chat-overlay`/`--policy`
 are chat-layer keys and share one overlay wrapper (`chatOverlayReader` in
 `cmd/eval/main.go`), chained after `--crag`; the vector-layer flags
 (`--bm25-mode`, `--recency-boost`, …) use the separate `overlaySiteConfig`.
