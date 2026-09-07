@@ -647,3 +647,307 @@ Gitignored (not committed), under
 | `t5-out/t5-ppm-on.json` / `.log` | PPM, flag on |
 | `t5-analysis.txt` | the analysis script's full output |
 | `eval/golden/cert-recency-de.local.jsonl` | the runnable golden set (KB id resolved) |
+
+---
+
+# Conflict surfacing re-measured (Wave 6)
+
+- **Date:** 2026-09-07
+- **Branch/base:** `feat/rag-sota-wave6` (Task 1; base `ce0b972`, local main
+  after the Wave-5 merge)
+- **Ruling:** W6-R1 (pre-registered 2026-09-07, `.superpowers/sdd/2026-09-07-rag-sota-wave6/rulings.md`) —
+  the eight CERT `cert-p01`..`cert-p08` pair questions were rewritten to
+  **name the advisory and ask for the delta** ("Was hat sich an der Meldung
+  WID-SEC-2026-NNNN zu &lt;Produkt&gt; gegenüber der ersten Fassung
+  geändert?"), with `must_cite_file_names` set to **both** halves and an
+  `expected_points` array per row (see `eval/golden/README.md` §"NEU/UPDATE
+  pair questions (Wave 6 rewrite)" for the full rationale and the fixture
+  text each `expected_points` entry was verified against). This section is
+  the re-measurement that rewrite exists to feed.
+
+## RULE (stated before the numbers, pre-registered 2026-09-07)
+
+```
+RULE (W6-R1, pre-registered 2026-09-07): PASS iff (a) >= 6/8 pairs have
+both_assembled AND flagged AND newer_is_update, and (b) PPM flag rate <= 0.10
+on BOTH runs. Only a PASS makes the recipe recommend
+chat_conflict_surfacing_enabled for RSS/advisory KBs; the default stays OFF
+either way.
+```
+
+Definitions (unchanged from the Wave-5 rules, restated in
+`.superpowers/sdd/2026-09-07-rag-sota-wave6/t1-analyse.py`):
+
+- **assembled set** — the question's `retrieved` array in the JSON report,
+  the final chunk set sorted by score and cut at `k=10` (the eval CLI
+  default). The detector's own window is the turn's `sources` list capped
+  at `chat_conflict_max_chunks` (12), so this view can slightly
+  **under-count** what the detector saw; both-files-present is judged on
+  file NAMES.
+- **both_assembled** — both halves of the pair are present, by name, in the
+  question's `retrieved` (top-10).
+- **flagged** — the question's `conflicts` array contains an entry whose
+  `{fileA,fileB}` is exactly that pair.
+- **newer_is_update** — such an entry has `kind == "superseded"` and the
+  side `newer` points at is the UPDATE file.
+- **PPM flag rate** — questions with ≥ 1 conflict entry of any shape, over
+  ALL questions in the report.
+
+## Setup — exact commands
+
+```bash
+# 1. Re-stamp the fixture KB (relative to now()) and regenerate the runnable
+#    golden set (sources the main checkout's .env; never echoes the password).
+bash .superpowers/sdd/2026-09-07-rag-sota-wave6/t1-cert.sh
+
+# 2. CERT measurement, standard path, dispatch OFF, flag on then off:
+bash .superpowers/sdd/2026-09-07-rag-sota-wave6/run-eval.sh \
+  --golden eval/golden/cert-recency-de.local.jsonl --production-context \
+  --orchestrator-dispatch=false --conflict-surfacing on \
+  --output .superpowers/sdd/2026-09-07-rag-sota-wave6/t1-out/cert-on.json
+bash .superpowers/sdd/2026-09-07-rag-sota-wave6/run-eval.sh \
+  --golden eval/golden/cert-recency-de.local.jsonl --production-context \
+  --orchestrator-dispatch=false --conflict-surfacing off \
+  --output .superpowers/sdd/2026-09-07-rag-sota-wave6/t1-out/cert-off.json
+
+# 3. PPM false-positive measurement, two independent runs (flag on both):
+bash .superpowers/sdd/2026-09-07-rag-sota-wave6/run-eval.sh \
+  --golden eval/golden/production-ppm-2026-08.jsonl --production-context \
+  --orchestrator-dispatch=false --conflict-surfacing on \
+  --output .superpowers/sdd/2026-09-07-rag-sota-wave6/t1-out/ppm-on-1.json
+bash .superpowers/sdd/2026-09-07-rag-sota-wave6/run-eval.sh \
+  --golden eval/golden/production-ppm-2026-08.jsonl --production-context \
+  --orchestrator-dispatch=false --conflict-surfacing on \
+  --output .superpowers/sdd/2026-09-07-rag-sota-wave6/t1-out/ppm-on-2.json
+
+# 4. Retrieval-reason isolation for each of the 8 pairs (single-question
+#    runs; --top-k 30 to see the whole `final_docs` pool, not just the
+#    report's default k=10 cut):
+bash .superpowers/sdd/2026-09-07-rag-sota-wave6/run-eval.sh \
+  --golden eval/golden/cert-recency-de.local.jsonl --production-context \
+  --orchestrator-dispatch=false --conflict-surfacing on \
+  --question-id cert-p01 --top-k 30 \
+  --output .superpowers/sdd/2026-09-07-rag-sota-wave6/t1-out/pair-cert-p01-k30.json
+# (repeated for cert-p02..cert-p08)
+
+# 5. Every number below is reproduced by:
+python3 .superpowers/sdd/2026-09-07-rag-sota-wave6/t1-analyse.py
+```
+
+`--orchestrator-dispatch=false` per W6-R12 / W5-R12: conflict surfacing is a
+standard-`PrepareChatContext` feature.
+
+### Re-stamp verification (read-only, before the runs)
+
+All 8 golden pairs carry two distinct `created_at` values with the UPDATE
+newer, and `published_at` is NULL throughout:
+
+```
+ pairs | update_newer | same_timestamp
+-------+--------------+----------------
+     8 |            8 |              0
+```
+
+e.g. `WID-SEC-2026-0104`: NEU `2026-08-31 04:53:56`, UPDATE
+`2026-09-06 04:53:56`.
+
+## Result 1 — the eight rewritten pair questions: still 0/8, and still not the detector's fault
+
+| Question | WID | Product | both_assembled (top-10, `cert-on`) | flagged | newer_is_update |
+|---|---|---|---|---|---|
+| cert-p01 | WID-SEC-2026-0104 | Fortinet FortiOS | UPDATE only | no | no |
+| cert-p02 | WID-SEC-2026-0106 | Ivanti Connect Secure | NEU only | no | no |
+| cert-p03 | WID-SEC-2026-0107 | Cisco IOS XE | NEU only | no | no |
+| cert-p04 | WID-SEC-2026-0108 | VMware ESXi | NEU only | no | no |
+| cert-p05 | WID-SEC-2026-0109 | OpenSSL | UPDATE only | no | no |
+| cert-p06 | WID-SEC-2026-0113 | Citrix NetScaler | NEU only | no | no |
+| cert-p07 | WID-SEC-2026-0119 | Atlassian Confluence | UPDATE only | no | no |
+| cert-p08 | WID-SEC-2026-0123 | GitLab | NEU only | no | no |
+| **totals** | | | **0/8 both present** | **0/8** | **0/8** |
+
+Rewriting the question to name the advisory and ask for the delta did
+**not** change the outcome: the pair is never assembled together, so the
+conflict detector never gets the chance to flag it. This confirms the
+Wave-5 hypothesis (the phrasing was not the cause) rather than refuting it.
+
+### Retrieval-reason isolation: a deterministic rank-1-vs-rank-15 split
+
+Each pair question was re-run in isolation (`--question-id cert-p0N
+--top-k 30`, standard path, dispatch off) to see the whole `final_docs`
+pool (30 chunks; the eval report's default `k=10` view only shows the
+first third of it). The `rag.search.stages` line for `cert-p01` (the other
+seven are structurally identical — `vector_docs`/`keyword_docs` around
+36–40, `rrf_docs`/`rerank_docs` 40, `mmr_docs`/`final_docs` 30):
+
+```
+{"msg":"rag.search.stages","stage":"search_stages","vector_docs":40,"vector_files":40,
+ "keyword_docs":36,"keyword_files":36,"rrf_docs":40,"rrf_files":40,"rerank_docs":40,
+ "rerank_files":40,"dedup_docs":40,"dedup_files":40,"mmr_docs":30,"mmr_files":30,
+ "bm25_floor_reinserted":1,"final_docs":30,"final_files":30,"rerank_used":true,
+ "mmr_lambda":0.7,"rerank_depth":120,"hnsw_ef_search":151}
+```
+
+Both vector and keyword arms return the file (the corpus is only 40 files,
+so `vector_docs=40` covers everything); RRF and the reranker keep all 40;
+**MMR (`mmr_lambda":0.7`) drops the pool from 40 to 30**, and that is where
+one half of every pair disappears from the *effective* ranking, not from
+whether it was retrieved at all. Checking each pair's exact rank within the
+30-doc `final_docs` pool (the same pool the conflict detector's
+`chat_conflict_max_chunks`=12 window is drawn from):
+
+| Question | Product | NEU rank | UPDATE rank |
+|---|---|---|---|
+| cert-p01 | Fortinet FortiOS | 15 | **1** |
+| cert-p02 | Ivanti Connect Secure | **1** | 15 |
+| cert-p03 | Cisco IOS XE | **1** | 15 |
+| cert-p04 | VMware ESXi | **1** | 15 |
+| cert-p05 | OpenSSL | 15 | **1** |
+| cert-p06 | Citrix NetScaler | **1** | 15 |
+| cert-p07 | Atlassian Confluence | 15 | **1** |
+| cert-p08 | GitLab | **1** | 15 |
+
+Every single pair splits **exactly** rank 1 vs. rank 15 — the more
+topically on-point half (by rerank score) takes rank 1, and MMR's diversity
+penalty pushes its near-duplicate to precisely the midpoint of the 30-doc
+pool, in every one of the 8 cases. Rank 15 is outside both the eval
+report's default top-10 view **and** the conflict detector's top-12
+`chat_conflict_max_chunks` window — so this is not a k=10 eval-harness
+artifact, it is the real turn's context: the answer LLM and the conflict
+detector genuinely never see both halves together, regardless of how the
+question is phrased. **This is the retrieval finding the brief asks to
+isolate rather than tune**: MMR near-duplicate suppression (not top-k
+truncation, not the recency-listing name-match arm — this fixture routes
+through the standard lookup path, not `IsRecencyListingQuery`) is the
+mechanism, and it is deterministic enough on this fixture to reproduce the
+same 1-vs-15 split on every pair. No `site_config` was changed to produce
+or work around this.
+
+## Result 2 — cost and retrieval neutrality (25 CERT questions)
+
+Wall time:
+
+| Run | wall time | mean per-question latency |
+|---|---|---|
+| cert `on`  | 1m14.4s | 2976.5 ms |
+| cert `off` | 0m59.8s | 2391.4 ms |
+
+Delta `on` − `off` = **+585.1 ms (+24.5 %)** per turn — one extra fast-tier
+call over ≤ 12 sources, consistent with Wave 5's +19–27 % range.
+
+Retrieval metrics (k=10):
+
+| Run | mean_recall | mean_precision | mrr | mean_ndcg |
+|---|---|---|---|---|
+| cert `on`  | 0.700 | 0.250 | 0.873 | 0.901 |
+| cert `off` | 0.708 | 0.254 | 0.873 | 0.902 |
+| delta | −0.008 | −0.004 | +0.000 | −0.002 |
+
+MRR is identical; recall/precision/ndcg differ in the third decimal. This
+is the same CRAG-grader run-to-run non-determinism the Wave-2 and Wave-5
+sections of this document already document on this fixture (not a re-run
+noise-band pair here — only one `off` run was taken — so this delta is
+reported as-measured, consistent in direction and magnitude with the prior
+waves' noise band, not claimed as a new same-flag control).
+
+## Result 3 — PPM false-positive rate (89 questions, no known conflicts), two runs
+
+`eval/golden/production-ppm-2026-08.jsonl`, standard path, dispatch off,
+`--conflict-surfacing on`, run twice (no code changes between runs — this
+is the pre-registered two-run PPM check):
+
+| Run | wall time | mean per-question latency | flagged | flag rate |
+|---|---|---|---|---|
+| ppm on-1 | 18m52.4s | 12723.5 ms | 10/89 | **0.112** |
+| ppm on-2 | 18m52.1s | 12719.5 ms |  9/89 | **0.101** |
+
+Both runs exceed the ≤ 0.10 gate (run 1 by 1.2 pp, run 2 by 0.1 pp — the
+smallest possible margin above the threshold, since 9/89 = 0.1011...). Nine
+of the eleven `entries` overlap between the two runs by claim text and file
+pair (`Q012`, `Q013`, `Q030`, `Q038`, `Q062`, `Q084`, `Q085`, `Q091`,
+`Q095` all recur; `Q071` from the Wave-5 measurement did not fire in either
+Wave-6 run). All 20 entries across both runs are `kind=contradiction`,
+`newer=unknown` — same shape as Wave 5: no superseded pair was found on
+this KB, which has no NEU/UPDATE convention. Two representative entries
+(seen in both runs):
+
+> `[Q012]` claim: *"Der Zeitraum des Planungsprojekts 'Neue Wege mit KI'"*
+> A: `Planungsprojekt Neue Wege mit KI.md`
+> B: `Projektabschlussbericht Neue Wege mit KI.md`
+
+> `[Q095]` claim: *"Das Projekt 'Verlängerung Adobe Softwarelizenzverträge'
+> ist als 'entscheidbar' eingestuft."*
+> A: `Verlängerung Adobe Softwarelizenzverträge.md`
+> B: `JLU-weites Confluence.md`
+
+No same-file pair and no mirrored-duplicate entry was observed in either
+run (the Wave-5 final fix wave's `buildConflictReport` de-dup/self-pair
+fixes hold on this corpus). The **0.124** Wave-5 number was explicitly
+flagged there as an upper bound measured before that fix; this Wave-6
+re-measurement (0.112 / 0.101) is the corrected number, on the same
+fixture, and it is lower — but still above the 0.10 gate on both runs.
+
+## Decision
+
+| Criterion | Threshold | Measured | Met? |
+|---|---|---|---|
+| pairs with both_assembled AND flagged AND newer_is_update | ≥ 6/8 | **0/8** | no |
+| PPM flag rate, run 1 | ≤ 0.10 | **0.112** | no |
+| PPM flag rate, run 2 | ≤ 0.10 | **0.101** | no |
+
+**Verdict: FAIL.** Per W6-R1, the recipe does **not** gain a recommendation
+for RSS/advisory KBs, and `chat_conflict_surfacing_enabled` stays default
+**OFF** — unchanged from Wave 5.
+
+Both criteria fail, and the Wave-6 rewrite narrows down exactly why each
+one does:
+
+1. **0/8 is now conclusively a retrieval-side finding, not a fixture
+   phrasing artifact.** The Wave-5 hypothesis ("the pair questions were
+   authored to test promotion, not co-retrieval, so of course both halves
+   aren't retrieved together") predicted that naming the advisory and
+   asking for the delta would fix it. It did not: MMR near-duplicate
+   suppression splits every single NEU/UPDATE pair to exactly rank 1 vs.
+   rank 15 of a 30-chunk pool, regardless of question phrasing, so the
+   pair is never in the same context window the conflict detector (or the
+   answer LLM) sees. Fixing this would require either an MMR change that
+   treats a same-topic near-duplicate specially (a retrieval change, out of
+   scope for this task per the brief — "do NOT tune anything, do NOT
+   change any site_config") or a fixture/detector design that does not
+   depend on both halves surviving MMR together (e.g. widening
+   `chat_conflict_max_chunks` past 12, or a KB-level exemption from MMR
+   dedup for advisory-style corpora — both are roadmap items, not
+   measured here).
+2. **0.112 / 0.101 confirms the Wave-5 upper-bound claim was directionally
+   right**: the corrected detector (self-pair dropped, mirrored duplicates
+   collapsed) does score lower than the pre-fix 0.124, but it remains above
+   the 0.10 gate on both independent runs, with the second run landing only
+   0.1 pp over the line. On a normal project-documentation KB with no
+   NEU/UPDATE convention, the pass still fires on roughly 1 turn in 9,
+   always as an undirected `contradiction`, on document pairs that mostly
+   turn out to be either genuinely different (a project sheet vs. an
+   unrelated Confluence page) or agreeing in different words (an
+   announcement vs. the closing report of the same project) — the same
+   two failure patterns Wave 5 already catalogued.
+
+No `site_config` was mutated to produce any number in this section (every
+override is a `cmd/eval` overlay flag, `--conflict-surfacing on|off`).
+
+## Artifacts
+
+Gitignored (not committed), under
+`.superpowers/sdd/2026-09-07-rag-sota-wave6/`:
+
+| Path | Contents |
+|---|---|
+| `t1-cert.sh` | restamp + read-only date verification |
+| `t1-analyse.py` | reproduces every number above |
+| `run-eval.sh` | shared eval wrapper (fresh binary, dev env) |
+| `t1-out/cert-on.json` / `.log` | CERT, flag on |
+| `t1-out/cert-off.json` / `.log` | CERT, flag off (control) |
+| `t1-out/ppm-on-1.json` / `.log` | PPM, flag on, run 1 |
+| `t1-out/ppm-on-2.json` / `.log` | PPM, flag on, run 2 |
+| `t1-out/pair-cert-p0N.json` | isolated single-question runs (top-10) |
+| `t1-out/pair-cert-p0N-k30.json` | isolated single-question runs (top-30, rank table above) |
+| `t1-out/pairs-isolated.log` | stderr for the top-10 isolation runs |
+| `t1-out/t1-analysis.txt` | the analysis script's full output |
+| `eval/golden/cert-recency-de.local.jsonl` | the runnable golden set (KB id resolved) |

@@ -886,13 +886,42 @@ NEU-labeled file once the name-marker arm fires — see
 `internal/chat/recency_listing.go`'s two-arm design — while a
 window-only phrasing like "Welche Meldungen wurden in den letzten 6 Tagen
 veröffentlicht?" is scoped to just that window's NEU files), 8 NEU/UPDATE
-product lookups (`must_cite` is the UPDATE file only — tests whether the
-recency boost/prior promotes the newer, more complete advisory over its
-near-duplicate NEU predecessor), 6 CVE/WID-id lookups (lexical/BM25
-exercise; two target a CVE that exists only in an UPDATE, not its NEU
-predecessor), 3 cross-advisory enumerations (`query_type: enumeration`),
-and 2 "newest for product" lookups (recency boost ranking a single file,
-deliberately phrased to avoid tripping the recency-listing classifier).
+**delta** questions (`cert-p01`..`cert-p08`, rewritten in Wave 6 — see
+"NEU/UPDATE pair questions (Wave 6 rewrite)" below), 6 CVE/WID-id lookups
+(lexical/BM25 exercise; two target a CVE that exists only in an UPDATE, not
+its NEU predecessor), 3 cross-advisory enumerations (`query_type:
+enumeration`), and 2 "newest for product" lookups (recency boost ranking a
+single file, deliberately phrased to avoid tripping the recency-listing
+classifier).
+
+#### NEU/UPDATE pair questions (Wave 6 rewrite)
+
+`cert-p01`..`cert-p08` originally asked "Was ist zu der Schwachstelle
+WID-SEC-2026-NNNN bei &lt;Produkt&gt; bekannt?" with `must_cite_file_names`
+set to the UPDATE file only — a promotion test (does the newer, more
+complete advisory outrank its near-duplicate NEU predecessor for an equally
+topical query), not a test that needs both halves in the assembled set.
+That phrasing was reused for the Wave-5 conflict-surfacing measurement
+(`eval/golden/cert-recency-de.acceptance.md` § "Conflict surfacing (Wave
+5)") and scored 0/8 there because a promotion query has no reason to
+retrieve both halves at once.
+
+Wave 6 rewrote all eight rows to instead **name the advisory and ask for the
+delta**: "Was hat sich an der Meldung WID-SEC-2026-NNNN zu &lt;Produkt&gt;
+gegenüber der ersten Fassung geändert?" (deliberately avoiding "neu" /
+"aktuell" / "kürzlich" / "new", which would trip the recency-listing
+classifier's name-marker arm, `internal/chat/recency_classifier.go`).
+`must_cite_file_names` now lists **both** halves (`["NEU …", "UPDATE …"]`,
+copied verbatim from `eval/fixtures/cert-advisories/manifest.tsv` column 3),
+and each row carries an `expected_points` array (1–2 points per pair) drawn
+from the fixture's own `Update: …` line, for the coverage judge. This is the
+pre-registered W6-R1 measurement's fixture; see the acceptance doc's
+"Conflict surfacing re-measured (Wave 6)" section for the result — even with
+the rewritten phrasing, 0/8 pairs assembled both halves within the top-30
+final chunk set (isolated per-question `rag.search.stages` logs show, e.g.,
+the `cert-p01` NEU half ranking 15th against the UPDATE half at rank 1), so
+the finding is retrieval-side (reranker + MMR near-duplicate suppression),
+not a property of question phrasing.
 
 `kb_id` in the committed file is the placeholder
 `REPLACE_WITH_FIXTURE_KB_ID` (see "Ground truth by name, not by UUID"
