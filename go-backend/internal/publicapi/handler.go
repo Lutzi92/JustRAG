@@ -73,6 +73,10 @@ type Handler struct {
 	// fileDates resolves the cited files' dates for the sources payload.
 	// Optional — see SetFileDates.
 	fileDates chat.FileDateLookup
+
+	// siteConfig backs the degenerate-run guard's limit only. Optional —
+	// see SetSiteConfig.
+	siteConfig chat.SiteConfigReader
 }
 
 // NewHandler creates a Handler backed by the given store, AI resolver, and
@@ -104,6 +108,16 @@ func (h *Handler) SetUsageRecorder(r usage.Recorder) {
 // before the freshness surface existed.
 func (h *Handler) SetFileDates(l chat.FileDateLookup) {
 	h.fileDates = l
+}
+
+// SetSiteConfig injects a site_config reader. This surface deliberately runs
+// the retrieval pipeline with a nil reader (see PrepareChatContext below), so
+// the reader is used for exactly ONE thing: reading
+// chat_answer_degenerate_run_limit, whose 0 value is a deployment-wide kill
+// switch that has to reach every answering surface. Optional — when unset the
+// guard runs at its default limit.
+func (h *Handler) SetSiteConfig(r chat.SiteConfigReader) {
+	h.siteConfig = r
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +499,15 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 			"userMessageId": userMsg.ID,
 		})
 
-		events, err := ai.StreamCompletion(ctx, h.aiResolver, body.Message, systemPrompt, kbID, reasoningLevel, ai.DefaultAnswerTemperature)
+		// Degenerate-run guard (W5-R4): the completion runs under a
+		// cancellable child of ctx so a runaway repetition can be cut off at
+		// the provider; ctx itself stays live for the SSE writes and the
+		// AddMessage that follow.
+		genCtx, cancelGen := context.WithCancel(ctx)
+		defer cancelGen()
+		tracker := chat.NewRunTracker(chat.ChatAnswerDegenerateRunLimit(ctx, h.siteConfig))
+
+		events, err := ai.StreamCompletion(genCtx, h.aiResolver, body.Message, systemPrompt, kbID, reasoningLevel, ai.DefaultAnswerTemperature)
 		if err != nil {
 			writeSSE(w, map[string]string{"error": "failed to start AI stream"})
 			writeSSEDone(w)
@@ -493,6 +515,11 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var fullResponse, fullReasoning string
+		// sentLen is how much of fullResponse has reached the client. The
+		// guard needs it: the trip chunk is buffered but not forwarded, so
+		// the client is missing whatever legitimate text preceded the run
+		// inside it, and chat.GuardStreamedAnswer streams that back.
+		sentLen := 0
 		var streamErr error
 		for event := range events {
 			if event.Done {
@@ -501,14 +528,38 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 			}
 			if event.Content != "" {
 				fullResponse += event.Content
+				// The chunk that trips the guard is buffered (the strip
+				// needs the run and the text around it) but not forwarded —
+				// that is where the visible stream stops.
+				if tracker.Feed(event.Content) {
+					cancelGen()
+					break
+				}
 				writeSSE(w, map[string]string{"content": event.Content})
+				sentLen = len(fullResponse)
 			}
 			if event.Reasoning != "" {
 				fullReasoning += event.Reasoning
 				writeSSE(w, map[string]string{"reasoning": event.Reasoning})
 			}
 		}
-		if streamErr != nil {
+		if tracker.Tripped() {
+			// The FORCED guard, on the tracker's own limit: the completion
+			// was cancelled, so the answer is truncated whether or not a
+			// second detection over the buffer re-finds the run, and the
+			// limit that fired is the one to strip against (no second
+			// site_config read).
+			guarded, appended := chat.GuardStreamedAnswer(fullResponse, fullResponse[:sentLen], tracker.Limit(), lang, "api_v1")
+			fullResponse = guarded
+			if appended != "" {
+				writeSSE(w, map[string]string{"content": appended})
+			}
+			logctx.From(ctx).Warn("publicapi: degenerate answer run truncated",
+				"kbId", kbID, "limit", tracker.Limit(), "run_length", tracker.RunLength())
+		}
+		// A guard trip cancels genCtx; the provider's terminal event is not
+		// a stream failure in that case, it is the abort we asked for.
+		if streamErr != nil && !tracker.Tripped() {
 			// Mid-stream abort: fullResponse is truncated — don't persist it
 			// as a complete AI message.
 			logctx.From(ctx).Error("publicapi: AI stream aborted mid-answer", "error", streamErr, "kbId", kbID)
@@ -553,6 +604,12 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to generate response")
 		return
+	}
+	// Degenerate-run guard, post hoc (W5-R4): nothing to abort here, but the
+	// answer must not be persisted or returned with the run in it.
+	if guarded, appended := chat.GuardAnswerText(ctx, h.siteConfig, result.Content, lang, "api_v1"); appended != "" {
+		logctx.From(ctx).Warn("publicapi: degenerate answer run stripped (non-streaming)", "kbId", kbID)
+		result.Content = guarded
 	}
 
 	var reasoningPtr *string

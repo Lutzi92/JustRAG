@@ -5,6 +5,7 @@
 //
 //	eval --golden ../eval/golden/example.jsonl [--top-k 10] [--output eval-report.json] [--concurrency 1] [--question-id <id>] [--baseline prev.json]
 //	eval --pairwise-a A.json --pairwise-b B.json [--judge-model <m>] [--pairwise-out pairwise.json]
+//	eval [--pairwise-out pooled.json] --pairwise-pool pw1.json pw2.json
 package main
 
 import (
@@ -29,6 +30,7 @@ import (
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/database"
 	"github.com/justrag/go-backend/internal/eval"
+	"github.com/justrag/go-backend/internal/files"
 	"github.com/justrag/go-backend/internal/recencylister"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/tabular/sqlexec"
@@ -73,43 +75,38 @@ func main() {
 	refreshBM25Stats := flag.Bool("refresh-bm25-stats", false, "Before running, recompute BM25 statistics (vector.BM25StatsRefresher.RefreshKB) for every KB referenced by the golden set, across every dim table that has rows for that KB, so an A/B never runs against missing/stale stats.")
 	bm25ModeOverride := flag.String("bm25-mode", "", `Wave-2 Task 6 / ruling W2-R10: per-run override for bm25_scoring_mode ("ts_rank" | "bm25"). Empty = read the live site_config. Applied the same way as --rerank-blend-alpha (wraps the vector-layer site-config reader; no site_configs mutation) — combine with --refresh-bm25-stats when testing "bm25" against a golden set whose KBs haven't had a stats refresh yet.`)
 	bm25TieredBoostOverride := flag.String("bm25-tiered-boost", "", `Per-run override for bm25_tiered_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-mode.`)
-	longContextModeOverride := flag.String("longcontext-mode", "", `Wave-3 ruling W3-R6: per-run override for chat_longcontext_mode ("flat" | "map_reduce") — which consumer the OrchLongContext orchestrator uses. Empty = read the live site_config. This is a CHAT-layer key, so it wraps siteReader like --crag (not the vector-layer overlay). Only has an effect when chat_longcontext_enabled is on and the question trips the global-synthesis classifier.`)
+	longContextModeOverride := flag.String("longcontext-mode", "", `Wave-3 ruling W3-R6: per-run override for chat_longcontext_mode ("flat" | "map_reduce") — which consumer the OrchLongContext orchestrator uses. Empty = read the live site_config (whose default is "map_reduce" since Wave 5 / W5-R1; an unrecognised stored value normalises to "flat"). This is a CHAT-layer key, so it wraps siteReader like --crag (not the vector-layer overlay). Only has an effect when chat_longcontext_enabled is on and the question trips the global-synthesis classifier.`)
 	longContextEnabled := flag.String("longcontext", "", `Wave-3 ruling W3-R5: per-run override for chat_longcontext_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext-mode. "on" puts OrchLongContext at the top of the eval orchestrator ladder for questions the global-synthesis classifier accepts, so a global-synthesis golden set can be measured without mutating site_configs.`)
+	conflictSurfacing := flag.String("conflict-surfacing", "", `Wave-5 ruling W5-R7: per-run override for chat_conflict_surfacing_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext. "on" makes every turn whose assembled set spans >= 2 distinct files run the fast-tier conflict / supersession pass, and records the resulting report per question as "conflicts" in the JSON report (the same bare array a chat turn persists and streams). Effective on the standard PrepareChatContext path and, under --orchestrator-dispatch, on the Supervisor path.`)
 	goldenQueryType := flag.Bool("golden-query-type", false, `Forward each golden row's curated "query_type" label into the retrieval pipeline (chat.ChatContextParams.QueryType) instead of letting the pipeline classify the question. Default false so existing --production-context reports keep their historical shape. Does NOT affect orchestrator dispatch, which classifies independently — if a question does not reach the intended orchestrator, rewrite the question, not the label.`)
 	recencyBoostOverride := flag.String("recency-boost", "", `Wave 2 Task 8: per-run override for recency_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-tiered-boost (a vector-layer key, applied via the searchReader overlay, not the chat-level siteReader). Lets the CERT recency fixture A/B the recency prior without a site_configs mutation.`)
 	printKeywordSQL := flag.String("print-keyword-sql", "", `Diagnostic mode (Wave-3 Task 7): print the keyword arm's SQL for this query — for BOTH scoring modes (ts_rank and bm25), with the KB's real resolved settings (chunk table, text-search config, simple arm, tiered boost, k1/b, dim-keyed stats tables) — as one JSON document on stdout, then exit 0. Requires --kb-id. Runs no search, no LLM call, and needs no golden set; --top-k sets the statement's LIMIT (pass 50 to match the legacy pre-rerank candidate depth the keyword arm actually runs with at top-k 10 with a reranker; a non-positive value falls back to 50). Each mode carries both the parameterised SQL and an "executable_sql" with the placeholders inlined, so it can be handed straight to EXPLAIN (ANALYZE, BUFFERS).`)
 	printKeywordSQLKBID := flag.String("kb-id", "", "KB id for --print-keyword-sql. Ignored in every other mode (the golden set carries its own kb_id per question).")
 	pairwiseA := flag.String("pairwise-a", "", `Offline pairwise preference mode (ruling W4-R4), side A: path to a judged eval report (a run made with --judge, so every question carries judge.answer). Requires --pairwise-b. Compares the two reports' persisted answers question by question with an LLM preference judge — every pair judged TWICE with the positions swapped, counting a win only when both orders agree (position debias); pairs the judge flips on are ties. Prints win/tie/loss counts, the win rate with a 95% Wilson interval, a per-route breakdown and a per-question table. Runs no retrieval and generates no answers; short-circuits before --golden and always exits 0 on a completed comparison (measurement, not a gate). --judge-model selects the judge.`)
 	pairwiseB := flag.String("pairwise-b", "", "Pairwise preference mode, side B: the report compared against --pairwise-a. The reported win rate is A's — a win rate below 0.5 means B produced the better answers.")
-	pairwiseOut := flag.String("pairwise-out", "", "Optional path for the pairwise result as JSON (per-pair verdicts incl. both orders' reasoning, counts, Wilson interval, per-route breakdown). Empty = human-readable output only.")
+	pairwiseOut := flag.String("pairwise-out", "", "Optional path for the pairwise result as JSON (per-pair verdicts incl. both orders' reasoning, counts, Wilson interval, per-route breakdown). Empty = human-readable output only. Also the output path of --pairwise-pool (the pooled report).")
+	pairwisePool := flag.String("pairwise-pool", "", `Wave-5 ruling W5-R1: pool two or more finished --pairwise-out JSONs into ONE win/tie/loss tally, with the win rate, the tie rate and the 95% Wilson interval RECOMPUTED on the pooled decisive pairs (never averaged across runs, which would weight a pair with 4 decisive verdicts like one with 16). Usage: --pairwise-out pooled.json --pairwise-pool a.json b.json — the first path is the flag value, the rest are positional, so EVERY other flag must come BEFORE them (Go's flag parsing stops at the first positional argument; a flag placed after the paths is rejected with an error rather than silently swallowed as a path). Ties stay out of every denominator, as in --pairwise-a/-b. Prints the pooled counts from BOTH sides' view (W5-R1 is stated from side B's) plus a per-input and a per-route pooled table. Reads only files: no retrieval, no judge, no database. Exits 0 on a completed pooling (measurement, not a gate), 2 on a usage error. Pooling assumes every input assigned the SAME configuration to side A — the pairwise JSON carries no report paths, so that cannot be verified here.`)
 	flag.Parse()
 
-	// Diagnostic mode short-circuits before --golden is required: it needs
-	// only a KB and a query.
-	if *printKeywordSQL != "" {
-		if err := validateKeywordSQLFlags(*printKeywordSQLKBID); err != nil {
-			slog.Error("invalid --print-keyword-sql invocation", "error", err)
-			os.Exit(2)
+	// The offline modes (--print-keyword-sql, --pairwise-pool,
+	// --pairwise-a/-b) short-circuit before --golden is required and before
+	// any config/DB setup. runOfflineMode keeps their precedence, their
+	// usage-error/failure exit codes and their "a completed comparison exits
+	// 0 whichever side won" contract; see cmd/eval/offline_modes.go.
+	if handled, code := runOfflineMode(offlineFlags{
+		printKeywordSQL: *printKeywordSQL,
+		kbID:            *printKeywordSQLKBID,
+		topK:            *topK,
+		pairwisePool:    *pairwisePool,
+		poolExtraPaths:  flag.Args(),
+		pairwiseA:       *pairwiseA,
+		pairwiseB:       *pairwiseB,
+		pairwiseOut:     *pairwiseOut,
+		judgeModel:      *judgeModel,
+	}); handled {
+		if code != 0 {
+			os.Exit(code)
 		}
-		if err := runPrintKeywordSQL(*printKeywordSQL, *printKeywordSQLKBID, *topK, os.Stdout); err != nil {
-			slog.Error("--print-keyword-sql failed", "error", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// Pairwise preference mode short-circuits before --golden as well: it
-	// compares two finished reports and never loads a golden set.
-	if *pairwiseA != "" || *pairwiseB != "" {
-		if err := validatePairwiseFlags(*pairwiseA, *pairwiseB); err != nil {
-			slog.Error("invalid --pairwise invocation", "error", err)
-			os.Exit(2)
-		}
-		if err := runPairwiseMode(*pairwiseA, *pairwiseB, *pairwiseOut, *judgeModel, os.Stdout); err != nil {
-			slog.Error("--pairwise failed", "error", err)
-			os.Exit(1)
-		}
-		// Exit 0 even when report B won: this mode measures, it does not gate.
 		return
 	}
 
@@ -138,58 +135,31 @@ func main() {
 		os.Exit(2)
 	}
 
-	var forceEnumeration *bool
-	switch *enumerationOverride {
-	case "on":
-		b := true
-		forceEnumeration = &b
-	case "off":
-		b := false
-		forceEnumeration = &b
-	case "":
-		// default classifier
-	default:
+	// nil = leave the decision to the classifier.
+	forceEnumeration, ok := parseBoolChoice(*enumerationOverride)
+	if !ok {
 		slog.Error("invalid --enumeration value", "value", *enumerationOverride)
 		os.Exit(2)
 	}
 
-	if *cragOverride != "" && *cragOverride != "on" && *cragOverride != "off" {
-		slog.Error("invalid --crag value", "value", *cragOverride)
+	// One list, checked in the order these flags were checked individually,
+	// so a command line with two bad values still reports the same one.
+	if bad, found := firstInvalidChoice([]choiceFlag{
+		{name: "--crag", value: *cragOverride, allowed: []string{"on", "off"}},
+		{name: "--bm25-mode", value: *bm25ModeOverride, allowed: []string{"ts_rank", "bm25"}},
+		{name: "--longcontext-mode", value: *longContextModeOverride, allowed: []string{"flat", "map_reduce"}},
+		{name: "--longcontext", value: *longContextEnabled, allowed: []string{"on", "off"}},
+		{name: "--bm25-tiered-boost", value: *bm25TieredBoostOverride, allowed: []string{"on", "off"}},
+		{name: "--conflict-surfacing", value: *conflictSurfacing, allowed: []string{"on", "off"}},
+		{name: "--recency-boost", value: *recencyBoostOverride, allowed: []string{"on", "off"}},
+	}); found {
+		slog.Error("invalid "+bad.name+" value", "value", bad.value)
 		os.Exit(2)
 	}
 
-	if *bm25ModeOverride != "" && *bm25ModeOverride != "ts_rank" && *bm25ModeOverride != "bm25" {
-		slog.Error("invalid --bm25-mode value", "value", *bm25ModeOverride)
-		os.Exit(2)
-	}
-	if *longContextModeOverride != "" && *longContextModeOverride != "flat" && *longContextModeOverride != "map_reduce" {
-		slog.Error("invalid --longcontext-mode value", "value", *longContextModeOverride)
-		os.Exit(2)
-	}
-	if *longContextEnabled != "" && *longContextEnabled != "on" && *longContextEnabled != "off" {
-		slog.Error("invalid --longcontext value", "value", *longContextEnabled)
-		os.Exit(2)
-	}
-	if *bm25TieredBoostOverride != "" && *bm25TieredBoostOverride != "on" && *bm25TieredBoostOverride != "off" {
-		slog.Error("invalid --bm25-tiered-boost value", "value", *bm25TieredBoostOverride)
-		os.Exit(2)
-	}
-	if *recencyBoostOverride != "" && *recencyBoostOverride != "on" && *recencyBoostOverride != "off" {
-		slog.Error("invalid --recency-boost value", "value", *recencyBoostOverride)
-		os.Exit(2)
-	}
-
-	var keepRaw *bool
-	switch *keepRawFlag {
-	case "on":
-		b := true
-		keepRaw = &b
-	case "off":
-		b := false
-		keepRaw = &b
-	case "":
-		// nil = read chat_condense_keep_raw_enabled from site_configs
-	default:
+	// nil = read chat_condense_keep_raw_enabled from site_configs.
+	keepRaw, ok := parseBoolChoice(*keepRawFlag)
+	if !ok {
 		slog.Error("invalid --keep-raw value", "value", *keepRawFlag)
 		os.Exit(2)
 	}
@@ -338,7 +308,7 @@ func main() {
 	// siteReader rather than the vector-layer overlay above. Chained after
 	// the CRAG wrapper so both overrides compose. One wrapper carries both
 	// keys — a second wrapper would be indistinguishable but harder to read.
-	if chatOverlays := buildChatOverlays(*longContextEnabled, *longContextModeOverride); len(chatOverlays) > 0 {
+	if chatOverlays := buildChatOverlays(*longContextEnabled, *longContextModeOverride, *conflictSurfacing); len(chatOverlays) > 0 {
 		siteReader = &chatOverlayReader{inner: siteReader, overlays: chatOverlays}
 		slog.Info("eval: applying chat site_config overlays for this run", "overlays", chatOverlays)
 	}
@@ -398,6 +368,15 @@ func main() {
 		// tabularRouter above, and wired into every --production-context
 		// branch that runs the standard PrepareChatContext path.
 		recencyLister := recencylister.New(db.Main)
+		// Wave 5 Task 5 (W5-R7): the conflict / supersession pass decides
+		// DIRECTION from each source's date line, and those dates come from
+		// a chat.FileDateLookup. internal/app wires exactly this adapter for
+		// production; without it every date renders "unknown" and no
+		// supersession can ever be reported with `newer` set, which would
+		// make the CERT NEU/UPDATE measurement vacuous. Inert when
+		// chat_conflict_surfacing_enabled is off (PrepareChatContext never
+		// reaches FileDates then).
+		fileDates := &fileDatesAdapter{store: files.NewStore(db.Main)}
 		if hasTurns {
 			// Turn rows bypass orchestrator dispatch and teams entirely
 			// (validated above: --team-id is already rejected when
@@ -414,6 +393,7 @@ func main() {
 				flags,
 				eval.WithTabularRouter(tabularRouter),
 				eval.WithRecencyLister(recencyLister),
+				eval.WithFileDates(fileDates),
 			)
 			adapter = eval.NewMultiTurnAdapter(prod, aiResolver, siteReader, keepRaw)
 			slog.Info("eval: multi-turn replay mode on (golden set has turns; standard PrepareChatContext path, no orchestrator dispatch, no team)")
@@ -437,6 +417,7 @@ func main() {
 				flags,
 				eval.WithTabularRouter(tabularRouter),
 				eval.WithRecencyLister(recencyLister),
+				eval.WithFileDates(fileDates),
 			)
 			slog.Info("eval: orchestrator-dispatch mode on (production-parity routing)")
 		} else {
@@ -465,6 +446,7 @@ func main() {
 				siteReader,
 				flags,
 				eval.WithRecencyLister(recencyLister),
+				eval.WithFileDates(fileDates),
 			)
 		}
 	} else {
@@ -808,11 +790,12 @@ type chatOverlayReader struct {
 	overlays map[string]string
 }
 
-// buildChatOverlays turns the two long-context CLI flags into the overlay
-// map. An empty flag contributes NO entry, which is the whole point: an
-// entry with an empty value would pin the key to the zero value for the run
-// instead of delegating to the live site_config.
-func buildChatOverlays(longContextEnabled, longContextMode string) map[string]string {
+// buildChatOverlays turns the chat-layer CLI flags (the two long-context
+// ones and --conflict-surfacing) into the overlay map. An empty flag
+// contributes NO entry, which is the whole point: an entry with an empty
+// value would pin the key to the zero value for the run instead of
+// delegating to the live site_config.
+func buildChatOverlays(longContextEnabled, longContextMode, conflictSurfacing string) map[string]string {
 	overlays := map[string]string{}
 	switch longContextEnabled {
 	case "on":
@@ -823,6 +806,12 @@ func buildChatOverlays(longContextEnabled, longContextMode string) map[string]st
 	if longContextMode != "" {
 		overlays["chat_longcontext_mode"] = longContextMode
 	}
+	switch conflictSurfacing {
+	case "on":
+		overlays["chat_conflict_surfacing_enabled"] = "true"
+	case "off":
+		overlays["chat_conflict_surfacing_enabled"] = "false"
+	}
 	return overlays
 }
 
@@ -831,6 +820,31 @@ func (w *chatOverlayReader) GetSiteConfigValue(ctx context.Context, key string) 
 		return &v, nil
 	}
 	return w.inner.GetSiteConfigValue(ctx, key)
+}
+
+// fileDatesAdapter implements chat.FileDateLookup over the main-DB files
+// store, exactly like internal/app/routes.go's identically-named adapter:
+// internal/files must not import internal/chat, so the two flat date structs
+// meet in one copy per entrypoint. cmd/eval needs it so a
+// --conflict-surfacing run sees the same published_at/created_at date lines
+// a real chat turn sees.
+type fileDatesAdapter struct {
+	store *files.PGStore
+}
+
+func (a *fileDatesAdapter) FileDatesByIDs(ctx context.Context, ids []string) (map[string]chat.FileDates, error) {
+	if a.store == nil {
+		return nil, nil
+	}
+	rows, err := a.store.FileDatesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]chat.FileDates, len(rows))
+	for id, d := range rows {
+		out[id] = chat.FileDates{CreatedAt: d.CreatedAt, PublishedAt: d.PublishedAt}
+	}
+	return out, nil
 }
 
 // cragOverrideReader wraps a chat.SiteConfigReader to force CRAG on or

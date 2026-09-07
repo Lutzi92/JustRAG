@@ -124,15 +124,45 @@ func TestChatOverlayReader_LongContextEnabledOverride(t *testing.T) {
 // fails this test (an empty overlay entry would pin the key to the zero
 // value instead of delegating).
 func TestBuildChatOverlays_EmptyFlagsLeaveOverlayEmpty(t *testing.T) {
-	if got := buildChatOverlays("", ""); len(got) != 0 {
-		t.Fatalf("buildChatOverlays(\"\", \"\") = %v, want empty map", got)
+	if got := buildChatOverlays("", "", ""); len(got) != 0 {
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"\") = %v, want empty map", got)
 	}
-	got := buildChatOverlays("on", "")
+	got := buildChatOverlays("on", "", "")
 	if len(got) != 1 || got["chat_longcontext_enabled"] != "true" {
-		t.Fatalf("buildChatOverlays(\"on\", \"\") = %v, want only chat_longcontext_enabled=true", got)
+		t.Fatalf("buildChatOverlays(\"on\", \"\", \"\") = %v, want only chat_longcontext_enabled=true", got)
 	}
-	got = buildChatOverlays("off", "flat")
+	got = buildChatOverlays("off", "flat", "")
 	if got["chat_longcontext_enabled"] != "false" || got["chat_longcontext_mode"] != "flat" {
-		t.Fatalf("buildChatOverlays(\"off\", \"flat\") = %v", got)
+		t.Fatalf("buildChatOverlays(\"off\", \"flat\", \"\") = %v", got)
+	}
+}
+
+// --conflict-surfacing overlays chat_conflict_surfacing_enabled for one run
+// (W5-R7 measurement, no site_configs mutation), composes with the
+// long-context flags, and — like them — contributes NO entry when empty so
+// the live site_config still decides.
+//
+// Mutation: dropping the conflict arm from buildChatOverlays (so "on"
+// produces an empty overlay) fails this test.
+func TestBuildChatOverlays_ConflictSurfacing(t *testing.T) {
+	got := buildChatOverlays("", "", "on")
+	if len(got) != 1 || got["chat_conflict_surfacing_enabled"] != "true" {
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"on\") = %v, want only chat_conflict_surfacing_enabled=true", got)
+	}
+	got = buildChatOverlays("", "", "off")
+	if len(got) != 1 || got["chat_conflict_surfacing_enabled"] != "false" {
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"off\") = %v, want only chat_conflict_surfacing_enabled=false", got)
+	}
+	// An unrecognised value contributes nothing (the CLI rejects it before
+	// this point; the map must not invent a value either way).
+	if got := buildChatOverlays("", "", "maybe"); len(got) != 0 {
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"maybe\") = %v, want empty map", got)
+	}
+	got = buildChatOverlays("on", "flat", "on")
+	if len(got) != 3 ||
+		got["chat_longcontext_enabled"] != "true" ||
+		got["chat_longcontext_mode"] != "flat" ||
+		got["chat_conflict_surfacing_enabled"] != "true" {
+		t.Fatalf("buildChatOverlays(\"on\", \"flat\", \"on\") = %v, want all three keys", got)
 	}
 }

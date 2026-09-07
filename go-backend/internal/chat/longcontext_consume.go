@@ -110,6 +110,10 @@ type flatAddenda struct {
 	// Tabular is the executed-rows addendum. Unlike the two above it carries
 	// no leading blank line of its own, so the assembler adds one.
 	Tabular string
+	// Conflicts is the W5-R7 conflict / supersession addendum, empty when
+	// the pass is off, found nothing or failed. Carries its own leading
+	// blank line (like Enumeration and Recency).
+	Conflicts string
 }
 
 // extractFindingsFn is the injectable seam for ai.ExtractLongContextFindings.
@@ -547,6 +551,12 @@ func assembleFlatFromParts(
 		// the answer LLM should prefer over the retrieved prose.
 		sb.WriteString("\n\n")
 		sb.WriteString(add.Tabular)
+	}
+	if add.Conflicts != "" {
+		// After Tabular, still before CONTEXT: the conflict list refers to
+		// the [N] markers of the context blocks below, so it reads as a
+		// commentary on them rather than as evidence of its own.
+		sb.WriteString(add.Conflicts)
 	}
 	sb.WriteString("\n\nCONTEXT:\n")
 	sb.WriteString(contextText)

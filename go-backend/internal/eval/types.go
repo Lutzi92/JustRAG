@@ -9,7 +9,11 @@
 // future phase.
 package eval
 
-import "time"
+import (
+	"time"
+
+	"github.com/justrag/go-backend/internal/chat"
+)
 
 // Question is one entry in the golden set.
 type Question struct {
@@ -176,6 +180,15 @@ type QuestionReport struct {
 	// ProductionContextAdapter) so existing on-disk reports stay
 	// byte-stable.
 	Agent *AgentTrace `json:"agent,omitempty"`
+	// Conflicts is the W5-R7 conflict / supersession report the chat
+	// pipeline produced for this question, in EXACTLY the shape a chat
+	// turn persists and streams (chat.ConflictsForWire — the bare array).
+	// Nil/absent means the pass did not run (flag off, fewer than two
+	// distinct files, abstain, timeout) or ran and found nothing, which is
+	// why the flag rate is measured as "questions with >= 1 entry" and not
+	// from the key's presence. Omitted from the JSON when empty, so every
+	// pre-Wave-5 report shape stays byte-stable.
+	Conflicts []chat.MessageConflict `json:"conflicts,omitempty"`
 	// Contents holds the chunk text per retrieved chunk, in the same
 	// order as Retrieved. JSON-suppressed via `json:"-"` so the on-disk
 	// Report shape is unchanged — Phase 3 §G's ExportRAGAS uses this

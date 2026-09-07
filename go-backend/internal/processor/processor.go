@@ -184,6 +184,20 @@ type ProcessorStore interface {
 	// UpdateFileStageDetail records a human-readable progress detail for
 	// the current stage (e.g. "Blatt 2/3 · 120000 Zeilen"); "" clears it.
 	UpdateFileStageDetail(ctx context.Context, fileID, detail string) error
+	// GetFileOrigin returns files.origin for fileID ("" when the row is
+	// gone). Read by the ingest prompt-injection screen, which only runs
+	// for external sources — see screening.go's screenedOrigins.
+	GetFileOrigin(ctx context.Context, fileID string) (string, error)
+	// SetInjectionFlag records a screening hit (files.injection_flag +
+	// injection_detail). detail is document-derived, untrusted text —
+	// never log it in full.
+	SetInjectionFlag(ctx context.Context, fileID string, detail []byte) error
+	// MarkInjectionScreenedClean records a pass that found nothing:
+	// injection_flag = false with a detail carrying only screened_at. A
+	// re-ingest therefore drops a stale flag rather than keeping it
+	// forever, and "screened, clean" stays distinguishable from "never
+	// screened" (a NULL detail).
+	MarkInjectionScreenedClean(ctx context.Context, fileID string, detail []byte) error
 }
 
 // SiteConfigReader reads individual site config values.
@@ -990,6 +1004,22 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			_ = p.store.MarkFileError(ctx, fileID, "parse", "The file could not be parsed")
 			return fmt.Errorf("processor: parse file: %w", parseErr)
 		}
+	}
+
+	// Ingest prompt-injection screening (W5-R8): one pass over the parsed
+	// text of an externally sourced file, after a successful parse and
+	// BEFORE chunking, so the verdict describes the document as parsed
+	// rather than an arbitrary chunk window. Advisory only — it never
+	// blocks ingestion or alters anything that follows, and every failure
+	// inside it is swallowed.
+	//
+	// Gated on !isSpreadsheet rather than nested in the else branch above:
+	// a spreadsheet with no ingester wired falls through to the plain
+	// SpreadsheetParser and would otherwise be screened after all. Its
+	// "text" is a generated key:value render of typed cells, and cell text
+	// already gets the equivalent check inside the sheet profiler.
+	if !isSpreadsheet {
+		p.screenIfExternal(ctx, fileID, result.Text)
 	}
 
 	// Parsing done — bump progress so the bar visibly advances before

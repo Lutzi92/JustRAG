@@ -29,8 +29,8 @@ const SECTION_CONFIGS = [
     { id: 'compare', titleKey: 'agentSectionCompare', i18nKeys: ['chatCompareEnabled', 'chatCompareModel', 'chatCompareMaxSections', 'chatCompareConcurrency', 'chatComparePeersPerSection', 'chatCompareAttachmentTtlHours', 'chatCompareMaxFileBytes'], settingKeys: ['chat_compare_enabled', 'chat_compare_model', 'chat_compare_max_sections', 'chat_compare_concurrency', 'chat_compare_peers_per_section', 'chat_compare_attachment_ttl_hours', 'chat_compare_max_file_bytes'] },
     { id: 'teams', titleKey: 'agentSectionTeams', i18nKeys: ['agentTeamRouterModel', 'agentsAllowPrivilegedTools'], settingKeys: ['agent_team_router_model', 'agents_allow_privileged_tools'] },
     { id: 'longmem', titleKey: 'agentSectionLongmem', i18nKeys: ['chatLongmemEnabled', 'chatLongmemMinSalience', 'chatLongmemRecallTopK', 'chatLongmemDecayDays', 'chatLongmemRecallSemantic', 'chatLongmemConflictResolution', 'chatLongmemConflictModel', 'chatLongmemConflictCandidates'], settingKeys: ['chat_longmem_enabled', 'chat_longmem_min_salience', 'chat_longmem_recall_top_k', 'chat_longmem_decay_days', 'chat_longmem_recall_semantic', 'chat_longmem_conflict_resolution', 'chat_longmem_conflict_model', 'chat_longmem_conflict_candidates'] },
-    { id: 'validation', titleKey: 'agentSectionValidation', i18nKeys: ['factcheckInChat', 'citationValidationEnabled', 'citationValidationSemanticThreshold', 'chatFactualityGateEnabled', 'chatFactualityGateMaxRefines', 'chatSelfRAGEnabled', 'ragasSamplingEnabled', 'ragasSamplingRate', 'chatCitationSpansEnabled', 'chatCitationSpansMaxSources', 'chatCitationSpansTimeoutMs'], settingKeys: ['factcheck_in_chat', 'citation_validation_enabled', 'citation_validation_semantic_threshold', 'chat_factuality_gate_enabled', 'chat_factuality_gate_max_refines', 'chat_self_rag_enabled', 'ragas_sampling_enabled', 'ragas_sampling_rate', 'chat_citation_spans_enabled', 'chat_citation_spans_max_sources', 'chat_citation_spans_timeout_ms'] },
-    { id: 'ingestion', titleKey: 'agentSectionIngestion', i18nKeys: ['doclingEnabled', 'doclingBaseUrl', 'doclingTableMode', 'doclingOcrLanguages', 'doclingForceOcr', 'doclingPictureDescriptionEnabled', 'doclingPictureAreaThreshold', 'doclingPictureDescriptionPrompt', 'describeImageEnabled', 'describeImageEnabledHelp', 'describeImageModel', 'describeImageModelHelp', 'contextualEnrichment', 'embeddingBatchSize', 'lateChunkingEnabled', 'lateChunkingMaxInputTokens', 'parentChildEnabled', 'parentChunkSize', 'childChunkSize', 'raptorEnabled', 'raptorMinChunks', 'raptorMaxLevels', 'raptorBranchingFactor', 'raptorClusteringAlgorithm', 'raptorLeidenResolution', 'hyPEEnabled', 'hyPEQuestionsPerChunk', 'hyPEModel'], settingKeys: ['docling_enabled', 'docling_base_url', 'docling_table_mode', 'docling_ocr_languages', 'docling_force_ocr', 'docling_picture_description_enabled', 'docling_picture_area_threshold', 'docling_picture_description_prompt', 'describe_image_enabled', 'describe_image_model', 'contextual_enrichment', 'embedding_batch_size', 'late_chunking_enabled', 'late_chunking_max_input_tokens', 'parent_child_enabled', 'parent_chunk_size', 'child_chunk_size', 'raptor_enabled', 'raptor_min_chunks', 'raptor_max_levels', 'raptor_branching_factor', 'raptor_clustering_algorithm', 'raptor_leiden_resolution', 'hype_enabled', 'hype_questions_per_chunk', 'hype_model'] },
+    { id: 'validation', titleKey: 'agentSectionValidation', i18nKeys: ['factcheckInChat', 'citationValidationEnabled', 'citationValidationSemanticThreshold', 'chatFactualityGateEnabled', 'chatFactualityGateMaxRefines', 'chatSelfRAGEnabled', 'ragasSamplingEnabled', 'ragasSamplingRate', 'ragasSamplesRetentionDays', 'chatCitationSpansEnabled', 'chatCitationSpansMaxSources', 'chatCitationSpansTimeoutMs', 'chatConflictSurfacingEnabled', 'chatConflictModel', 'chatConflictMaxChunks', 'chatConflictTimeoutMs', 'chatAnswerDegenerateRunLimit'], settingKeys: ['factcheck_in_chat', 'citation_validation_enabled', 'citation_validation_semantic_threshold', 'chat_factuality_gate_enabled', 'chat_factuality_gate_max_refines', 'chat_self_rag_enabled', 'ragas_sampling_enabled', 'ragas_sampling_rate', 'ragas_samples_retention_days', 'chat_citation_spans_enabled', 'chat_citation_spans_max_sources', 'chat_citation_spans_timeout_ms', 'chat_conflict_surfacing_enabled', 'chat_conflict_model', 'chat_conflict_max_chunks', 'chat_conflict_timeout_ms', 'chat_answer_degenerate_run_limit'] },
+    { id: 'ingestion', titleKey: 'agentSectionIngestion', i18nKeys: ['doclingEnabled', 'doclingBaseUrl', 'doclingTableMode', 'doclingOcrLanguages', 'doclingForceOcr', 'doclingPictureDescriptionEnabled', 'doclingPictureAreaThreshold', 'doclingPictureDescriptionPrompt', 'describeImageEnabled', 'describeImageEnabledHelp', 'describeImageModel', 'describeImageModelHelp', 'contextualEnrichment', 'ingestScreeningEnabled', 'ingestScreeningEnabledHelp', 'ingestScreeningWindowRunes', 'ingestScreeningWindowRunesHelp', 'embeddingBatchSize', 'lateChunkingEnabled', 'lateChunkingMaxInputTokens', 'parentChildEnabled', 'parentChunkSize', 'childChunkSize', 'raptorEnabled', 'raptorMinChunks', 'raptorMaxLevels', 'raptorBranchingFactor', 'raptorClusteringAlgorithm', 'raptorLeidenResolution', 'hyPEEnabled', 'hyPEQuestionsPerChunk', 'hyPEModel'], settingKeys: ['docling_enabled', 'docling_base_url', 'docling_table_mode', 'docling_ocr_languages', 'docling_force_ocr', 'docling_picture_description_enabled', 'docling_picture_area_threshold', 'docling_picture_description_prompt', 'describe_image_enabled', 'describe_image_model', 'contextual_enrichment', 'ingest_screening_enabled', 'ingest_screening_window_runes', 'embedding_batch_size', 'late_chunking_enabled', 'late_chunking_max_input_tokens', 'parent_child_enabled', 'parent_chunk_size', 'child_chunk_size', 'raptor_enabled', 'raptor_min_chunks', 'raptor_max_levels', 'raptor_branching_factor', 'raptor_clustering_algorithm', 'raptor_leiden_resolution', 'hype_enabled', 'hype_questions_per_chunk', 'hype_model'] },
     { id: 'observability', titleKey: 'agentSectionObservability', i18nKeys: ['langfuseBaseUrl', 'kbStaleDays'], settingKeys: ['langfuse_base_url', 'kb_stale_days'] },
     { id: 'tools', titleKey: 'agentSectionTools', i18nKeys: ['chatCodeExecEnabled'], settingKeys: ['mcp_servers', 'chat_use_mcp_tools', 'chat_code_exec_enabled'] },
     { id: 'tabular', titleKey: 'agentSectionTabular', i18nKeys: ['chatTabularQueryEnabled', 'chatTabularChartsEnabled', 'chatTabularRouterEnabled', 'chatTabularRouterModel', 'chatTabularRouterMaxRows', 'chatTabularRouterMaxRepairs', 'chatTabularRouterTimeoutMs', 'chatTabularRouterSchemaMaxTokens', 'chatTabularGuidanceMaxTokens'], settingKeys: ['chat_tabular_query_enabled', 'chat_tabular_charts_enabled', 'chat_tabular_router_enabled', 'chat_tabular_router_model', 'chat_tabular_router_max_rows', 'chat_tabular_router_max_repairs', 'chat_tabular_router_timeout_ms', 'chat_tabular_router_schema_max_tokens', 'chat_tabular_guidance_max_tokens'] },
@@ -91,11 +91,16 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
     const isDescribeImageEnabled = siteConfigs.describe_image_enabled === 'true' || siteConfigs.describe_image_enabled === '1';
     const isDoclingCaptioningEnabled = siteConfigs.docling_picture_description_enabled === 'true' || siteConfigs.docling_picture_description_enabled === '1';
     const isContextualEnrichmentEnabled = siteConfigs.contextual_enrichment !== 'false' && siteConfigs.contextual_enrichment !== '0';
+    // Kill switch: default ON, so anything but an explicit false/0 is on
+    // (mirrors processor.resolveScreeningEnabled).
+    const isIngestScreeningEnabled = siteConfigs.ingest_screening_enabled !== 'false' && siteConfigs.ingest_screening_enabled !== '0';
     const isQueryCacheEnabled = siteConfigs.query_cache_enabled === 'true' || siteConfigs.query_cache_enabled === '1';
     const isCorpusTableEnabled = siteConfigs.chat_corpus_table_enabled === 'true' || siteConfigs.chat_corpus_table_enabled === '1';
     const isLongcontextEnabled = siteConfigs.chat_longcontext_enabled === 'true' || siteConfigs.chat_longcontext_enabled === '1';
-    // The two map knobs only do anything in map_reduce mode.
-    const isLongcontextMapReduce = isLongcontextEnabled && siteConfigs.chat_longcontext_mode === 'map_reduce';
+    // The two map knobs only do anything in map_reduce mode. An unset key is
+    // map_reduce since Wave 5 (W5-R1), so the fallback has to match the backend
+    // default or the knobs would be hidden on exactly the deployments that use them.
+    const isLongcontextMapReduce = isLongcontextEnabled && (siteConfigs.chat_longcontext_mode || 'map_reduce') === 'map_reduce';
 
     const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => {
         try {
@@ -760,7 +765,7 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                         <label htmlFor="chat-longcontext-mode">{t('chatLongcontextMode')}</label>
                         <select
                             id="chat-longcontext-mode"
-                            value={siteConfigs.chat_longcontext_mode || 'flat'}
+                            value={siteConfigs.chat_longcontext_mode || 'map_reduce'}
                             onChange={e => setSiteConfigs(prev => ({ ...prev, chat_longcontext_mode: e.target.value }))}
                             disabled={!isLongcontextEnabled}
                             style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
@@ -1888,6 +1893,21 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                     </div>
 
                     <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="ragas-samples-retention-days">{t('ragasSamplesRetentionDays')}</label>
+                        <input
+                            id="ragas-samples-retention-days"
+                            type="number"
+                            min="1"
+                            max="3650"
+                            step="1"
+                            value={siteConfigs.ragas_samples_retention_days || '90'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, ragas_samples_retention_days: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('ragasSamplesRetentionDaysHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
                         <label htmlFor="chat-citation-spans-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
                             <input
                                 id="chat-citation-spans-enabled"
@@ -1929,6 +1949,77 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
                         />
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatCitationSpansTimeoutMsHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-conflict-surfacing-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="chat-conflict-surfacing-enabled"
+                                type="checkbox"
+                                checked={siteConfigs.chat_conflict_surfacing_enabled === 'true' || siteConfigs.chat_conflict_surfacing_enabled === '1'}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, chat_conflict_surfacing_enabled: e.target.checked ? 'true' : 'false' }))}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('chatConflictSurfacingEnabled')}
+                        </label>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatConflictSurfacingEnabledHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-conflict-model">{t('chatConflictModel')}</label>
+                        <input
+                            id="chat-conflict-model"
+                            type="text"
+                            value={siteConfigs.chat_conflict_model || ''}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_conflict_model: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatConflictModelHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-conflict-max-chunks">{t('chatConflictMaxChunks')}</label>
+                        <input
+                            id="chat-conflict-max-chunks"
+                            type="number"
+                            min="2"
+                            max="30"
+                            step="1"
+                            value={siteConfigs.chat_conflict_max_chunks || '12'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_conflict_max_chunks: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatConflictMaxChunksHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-conflict-timeout-ms">{t('chatConflictTimeoutMs')}</label>
+                        <input
+                            id="chat-conflict-timeout-ms"
+                            type="number"
+                            min="1000"
+                            max="30000"
+                            step="500"
+                            value={siteConfigs.chat_conflict_timeout_ms || '6000'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_conflict_timeout_ms: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatConflictTimeoutMsHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="chat-answer-degenerate-run-limit">{t('chatAnswerDegenerateRunLimit')}</label>
+                        <input
+                            id="chat-answer-degenerate-run-limit"
+                            type="number"
+                            min="0"
+                            max="100000"
+                            step="50"
+                            value={siteConfigs.chat_answer_degenerate_run_limit || '400'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, chat_answer_degenerate_run_limit: e.target.value }))}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('chatAnswerDegenerateRunLimitHelp')}</p>
                     </div>
                 </Section>
 
@@ -2090,6 +2181,36 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                             {t('contextualEnrichment')}
                         </label>
                         <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('contextualEnrichmentHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="ingest-screening-enabled" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                            <input
+                                id="ingest-screening-enabled"
+                                type="checkbox"
+                                checked={isIngestScreeningEnabled}
+                                onChange={e => setSiteConfigs(prev => ({ ...prev, ingest_screening_enabled: e.target.checked ? 'true' : 'false' }))}
+                                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            />
+                            {t('ingestScreeningEnabled')}
+                        </label>
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('ingestScreeningEnabledHelp')}</p>
+                    </div>
+
+                    <div className="input-group" style={{ maxWidth: '400px' }}>
+                        <label htmlFor="ingest-screening-window-runes">{t('ingestScreeningWindowRunes')}</label>
+                        <input
+                            id="ingest-screening-window-runes"
+                            type="number"
+                            min="100"
+                            max="5000"
+                            step="50"
+                            value={siteConfigs.ingest_screening_window_runes || '600'}
+                            onChange={e => setSiteConfigs(prev => ({ ...prev, ingest_screening_window_runes: e.target.value }))}
+                            disabled={!isIngestScreeningEnabled}
+                            style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}
+                        />
+                        <p style={{ fontSize: '0.8rem', opacity: 0.6, marginTop: '0.5rem' }}>{t('ingestScreeningWindowRunesHelp')}</p>
                     </div>
 
                     <div className="input-group" style={{ maxWidth: '400px' }}>

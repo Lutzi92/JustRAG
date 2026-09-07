@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 
@@ -14,11 +15,22 @@ import (
 	"github.com/justrag/go-backend/internal/observability"
 )
 
-// fakeJudgeCompleter returns canned JSON responses keyed on a substring
-// of the user prompt. The eval.Judge calls Complete(ctx, user, system)
-// per metric (faithfulness/answer_relevance/context_precision), each
-// with a distinct user-prompt shape; the substrings below pick the
-// right canned reply for each call.
+// fakeJudgeCompleter returns canned JSON responses keyed on a substring of
+// the prompt. The eval.Judge calls Complete(ctx, user, system) per metric
+// (faithfulness/answer_relevance/context_precision); the needles below pick
+// the right canned reply for each call.
+//
+// The needles are the JSON SHAPE each system prompt demands — `{"claims"`,
+// `{"score"`, `{"relevant"` — and not the bare words. That is a correctness
+// requirement, not a style choice: the answer-relevance system prompt
+// contains the bare word "relevant" twice ("3 = partially relevant…",
+// "2 = mostly irrelevant"), so with bare-word needles the answer-relevance
+// call matched BOTH "score" and "relevant" and a map range picked between
+// them at random — roughly one run in ten returned `{"relevant":[true]}` for
+// it, the score field was then missing, and the metric was dropped with
+// `answer_relevance: score: missing ("")`. Matching is also done over a
+// SORTED needle list so any future overlap fails identically on every run
+// instead of once in N.
 type fakeJudgeCompleter struct {
 	responses map[string]string // substring → canned response
 	err       error
@@ -28,12 +40,14 @@ func (f *fakeJudgeCompleter) Complete(_ context.Context, user, system string) (s
 	if f.err != nil {
 		return "", f.err
 	}
-	// Match against the system prompt — the judge's system prompts are the
-	// distinguishing signal: faithfulness has "claims", answer relevance has
-	// "score", context precision has "relevant".
-	for needle, resp := range f.responses {
+	needles := make([]string, 0, len(f.responses))
+	for needle := range f.responses {
+		needles = append(needles, needle)
+	}
+	sort.Strings(needles)
+	for _, needle := range needles {
 		if strings.Contains(system, needle) || strings.Contains(user, needle) {
-			return resp, nil
+			return f.responses[needle], nil
 		}
 	}
 	return "", errors.New("fakeJudgeCompleter: no canned response for prompt")
@@ -42,12 +56,12 @@ func (f *fakeJudgeCompleter) Complete(_ context.Context, user, system string) (s
 func TestRAGASSampleHandler_HappyPath_EmitsCompletedOutcome(t *testing.T) {
 	completer := &fakeJudgeCompleter{
 		responses: map[string]string{
-			// Faithfulness prompt mentions "claims"; 1/1 supported = 1.0
-			"claims": `{"claims":[{"text":"a","supported":true}]}`,
-			// Answer relevance prompt mentions "score"; 5/5 → normalized 1.0
-			"score": `{"score":5,"reasoning":"perfect"}`,
-			// Context precision prompt mentions "relevant"; 1/1 relevant = 1.0
-			"relevant": `{"relevant":[true]}`,
+			// Faithfulness prompt demands {"claims":…}; 1/1 supported = 1.0
+			`{"claims"`: `{"claims":[{"text":"a","supported":true}]}`,
+			// Answer relevance prompt demands {"score":…}; 5/5 → normalized 1.0
+			`{"score"`: `{"score":5,"reasoning":"perfect"}`,
+			// Context precision prompt demands {"relevant":…}; 1/1 relevant = 1.0
+			`{"relevant"`: `{"relevant":[true]}`,
 		},
 	}
 
@@ -66,7 +80,7 @@ func TestRAGASSampleHandler_HappyPath_EmitsCompletedOutcome(t *testing.T) {
 	counter := observability.RAGASSampleTotalForTest()
 	beforeCompleted := testutil.ToFloat64(counter.WithLabelValues("completed"))
 
-	handler := NewRAGASSampleHandler(completer)
+	handler := NewRAGASSampleHandler(completer, nil)
 	if err := handler(context.Background(), task); err != nil {
 		t.Fatalf("handler returned error: %v", err)
 	}
@@ -95,7 +109,7 @@ func TestRAGASSampleHandler_AllPromptsFail_RecordsErrorOutcome(t *testing.T) {
 	counter := observability.RAGASSampleTotalForTest()
 	beforeError := testutil.ToFloat64(counter.WithLabelValues("error"))
 
-	handler := NewRAGASSampleHandler(completer)
+	handler := NewRAGASSampleHandler(completer, nil)
 	// Worker handler should NOT return an error — that would cause asynq
 	// to retry. Sampling is best-effort.
 	if err := handler(context.Background(), task); err != nil {
@@ -115,7 +129,7 @@ func TestRAGASSampleHandler_MalformedPayload_ReturnsError(t *testing.T) {
 	task := asynq.NewTask(jobs.TypeRAGASSample, []byte("not json"))
 
 	completer := &fakeJudgeCompleter{}
-	handler := NewRAGASSampleHandler(completer)
+	handler := NewRAGASSampleHandler(completer, nil)
 	if err := handler(context.Background(), task); err == nil {
 		t.Error("malformed payload should return error so asynq can retry")
 	}

@@ -4,7 +4,7 @@ import { useCallback, useState } from 'react';
  * Expandable sections inside an answer whose open/closed state changes the
  * message's rendered height.
  */
-export type MessageSection = 'reasoning' | 'sources' | 'confidence';
+export type MessageSection = 'reasoning' | 'sources' | 'confidence' | 'conflicts';
 
 /**
  * Per-message expand state, owned ABOVE the virtualized message list.

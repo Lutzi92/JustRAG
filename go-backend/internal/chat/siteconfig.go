@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/justrag/go-backend/internal/ai"
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/siteconfig"
 )
 
@@ -263,6 +264,20 @@ func RAGASSamplingEnabled(ctx context.Context, reader SiteConfigReader) bool {
 // back to 0.0. Tunable via site_configs key "ragas_sampling_rate".
 func RAGASSamplingRate(ctx context.Context, reader SiteConfigReader) float64 {
 	return readFloat(ctx, reader, "ragas_sampling_rate", 0.0, 0.0, 1.0)
+}
+
+// RagasSamplesRetentionDays is how long a judged sample stays in the
+// ragas_samples table (migration 0072) before the nightly maintenance pass
+// deletes it. Default 90 days, clamped to [1, 3650]; global-only, since
+// retention is a property of the table, not of a KB.
+//
+// Out-of-range values fall back to 90 rather than clamping to the nearest
+// bound — readInt's documented behaviour, and load-bearing here: a "0" typed
+// into the field would otherwise mean "delete every sample tonight", turning
+// a retention knob into a data-loss one. Tunable via site_configs key
+// "ragas_samples_retention_days".
+func RagasSamplesRetentionDays(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "ragas_samples_retention_days", 90, 1, 3650)
 }
 
 // CitationValidationSemanticThreshold returns the cosine-similarity floor
@@ -683,22 +698,38 @@ func ChatLongContextTopK(ctx context.Context, reader SiteConfigReader) int {
 // ChatLongContextMode selects how the OrchLongContext consumer turns the
 // wide chunk pool into an answer prompt:
 //
-//   - "flat" (default) hands the whole token-budgeted pool to the answer LLM
-//     raw — byte-identical to the pre-Wave-3 behaviour.
-//   - "map_reduce" first extracts per-group findings (claim + verbatim quote,
-//     tagged with the source's `[N]`) with one fast-tier call per chunk group,
-//     then hands the answer LLM only those findings plus the source headers.
-//     Trades N/GroupSize cheap calls for a far shorter answer prompt and much
-//     less position bias across a 200-chunk pool.
+//   - "map_reduce" (default since Wave 5) first extracts per-group findings
+//     (claim + verbatim quote, tagged with the source's `[N]`) with one
+//     fast-tier call per chunk group, then hands the answer LLM only those
+//     findings plus the source headers. Trades N/GroupSize cheap calls for a
+//     far shorter answer prompt and much less position bias across a
+//     200-chunk pool.
+//   - "flat" hands the whole token-budgeted pool to the answer LLM raw —
+//     byte-identical to the pre-Wave-3 behaviour.
 //
-// Unknown values normalise to "flat" so a typo never changes behaviour.
-// Tunable via "chat_longcontext_mode".
+// W5-R1 (pre-registered 2026-09-06, decided on the 24-question
+// global-synthesis set): map_reduce won 34/36 pooled decisive judge pairs
+// (0.944, Wilson low 0.819), coverage +5.0 pp against a 1.4 pp same-mode band,
+// control pair 0.364 — all four criteria passed, at 1.28x wall time.
+//
+// Two DIFFERENT fallbacks, deliberately: an UNSET key means "the operator
+// never chose", so it reads the new default; an UNRECOGNISED value is a typo,
+// and a typo must never silently buy the expensive mode — it normalises to the
+// safe "flat" and logs a warning. Tunable via "chat_longcontext_mode".
 func ChatLongContextMode(ctx context.Context, reader SiteConfigReader) string {
 	v := strings.ToLower(strings.TrimSpace(readString(ctx, reader, "chat_longcontext_mode")))
-	if v == LongContextModeMapReduce {
+	switch v {
+	case "":
 		return LongContextModeMapReduce
+	case LongContextModeMapReduce:
+		return LongContextModeMapReduce
+	case LongContextModeFlat:
+		return LongContextModeFlat
+	default:
+		logctx.From(ctx).Warn("chat_longcontext_mode: unrecognised value, falling back to flat",
+			"value", v, "known", []string{LongContextModeFlat, LongContextModeMapReduce})
+		return LongContextModeFlat
 	}
-	return LongContextModeFlat
 }
 
 // ChatLongContextMapGroupSize is how many chunks one map-stage extraction call
@@ -1270,6 +1301,29 @@ func ChatAnswerTemperature(ctx context.Context, reader SiteConfigReader) float64
 	return readFloat(ctx, reader, "chat_answer_temperature", ai.DefaultAnswerTemperature, 0, 2)
 }
 
+// ChatAnswerDegenerateRunLimit is the maximum length, in runes, of a run of
+// one repeated character — or of a repeated 2–4-rune pattern — that an
+// answer may contain before the degenerate-run guard aborts the completion
+// and truncates the answer (W5-R4). See internal/chat/degenerate_guard.go.
+//
+// Default 400: above any realistic Markdown rule width (a 300-`-` table
+// rule is common; 400 is not), well below the ~15 400-rune `_` run the
+// Wave-4 G01 answer produced. **0 disables the guard entirely** — the kill
+// switch. Any other value outside [50, 100000], and anything unparseable,
+// falls back to the default, the same convention as every other int knob
+// here. Global-only: this guards the deployment against a model failure
+// mode, it is not a per-KB retrieval trade-off, so there is no registry
+// entry and no per-KB override.
+func ChatAnswerDegenerateRunLimit(ctx context.Context, reader SiteConfigReader) int {
+	// lo=0 so the explicit "disabled" value survives parseInt's range
+	// check; the [50, …] floor for a real limit is applied after.
+	n := readInt(ctx, reader, "chat_answer_degenerate_run_limit", degenerateRunLimitDefault, 0, degenerateRunLimitMax)
+	if n != 0 && n < degenerateRunLimitMin {
+		return degenerateRunLimitDefault
+	}
+	return n
+}
+
 // ChatAgenticPlateauStop reports whether the Phase 1 §1.3 quality-plateau
 // early-stop check is active. When true, the agentic / plan-execute loops
 // track per-step `topScore` and `chunksAdded` deltas; two consecutive
@@ -1804,4 +1858,52 @@ func RawQueryForRetrieval(enabled bool, raw, condensed string) string {
 		return ""
 	}
 	return r
+}
+
+// --- Conflict / supersession surfacing (W5-R7) -----------------------------
+
+// defaultConflictMaxChunks / defaultConflictTimeoutMs are the compiled-in
+// defaults, named so conflicts.go can fall back to them without re-reading
+// site_config on a zero-valued config (an eval or public-API caller that
+// built a ConflictConfig by hand).
+const (
+	defaultConflictMaxChunks = 12
+	defaultConflictTimeoutMs = 6000
+)
+
+// ChatConflictSurfacingEnabled gates the W5-R7 conflict / supersession
+// pass: one structured fast-tier call over the already-assembled chunk set
+// asking which of the cited sources disagree with each other and which of a
+// disagreeing pair is newer. The result becomes a system-prompt addendum, a
+// persisted `conflicts` blob on the AI message and an SSE frame the
+// frontend renders as a badge. Default: OFF — it costs one extra fast-tier
+// call on every turn of a KB that opts in, and its value depends on the
+// corpus actually containing superseding documents (CERT advisories,
+// versioned policies). Tunable via "chat_conflict_surfacing_enabled".
+func ChatConflictSurfacingEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_conflict_surfacing_enabled", false)
+}
+
+// ChatConflictModel resolves the detector's model through the fast-tier
+// chain (per-task key → `model_tier_fast` → empty, i.e. the KB's chat
+// model). Tunable via "chat_conflict_model".
+func ChatConflictModel(ctx context.Context, reader SiteConfigReader) string {
+	return ResolveFastTierModel(ctx, reader, "chat_conflict_model")
+}
+
+// ChatConflictMaxChunks caps how many of the turn's sources are compared in
+// the single detector call (top-scoring first). Range [2, 30]; default 12.
+// Below 2 there is nothing to compare; the upper bound keeps the prompt —
+// and therefore the added latency — bounded on a wide retrieval set.
+// Tunable via "chat_conflict_max_chunks".
+func ChatConflictMaxChunks(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_conflict_max_chunks", defaultConflictMaxChunks, 2, 30)
+}
+
+// ChatConflictTimeoutMs is the wall-clock budget for the detector call. On
+// expiry the turn continues with no addendum and no badge (fail-soft).
+// Range [1000, 30000]; default 6000. Tunable via
+// "chat_conflict_timeout_ms".
+func ChatConflictTimeoutMs(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_conflict_timeout_ms", defaultConflictTimeoutMs, 1000, 30000)
 }

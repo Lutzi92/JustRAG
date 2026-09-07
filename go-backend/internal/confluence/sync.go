@@ -168,10 +168,16 @@ func syncConfluenceSource(ctx context.Context, deps SyncDeps, sourceID string) e
 	// handler reaches its final reconciliation block. Attachments imported
 	// alongside pages will be reconciled by the post-file wrapper, which
 	// writes the authoritative count from the DB.
+	//
+	// versionWhenWarnOnce scopes isPageUpdated's "unparseable version.when"
+	// log line to this one sync run: the function is called twice per page
+	// (here, and again below to classify the job), and a sync affecting many
+	// pages with bad timestamps must not emit one line per page per call.
+	var versionWhenWarnOnce sync.Once
 	pagesToImport := 0
 	for pageID, pageMeta := range currentPageMap {
 		existingPageFiles := existingByPageID[pageID]
-		if len(existingPageFiles) == 0 || isPageUpdated(pageMeta, existingPageFiles) {
+		if len(existingPageFiles) == 0 || isPageUpdated(pageMeta, existingPageFiles, &versionWhenWarnOnce) {
 			pagesToImport++
 		}
 	}
@@ -205,7 +211,7 @@ func syncConfluenceSource(ctx context.Context, deps SyncDeps, sourceID string) e
 		kind := "skip"
 		if len(existingPageFiles) == 0 {
 			kind = "new"
-		} else if isPageUpdated(pageMeta, existingPageFiles) {
+		} else if isPageUpdated(pageMeta, existingPageFiles, &versionWhenWarnOnce) {
 			kind = "updated"
 		}
 		jobs = append(jobs, pageJob{
@@ -416,18 +422,29 @@ func fetchPages(ctx context.Context, client *ConfluenceClient, source *Confluenc
 }
 
 // isPageUpdated checks if a Confluence page has been modified after the
-// existing file was created.
-func isPageUpdated(page ConfluencePage, existing []ConfluenceFileRow) bool {
-	if page.Version.When == "" {
-		return false
-	}
-	pageModified, err := time.Parse(time.RFC3339, page.Version.When)
-	if err != nil {
-		// Try alternate format (Confluence sometimes uses different formats).
-		pageModified, err = time.Parse("2006-01-02T15:04:05.000Z", page.Version.When)
-		if err != nil {
-			return false
+// existing file was created. Version.When is parsed via page.VersionWhen()
+// alone — the second literal-layout fallback that used to live here was
+// unreachable dead code: time.Parse(time.RFC3339, ...) already accepts a
+// fractional-second component even though the RFC3339 layout constant
+// doesn't spell one out, so any timestamp that fails the first parse also
+// fails the narrower second one.
+//
+// An unparseable (or absent) Version.When is treated as "unchanged" rather
+// than "changed" — the opposite would re-import every affected page on
+// every sync tick. warnOnce logs that condition at most once per sync,
+// regardless of how many pages hit it or how many times this function is
+// called for the same page (the caller checks it once to size the progress
+// estimate and again to classify the import job); pass nil to opt out.
+func isPageUpdated(page ConfluencePage, existing []ConfluenceFileRow, warnOnce *sync.Once) bool {
+	pageModified := page.VersionWhen()
+	if pageModified == nil {
+		if warnOnce != nil {
+			warnOnce.Do(func() {
+				slog.Warn("confluence page version.when unparseable, treating page as unchanged",
+					"pageId", page.ID, "when", page.Version.When)
+			})
 		}
+		return false
 	}
 
 	// Find the markdown file (the main page content).

@@ -283,15 +283,46 @@ func unmarshalStrict(text string, v any) error {
 		return nil
 	}
 	objects, unterminated := scanJSONObjects(text)
+	var lastErr error
 	for _, obj := range objects {
-		if err := json.Unmarshal([]byte(obj), v); err == nil {
+		err := json.Unmarshal([]byte(obj), v)
+		if err == nil {
 			return nil
 		}
+		lastErr = err
 	}
 	if unterminated {
-		return fmt.Errorf("truncated JSON: the response opens an object that never closes (%d bytes — a completion-token limit on the judge model is the usual cause): %q", len(text), firstN(text, 120))
+		return fmt.Errorf("truncated JSON: the response opens an object that never closes (%d bytes — a completion-token limit on the judge model is the usual cause): %q", len(text), previewJSON(text))
 	}
-	return fmt.Errorf("response is not valid JSON: %q", firstN(text, 120))
+	if lastErr != nil {
+		// A BALANCED object that json still rejects — neither truncation nor
+		// a code fence, which is what the three Wave-5 Task-10 failures were
+		// (t10-pw-2 G06, t10-mr1 G05, t10-mr2 G09). The 120-byte preview the
+		// error used to carry could not distinguish the candidate shapes (a
+		// raw newline inside a string, an unescaped quote inside a string, a
+		// trailing comma), because the offending byte sits past it and the
+		// underlying decoder error — which names both the character and its
+		// offset — was dropped. Carry it.
+		return fmt.Errorf("invalid JSON inside a complete object (%d bytes; %v — neither truncation nor a code fence): %q", len(text), lastErr, previewJSON(text))
+	}
+	return fmt.Errorf("response is not valid JSON: no JSON object in %d bytes: %q", len(text), previewJSON(text))
+}
+
+// judgePreviewRunes bounds the response excerpt an error carries. It is wide
+// enough to reach the offending byte in a realistic judge reply (a German
+// "reasoning" string runs a few hundred runes) and still short enough to sit
+// in a report's judge_errors array.
+const judgePreviewRunes = 400
+
+// previewJSON is firstN in RUNES: a byte cut through a German judge response
+// splits a multi-byte rune and renders as an escape in the %q'd error,
+// exactly where the reader is trying to see the offending character.
+func previewJSON(s string) string {
+	r := []rune(s)
+	if len(r) <= judgePreviewRunes {
+		return s
+	}
+	return string(r[:judgePreviewRunes]) + "..."
 }
 
 // scanJSONObjects returns every top-level {...} span in text, in order, plus
@@ -333,11 +364,4 @@ func scanJSONObjects(text string) (objects []string, unterminated bool) {
 		}
 	}
 	return objects, depth > 0
-}
-
-func firstN(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

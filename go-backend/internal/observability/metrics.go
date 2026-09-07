@@ -2662,3 +2662,127 @@ func TabularIngestTotalForTest() *prometheus.CounterVec {
 func TabularIngestRowsForTest() *prometheus.CounterVec {
 	return tabularIngestRows
 }
+
+// --- Conflict / supersession surfacing (W5-R7) ----------------------------
+
+var conflictSurfacingTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_conflict_surfacing_total",
+		Help: "Per-outcome counter for the conflict / supersession pass " +
+			"(one fast-tier call per turn on a KB with " +
+			"chat_conflict_surfacing_enabled). Outcome values: found " +
+			"(at least one conflict pair surfaced onto the answer), none " +
+			"(the call succeeded and reported no conflict — the " +
+			"denominator for the flag rate), skipped_single_file (fewer " +
+			"than 2 distinct files in the assembled set, so no call was " +
+			"made), timeout (chat_conflict_timeout_ms expired), error " +
+			"(the call or its parse failed). timeout+error are fail-soft: " +
+			"the turn answers without an addendum or a badge.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"outcome"},
+)
+
+// conflictSurfacingKnownOutcomes bounds the label cardinality: an
+// unrecognised value records as "error" rather than minting a new series.
+var conflictSurfacingKnownOutcomes = map[string]bool{
+	"found":               true,
+	"none":                true,
+	"skipped_single_file": true,
+	"timeout":             true,
+	"error":               true,
+}
+
+// RecordConflictSurfacing increments the per-outcome counter for one
+// conflict-surfacing decision.
+func RecordConflictSurfacing(outcome string) {
+	if !conflictSurfacingKnownOutcomes[outcome] {
+		outcome = "error"
+	}
+	conflictSurfacingTotal.WithLabelValues(outcome).Inc()
+}
+
+// ConflictSurfacingTotalForTest exposes the conflict-surfacing counter to
+// other test packages (internal/chat). Mirrors AgenticDecisionTotalForTest.
+func ConflictSurfacingTotalForTest() *prometheus.CounterVec {
+	return conflictSurfacingTotal
+}
+
+// --- Ingest prompt-injection screening (W5-R8) -----------------------------
+
+var ingestInjectionFlagTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "rag_ingest_injection_flag_total",
+		Help: "Files flagged by the ingest-time prompt-injection screen, " +
+			"labelled by the file's origin (rss, confluence, git, crawl — " +
+			"user uploads are never screened). The screen is advisory: a " +
+			"flag never blocks ingestion, changes chunking, or alters " +
+			"retrieval, so this counter measures how much instruction-" +
+			"shaped text an external corpus is absorbing, not how much was " +
+			"rejected.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"origin"},
+)
+
+// ingestInjectionKnownOrigins bounds the label cardinality: origin comes
+// from a files row, so an unexpected value must not mint a new series.
+var ingestInjectionKnownOrigins = map[string]bool{
+	"rss":        true,
+	"confluence": true,
+	"git":        true,
+	"crawl":      true,
+}
+
+// RecordIngestInjectionFlag increments the per-origin counter for one file
+// the ingest screen flagged. An origin outside the screened set is dropped
+// rather than recorded: only those four are ever screened, so a value here
+// that is not in the map means the caller's origin gate has drifted.
+func RecordIngestInjectionFlag(origin string) {
+	if !ingestInjectionKnownOrigins[origin] {
+		return
+	}
+	ingestInjectionFlagTotal.WithLabelValues(origin).Inc()
+}
+
+// IngestInjectionFlagTotalForTest exposes the screening counter to other
+// test packages (internal/processor). Mirrors AgenticDecisionTotalForTest.
+func IngestInjectionFlagTotalForTest() *prometheus.CounterVec {
+	return ingestInjectionFlagTotal
+}
+
+// --- Degenerate answer guard (Wave-5 Task 7) -------------------------------
+
+var answerDegenerateTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name:        "rag_answer_degenerate_total",
+		Help:        "Answers the degenerate-run guard truncated, by answering surface (web | api_v1 | openai_compat | mcp). One increment per affected answer: on the streaming surfaces the completion was cancelled mid-run, on the non-streaming ones the finished answer was stripped post hoc. A non-zero rate means the model is collapsing into runaway repetition — the guard contains the symptom, it does not fix it.",
+		ConstLabels: commonLabels,
+	},
+	[]string{"surface"},
+)
+
+// answerDegenerateKnownSurfaces bounds the label cardinality: surface is a
+// compile-time constant at every call site, so a value outside this set
+// means a caller drifted, not that a new surface exists.
+var answerDegenerateKnownSurfaces = map[string]bool{
+	"web":           true,
+	"api_v1":        true,
+	"openai_compat": true,
+	"mcp":           true,
+}
+
+// RecordAnswerDegenerate increments the per-surface counter for one answer
+// the degenerate-run guard had to truncate.
+func RecordAnswerDegenerate(surface string) {
+	if !answerDegenerateKnownSurfaces[surface] {
+		return
+	}
+	answerDegenerateTotal.WithLabelValues(surface).Inc()
+}
+
+// AnswerDegenerateTotalForTest exposes the guard counter to other test
+// packages. Mirrors IngestInjectionFlagTotalForTest.
+func AnswerDegenerateTotalForTest() *prometheus.CounterVec {
+	return answerDegenerateTotal
+}

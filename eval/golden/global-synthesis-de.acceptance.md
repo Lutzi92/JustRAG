@@ -107,6 +107,11 @@ the band.
 **Recommendation: keep `chat_longcontext_mode = flat` as the default.**
 `map_reduce` stays a documented opt-in.
 
+> **SUPERSEDED by §4 (Wave 5, 2026-09-07).** This section's verdict stood
+> until the pooled rule W5-R1 was pre-registered and the set grew to 24
+> questions; the default is now `map_reduce`. The Wave-3 numbers below are
+> unchanged and remain the record of what was measured at the time.
+
 The brief's decision rule — adopt `map_reduce` for the route iff *mean answer
 relevance improves beyond the noise band* **and** *mean faithfulness does not
 drop beyond it* — fails on both arms:
@@ -464,6 +469,12 @@ above.
 `chat_longcontext_enabled` as before); Task 9 does **not** flip the default
 this wave.
 
+> **SUPERSEDED by §4 (Wave 5, 2026-09-07).** The Wave-4 verdict was
+> "measured favourably, under-powered set, per-pair rule missed by one
+> win". Wave 5 executed both remedies this section named — re-register
+> on the pooled statistic first, then grow the set — and the default
+> flipped to `map_reduce`. The Wave-4 numbers below are unchanged.
+
 **Cost, reported per W4-R7 (does not veto):** map_reduce's mean wall time
 (938 s = mean of 925 s, 951 s) is **1.65×** flat's (570 s = mean of 575 s,
 565 s), driven by 25 fast-tier map-stage LLM calls per question on top of
@@ -657,3 +668,788 @@ n=1, not the point of the smoke). The corrected file's `expected_points`
 The corrected `eval/golden/global-synthesis-de.jsonl` was copied over the
 main checkout's copy (`/home/steffen/git/JustRAG/eval/golden/global-synthesis-de.jsonl`,
 also gitignored) so both working copies hold the same fixed fixture.
+
+## §3 Wave 5 curation (G13–G24) — 2026-09-07
+
+Ruling **W5-R2**: extend the set from 12 to ≥ 24 `global_synthesis` questions
+so the long-context decision can be taken on the *pooled* decisive pairs of
+two cross comparisons (ruling **W5-R1**, re-registered in
+`eval/golden/README.md` § "Pooling two comparisons — `--pairwise-pool`"
+*before* this set was authored and before any run on it).
+
+**Result: 12 new rows, G13–G24, 72 `expected_points`** (6 per question), on
+KB `83262307-3a1b-49bc-bd08-3b925a868a92` (PPM-Eval, 297 files). G01–G12 are
+**byte-identical** — the rows were appended, and the Wave-5 header comment was
+inserted *between* G12 and G13, so the first 27 504 bytes of the file compare
+equal to the pre-Wave-5 copy (`cmp` verified).
+
+### Method
+
+Same discipline as Wave 4, and the same hard rule: **no point comes from a
+model answer.** `t4-*.json` / `t5-*.json` reports were not opened during
+authoring. Every point was read out of the ingested chunk text:
+
+- file ids by name from `justrag-db-1` (`files`, read-only `SELECT`),
+- chunk bodies from `justrag-vectordb-1`
+  (`document_chunks_4096`, `node_kind='leaf'`, ordered by
+  `metadata->>'chunkIndex'`),
+- reassembled per file with the chunk overlap removed, then the informative
+  windows of the Confluence "Steckbrief" template (`Projektziele`,
+  `Projektumfang (Scope)`, `Status`, `## Änderungshistorie`) printed and the
+  template boilerplate stripped.
+
+Helper scripts (read-only, no DB writes):
+`.superpowers/sdd/2026-09-06-rag-sota-wave5/t9-files.sh`,
+`t9-chunks.sh`, `t9-brief.py`, `t9-collect.sh`, `t9-status.py`,
+`t9-append-rows.py` (the authored rows themselves — re-runnable, refuses to
+duplicate an id), `t9-validate.py`, `t9-classify-check.sh`.
+
+Each question carries **exactly one** documented German global-synthesis
+trigger verbatim (`globalSynthesisTriggersDE`, `internal/chat/longcontext.go`)
+and is multi-clause so the query-type classifier lands on
+`complex_reasoning` — both are the precondition for reaching `OrchLongContext`.
+Trigger distribution across the new rows: `fasse alle` ×3 (G13, G17, G22),
+`überblick über alle` ×3 (G14, G18, G24), `vergleiche alle` ×3 (G15, G19, G20),
+`gesamtbild` ×2 (G16, G21), `gemeinsame themen` ×1 (G23).
+
+Topics are new relative to G01–G12. Individual files do recur (a corpus of
+297 files has no 24 disjoint clusters), but no question repeats another's
+*subject*: G20 is defined by a status value rather than a theme, G21 is KI
+*governance* as against G02's inventory of KI projects and G11's PPM
+governance, G24 is the workshop's *channels and audiences* as against G06's
+*contradictions* in the same orga documents.
+
+**Four rows carry a smaller must-cite cluster than the 12–15 of G01–G12**
+(G17 and G18: 8, G19: 8, G20: 9). That is the corpus, not a shortcut: the
+remaining Studium/Lehre files are already G05's, and exactly seven Steckbriefe
+in the whole KB carry status `60-pausiert` plus one `50-abgebrochen`, which is
+the entire population G20 asks about. Each row's `notes` field says so.
+
+### Validation
+
+1. **Schema / caps** (`t9-validate.py`, all 24 rows): one documented DE
+   trigger present verbatim per question; every `must_cite_file_names` entry
+   exists verbatim in the KB's `files.name` (this caught
+   `KI an der JLU bündeln auf Webseite.md`, whose real name carries a
+   **NO-BREAK SPACE** (U+00A0) between `auf` and `Webseite`); ≤ 6 points per
+   row; ≤ 300 runes per point (longest new point: 299); no duplicate file
+   names. `FAILURES: 0`.
+2. **Loader + pure preconditions** (`t9-classify-check.sh`, throwaway
+   `cmd/t9check`, removed after the run): `eval.LoadGoldenSet` accepts all
+   **24** questions; `ai.HeuristicComplexity` returns `ComplexityComplex` (12
+   rows) or `ComplexityUnknown` (12 rows, deferred to the LLM classifier) and
+   **never** `ComplexitySimple` for any row; `chat.IsGlobalSynthesisQuery` is
+   `true` for all 24. `FAILURES: 0`.
+   Note in passing: `eval.ParseGoldenSetContent` (the DB/admin eval path)
+   rejects this file at the very first byte — it does not skip `#` comment
+   lines, which only `internal/eval/loader.go`'s JSONL path does. That is
+   pre-existing (the file has carried a comment header since Wave 3) and is
+   another reason this set is `cmd/eval`-only.
+3. **One eval smoke** (the only run in this task, single question, no
+   `--judge`):
+
+```bash
+bash .superpowers/sdd/2026-09-06-rag-sota-wave5/run-eval.sh \
+  --golden eval/golden/global-synthesis-de.jsonl --question-id G13 \
+  --production-context --longcontext on --longcontext-mode flat \
+  --output .superpowers/sdd/2026-09-06-rag-sota-wave5/t9-smoke.json
+```
+
+Result: `errors = 0`, `eval-exit=0`, wall time 10.2 s, and the report's
+`agent` block reads
+`{"orchestrator": "longcontext", "classified_query_type": "complex_reasoning",
+"dispatch_reason": "complex_reasoning_longcontext_gate"}` — the new row
+reaches the intended orchestrator. Retrieval metrics are not reported for
+this route and are not the point of the smoke.
+
+### Per-question curation record
+
+Column *Beleg* quotes the chunk fragment the point was verified against; the
+file named is the one the fragment came from.
+
+#### G13 — trigger `fasse alle` — Unified Communication / Kollaboration
+
+> Fasse alle Vorhaben rund um Kommunikations- und Kollaborationsdienste
+> zusammen und beschreibe, welche Systeme dabei abgelöst, neu aufgebaut oder
+> pausiert wurden.
+
+Must-cite (10): JLU UC-Strategie Kommunikations- und Kollaborationslösungen ·
+Betriebskonzept Rainbow als Unified Communication-Lösung · JLU-weites
+Confluence · Sympa-Refresh · Greenlight-UpdateWechsel zu Pilos Verwaltungsportal
+für BBB-Räume · Erneuerung Video Streaming · Neues Servicedesign für
+Veranstaltungsaufzeichnungen · JLUcontact · Außerbetriebnahme altes
+IMAP-E-Mail-System (Dovecot) · M365-Planung
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | UC-Strategie zielt auf Präsidiums-Entscheidung über ein UC-Konzept, abgeschlossen | *JLU UC-Strategie…*: „Ziel ist eine Präsidiums-Entscheidung über ein Unified Communications-Konzept, um nächste Schritte für die Modernisierung … der JLU-weiten Sprachkommunikations-Infrastruktur zu planen (\"Arbeitsplatz der Zukunft\")“; `Status Green40-abgeschlossen` |
+| 2 | Rainbow pausiert, wartet auf UC-Strategie | *Betriebskonzept Rainbow…*: `Status trueYellow60-pausiert`; Änderungshistorie „18.02.25: Statusänderung zu \"pausiert\" (wartet auf Projekt UC-Strategie) nach ALB 17.02.25“ |
+| 3 | Greenlight → Pilos statt GL3 | *Greenlight-Update…*: „Das Verwaltungsportal Greenlight (GL) wird in der aktuellen Version 2 nicht mehr unterstützt. Stattdessen soll Pilos zum Einsatz kommen (statt eines zunächst beabsichtigten Update auf GL Version 3).“ |
+| 4 | Opencast löst Upload-Tool ab; Abschaltung nicht im Scope | *Erneuerung Video Streaming*: „Ablösung des alten Upload-Tools durch Opencast … das Abschalten des alten Streaming-Servers ist nicht Bestandteil des Projekts und muss neu projektiert werden.“ |
+| 5 | Veranstaltungsaufzeichnungen ab SoSe 2028 standardisiert, Altformat bis WiSe 2026/27 | *Neues Servicedesign für Veranstaltungsaufzeichnungen*: „Überführung … in ein standardisiertes und automatisiertes Servicemodell ab dem Sommersemester 2028 (Weiterbetrieb des bisherigen Serviceformats bis einschließlich Wintersemester 2026/27)“ |
+| 6 | Confluence auf 1.000 Lizenzen; Sympa-Server erneuert; JLUcontact aus OpenLDAP | *JLU-weites Confluence*: „Erhöhung der Lizenz-Anzahl auf 1.000“ · *Sympa-Refresh*: „Erneuerung des Servers für Mailinglisten“ · *JLUcontact*: „Bereitstellung einer zentralen webbasierten Kontaktauskunft auf Basis von Daten aus OpenLDAP.“ |
+
+#### G14 — trigger `überblick über alle` — Web-Auftritt / Sichtbarkeit
+
+> Gib mir einen Überblick über alle Vorhaben zum Web-Auftritt und zur
+> digitalen Sichtbarkeit der JLU und erkläre, wie sie inhaltlich und zeitlich
+> zusammenhängen.
+
+Must-cite (12): Webrelaunch · HRZ-Webseiten Vereinheitlichung und Verschlankung ·
+Webstatistik mit Matomo … · Bilddatenbank (JLU-weit) · Forschungsinformationssystem
+(FIS) Integration in JLU-Webseite · Forschungsdatenrepositorium Vernetzung mit
+FIS … · Barrierefreie IT umsetzen · Website KI an der JLU · KI an der JLU
+bündeln auf&nbsp;Webseite · Projekt-Website im BfD-Bereich · Arbeitspaket
+Sichtbarkeit - Website · 2025-11-13 Brainstorming Große KI Webseite
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Web-Auftritt bis 2029 neu; Continuous Relaunch; externe Agentur | *Webrelaunch*: „Die JLU gestaltet bis 2029 ihren Web-Auftritt mit dem Fokus Exzellenzstrategie und Studierendenmarketing grundlegend neu … Implementierung eines Prozesses für den Regelbetrieb \"Continuous Relaunch\" … Umstellung des Betriebsmodells auf eine externe Agentur“ |
+| 2 | HRZ-Seiten als Basis für den Relaunch, ca. 50 % weniger Seiten | *HRZ-Webseiten…*: „Ansprechender und zeitgemäßer Webauftritt als Basis für das anstehende Relaunch-Projekt … die Gesamtzahl der Seiten deutlich reduziert werden (ca. 50%) und die Navigationsebenen minimiert“ |
+| 3 | Bilddatenbank nur avisiert; Rechtemanagement; Bezug zum Relaunch | *Bilddatenbank (JLU-weit)*: `Status 10-AVISIERT`; „Insbesondere mit Blick auf den Webrelaunch wird der JLU-weite Zugriff auf rechtlich einwandfreies JLU-Bildmaterial (Urheber- und Nutzungsrechte geklärt) wichtig … Ein Rechtemanagement regelt dabei den Zugriff“ |
+| 4 | Matomo ausgerollt, dezentrales Nutzungsmodell, abgeschlossen | *Webstatistik mit Matomo…*: „Ausrollen des Tools (Aufsetzen der Anwendung, Konfiguration, erste Tests und Implementierung eines Modells für die dezentrale Nutzung des Dienstes)“; `Status Green40-abgeschlossen` |
+| 5 | FIS-Stufe 1 = Publikationslisten; zweites Vorhaben speist JLUdocs/JLUdata ins FIS | *FIS Integration in JLU-Webseite*: „Erste Stufe der Nutzung der FIS-Daten auf der Webseite der JLU: Publikationsliste der ProfessorInnen.“ · *Forschungsdatenrepositorium…*: „Die Metainformationen über die in JLUdocs und JLUdata abgelegten Publikationen werden ins FIS übertragen“ |
+| 6 | Barrierefreiheit gesetzlich vorgegeben; auch Relaunch-Anforderung | *Barrierefreie IT umsetzen*: „Gesetzliche Grundlagen dazu sind: … HessBGG … BITV HE 2019 … HHG, im Sozialgesetzbuch IX (SGB IX), in der UN-Behindertenrechtskonvention (UN-BRK) und … im Barrierefreiheitsstärkungsgesetz (BFSG)“ · *Webrelaunch*: „dies beinhaltet u.a. eine hohe Barrierefreiheit“ |
+
+#### G15 — trigger `vergleiche alle` — Gebäude / Energie / Liegenschaften
+
+> Vergleiche alle Vorhaben rund um Gebäude-, Energie- und
+> Liegenschaftsmanagement miteinander und arbeite heraus, welche auf
+> Verbrauchssenkung und welche auf Betriebssicherheit zielen.
+
+Must-cite (10): Energiemanagement (Gesetzesvorgabe) · Digitale Thermostate … ·
+Zählerstrukturen Verbrauchsmedien in Gebäuden … · Parkraummanagement … ·
+Schnittstelle CAFM-SAP · Schnittstelle CAFM-IAM · Gerätedatenbank zur
+Überwachung von Lebenszykluskosten · Erneuerung EMA - HRZ (Einbruchmeldeanlage) ·
+Erneuerung ELA - UB Durchsageanlage der Unibibliothek · Intrakey Workflow  App …
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Zertifizierungsfähiges Energiemanagementsystem nach DIN 50001, Ziele auf drei Ebenen | *Energiemanagement (Gesetzesvorgabe)*: „Einführung eines vollständigen und zertifizierungsfähigen Energiemanagementsystems nach DIN 50001 … definiert die JLU … konkrete Energieziele auf System-, Gebäude- und Prozessebene.“ (Quelle schreibt DIN, nicht ISO — wörtlich übernommen) |
+| 2 | Thermostate: geringe Kosten, bedarfsgerechte Regelung, Wärmeeinsparung | *Digitale Thermostate…*: „mit relativ geringen Investitionskosten und geringem Installationsaufwand eine bedarfsgerechte Regelung der Heizung zu realisieren und damit Wärmeenergie einzusparen.“ |
+| 3 | Flächendeckende Zählerinfrastruktur als Grundlage des Energiemonitorings | *Zählerstrukturen…*: „Installation einer flächendeckenden Zählerinfrastruktur zur Erfassung des Energie- und Wasserverbrauchs der JLU-Gebäude. Dies stellt die Grundlage für ein funktionierendes Energiemonitoring dar.“ |
+| 4 | EMA (laufend) und ELA (pausiert, Dez. E / Notbeleuchtung) = Betriebssicherheit | *Erneuerung EMA - HRZ*: „Austausch Einbruchmeldeanlage (EMA) HRZ“, `Status 30-laufend` · *Erneuerung ELA - UB*: `Status 60-pausiert`; „30.06.25: Nach ALB Projekt pausiert (u.a. aufgrund ausstehender Klärungen mit Dez. E bzw. Abhängigkeiten mit weiteren technischen Anforderungen wie der Notbeleuchtung)“ |
+| 5 | Zwei CAFM-Schnittstellen: Rechnungsdaten < 10.000 € aus EVER/SAP, Identitäten aus IAM | *Schnittstelle CAFM-SAP*: „Übertragung von Rechnungsdaten zu Bauaufträgen und Bestellungen unter 10.000 € aus EVER/SAP in das CAFM-System“ · *Schnittstelle CAFM-IAM*: „Für die CAFM-Module zur Schlüssel- und zur Fuhrparkverwaltung werden Daten zu den Identitäten der JLU benötigt. Diese werden aktuell wöchentlich … aus SAP exportiert, manuell in einem Excel-Tool aufbereitet“ |
+| 6 | Gerätedatenbank (Lebenszykluskosten), Parkraum (bargeldlos), Intrakey pausiert | *Gerätedatenbank…*: „Softwarelösung zur Überwachung von Lebenszykluskosten … insbesondere zur Wirtschaftlichkeitsermittlung von Wartungs- und Reparaturkosten“ · *Parkraummanagement…*: „Digitale und bargeldlose Zahlungsmöglichkeiten spielen dabei eine zentrale Rolle“ · *Intrakey…*: `Status 60-pausiert` |
+
+#### G16 — trigger `gesamtbild` — IT-Betrieb / Servicemanagement
+
+> Zeichne das Gesamtbild des zentralen IT-Betriebs- und Servicemanagements am
+> HRZ und erkläre, wie Monitoring, Ticketsystem und Servicepunkt aufeinander
+> aufbauen.
+
+Must-cite (10): Zentrales Systemmonitoring Phase 1 · … Erweiterung (Stufe 2) ·
+… Erweiterung (Stufe 3) · KIX-Funktionserweiterung … · Zentraler HRZ-Servicepunkt … ·
+Zentraler Log-Server · DNA-Center · Client-Management-Rollout Softwaremanagement
+durch Baramundi · Verbesserung der Ausfallsicherheit in der Servervirtualisierung ·
+Gerätedatenbank zur Überwachung von Lebenszykluskosten
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Phase 1 abgeschlossen: 1500–1800 Systeme in Checkmk, Schwellwerte, Key-User geschult | *Zentrales Systemmonitoring Phase 1*: „Alle HRZ-Systeme (ca. 1500-1800) sind im einheitlichen System Checkmk mit den Basis-Checks abgebildet Die Schwellwerte sind korrekt gesetzt … Die Key-User in den Abteilungen sind geschult“; `Status Green40-abgeschlossen` |
+| 2 | Stufe 2 (laufend): Plugins/aktive Checks, Dashboards, NetApp/vCenter/Appliances, E-Mail-Alarmierung | *… Erweiterung (Stufe 2)*: „Einbringung von individuellen Funktionserweiterungen … in Form von Plugins und/oder aktiven Checks. Erstellung von aussagekräftigen Dashboards … Anbindung weiterer Systeme (z.B.: NetApp, vCenter-Cluster, Appliances …) Ausbau Alarmierung (Email)“; `Status 30-laufend` |
+| 3 | Stufe 3 avisiert: Abhängigkeiten, Gesamtsicht, externe Überwachung, weitere Fachbereiche | *… Erweiterung (Stufe 3)*: „Ergänzung von Abhängigkeiten und einer bereichsübergreifenden logischen Gesamtsicht Weitere Optimierungen (ext. Überwachung) Anbindung weiterer Fachbereiche.“; `Status 10-AVISIERT` |
+| 4 | KIX-18: SSP, CMDB, Asset Management, Rollenkonzept, Baramundi-Integration | *KIX-Funktionserweiterung…*: „1. Self-Service-Portal (SSP) 2. Configuration Management Database (CMDB) … 3. Asset Management (HRZ-Shop) 4. Rechte- und Rollenkonzept … 5. Integration mit Baramundi“ |
+| 5 | Servicepunkt (avisiert): Räume 50–55, gemeinsame Theke | *Zentraler HRZ-Servicepunkt…*: „Die Gruppen **Service** und **Arbeitsplatzbetreuung** werden räumlich im Bereich der **Räume 50 bis 55** zusammengeführt, um Servicedesk und HRZ-Shop an einer gemeinsamen Theke als zentralen Anlaufpunkt zu bündeln.“; `Status 10-AVISIERT` |
+| 6 | Log-Server neu konzipiert; DNA-Center-Teststellung betriebsbereit | *Zentraler Log-Server*: „Neu-Konzeption zentraler Log-Server (Produktauswahl, Implementierung, ggf. Migration und Außerbetriebnahme Altsystem)“ · *DNA-Center*: „Teststellung DNA-Center betriebsbereit“ |
+
+#### G17 — trigger `fasse alle` — Studium / Lehre / Prüfungen
+
+> Fasse alle Vorhaben zusammen, die Studium, Lehre und Prüfungen betreffen,
+> und nenne jeweils das eingesetzte System sowie die betroffene Zielgruppe.
+
+Must-cite (8): AKKREDICOLLAB … · Erneuerung Scanner-Klausuren Wechsel der
+Prüfungsaufgabendatenbank · ILIAS Optimierung Lade- und Bearbeitungszeiten ·
+Digitales Buchungssystem für die Deutschkurse des AAA · EUPeace Joint Digital
+Campus · Vorprojekt Promovierendenverwaltung · JupyterHub als zentraler
+Service · Neues Servicedesign für Virtuelle Desktops
+(kleinerer Cluster als G01–G12: die Campusmanagement-/LMS-Kernsysteme gehören
+bereits zu G05, hier stehen nur die dort nicht genannten Vorhaben.)
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | AKKREDICOLLAB: QM-System, interne Akkreditierung | *AKKREDICOLLAB…*: „Aufbau eines Qualitätsmanagementsystem für den Bereich Studium und Lehre, sodass die JLU ihre Studiengänge zukünftig intern – und damit eigenverantwortlich, effizienter sowie zielgerichteter akkreditieren kann.“ |
+| 2 | Scanner-Klausuren: Fred → Frieda wegen Oracle Java, abgeschlossen | *Erneuerung Scanner-Klausuren…*: „Wechsel auf eine neue Aufgabendatenbank (von Fred zu Frieda) … die lokale Variante benutzt noch Oracle Java, was nicht mehr eingesetzt werden soll“; `Status Green40-abgeschlossen` |
+| 3 | ILIAS-Optimierung abgeschlossen: Startseite und objektreiche Seiten | *ILIAS Optimierung…*: „Verbesserung der Lade- und Bearbeitungszeiten von ILIAS-Seiten, insb. der Startseite und Seiten, die viele unterschiedliche Objekte beinhalten.“; `Status Green40-abgeschlossen` |
+| 4 | Deutschkurse AAA: Automatisierung, E-Payment, AAA/Finanzdezernat entlastet | *Digitales Buchungssystem…*: „einfache Buchung … Möglichkeiten des E-Payments … automatisierte Buchungen (Entlastung für Fachabteilungen: AAA, Finanzdezernat und andere) - Möglichkeit, für internationale Studierende und Gäste, sich niedrigschwellig im System anzumelden“ |
+| 5 | EUPeace: 9 Partnerhochschulen, Vorlesungsverzeichnisse, LMS-Zugang, Mobilität | *EUPeace Joint Digital Campus*: „IT-Systeme der an EUPeace beteiligten 9 Partnerhochschulen \"verbinden\" - Vorlesungsverzeichnisse der EUPeace Allianzpartner verfügbar machen - Zugang zu den Learning Management Systemen aufbauen - Vereinfachung von Zulassung und Auslandsmobilität von Studierenden und Personal“ |
+| 6 | JupyterHub: CPU-Notebooks mit SSO; TUD-Alternative evaluiert | *JupyterHub als zentraler Service*: „Bereitstellung von ressourcenlimitierten Notebook-Umgebungen mit zentraler Authentifizierung (SSO), die auf reinen CPU-Ressourcen laufen“; „Alternativ wird die Nutzung eines JupyterHub einer anderen Univserität (TUD) evaluiert.“ |
+
+#### G18 — trigger `überblick über alle` — Speicher / Datensicherung / Archivierung
+
+> Gib einen Überblick über alle Vorhaben zu Speicher, Datensicherung und
+> Archivierung und ordne sie danach, ob sie den laufenden Betrieb absichern
+> oder eine langfristige Aufbewahrung ermöglichen.
+
+Must-cite (8): DaSi Backup2disc … · Daten-Archivierung als zentraler Service ·
+Günstiger Massenspeicher … · LaVaH Langzeitverfügbarkeit an hessischen
+Hochschulen · Forschungsdatenrepositorium Vernetzung mit FIS … · Verbesserung
+der Ausfallsicherheit in der Servervirtualisierung · Aktualisierung der
+Wiederanlaufpläne inkl. Disaster Recovery · H^3 (Digitalpakt Hessen)
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | DaSi: Redundanz + Storage-Modernisierung für TSM, Must-Have, abgeschlossen | *DaSi Backup2disc…*: „Redundanzaufbau und Storage-Modernisierung für TSM-Datensicherung (Backup-to-disk)“; `RedMust-Have`; `Status Green40-abgeschlossen` |
+| 2 | Archivierung auf IBM Storage Protect (TSM); Anbindung zu sichernder Systeme out of scope | *Daten-Archivierung als zentraler Service*: „Bedarfsprüfung und vom Ergebnis abhängiger Aufbau eines Angebots zur längerfristigen Archivierung von Daten auf Basis von IBM Storage Protect (TSM)“; „Die Anbindung zu sichernder IT-Systeme ist nicht Teil des Projekts.“ |
+| 3 | data1 von NetApp auf STOR3 (EONstor, Infortrend, 1 PB); NetApp überprovisioniert | *Günstiger Massenspeicher…*: „Bestehender Service data1 soll vom \"teuren\" Speicher der NetApp auf den günstigen Speicher STOR3 (EONstor; Infortrend 1PB) migriert werden.“; „data1 liegt z.zT. … auf der wesentlich teureren Netapp und ist somit … nicht gegenfinanziert und … deutlich überprovisioniert.“ |
+| 4 | LaVaH: zwei Phasen 2019–2021 / 2022–2025; hebis; Dauerbetrieb nötig | *LaVaH…*: „In zwei Projektphasen (2019-2021 und 2022-2025) wurde schrittweise eine Infrastruktur für die Langzeitverfügbarkeit digitaler Objekte aufgebaut … Die Verantwortung für die Validierung und Archivierung der Daten sowie für das Risikomanagement liegt beim Hessischen Bibliotheksinformationssystem hebis. Der LaVaH Dienst muss in einen Dauerbetrieb überführt werden“ |
+| 5 | FIS-Vernetzung: Erstimport in „zur Validierung durch UB“, danach nächtlich | *Forschungsdatenrepositorium…*: „Einmaliger vollständiger Erstimport - Übertragung zunächst in den Status \"zur Validierung durch UB\" … Danach: Nächtliche Übertragung der neuen/geänderten Informationen“ |
+| 6 | Laufender Betrieb: Standort-Redundanz (Stretched Cluster / DR), Wiederanlaufpläne | *Verbesserung der Ausfallsicherheit…*: „Verbesserung der Ausfallsicherheit in der Servervirtualisierung mittels geeigneter Maßnahmen (z.B. Aufbau Standort-Redundanz mittels Stretched Cluster oder Desaster Recovery), ggf. mit Kapazitätserweiterung“ · Titel *Aktualisierung der Wiederanlaufpläne inkl. Disaster Recovery* |
+
+#### G19 — trigger `vergleiche alle` — Virtualisierung / Container / Cloud
+
+> Vergleiche alle Vorhaben zu Virtualisierung, Containern und Cloud-Nutzung
+> miteinander und beschreibe, welche Plattformen dabei jeweils gesetzt und
+> welche erst evaluiert werden.
+
+Must-cite (8): Evaluierung alternativer Virtualisierungs-Plattformen ·
+Containerbasierte Bereitstellung von Anwendungen · Cloud Computing Ressourcen
+via OCRE … · Neues Servicedesign für Virtuelle Desktops · Verbesserung der
+Ausfallsicherheit in der Servervirtualisierung · vPAW-Konzept · JupyterHub als
+zentraler Service · H^3 (Digitalpakt Hessen)
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Marktsichtung VMware-Alternativen; digitale Souveränität; Ergebnisse 05/2026 | *Evaluierung alternativer Virtualisierungs-Plattformen*: „Marktsichtung technisch vergleichbarer Alternativen zu HCI-Lösungen mit VMware, Ziel: Digitale Souveränität von US-Anbietern, Kostenstabilisierung bzw. -senkung“; „Vorstellung der Ergebnisse (05/2026)“ |
+| 2 | Container auf VMware Tanzu + NSX | *Containerbasierte Bereitstellung von Anwendungen*: „Implementierung einer containerbasierten Bereitstellung von Anwendungen auf Basis von VMware Tanzu unter Nutzung der vorhandenen Compute- und Storage-Ressourcen … sowie Einbindung von NSX als Netzwerk- und Security-Lösung im Containerumfeld.“ |
+| 3 | OCRE: nur Governance; Betrieb, Support und Einkauf out of scope | *Cloud Computing Ressourcen via OCRE…*: „Kernbestandteile sind die Definition von technischen und organisatorischen Leitplanken, die Ausarbeitung einer Kommunikationsstrategie sowie der Entwurf eines vereinfachten Bereitstellungsprozesses. Nicht Teil des Projekts ist der anschließende operative Betrieb sowie der laufende Support … oder der eigentliche Einkauf der Cloud-Kontingente“ |
+| 4 | Virtuelle Desktops: Cloud nur prüfen, Windows 11; Vollumstieg out of scope | *Neues Servicedesign für Virtuelle Desktops*: „Einsatz cloudbasierter Lösungen für virtuelle Desktops prüfen - PC-Arbeitsplätze mit Windows 11 bereitstellen“; „**Out of Scope:** - Vollständiger Umstieg auf cloudbasierte Lösungen“ |
+| 5 | vPAW abgeschlossen: Hyper-V-Härtung, AD-OUs und Gruppenrichtlinien | *vPAW-Konzept*: „die notwendigen Anpassungen in der AD (neue Organisationseinheiten und Gruppenrichtlinien zur Domänen und vPAW Härtung), die Einrichtung und Härtung der Hyper-V Virtualisierungpsplattform auf der vPAW Hardware“; `Status Green40-abgeschlossen` |
+| 6 | JupyterHub: CPU + SSO gesetzt, GitLab-Integration nur evaluiert | *JupyterHub als zentraler Service*: „Eine mögliche Gitlab-Integration zur Versionierung und zum Austausch von Notebooks wird als Teil des Konzepts evaluiert.“ |
+
+#### G20 — trigger `vergleiche alle` — Status `pausiert` / `abgebrochen`
+
+> Vergleiche alle Vorhaben, die derzeit pausiert oder abgebrochen sind,
+> miteinander und nenne jeweils den dokumentierten Grund für die
+> Unterbrechung.
+
+Must-cite (9): Betriebskonzept Rainbow … · DMS  Einführung digitales
+Vertragsmanagement · Erneuerung ELA - UB Durchsageanlage der Unibibliothek ·
+HISinOne MoveON Schnittstelle · Intrakey Workflow  App … · MFA für Admins … ·
+Passwortverwaltung in der zentralen IT Evaluation · Software Asset Management ·
+Prozess der DigITal-Projektentwicklung Welche Status durchläuft ein Projekt
+
+Cluster size is the population, not a shortcut: a status sweep over all 297
+files (`t9-status.py`) found exactly **7** Steckbriefe with `60-pausiert` and
+**1** with `50-abgebrochen`.
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | SAM einziges abgebrochenes Vorhaben, 13.07.2026, organisatorische Alternativen | *Software Asset Management*: „13.07.2026: Nach ALB 13.07.2026 Status \"abgebrochen\" - Umsetzung über organisatorische Alternativlösungen.“; `Status Red50-abgebrochen` |
+| 2 | Rainbow pausiert 18.02.2025, wartet auf UC-Strategie | *Betriebskonzept Rainbow…*: „18.02.25: Statusänderung zu \"pausiert\" (wartet auf Projekt UC-Strategie) nach ALB 17.02.25“ |
+| 3 | MFA für Admins: pausiert 18.02.2025 (ISB), im Oktober 2025 weiter wartend auf M365 | *MFA für Admins…*: „18.02.25: Statusänderung zu \"pausiert\" (weitere Klärungen u.a. mit ISB) nach ALB 17.02.25“; „07.10.2025: Datum angepasst (weiterhin wartend auf M365).“ |
+| 4 | Passwortverwaltung: Personalengpässe Basisdienste, Wiederaufnahme nach Onboarding neuer GL | *Passwortverwaltung…*: „30.06.2025: … (depriorisiert aufgrund von Personalengpässen Basisdienste)“; „17.11.25: Nach ALB Projektstatus geändert auf \"pausiert\". Wiederaufnahme nach Onboarding neuer GL.“ |
+| 5 | ELA UB: 30.06.2025, Klärungen mit Dez. E, Notbeleuchtung | *Erneuerung ELA - UB…*: „30.06.25: Nach ALB Projekt pausiert (u.a. aufgrund ausstehender Klärungen mit Dez. E bzw. Abhängigkeiten mit weiteren technischen Anforderungen wie der Notbeleuchtung).“ |
+| 6 | Intrakey nur mit Datum, DMS-Vertragsmanagement und HISinOne-MoveON ohne Grund | *Intrakey…*: „30.06.25: Nach ALB Projektende geändert auf 31.10.25, Projekt pausiert.“ (kein Grund genannt) · *DMS  Einführung digitales Vertragsmanagement* und *HISinOne MoveON Schnittstelle*: `Status 60-pausiert`, Änderungshistorie enthält **keinen** Statuswechsel-Eintrag |
+
+#### G21 — trigger `gesamtbild` — KI-Governance / Beschlussvorschläge
+
+> Erkläre das Gesamtbild der strategischen Verankerung von KI an der JLU und
+> beschreibe, welche Beschlussvorschläge dem Präsidium vorgelegt wurden und
+> welche Zuständigkeiten daraus folgen.
+
+Must-cite (12): Beschlussvorschläge Arbeitsbereich Strategie und
+Strukturbildung · Schärfung Beschlussvorschlag 2 · P-Vorlage Projektabschluss ·
+Entwurf Präsidiumsvermerk Neue Wege mit KI · Entwurf Bearbeitung des Themas KI
+an der JLU · Entwurf Planungsprojekt KI an der JLU · Kommunikation Präsidium ·
+Kommunikation Projektabschluss Neue Wege mit KI · 2026-01-28 Ergebnisprotokoll ·
+2026-02-10 P-Vorlage weiteres Vorgehen · Geschäftsfähigkeit - was ist das ·
+Präsidiumsentscheidungen
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Auftrag aus dem Entwicklungsplan, Zielhorizont 2027 | *Entwurf Bearbeitung des Themas KI an der JLU*: „Auftrag aus der aktuellen Version des Entwicklungsplans: Die JLU verfügt bis 2027 über eine klare Zielsetzung auf dem Gebiet der KI und entwickelt wettbewerbsdifferenzierende Fähigkeiten gezielt weiter.“ |
+| 2 | Commitment-Beschluss + Gremienvorstellung; geschärfte Fassung | *Beschlussvorschläge Arbeitsbereich…*: „Das Präsidium beschließt ein klares Committment zur Nutzung von KI innerhalb zu etablierender Rahmenbedingungen und fordert VPW/CIO/BfD auf, die Projektergebnisse … in folgenden Gremien vorzustellen: Senat, EP, SK und AG Fachbereichsmanagement“ · *Schärfung Beschlussvorschlag 2*: „neu: Das Präsidium beschließt ein klares Commitment zur Nutzung von KI in Forschung, Lehre und Verwaltung“ |
+| 3 | „KI-Säule“ im BfD mit vier Daueraufgaben | *Beschlussvorschläge Arbeitsbereich…*: „Etablierung einer \"KI-Säule\" im BfD … - KI wird analog zu / als Teilgebiet von Digitalisierung betrachtet - inhaltliche Anfragen koordinieren (nicht technisch) - Pflege und Aktualisierung zentrale KI-Website - Etablierung und Organisation von bestimmten Austauschformaten - KI Austausch im hessischen Hochschulverbund“ |
+| 4 | Leitplanken aus der Zielvereinbarung; 31.12.2026 Lehre, 31.03.2027 Forschung | *Beschlussvorschläge Arbeitsbereich…*: „\"Bis 2028 sind strategische Leitplanken für den verantwortungsvollen Einsatz von Künstlicher Intelligenz in Forschung und Lehre verabschiedet und intern kommuniziert\". Es fordert die entsprechenden Abteilungen (VPF, StF; VPL, StL) auf, diese Leitplanken bis zum 31.12.2026 für den Bereich Lehre und bis zum 31.3.2027 für den Bereich Forschung zu erarbeiten.“ |
+| 5 | Compliance-Beschluss am 10.02.2026 aus der P-Vorlage herausgelöst | *2026-02-10 P-Vorlage weiteres Vorgehen*: „Der Beschlussvorschlag zu Comliance wird aus der P-Vorlage herausgelöst - die Thematik soll außerhalb dieser Vorlage angegangen werden“ |
+| 6 | Start September 2025 unter CIO/BfD; Ende mit Präsidiumsvorstellung am 24.02.2026 | *P-Vorlage Projektabschluss*: „Im September 2025 wurde das Projekt \"Neue Wege mit KI\" unter Leitung von CIO und BfD gestartet“; „Mit der Vorstellung der Projektergebnisse im Präsidium am 24.02.2026 wird das Planungsprojekt \"Neue Wege mit KI\" beendet, alle weiteren Maßnahmen und Aufgaben werden mit entsprechenden Zuständigkeiten versehen.“ |
+
+#### G22 — trigger `fasse alle` — Besprechungsnotizen / Projektverlauf
+
+> Fasse alle Besprechungsnotizen des Projekts "Neue Wege mit KI"
+> chronologisch zusammen und beschreibe, wie sich Projektauftrag,
+> Workshop-Planung und Abschlussvorbereitung über die Termine hinweg
+> entwickelt haben.
+
+Must-cite (15): die 13 datierten Protokollseiten 2025-07-14 … 2026-04-21 plus
+Übersicht Besprechungsnotizen und Aufgaben und Projektstrukturplan. These 13
+minutes pages are addressed by no other question in the set.
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | 14.07.2025: Scope / Organisation / Arbeitspakete; Rollen benannt | *2025-07-14 Workshop 14.07.2025*: „14.00 – 14.50 Uhr Teil 1: Projekt Scope 15.00 – 15.50 Uhr Teil 2: Projektorganisation 16.00 – 17.00 Uhr Teil 3: Arbeitspakete“; „Projektleitung: Marcus Enger & Eberhard Kurz - Projektkoordination: Johanna Daus - Projektmitarbeit: Sten Seegel, Christina Koch“ |
+| 2 | 22.08.2025: P-Vorlage, Ziel 16.9. im Präsidium | *2025-08-22 Projekttreffen Vorbereitung P-Vorlage*: „Vorbereitung der P-Vorlage - Ziel: 16.9. im Präsidium“ |
+| 3 | 19.09.2025: Struktur-/Ablaufplan, Aula gebucht, Moderation angefragt | *2025-09-19 Projekttreffen Projektstrukturplan*: „Vorstellung Projektstrukturplan und Projektablaufplan“; „Aula buchen 25.11.2025“; „Anfrage Moderation Human Digitals oder andere 25. November“ |
+| 4 | 02.12.2025: Projekt endet mit Präsidiumsvorstellung; Leitplanken als neues Teilprojekt | *2025-12-02 Projekt-Jour Fixe*: „Projekt endet mit Vorstellung der Projektergebnisse im Präsidium 28.02.2026 - Die dort vorgeschlagenen Maßnahmen sind nicht Teil des Planungsprojekt“; „TOP 3: Strategische Leitplanken entwickeln - neues Teilprojekt“ |
+| 5 | 17.12.2025: Zusatzaufgabe Verwaltungsworkshop; Aufteilung CIO-/BfD-Team | *2025-12-17 Projektbesprechung und Zusatzaufgabe…*: „Zusatzaufgabe Workshop KI in der Verwaltung“; „Nächste Schritte CIO-Team 1. Zwei Seiten \"Summary\" zu Best Practices und Bedarfe … 2. Entwurf von Entscheidungsvorschlägen … Nächste Schritte BfD-Team 1. Summary Workshopergebnisse … 2. Fertigstellung Website 3. Entwurf von Entscheidungsvorschlägen“ |
+| 6 | 21.04.2026: Gremien, Projektwebsite, Roadmap-Veröffentlichung, Mail an TN | *2026-04-21 Projektabschluss*: „Vorstellung Projektergebnisse in Gremien … Aktualisierung Projektwebsite: Projektabschluss … Veröffentlichung der Roadmap auf der Projektseite … Anschließend (Wunsch von VPW): Mail zu Ergebnissen an WS-Teilnehmende mit Verweis auf Website“ |
+
+Deliberately **not** asserted: a single project start/end date. The corpus
+disagrees with itself (`2025-12-02` says the Präsidium date is 28.02.2026,
+*P-Vorlage Projektabschluss* says 24.02.2026, *Kommunikation Projektabschluss*
+says the project "wurde im März beendet"), so each dated claim is attributed
+to the document it comes from (point 4 and G21 point 6) instead of merged.
+
+#### G23 — trigger `gemeinsame themen` — KI-Bedarfserhebung / Anwendungsfälle
+
+> Nenne gemeinsame Themen, die sich durch die Bedarfserhebung zu KI und die
+> Best-Practice-Recherche ziehen, und ordne jedem Thema die vorgeschlagene
+> Maßnahme zu.
+
+Phrased without an article so the trigger appears verbatim *and* the German
+is grammatical — same device as G07.
+
+Must-cite (14): Zusammenfassung Bedarfe und Best Practice · KI Top-Bedarfe,
+Bewertung und Priorisierung · Arbeitsbereich Bedarfe und Best Practice ·
+Sammlung User Stories  Anwendungsfälle KI an der JLU · User Stories
+Anwendungsfälle Bedarfsbündelung und wer macht was - Entwurf · Infos zu User
+Stories · Anwendungsfälle · Fragen zum KI-Einsatz · Was tun wir schon an der
+JLU · Sammlung Best Practices KI in der Hochschulverwaltung · die drei
+KI-Austausch-Protokolle (2025-07-23, 2025-09-22, 2025-11-10) · Ideen
+Quellensammlung
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Fünf Erhebungsquellen | *Zusammenfassung Bedarfe und Best Practice*: „Stakeholder-Meetings: … zwischen Juli und November 2025 drei Stakeholder-Austausche … - KI-Workshop-Ergebnisse … - Studierendenbefragung 2025 … - ZAD-Arbeitstreffen-Ergebnisse: Erkenntnisse aus zwei World Cafés … - KI-Team HRZ … - Umfeld und Best Practices“ |
+| 2 | „Make or Buy“ mit fünf Kriterien | *ebd.*: „Für den gesamten Technologie-Stack gilt die \"Make or Buy\"-Frage: Eigenbetrieb, wo nötig und sinnvoll, andernfalls externe (Cloud-)Lösung. Bekannte Kriterien … sind Fachlichkeit (inkl. Sicherheit), Wirtschaftlichkeit, Nachhaltigkeit, Digitale Souveränität, Zeit (Time to Market).“ |
+| 3 | Infrastruktur fragmentiert; GPU-as-a-Service; CIO-Steuerung + OCRE bis Q3/2026 | *ebd.*: „Die aktuelle IT-Basis ist oft fragmentiert und nicht optimal ausgelastet.“; „Ein zentral verwalteter GPU-Pool (\"GPU-as-a-Service\") kann die Auslastung optimieren“; „Es beauftragt den CIO dazu, diese … beginnend in Q2/2026 abzustimmen. Ein zugehöriges Konzeptionsprojekt soll bis Ende Q3/2026 abgeschlossen sein. - Außerdem werden CIO/HRZ ein Projekt zur Konzeption zur Nutzung von Cloud Computing Ressourcen via Open Clouds for Research Environments (OCRE-Rahmenverträge des DFN) initiieren“ |
+| 4 | Drei „Treppenstufen“ der Anwendungsfälle; Support-Chatbot als Maßnahme | *ebd.*: „##### KI am eigenen Arbeitsplatz (1. Treppenstufe) … ##### Arbeitsplatznahe KI-Integration (2. Treppenstufe) … ##### KI in Fachanwendungen (3. Treppenstufe) … KI-Komponenten in bestehender oder neuer Fach-Software (z.B. Bewerbermanagementsystem, CAFM), KI-Agenten“; „Das HRZ initiiert ein \"Support-Chatbot\"-Projekt zur Bereitstellung eines Systems für Website-Widgets“ |
+| 5 | Compliance: „Schatten-KI“; Ampelsystem; erste Iteration Sommer 2026 | *ebd.*: „Lange und aufwändige Prüfungsprozesse riskieren allerdings das Entstehen von \"Schatten-KI\" … Vorgeschlagen wird daher ein Optimierungskonzept, in dem … eine vereinfachte Entscheidungsbasis nach Risikobewertung (z.B. Ampelsystem) entwickelt werden sollen … Ziel ist es, eine erste Iteration zum Sommer 2026 zu erarbeiten“ |
+| 6 | KI-Hub als Toolbox mit SSO; Website bündelt Strategisches | *ebd.*: „Geplant ist ein \"KI-Hub\" ist als zentrale, technisch-anwendungsorientierte Toolbox für KI-Angebote der JLU … Der KI-Hub zielt … auf ein zentrales Portal für alle Anwendungen ab (Single Sign-On …), während die zentrale KI-Website primär strategische und vernetzende Aktivitäten bündelt“ |
+
+#### G24 — trigger `überblick über alle` — Workshop-Kommunikation
+
+> Gib mir einen Überblick über alle Kommunikations- und Einladungsmaßnahmen
+> rund um den KI-Workshop und erkläre, welche Zielgruppen über welchen Kanal
+> angesprochen wurden.
+
+Distinct from G06: that question asks for *contradictions* in the orga
+documents, this one for *channels and audiences*.
+
+Must-cite (13): Kommunikation Workshop · Save the Date und E-Mailverteiler für
+Einladung · Einladungstext · Verteiler · Anmeldung über Eveeno · Programm-Flyer ·
+Mail zur Versendung an TN nach dem WS · Kommunikation Präsidium · Kommunikation
+Projektabschluss Neue Wege mit KI · Entwurf Kommunikation C1 · Kommunikation
+Personalentwicklung (PE) oder auch C5 · Arbeitspaket Sichtbarkeit - Website ·
+Einführung von Eveeno - digitales Teilnehmendenmanagement
+
+| # | Punkt (gekürzt) | Beleg (Chunk-Fragment) |
+|---|---|---|
+| 1 | Feste Reihenfolge: Save the Date → Einladung mit Agenda → DB-Bericht → Eveeno | *Kommunikation Workshop*: „Save the Date versenden … Text verfassen und abstimmen … breiten Mailverteiler erstellen … Einladung mit Agenda versenden … Bericht zu Workshop in der DB … Eveeno für Anmeldung“ |
+| 2 | Save the Date am 07.10.2025 über ki@uni-giessen.de; Termin/Ort | *Verteiler*: „Save the Date Versendung am 07.10.2025 ki@uni-giessen.de“ · *Save the Date und E-Mailverteiler…*: „wann: 25. November 2025 09:00 - 16:00 Uhr wo: Aula im Hauptgebäude der JLU“ |
+| 3 | Verteiler für persönliche Ansprache; Statusgruppen einzeln; AG FBM; ILIAS-Plugin | *Einladungstext*: „über verschiedene Verteiler versenden um \"persönliche Ansprache\" zu gewährleisten … Statusgruppen einzeln anschreiben … AG Fachbereichsmanagement über Jessica … ILIAS-Plugin über Mirco Hilbert“ |
+| 4 | Eveeno erhebt die Gruppenzuordnung (fünf Gruppen) | *Anmeldung über Eveeno*: „Welchen Bereichen ordnen Sie sich zu? O Professorinnen und Professoren aller Fachbereiche O Mitarbeitende aus der Lehre O Mitarbeitende aus der Forschung O Mitarbeitende aus Verwaltung und Technik O Studierende“ |
+| 5 | Dankes-Mail nach dem WS mit Website, Keynotes, 7 Einblicken, World Café | *Mail zur Versendung an TN nach dem WS*: „Die inspirierenden Keynotes von Christine Serrette (ITZBund) und Prof. Dr. Irene Bertschek sowie die sieben praxisnahen Einblicke in KI-Projekte an der JLU haben wichtige Impulse gesetzt. Besonders gewinnbringend waren die intensiven und konstruktiven Diskussionen an den Thementischen des World Cafés“ |
+| 6 | Gremienkommunikation: Präsidiumsvermerk/-berichtspunkt, Senat, EP, AG FBM, SK Studiengänge | *Kommunikation Präsidium*: „# Präsidiumsvermerk für … # Präsidiumsberichtspunkt“ · *Kommunikation Projektabschluss Neue Wege mit KI*: „- Senat - EP TOP-Anmeldung … - AG Fachbereichsmanagement - Senatskommission Studiengänge … Senatsberichtspunkt erstellen für VPW“ |
+
+### Points deliberately left out (not verifiable within scope)
+
+- **Project start/end dates as a single fact** — see the G22 note above; the
+  corpus contradicts itself, so dates are only stated with their source.
+- **Whether Christine Serrette actually spoke** was almost stated from
+  `2025-10-08 Projektbesprechung` ("Absage Frau Serrette"), which the later
+  `2025-10-24` note ("Eberhard übernimmt die Kommunikation mit Frau Serette")
+  and the post-workshop mail contradict. Only the post-workshop mail's
+  statement is used (G24 point 5), and the cancellation is not asserted.
+- **`Projektende` dates from the Steckbrief template** — same reason as
+  Wave 4: the field is revised through changelog entries rather than holding
+  a stable value (Containerbasierte Bereitstellung alone moves twice in 2026).
+- **Named `Projektleitung` persons** outside the "Neue Wege mit KI" project,
+  where they are stated in prose rather than in an `@mention` template field.
+- **`Funktionspostfach.md`, `Raumbuchung.md`, `Programm-Flyer.md`,
+  `Übersicht Besprechungsnotizen und Aufgaben.md`, `Projektorganisation.md`,
+  `Arbeitsbereich Bedarfe und Best Practice.md`** are near-empty task lists,
+  screenshots or Confluence macros; they appear in `must_cite_file_names`
+  where a curator would expect them but carry no point of their own.
+- **Status for the non-Steckbrief pages** (`Barrierefreie IT umsetzen`,
+  `Website KI an der JLU`, …) — those pages use a different template with no
+  status field; no status was asserted for them.
+
+### Artifacts
+
+- `eval/golden/global-synthesis-de.jsonl` — 24 rows (gitignored, never
+  `git add`ed); copied to the main checkout at
+  `/home/steffen/git/JustRAG/eval/golden/global-synthesis-de.jsonl` so both
+  working copies hold the same fixture.
+- `.superpowers/sdd/2026-09-06-rag-sota-wave5/t9-smoke.json`, `t9-smoke.log` —
+  the single G13 smoke.
+- `.superpowers/sdd/2026-09-06-rag-sota-wave5/t9-files.txt`, `t9-status.txt` —
+  the read-only corpus listings the curation was done against.
+- `.superpowers/sdd/2026-09-06-rag-sota-wave5/t9-append-rows.py` — the authored
+  rows in source form, so the gitignored jsonl is reproducible from a tracked
+  worktree artifact.
+
+## §4 Wave 5 re-measurement under the pooled rule (W5-R1, pre-registered 2026-09-06)
+
+### The rule, first
+
+**Ruling W5-R1** (registered 2026-09-06, *before* the extended set existed and
+*before* any run on it — see `eval/golden/README.md` § "Pooling two
+comparisons — `--pairwise-pool`" and `rulings.md`). Over the extended
+global-synthesis set (N ≥ 24 questions), two cross pairs are run
+(flat1 vs mr1, flat2 vs mr2) and the decisive pairs of the two are **pooled**
+(ties excluded from every rate). All four sub-criteria must pass:
+
+1. pooled `map_reduce` (B) win rate ≥ 0.60
+2. pooled Wilson lower bound (z = 1.96) > 0.50
+3. pooled mean coverage of `map_reduce` not below flat's mean coverage by
+   more than the flat1-vs-flat2 coverage band
+   (`band = |mean_cov(flat1) − mean_cov(flat2)|`)
+4. the control pair (flat1 vs flat2) win rate lands inside `[0.35, 0.65]`
+   (otherwise the judge is unstable on this set and the run is inconclusive)
+
+All four → `chat_longcontext_mode` default flips to `map_reduce` in Task 11
+(the route stays gated by `chat_longcontext_enabled`). Any failure → `flat`
+stays. Cost is reported, not a veto. This replaces the per-pair W4-R7 rule
+(§2) for all future runs. Nothing below changes the verdict after the fact;
+anything not in the four numbered criteria above is labelled **post hoc**.
+
+### Setup
+
+Same KB (`83262307-3a1b-49bc-bd08-3b925a868a92`, PPM-Eval) and the same
+unchanged site-config baseline as §1/§2 — no `site_configs` row was written;
+`chat_longcontext_enabled`/`chat_longcontext_mode` are supplied per run
+through the `--longcontext`/`--longcontext-mode` overlays, confirmed in each
+run's first log line, e.g. `t10-flat1.log`:
+`{"msg":"eval: applying chat site_config overlays for this
+run","overlays":{"chat_longcontext_enabled":"true","chat_longcontext_mode":"flat"}}`
+(and `"map_reduce"` for mr1/mr2). Fixture: `eval/golden/global-synthesis-de.jsonl`,
+**24 questions** (G01–G24, §3). Binary built once from commit `15c383a`
+(`.superpowers/sdd/2026-09-06-rag-sota-wave5/eval-wave5`). Model stack
+unchanged from §1/§2 (`jlu/gemma-4-26b-it` answer + all judges,
+`jlu-internal/gemma-4-26b-it-bulk` map-stage extractor, `jlu/jina-rerank`
+reranker, `jlu/qwen3-embedding` 4096-dim embedder). All four judged runs and
+three pairwise comparisons ran back-to-back on the dev stack with nothing
+else scheduled against it, per the runner's lock check.
+
+### Commands (exact, `t10-run.sh`)
+
+```bash
+export DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=rag_db
+export VECTOR_DB_HOST=localhost VECTOR_DB_PORT=5433 VECTOR_DB_USER=postgres VECTOR_DB_PASSWORD=postgres VECTOR_DB_NAME=rag_vector_db
+export JWT_SECRET=local-eval-acceptance-secret-0123456789abcdef
+export REDIS_HOST=localhost REDIS_PORT=6379 REDIS_PASSWORD=redis
+export S3_ENDPOINT=http://localhost:9000 S3_ACCESS_KEY=minioadmin S3_SECRET_KEY=minioadmin S3_BUCKET=rag-files S3_REGION=us-east-1
+
+# four judged runs, alternating flat / map_reduce, on the extended 24-question set
+eval-wave5 --golden eval/golden/global-synthesis-de.jsonl --production-context \
+  --orchestrator-dispatch=true --judge --longcontext on --longcontext-mode flat \
+  --output t10-flat1.json        # then mr1 (map_reduce), flat2, mr2, same shape
+
+# three pairwise comparisons (win rate is A's; A is always the first path named)
+eval-wave5 --pairwise-a t10-flat1.json --pairwise-b t10-mr1.json   --pairwise-out t10-pw-1.json
+eval-wave5 --pairwise-a t10-flat2.json --pairwise-b t10-mr2.json   --pairwise-out t10-pw-2.json
+eval-wave5 --pairwise-a t10-flat1.json --pairwise-b t10-flat2.json --pairwise-out t10-pw-ctrl.json
+
+# W5-R1's actual decision statistic: pool the two cross pairs
+eval-wave5 --pairwise-out t10-pw-pooled.json \
+  --pairwise-pool t10-pw-1.json t10-pw-2.json
+```
+
+Full driver: `.superpowers/sdd/2026-09-06-rag-sota-wave5/t10-run.sh`. Wall
+clock (`t10-run.log`): flat1 1558 s, mr1 1797 s, flat2 1244 s, mr2 1797 s —
+total ≈ 1 h 43 min for the four judged runs, plus the near-instant pairwise
+and pooling steps (file-only, no retrieval/judge calls).
+
+### Per-run validity table (n=24, k=10 per run)
+
+All four runs pass every validity check from the hand-off: `errors == 0`,
+every one of the 24 questions has `agent.orchestrator == "longcontext"`
+(`classified_query_type == "complex_reasoning"` throughout), and
+`judge.coverage` is present for all 24 (`coverage_n = 24`).
+
+| Run | errors | orchestrator=longcontext (24/24) | coverage n | mean coverage | mean faithfulness (n) | mean context precision | mean answer relevance | mean answer length (runes) | judge warnings | judge errors | wall time |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| flat1 | 0 | 24/24 | 24/24 | 0.5403 | 0.4642 (24) | 0.4500 | 1.0000 | 3031 | 3 | 0 | 1558 s |
+| mr1 | 0 | 24/24 | 24/24 | 0.5972 | 0.4615 (23) | 0.5458 | 1.0000 | 4082 | 1 | 1 | 1797 s |
+| flat2 | 0 | 24/24 | 24/24 | 0.5264 | 0.5694 (24) | 0.4500 | 1.0000 | 3207 | 3 | 0 | 1244 s |
+| mr2 | 0 | 24/24 | 24/24 | 0.5701 | 0.5327 (23) | 0.5250 | 1.0000 | 3938 | 1 | 1 | 1797 s |
+
+Answer relevance is fully saturated (24/24 at 1.000 in every run), consistent
+with §1/§2's finding that the judge has no discriminative power on this
+route — expected, not a criterion. Faithfulness and context precision remain
+diagnostic, not decision inputs, per W5-R1 (only coverage and the pairwise
+judge feed the decision).
+
+**Judge instrument faults, pre-existing and independent of mode (post hoc):**
+mr1 G05 and mr2 G09 each hit a faithfulness judge call whose response the
+strict decoder rejected (`judge_errors`; that question's faithfulness is
+simply absent from its run's mean, computed over the other 23).
+
+> **Diagnosis correction (Wave-5 final fix wave).** The `` ```json `` fence
+> visible in the recorded preview is **not** the cause. The binary these runs
+> used already carried the Wave-4 balanced-object scanner, under which a
+> fenced complete object parses (verified by replay) and a truncated one
+> reports the distinct `truncated JSON` error. Both of these reported the
+> plain `response is not valid JSON`, which leaves exactly one class: a
+> **brace-balanced object the JSON decoder still rejects** — a raw newline
+> inside a string, an unescaped `"` inside a string, or a trailing comma. The
+> recorded 120-byte preview cannot say which, because the offending byte sits
+> past it and the decoder's own error was dropped. That is fixed: the error
+> now carries the decoder's message (which names the character and its
+> offset) and a 400-rune, rune-safe preview, so one further occurrence
+> identifies the shape. No parser tolerance was added on a guess. The
+recurring `context_precision: judge returned 11 booleans, expected 10 —
+truncated/padded` warning fired 8 times across the four runs (flat1
+G02/G07/G21; flat2 G02/G07/G23; mr1 G08; mr2 G22) — same pre-existing
+boolean-count quirk as §1/§2, zero effect beyond dropping that one question's
+context-precision score.
+
+**No degenerate-answer anomaly this wave** (unlike §2's flat1 G01, a 17337-rune
+answer with a ~15400-character garbage run): the longest answer in any of the
+four runs is mr1 G02 at 6638 runes, a normal length for a synthesis answer
+over 200 chunks. **`answer_degenerate_guard` (W5-R4) trajectory-event count:
+0 across all four runs** (`t10-analyse.py` §1b greps every run's JSON and log
+for the marker; none found). Note this eval mode does not run `--trajectory`,
+so there is no per-question trajectory array to scan — the grep is over the
+raw report/log text, which is where the marker would appear if the guard had
+fired via its own log line. The unrelated `rag.reranker.degenerate` WARN
+lines seen 18 times per run's log are a **pre-existing reranker-calibration**
+signal (score-distribution stddev below threshold) and have nothing to do
+with the W5-R4 answer guard — flagged here only because the substring match
+is easy to confuse.
+
+### Coverage — noise band + per-question table (all 24 questions)
+
+Noise band = `|mean_coverage(flat1) − mean_coverage(flat2)| = |0.5403 −
+0.5264| = 0.0139` (**1.39 pp**).
+
+| Q | flat1 | mr1 | flat2 | mr2 |
+|---|---|---|---|---|
+| G01 | 0.800 | 1.000 | 0.800 | 0.600 |
+| G02 | 0.667 | 0.833 | 0.667 | 0.833 |
+| G03 | 0.667 | 0.500 | 0.667 | 0.500 |
+| G04 | 0.333 | 0.333 | 0.500 | 0.500 |
+| G05 | 0.333 | 0.833 | 0.500 | 0.833 |
+| G06 | 1.000 | 0.500 | 0.500 | 0.750 |
+| G07 | 0.667 | 0.500 | 0.333 | 0.000 |
+| G08 | 0.667 | 0.500 | 0.500 | 0.667 |
+| G09 | 0.667 | 0.833 | 0.667 | 0.667 |
+| G10 | 0.667 | 0.667 | 0.500 | 0.667 |
+| G11 | 0.500 | 0.833 | 0.500 | 0.833 |
+| G12 | 0.500 | 0.500 | 0.500 | 0.500 |
+| G13 | 0.500 | 0.333 | 0.333 | 0.500 |
+| G14 | 0.500 | 0.500 | 0.667 | 0.833 |
+| G15 | 0.500 | 0.500 | 0.500 | 0.500 |
+| G16 | 0.500 | 0.500 | 0.500 | 0.500 |
+| G17 | 0.333 | 0.833 | 0.167 | 0.500 |
+| G18 | 0.333 | 0.833 | 0.500 | 0.500 |
+| G19 | 0.500 | 0.500 | 0.500 | 0.500 |
+| G20 | 0.500 | 0.667 | 0.667 | 0.667 |
+| G21 | 0.500 | 0.500 | 0.667 | 0.667 |
+| G22 | 0.500 | 0.500 | 0.333 | 0.167 |
+| G23 | 0.500 | 0.333 | 0.500 | 0.333 |
+| G24 | 0.333 | 0.500 | 0.667 | 0.667 |
+
+Cross-pair coverage deltas (map_reduce − flat, same run pair): pw1
+`mr1 − flat1 = 0.5972 − 0.5403 = +0.0569` (**+5.69 pp**, beyond the 1.39 pp
+band); pw2 `mr2 − flat2 = 0.5701 − 0.5264 = +0.0438` (**+4.38 pp**, also
+beyond the band). **Pooled** coverage: `mean(mr1, mr2) = 0.5837`,
+`mean(flat1, flat2) = 0.5333`, pooled delta `= +0.0503` (**+5.03 pp**) — this
+is the number W5-R1 sub-criterion 3 actually tests, and it clears the 1.39 pp
+band with room to spare in both cross pairs and pooled.
+
+### Map/reduce trajectory stats (mr1, mr2 logs)
+
+Both runs: 24 questions × 25 groups/question (`chat_longcontext_map_group_size`
+default 8, 200-chunk pool ÷ 8 = 25) = 600 groups/run, `dropped_findings = 0`
+throughout (no reduce-stage truncation, the W3-R7 fallback never needed to
+spill).
+
+| Run | groups | failed groups | findings | dropped findings |
+|---|---|---|---|---|
+| mr1 | 600 | 3 | 1867 | 0 |
+| mr2 | 600 | 1 | 1907 | 0 |
+
+The 4 failed groups (`longcontext.map_group_failed`, `error: "context
+deadline exceeded"`) landed on mr1 groups 19/1/14 and mr2 group 1 — the
+W3-R7 fallback (raw first-600-rune chunk text instead of an extracted
+finding) covered them; no question errored.
+
+### Pairwise comparisons (winner is from A's perspective)
+
+| Pair | A | B | wins(A) | ties | losses(A)=wins(B) | decisive | A win rate | A Wilson [lo,hi] | B (map_reduce) win rate | B Wilson [lo,hi] | tie rate | skipped/errors |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| pw1 | flat1 | mr1 | 1 | 3 | 20 | 21 | 0.0476 | [0.008, 0.227] | **0.9524** | **[0.773, 0.992]** | 0.125 | 0/0 |
+| pw2 | flat2 | mr2 | 1 | 8 | 14 | 15 | 0.0667 | [0.012, 0.298] | **0.9333** | **[0.702, 0.988]** | 0.348 | 1/1 |
+| ctrl | flat1 | flat2 | 4 | 13 | 7 | 11 | 0.3636 | [0.152, 0.646] | 0.6364 | [0.354, 0.848] | 0.542 | 0/0 |
+
+(B's Wilson interval is the exact complement of A's, `[1−hi(A), 1−lo(A)]`,
+confirmed by direct Wilson computation in `t10-analyse.py` §5.)
+
+**pw2's one skipped/errored pair:** G06's `(B,A)`-order judge call returned a
+response the strict decoder rejected
+(`"note":"judge (B,A) failed: response is not valid JSON: ..."`); the pair
+contributes to neither wins/ties/losses nor the win-rate denominator. The
+`` ```json `` fence in the preview is not the cause — see the diagnosis
+correction under "Judge instrument faults" above; the same brace-balanced-but-
+invalid class as mr1 G05 / mr2 G09.
+
+**Control pair (flat1 vs flat2, sub-criterion 4):** win rate **0.3636**,
+inside `[0.35, 0.65]` — but only just: the margin to the lower floor is
+**0.3636 − 0.35 = 0.014**, i.e. a single verdict's worth on an 11-decisive-pair
+denominator (one flipped decisive pair moves the rate by ~0.09). The control
+therefore passes, and it passes *narrowly*; a re-run of this design should not
+treat "control inside the band" as a comfortable result. The judge is not
+systematically preferring one flat run over the identically-configured other,
+so the two cross-pair results below are not an artifact of judge instability. Widest Wilson interval of
+the three pairs (`[0.152, 0.646]`) and the highest tie rate (0.542, 13 of 24
+pairs) — a same-configuration comparison should be close to indistinguishable,
+and it is.
+
+### Per-question verdict table
+
+| Q | pw1 (flat1/mr1) | pw2 (flat2/mr2) | ctrl (flat1/flat2) |
+|---|---|---|---|
+| G01 | B | B | B |
+| G02 | B | B | A |
+| G03 | B | tie | B |
+| G04 | tie | tie | tie |
+| G05 | B | tie | tie |
+| G06 | A | skipped | tie |
+| G07 | tie | A | tie |
+| G08 | B | B | tie |
+| G09 | B | B | tie |
+| G10 | B | tie | B |
+| G11 | B | B | A |
+| G12 | B | B | tie |
+| G13 | B | B | tie |
+| G14 | B | B | B |
+| G15 | B | B | tie |
+| G16 | tie | tie | tie |
+| G17 | B | B | tie |
+| G18 | B | B | A |
+| G19 | B | B | B |
+| G20 | B | tie | B |
+| G21 | B | tie | B |
+| G22 | B | B | A |
+| G23 | B | tie | tie |
+| G24 | B | B | tie |
+
+map_reduce (B) wins the large majority of decisive pairs in both cross
+comparisons (20/21 in pw1, 14/15 in pw2); the control pair splits close to
+even with a heavy tie rate, exactly the expected signature of a judge that
+discriminates real mode differences but not noise between identical runs.
+
+### Three disagreement excerpts (both orders' reasoning, `agree_both_orders = false`)
+
+**pw1 G04** (winner recorded as `tie`):
+> **A-then-B order:** "Antwort A bietet eine bessere Übersicht über das
+> 'Gesamtbild', da sie die Modernisierung in zwei klare technologische
+> Säulen (RZ und Netzwerk) unterteilt und zusätzlich die strategische
+> Komponente (KI) als Abhängigkeit hervorhebt. Zudem ist die zeitliche
+> Einordnung in einer Tabelle deutlich übersichtlicher..."
+>
+> **B-then-A order:** "Antwort A ist präziser bei der Beschreibung der
+> zeitlichen Abhängigkeiten und nennt konkrete Daten (30.09.2026,
+> 01.07.2026), während Antwort B eher allgemeine Zeiträume (2024, 2025 etc.)
+> verwendet. Zudem geht Antwort A besser auf die spezifischen technischen
+> Abhängigkeiten ein..."
+
+Both orders pick "the answer shown first" — a textbook position-bias flip,
+correctly neutralised into a tie by the swap-and-require-agreement design
+rather than credited to either mode.
+
+**pw2 G03** (winner recorded as `tie`):
+> **A-then-B order:** "Antwort A erfüllt die Aufgabenstellung besser, da sie
+> im ersten Schritt die explizite Anforderung 'Vergleiche alle Vorhaben'
+> durch eine tabellarische Übersicht der einzelnen Vorhaben mit deren Fokus
+> umsetzt. Antwort B springt direkt zur Kategorisierung der Maßnahmen..."
+>
+> **B-then-A order:** "Antwort A ist besser, da sie die Anforderung
+> 'Vergleiche alle Vorhaben' umfassender erfüllt. Während Antwort B die
+> Vorhaben in einer Tabelle auflistet, geht Antwort A tiefer in die
+> inhaltliche Strukturierung der Maßnahmen ein..."
+
+Same signature as pw1 G04 — both orders prefer whichever answer is shown
+first, correctly resolved to a tie.
+
+**ctrl G04** (winner recorded as `tie`, between the two flat runs):
+> **A-then-B order:** "Antwort A bietet eine bessere Übersicht über die
+> zeitliche Einordnung durch die tabellarische Darstellung der Meilensteine
+> (2024-2028). Antwort B konzentriert sich eher auf die logische Abfolge der
+> Phasen..."
+>
+> **B-then-A order:** "Antwort A bietet eine etwas bessere Strukturierung
+> des 'Gesamtbildes', indem sie die drei Ebenen (Baulich, Netzwerk, Digitale
+> Dienste) klarer voneinander trennt... Antwort B ist zwar durch die Tabelle
+> übersichtlicher bei den Daten, aber Antwort A geht tiefer auf die logische
+> Kette der Abhängigkeiten ein."
+
+Both orders in the control pair also favour "first shown", consistent with
+the pw1/pw2 pattern above — position bias is a property of the judge on this
+question shape, resolved the same conservative way regardless of which two
+runs are being compared.
+
+### The pooled statistic (W5-R1's decision input)
+
+From `t10-pw-pooled.json` (B = map_reduce's view), and independently
+recomputed from `t10-pw-1.json` + `t10-pw-2.json` in `t10-analyse.py` §8
+(counts match exactly):
+
+- decisive pairs pooled = **36** (pw1: 21, pw2: 15), ties pooled = 11
+- **A (flat) wins = 2, B (map_reduce) wins = 34**
+- **pooled map_reduce win rate = 34/36 = 0.9444**
+- **pooled Wilson interval (z = 1.96) = [0.8186, 0.9846]**
+
+### Control check
+
+flat1-vs-flat2 win rate = **0.3636**, inside `[0.35, 0.65]` (see the pairwise
+table above) — the control passes, so the judge is not simply biased toward
+one of the two "flat" reports; the 34/36 pooled result is read as a real
+map_reduce preference rather than judge noise.
+
+### Cost (reported, not a veto)
+
+| | flat1 | flat2 | mean | mr1 | mr2 | mean | ratio (mr/flat) |
+|---|---|---|---|---|---|---|---|
+| wall time | 1558 s | 1244 s | 1401 s | 1797 s | 1797 s | 1797 s | **1.28×** |
+
+map_reduce's mean wall time (1797 s) is **1.28×** flat's (1401 s) — markedly
+cheaper, relatively, than §2's Wave-4 measurement (1.65×) at half the
+question count and the same 25-groups-per-question map stage; the absolute
+per-question map-stage cost (25 fast-tier calls) is unchanged, so the lower
+ratio here reflects flat1/flat2's wall time varying more between the two
+Wave-5 runs (1558 s vs 1244 s) than a genuine map_reduce speed-up — flat2 is
+simply the fastest of the four runs. This is reported per the rule; it does
+not veto the decision below.
+
+### Decision (W5-R1)
+
+| # | Sub-criterion | Value | Threshold | Pass? |
+|---|---|---|---|---|
+| 1 | pooled map_reduce win rate | 0.9444 | ≥ 0.60 | **yes** |
+| 2 | pooled Wilson lower bound | 0.8186 | > 0.50 | **yes** |
+| 3 | pooled coverage delta (mr − flat) | +5.03 pp | ≥ −1.39 pp (band) | **yes** |
+| 4 | control (flat1 vs flat2) win rate | 0.3636 | ∈ [0.35, 0.65] | **yes** |
+
+**All four sub-criteria pass. `chat_longcontext_mode` default flips to
+`map_reduce`** (Task 11 makes the site_config default change; the route
+stays gated behind `chat_longcontext_enabled`, unchanged). Applying W5-R1
+literally, exactly as pre-registered on 2026-09-06 before this set or any of
+these runs existed — no criterion was relaxed or reinterpreted after seeing
+the data.
+
+**Post hoc, supporting evidence (not part of the rule):** the per-question
+verdict table shows map_reduce winning the overwhelming majority of decisive
+pairs in *both* cross comparisons individually (20/21 and 14/15), not merely
+in the pooled tally — unlike §2's Wave-4 measurement, where pw1 (11
+decisive, 8/11 wins) missed the *per-pair* Wilson bar by one win while pw2
+(9 decisive, 8/9) cleared it; here both pairs clear the pooled bar and would
+also individually clear a per-pair 0.60/Wilson-low>0.50 bar (pw1: 20/21 =
+0.952, Wilson low 0.773; pw2: 14/15 = 0.933, Wilson low 0.702) — the larger
+set (24 vs 12 questions) resolved the under-powering §2 flagged, and the
+pooled and per-pair reads now agree.
+
+### Artifacts
+
+Under `.superpowers/sdd/2026-09-06-rag-sota-wave5/` (gitignored workspace):
+`t10-flat1.json`/`.log`, `t10-mr1.json`/`.log`, `t10-flat2.json`/`.log`,
+`t10-mr2.json`/`.log` (the four judged runs, n=24 each), `t10-pw-1.json`/`.log`,
+`t10-pw-2.json`/`.log`, `t10-pw-ctrl.json`/`.log` (the three pairwise
+comparisons), `t10-pw-pooled.json`/`.log` (the W5-R1 pooled statistic),
+`t10-run.sh`/`t10-run.log` (the driver + wall-time log), `t10-summary.py`
+(controller's quick summary) and `t10-analyse.py` (this record's source of
+truth — every number above is reproducible by running
+`python3 t10-analyse.py` from that directory).

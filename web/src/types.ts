@@ -133,6 +133,12 @@ export interface TrajectoryEvent {
     // Set whenever the refine pass actually changed the answer. Use this to
     // rebuild message content — the word-level diff is newline-lossy.
     refined_text?: string;
+    // answer_degenerate_guard: the configured run limit
+    // (chat_answer_degenerate_run_limit) and the length the repeated run had
+    // reached when the guard cut the completion, both in runes. Omitted by the
+    // backend when zero, so both are optional.
+    limit?: number;
+    run_length?: number;
 }
 
 export interface TableColumn {
@@ -182,6 +188,31 @@ export interface Message {
     // In-chat document comparison findings, populated by useChatStream from
     // the `comparisonFindings` SSE event during a comparison turn.
     comparisonFindings?: ComparisonFinding[];
+    // Conflicting-sources report (Wave 5, chat_conflict_surfacing_enabled):
+    // populated live from the `conflicts` SSE frame (useChatStream, right
+    // after `sources`) and from the persisted `conflicts` column on reload
+    // (useChat.handleSelectChat). Bare array on every surface — the backend
+    // omits the key entirely when the turn's report is empty, so this stays
+    // undefined rather than an empty array in that case.
+    conflicts?: MessageConflict[];
+}
+
+// MessageConflict is one entry in Message.conflicts, produced when the
+// conflict-surfacing pass finds two cited sources disagreeing on a claim.
+// `sourceA`/`sourceB` are 1-based citation indices into the same `sources`
+// array the FE already renders (same convention as CitationStatus.n);
+// `fileA`/`fileB` are the two files' names for display. `kind` distinguishes
+// an outright contradiction from one source being superseded by a newer one;
+// `newer` names which side is more recent when known ('a' -> fileA,
+// 'b' -> fileB, 'unknown' -> not determinable).
+export interface MessageConflict {
+    claim: string;
+    sourceA: number;
+    sourceB: number;
+    kind: 'contradiction' | 'superseded';
+    newer: 'a' | 'b' | 'unknown';
+    fileA: string;
+    fileB: string;
 }
 
 export interface ComparisonFinding {
@@ -332,6 +363,23 @@ export interface FileEntry {
     stageIndex?: number;
     stageTotal?: number;
     stageDetail?: string;
+    // Ingest prompt-injection screening verdict (migration 0072, W5-R8).
+    // Advisory only: a flagged file was ingested, chunked and is retrieved
+    // exactly like any other — the flag says the document carries
+    // instruction-shaped text, nothing more. Only files from external
+    // sources (rss/confluence/git/crawl) are ever screened; own uploads
+    // never are, so injectionFlag is always false for them.
+    injectionFlag?: boolean;
+    // Snake_case field names verbatim from the Go Finding struct's JSON
+    // tags (go-backend/internal/promptsafety/screen.go) — do not camelCase
+    // them. snippet is untrusted, document-derived text: render it as data
+    // (a tooltip), never as markup and never back into a prompt.
+    injectionDetail?: {
+        rule?: string;
+        position?: number;
+        snippet?: string;
+        screened_at?: string;
+    };
 }
 
 // Tabular file detail (Phase 4) — mirrors tabular.FileTabularDTO / TableDTO /

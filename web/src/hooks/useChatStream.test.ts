@@ -352,3 +352,57 @@ describe('useChatStream.handleSendMessage — editing the first question of a ch
     expect(result.current.messageTree.get('u-new')?.parentMessageId).toBeUndefined();
   });
 });
+
+// Wave 5 conflict surfacing: the backend emits a `conflicts` frame
+// immediately after `sources` (see task-3-report.md "SSE frame placement").
+// Handled the same way as `comparisonFindings`/`verification` above —
+// dropped straight onto the streaming AI message so MessageBubble's badge
+// gate (`message.conflicts?.length > 0`) sees it without waiting for a
+// reload.
+describe('useChatStream — conflicts frame', () => {
+  const conflicts = [
+    { claim: 'Beitragshöhe', sourceA: 1, sourceB: 2, kind: 'contradiction', newer: 'unknown', fileA: 'alt.md', fileB: 'neu.md' },
+  ];
+
+  it('legt eine `conflicts`-Frame auf der streamenden Nachricht ab', async () => {
+    authFetchMock.mockResolvedValueOnce(okResponse([
+      { aiMessageId: 'ai-conf' },
+      { conflicts },
+      { content: 'Die Quellen widersprechen sich.' },
+    ]));
+    const { result } = renderHook(() => useHarness());
+
+    await act(async () => {
+      await result.current.stream.handleSendMessage(
+        { preventDefault: () => {} } as React.FormEvent,
+        'Wie hoch ist die Beitragshöhe?',
+        null,
+        undefined,
+      );
+    });
+
+    const aiMsg = result.current.messageTree.get('ai-conf');
+    expect(aiMsg?.conflicts).toHaveLength(1);
+    expect(aiMsg?.conflicts?.[0].claim).toBe('Beitragshöhe');
+    expect(aiMsg?.conflicts?.[0].fileA).toBe('alt.md');
+  });
+
+  it('lässt `conflicts` undefined, wenn die Frame nie kommt', async () => {
+    authFetchMock.mockResolvedValueOnce(okResponse([
+      { aiMessageId: 'ai-noconf' },
+      { content: 'Keine Widersprüche gefunden.' },
+    ]));
+    const { result } = renderHook(() => useHarness());
+
+    await act(async () => {
+      await result.current.stream.handleSendMessage(
+        { preventDefault: () => {} } as React.FormEvent,
+        'Wie hoch ist die Beitragshöhe?',
+        null,
+        undefined,
+      );
+    });
+
+    expect(result.current.messageTree.get('ai-noconf')?.conflicts).toBeUndefined();
+  });
+});

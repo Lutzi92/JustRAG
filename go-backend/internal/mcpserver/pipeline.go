@@ -73,8 +73,13 @@ func (p *pipelineAnswerer) Answer(ctx context.Context, kbID, question, language 
 		return AnswerResult{}, fmt.Errorf("generate completion: %w", err)
 	}
 
+	// Degenerate-run guard, post hoc (W5-R4): this surface is non-streaming,
+	// so there is nothing to abort — but a runaway repetition must not be
+	// handed to the MCP client as the answer.
+	answer, _ := chat.GuardAnswerText(ctx, p.cfg, completion.Content, language, "mcp")
+
 	return AnswerResult{
-		Answer:  completion.Content,
+		Answer:  answer,
 		Sources: mapSources(chatCtx.Sources),
 	}, nil
 }

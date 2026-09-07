@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/kbmembers"
 	"github.com/justrag/go-backend/internal/pgxutil"
+	"github.com/justrag/go-backend/internal/ragassamples"
 )
 
 // ErrKBNotFound is returned by TransferKBOwner when the target KB no longer
@@ -23,11 +25,12 @@ var ErrKBNotFound = errors.New("knowledge base not found")
 type PGStore struct {
 	pool    *pgxpool.Pool
 	members kbmembers.Store
+	ragas   ragassamples.Store
 }
 
 // NewStore creates a PGStore over the main pool.
 func NewStore(pool *pgxpool.Pool) *PGStore {
-	return &PGStore{pool: pool, members: kbmembers.NewStore(pool)}
+	return &PGStore{pool: pool, members: kbmembers.NewStore(pool), ragas: ragassamples.NewStore(pool)}
 }
 
 // Compile-time interface assertion.
@@ -61,6 +64,7 @@ type fileStatRow struct {
 	LastFileUploadAt    *string `db:"last_file_upload_at"`
 	OldestFileAt        *string `db:"oldest_file_at"`
 	StaleFileCount      int     `db:"stale_file_count"`
+	InjectionFlagged    int     `db:"injection_flagged"`
 }
 
 // FileStatsByKB returns per-KB file aggregates keyed by kb_id (text).
@@ -86,7 +90,8 @@ func (s *PGStore) FileStatsByKB(ctx context.Context, staleDays int) (map[string]
 		       to_char(MIN(COALESCE(published_at, created_at)) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS oldest_file_at,
 		       COUNT(*) FILTER (
 		           WHERE COALESCE(published_at, created_at) < NOW() - make_interval(days => $1)
-		       )::int                                                               AS stale_file_count
+		       )::int                                                               AS stale_file_count,
+		       COUNT(*) FILTER (WHERE injection_flag)::int                          AS injection_flagged
 		FROM files
 		GROUP BY kb_id`
 	rows, err := pgxutil.QueryRows[fileStatRow](ctx, s.pool, sql, staleDays)
@@ -103,6 +108,7 @@ func (s *PGStore) FileStatsByKB(ctx context.Context, staleDays int) (map[string]
 			LastFileUploadAt:    r.LastFileUploadAt,
 			OldestFileAt:        r.OldestFileAt,
 			StaleFileCount:      r.StaleFileCount,
+			InjectionFlagged:    r.InjectionFlagged,
 		}
 	}
 	return out, nil
@@ -257,6 +263,29 @@ func (s *PGStore) TurnStatsByKB(ctx context.Context) (map[string]TurnStats, erro
 	out := make(map[string]TurnStats, len(rows))
 	for _, r := range rows {
 		out[r.KbID] = TurnStats{WebTurns: r.WebTurns, APITurns: r.APITurns, LastTurnAt: r.LastTurnAt}
+	}
+	return out, nil
+}
+
+// RagasStatsByKB returns each KB's RAGAS judge-score aggregate for the window
+// starting at since, keyed by kb_id (text).
+//
+// Deliberately delegates to ragassamples.Store.DailyStats (Task 1) rather
+// than writing a second aggregate query against ragas_samples: the two
+// packages must never be able to compute this number two different ways.
+func (s *PGStore) RagasStatsByKB(ctx context.Context, since time.Time) (map[string]RagasStats, error) {
+	daily, err := s.ragas.DailyStats(ctx, since)
+	if err != nil {
+		return nil, fmt.Errorf("RagasStatsByKB: %w", err)
+	}
+	out := make(map[string]RagasStats, len(daily))
+	for kbID, st := range daily {
+		out[kbID] = RagasStats{
+			N24h:             st.N,
+			Faithfulness:     st.Faithfulness,
+			AnswerRelevance:  st.AnswerRelevance,
+			ContextPrecision: st.ContextPrecision,
+		}
 	}
 	return out, nil
 }

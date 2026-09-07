@@ -526,6 +526,12 @@ export const translations = {
     verificationScoreLabel: { de: 'Konfidenz', en: 'Confidence' },
     verificationIssuesLabel: { de: 'Anmerkungen', en: 'Notes' },
 
+    // Conflicting-sources badge (Wave 5 conflict surfacing)
+    conflictsBadge: { de: 'Widersprüchliche Quellen', en: 'Conflicting sources' },
+    conflictKindContradiction: { de: 'Widerspruch', en: 'Contradiction' },
+    conflictKindSuperseded: { de: 'überholt', en: 'superseded' },
+    conflictNewerPrefix: { de: 'neuer', en: 'newer' },
+
     // Sources
     sourcesLabel: { de: 'Quellen:', en: 'Sources:' },
     sourceCount: { de: 'Quelle', en: 'Source' },
@@ -969,6 +975,11 @@ export const translations = {
     colOldestContent: { de: 'Ältester Inhalt', en: 'Oldest content' },
     colStaleShare: { de: 'Veraltet', en: 'Stale' },
     colLastSync: { de: 'Letzte Synchronisierung', en: 'Last sync' },
+    colRagas: { de: 'RAGAS (24 Std.)', en: 'RAGAS (24h)' },
+    colRagasTooltip: {
+        de: 'RAGAS-Stichprobe der letzten 24 Stunden: Anzahl · F = Treue (Faithfulness), AR = Antwortrelevanz (Answer Relevance), CP = Kontextpräzision (Context Precision). Ein Bindestrich statt Wert bedeutet: kein Ergebnis für diese Metrik (Judge-Aufruf fehlgeschlagen).',
+        en: 'RAGAS sample over the trailing 24 hours: count · F = Faithfulness, AR = Answer Relevance, CP = Context Precision. A dash instead of a value means no result for that metric (the judge call failed).',
+    },
     kbSyncFailing: { de: 'Synchronisierung fehlerhaft', en: 'Sync failing' },
     // Per-kind sync status (Wave-4 Task 7 / W4-R9): a KB with several source
     // kinds shows the worst one in the lastSync cell and lists all of them
@@ -1295,6 +1306,13 @@ export const translations = {
     contextualEnrichmentHelp: { de: 'Beim Importieren wird jeder Chunk per LLM mit einer Kontextbeschreibung angereichert, um die Suchgenauigkeit zu verbessern. Erhöht die Verarbeitungszeit und API-Kosten. Gilt nur für neu importierte Dateien.', en: 'During ingestion, each chunk is enriched with an LLM-generated context description to improve search accuracy. Increases processing time and API costs. Only applies to newly ingested files.' },
     contextualEnrichmentModel: { de: 'Modell für kontextuelle Anreicherung', en: 'Contextual enrichment model' },
     contextualEnrichmentModelHelp: { de: 'Modell, das während der Ingestion für die Chunk-Kontextgenerierung verwendet wird. Leer = Standard-Chat-Modell der Wissensdatenbank. Ein kleineres/schnelleres Modell hält den Ingestion-Durchsatz hoch.', en: "Model used to generate chunk context during ingestion. Empty = use the KB's default chat model. A smaller/faster model keeps ingestion throughput high." },
+    fileInjectionFlagged: { de: 'Verdächtiger Text', en: 'Suspicious text' },
+    fileInjectionFlaggedHelp: { de: 'Dateien aus externen Quellen, deren Text anweisungsartige Formulierungen enthält. Rein informativ — Import und Suche sind unverändert.', en: 'Files from external sources whose text contains instruction-shaped phrases. Advisory only — ingestion and retrieval are unchanged.' },
+    colInjectionFlagged: { de: 'Dateien mit verdächtigem Text', en: 'Files with suspicious text' },
+    ingestScreeningEnabled: { de: 'Prompt-Injection-Screening beim Import', en: 'Prompt-injection screening on ingest' },
+    ingestScreeningEnabledHelp: { de: 'Prüft den geparsten Text von Dateien aus externen Quellen (RSS, Confluence, Git, Crawl) auf anweisungsartige Formulierungen und markiert Treffer. Rein informativ: der Import, das Chunking und die Suche bleiben unverändert, es wird nur ein Hinweis in der Quellenliste gesetzt. Eigene Uploads werden nie geprüft.', en: 'Screens the parsed text of files from external sources (RSS, Confluence, git, crawl) for instruction-shaped phrases and flags any hit. Advisory only: ingestion, chunking and retrieval are unchanged, a badge in the source list is the entire effect. Your own uploads are never screened.' },
+    ingestScreeningWindowRunes: { de: 'Screening-Fenster (Zeichen)', en: 'Screening window (characters)' },
+    ingestScreeningWindowRunesHelp: { de: 'Breite des gleitenden Fensters, in dem nach anweisungsartigen Formulierungen gesucht wird (Schrittweite: halbes Fenster, damit ein Treffer an der Fenstergrenze nicht verloren geht). Standard 600, erlaubt 100–5000. Wirkt nur auf neu importierte Dateien.', en: 'Width of the sliding window the screen matches in (it steps by half a window, so a phrase on a boundary is still seen). Default 600, allowed 100–5000. Only applies to newly ingested files.' },
     lateChunkingEnabled: { de: 'Late Chunking (Jina-Stil)', en: 'Late chunking (Jina-style)' },
     lateChunkingEnabledHelp: {
         de: 'Beim Importieren wird das gesamte Dokument in einem Aufruf an einen Long-Context-Embedder geschickt; pro Chunk wird ein gepoolter Vektor zurückgegeben, der Kontext über Chunk-Grenzen hinweg enthält. Setzt voraus, dass der konfigurierte Embedding-Endpunkt das Feld `late_chunking: true` versteht (Jina-kompatibel). Andere Anbieter ignorieren das Feld und liefern Standard-Embeddings. Kontextuelle Anreicherung bleibt unabhängig nutzbar: der Prefix wird weiterhin in der Datenbank gespeichert und über BM25 / Chat-Prompt verwendet, aber NICHT in den Embedding-Input des Late-Chunking-Pfads gemischt. Gilt nur für neu importierte Dateien.',
@@ -1573,6 +1591,11 @@ export const translations = {
         de: 'Wahrscheinlichkeit, mit der eine abgeschlossene Antwort an den RAGAS-Judge weitergeleitet wird. Bereich 0.0–1.0; Standard 0.0 (nichts wird gesampelt, auch wenn der Master-Schalter oben an ist). Empfehlung: mit 0.01 (1%) starten, Kosten in den Prometheus-Counters beobachten, dann nach Bedarf anpassen. Bei 100 Anfragen/Tag und Rate 0.05 ergibt das ~5 Samples/Tag = 15 Judge-LLM-Aufrufe/Tag — klein genug für stabile Wochen-Trends ohne nennenswerte Zusatzkosten.',
         en: 'Probability that a completed response is forwarded to the RAGAS judge. Range 0.0–1.0; default 0.0 (nothing is sampled even when the master switch above is on). Recommended starting point: 0.01 (1%), watch the Prometheus counters, then adjust as needed. At 100 queries/day with rate 0.05 you get ~5 samples/day = 15 judge LLM calls/day — small enough for stable weekly trends without meaningful additional cost.',
     },
+    ragasSamplesRetentionDays: { de: 'RAGAS-Stichproben: Aufbewahrung (Tage)', en: 'RAGAS samples: retention (days)' },
+    ragasSamplesRetentionDaysHelp: {
+        de: 'Wie viele Tage ein einzelnes RAGAS-Stichprobenergebnis in ragas_samples aufbewahrt wird, bevor die nächtliche Bereinigung es löscht. Bereich 1–3650; Standard 90. Global (nicht pro Wissensbasis) — betrifft die Rohdaten hinter der 24-Std.-Spalte in der Admin-KB-Übersicht und die RAGAS-Prometheus-Metriken, nicht die Metriken selbst.',
+        en: 'How many days a single RAGAS sample result stays in ragas_samples before the nightly cleanup deletes it. Range 1–3650; default 90. Global (not per-KB) — affects the raw rows behind the 24h column in the admin KB overview and the RAGAS Prometheus metrics, not the metrics themselves.',
+    },
     chatCitationSpansEnabled: { de: 'Zitat-Fundstellen (wortgenaue Belegstelle)', en: 'Citation spans (verbatim quote match)' },
     chatCitationSpansEnabledHelp: {
         de: 'Wenn aktiviert: zitiert der Antworttext [N], extrahiert ein Fast-Tier-Modell nach der Antwort ein wörtliches Zitat aus der jeweiligen Quelle und prüft es exakt gegen den Chunk-Text; die gefundene Fundstelle (Rune-Offsets in die Quelle) wird im Quellen-Popover als hervorgehobene Textstelle angezeigt statt des bisherigen 320-Zeichen-Ausschnitts. Ein zusätzlicher Modellaufruf pro Antwort, zeitbudgetiert (s. Timeout unten); bei Fehler oder Timeout bleibt die bisherige Zitatprüfung unverändert bestehen. Standard: aus.',
@@ -1587,6 +1610,31 @@ export const translations = {
     chatCitationSpansTimeoutMsHelp: {
         de: 'Zeitbudget für den Fundstellen-Modellaufruf in Millisekunden. Bereich 1000–60000; Standard 8000. Läuft die Extraktion nicht rechtzeitig durch, bleibt die bisherige Zitatprüfung unverändert bestehen — die Post-Response-Verarbeitung wartet nicht länger.',
         en: 'Time budget for the span-extraction model call, in milliseconds. Range 1000–60000; default 8000. If extraction doesn\'t finish in time, the existing citation validation is left unchanged — post-response processing never waits longer.',
+    },
+    chatConflictSurfacingEnabled: { de: 'Widersprüchliche Quellen erkennen', en: 'Surface conflicting sources' },
+    chatConflictSurfacingEnabledHelp: {
+        de: 'Wenn aktiviert: nachdem die Quellen für eine Antwort feststehen, vergleicht ein Fast-Tier-Modell sie in EINEM Aufruf darauf, ob zwei Quellen sich widersprechen oder ob eine eine andere ersetzt (neuere Fassung). Gefundene Widersprüche werden dem Antwortprompt als Vorgabe mitgegeben („nenne den Widerspruch, stelle die neuere Fassung dar“), auf der Nachricht gespeichert und im Chat als Hinweis angezeigt. Läuft nur, wenn mindestens zwei verschiedene Dateien im Kontext stehen; welche Quelle neuer ist, wird ausschließlich aus published_at/created_at abgeleitet. Bei Fehler oder Timeout wird die Antwort unverändert erzeugt. Standard: aus.',
+        en: 'When on: once the sources for an answer are fixed, a fast-tier model compares them in ONE call for pairs that contradict each other or supersede one another (newer version). Findings are injected into the answer prompt as a requirement ("state the disagreement, present the newer version"), stored on the message and shown in the chat as a badge. Only runs when at least two distinct files are in context; which source is newer is derived from published_at/created_at alone. On error or timeout the answer is produced unchanged. Default: off.',
+    },
+    chatConflictModel: { de: 'Widersprüche: Modell', en: 'Conflicts: model' },
+    chatConflictModelHelp: {
+        de: 'Fast-Tier-Modell für den Vergleichsaufruf. Leer lassen, um model_tier_fast zu verwenden (und ersatzweise das Chat-Modell der Wissensdatenbank).',
+        en: 'Fast-tier model for the comparison call. Leave empty to use model_tier_fast (falling back to the knowledge base\'s chat model).',
+    },
+    chatConflictMaxChunks: { de: 'Widersprüche: max. Quellen', en: 'Conflicts: max sources' },
+    chatConflictMaxChunksHelp: {
+        de: 'Obergrenze für Quellen, die pro Antwort in einem Aufruf verglichen werden (die am besten bewerteten zuerst). Bereich 2–30; Standard 12. Höhere Werte decken mehr Quellenpaare ab, verlängern aber den Prompt und damit die Latenz des Aufrufs.',
+        en: 'Upper bound on sources compared per response in the single call (top-scoring first). Range 2–30; default 12. Higher values cover more pairs but lengthen the prompt and the call\'s latency.',
+    },
+    chatConflictTimeoutMs: { de: 'Widersprüche: Timeout (ms)', en: 'Conflicts: timeout (ms)' },
+    chatConflictTimeoutMsHelp: {
+        de: 'Zeitbudget für den Vergleichsaufruf in Millisekunden. Bereich 1000–30000; Standard 6000. Läuft der Vergleich nicht rechtzeitig durch, wird die Antwort ohne Widerspruchshinweis erzeugt — die Antwort wartet nie länger.',
+        en: 'Time budget for the comparison call, in milliseconds. Range 1000–30000; default 6000. If it doesn\'t finish in time, the answer is produced with no conflict addendum and no badge — the answer never waits longer.',
+    },
+    chatAnswerDegenerateRunLimit: { de: 'Abbruch bei Zeichenwiederholung (Runen)', en: 'Degenerate-run guard (runes)' },
+    chatAnswerDegenerateRunLimitHelp: {
+        de: 'Maximale Länge einer ununterbrochenen Wiederholung — desselben Zeichens („____“) oder eines 2–4-Zeichen-Musters („ababab“) — in einer Antwort. Wird sie überschritten, bricht der Server die laufende Modellgenerierung ab, entfernt die Wiederholung aus der gespeicherten Antwort und hängt einen Hinweis an; der Rest des Chat-Turns läuft normal weiter. Standard 400 (liegt über jeder realistischen Markdown-Trennlinie, z. B. 300 Bindestriche). 0 schaltet die Prüfung vollständig ab; andere Werte außerhalb 50–100000 fallen auf 400 zurück. Gilt für alle Antwort-Oberflächen (Web-Chat, öffentliche API, OpenAI-kompatibel, MCP).',
+        en: 'Maximum length of an unbroken repetition — of one character ("____") or of a 2–4-character pattern ("ababab") — allowed in an answer. Beyond it the server aborts the running completion, strips the run from the stored answer and appends a notice; the rest of the chat turn proceeds normally. Default 400 (above any realistic Markdown rule, e.g. a 300-dash table rule). 0 disables the check entirely; other values outside 50–100000 fall back to 400. Applies to every answering surface (web chat, public API, OpenAI-compat, MCP).',
     },
     chatAgenticEnabled: { de: 'Agentischer Chat-Loop (Multi-Hop Suche)', en: 'Agentic chat loop (multi-hop search)' },
     chatAgenticEnabledHelp: {
@@ -2208,8 +2256,8 @@ export const translations = {
     chatLongcontextModeFlat: { de: 'flat — kompletter Chunk-Pool roh an das Antwortmodell', en: 'flat — whole chunk pool raw to the answer model' },
     chatLongcontextModeMapReduce: { de: 'map_reduce — erst Befunde je Chunk-Gruppe extrahieren', en: 'map_reduce — extract findings per chunk group first' },
     chatLongcontextModeHelp: {
-        de: 'Wie der breite Chunk-Pool (bis ~200 Chunks) zur Antwort wird. flat = bisheriges Verhalten: der komplette, aufs Token-Budget gekürzte Pool geht roh an das Antwortmodell. map_reduce = pro Chunk-Gruppe zuerst ein günstiger Fast-Tier-Aufruf, der je Quelle eine Aussage plus wörtliches Zitat extrahiert; das Antwortmodell sieht dann nur diese Befunde und die Quellenüberschriften, nicht die Rohtexte. Vorteil: deutlich kürzerer Antwort-Prompt und weniger Positionsbias über 200 Chunks. Kosten: ein zusätzlicher Fast-Tier-Aufruf je Gruppe. Achtung: eine Quelle, zu der kein Befund extrahiert wurde, kann in der Antwort nicht mehr zitiert werden. Scheitert eine Gruppe, gehen deren Rohtexte (erste 600 Zeichen je Chunk) als Ersatz-Befunde in den Prompt — Belege gehen nie still verloren. Wirkt nur, wenn Long-Context aktiv ist. Standard: flat.',
-        en: 'How the wide chunk pool (up to ~200 chunks) becomes an answer. flat = today\'s behaviour: the whole token-budgeted pool goes to the answer model raw. map_reduce = one cheap fast-tier call per chunk group first, extracting one claim plus a verbatim quote per source; the answer model then sees only those findings and the source headers, not the raw bodies. Upside: a much shorter answer prompt and less position bias across 200 chunks. Cost: one extra fast-tier call per group. Caveat: a source no finding surfaced can no longer be cited in the answer. If a group fails, its raw text (first 600 characters per chunk) enters the prompt as fallback findings — evidence is never silently dropped. Only has an effect when long-context is on. Default: flat.',
+        de: 'Wie der breite Chunk-Pool (bis ~200 Chunks) zur Antwort wird. flat = bisheriges Verhalten: der komplette, aufs Token-Budget gekürzte Pool geht roh an das Antwortmodell. map_reduce = pro Chunk-Gruppe zuerst ein günstiger Fast-Tier-Aufruf, der je Quelle eine Aussage plus wörtliches Zitat extrahiert; das Antwortmodell sieht dann nur diese Befunde und die Quellenüberschriften, nicht die Rohtexte. Vorteil: deutlich kürzerer Antwort-Prompt und weniger Positionsbias über 200 Chunks. Kosten: ein zusätzlicher Fast-Tier-Aufruf je Gruppe. Achtung: eine Quelle, zu der kein Befund extrahiert wurde, kann in der Antwort nicht mehr zitiert werden. Scheitert eine Gruppe, gehen deren Rohtexte (erste 600 Zeichen je Chunk) als Ersatz-Befunde in den Prompt — Belege gehen nie still verloren. Wirkt nur, wenn Long-Context aktiv ist. Standard: map_reduce (seit Wave 5; gemessen: 34 von 36 entscheidbaren Richtervergleichen, Abdeckung +5,0 Prozentpunkte, Laufzeit 1,28x). Ein nicht erkannter Wert fällt auf flat zurück.',
+        en: 'How the wide chunk pool (up to ~200 chunks) becomes an answer. flat = today\'s behaviour: the whole token-budgeted pool goes to the answer model raw. map_reduce = one cheap fast-tier call per chunk group first, extracting one claim plus a verbatim quote per source; the answer model then sees only those findings and the source headers, not the raw bodies. Upside: a much shorter answer prompt and less position bias across 200 chunks. Cost: one extra fast-tier call per group. Caveat: a source no finding surfaced can no longer be cited in the answer. If a group fails, its raw text (first 600 characters per chunk) enters the prompt as fallback findings — evidence is never silently dropped. Only has an effect when long-context is on. Default: map_reduce (since Wave 5; measured: 34 of 36 decisive judge pairs, coverage +5.0 pp, 1.28x wall time). An unrecognised value falls back to flat.',
     },
     chatLongcontextMapGroupSize: { de: 'Long-Context: Chunks je Gruppe', en: 'Long-context: chunks per group' },
     chatLongcontextMapGroupSizeHelp: {

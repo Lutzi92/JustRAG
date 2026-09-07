@@ -313,19 +313,28 @@ historical reports.
 | `--crag on\|off` | Force CRAG on/off regardless of KB config (production-context mode only). |
 | `--enumeration on\|off` | Force enumeration pre-pass on/off regardless of `IsEnumerationQuery` (production-context mode only). |
 | `--longcontext on\|off` | Per-run override for `chat_longcontext_enabled`. `on` puts `OrchLongContext` at the top of the eval orchestrator ladder, so a global-synthesis set can be measured on a deployment where the flag is off. Empty = live site_config. |
-| `--longcontext-mode flat\|map_reduce` | Per-run override for `chat_longcontext_mode` — which consumer the long-context orchestrator uses. Only has an effect together with `--longcontext on` (or a live-on flag). Empty = live site_config. |
+| `--longcontext-mode flat\|map_reduce` | Per-run override for `chat_longcontext_mode` — which consumer the long-context orchestrator uses. Only has an effect together with `--longcontext on` (or a live-on flag). Empty = live site_config, whose **default is `map_reduce` since Wave 5** (W5-R1), so `--longcontext-mode flat` is now the one that overrides it. An unrecognised stored value normalises to `flat`. |
 | `--golden-query-type` | Forward each row's curated `query_type` into the retrieval pipeline instead of classifying the question. Default **off** so existing reports keep their historical shape. Does **not** affect orchestrator dispatch, which classifies independently — if a question fails to reach the intended orchestrator, rewrite the question, not the label. |
 | `--bm25-mode ts_rank\|bm25` | Per-run override for `bm25_scoring_mode`. Combine with `--refresh-bm25-stats` (recomputes the golden set's KBs' BM25 statistics first) whenever the KB hasn't had a recent refresh — without stats the arm silently falls back to `ts_rank` and the A/B measures nothing. |
 | `--bm25-tiered-boost on\|off` | Per-run override for `bm25_tiered_boost_enabled` (deprecated; see `docs/retrieval.md`). |
 | `--recency-boost on\|off` | Per-run override for `recency_boost_enabled`. |
 | `--rrf-weight-bm25 <f>` / `--rrf-weight-vector <f>` / `--rerank-blend-alpha <f>` | Per-run overrides for the fusion weights and the **global** reranker α. Per-route α overrides (`rerank_blend_alpha_lookup` etc.) are NOT overridden — set those in `site_configs` if you want to grid them. Used together with `--bm25-mode bm25` for the Wave-3 retune grid (`eval/golden/bm25-retune.acceptance.md`). |
 | `--keep-raw on\|off` | Multi-turn only: per-run override for `chat_condense_keep_raw_enabled`. |
+| `--conflict-surfacing on\|off` | Per-run override for `chat_conflict_surfacing_enabled` (W5-R7). `on` makes every turn whose assembled set spans ≥ 2 distinct files run the fast-tier conflict / supersession pass; the resulting report is written per question as `conflicts` in the JSON report — the same bare array a chat turn persists and streams (`claim, sourceA, sourceB, kind, newer, fileA, fileB`) — and the human summary gains a `Conflict surfacing:` block whenever at least one question carries an entry. Effective on the standard `PrepareChatContext` path and, under `--orchestrator-dispatch`, on the Supervisor path. Empty = live site_config. |
 
 These are all per-run **overlays**: they wrap the site-config reader for that
-process only and never write `site_configs`. `--longcontext`/`--longcontext-mode`
-are chat-layer keys and share one overlay wrapper (`chatOverlayReader` in
-`cmd/eval/main.go`), chained after `--crag`; the vector-layer flags
-(`--bm25-mode`, `--recency-boost`, …) use the separate `overlaySiteConfig`.
+process only and never write `site_configs`.
+`--longcontext`/`--longcontext-mode`/`--conflict-surfacing` are chat-layer keys
+and share one overlay wrapper (`chatOverlayReader` in `cmd/eval/main.go`),
+chained after `--crag`; the vector-layer flags (`--bm25-mode`,
+`--recency-boost`, …) use the separate `overlaySiteConfig`.
+
+The conflict pass decides supersession DIRECTION from each source's
+`published_at`/`created_at` date line, so `cmd/eval` wires the same
+`chat.FileDateLookup` production uses (`eval.WithFileDates`). Without it every
+date renders "unknown" and `newer` can only ever be `"unknown"` — which is
+also what the public API / OpenAI-compat / MCP-server paths get today, since
+they leave `FileDates` nil.
 
 Example — measure the contribution of the enumeration pre-pass on
 enumeration-labeled questions:
@@ -463,6 +472,64 @@ flat-vs-map_reduce re-measurement) — two cross pairs, a self-pair control,
 disagreement excerpts, and the observation that the W4-R7 per-pair Wilson
 criterion is under-powered at 9–11 decisive pairs (one pair needed 9/11 wins
 and landed on 8/11).
+
+### Pooling two comparisons — `--pairwise-pool`
+
+One comparison of 12 questions decides 9–11 pairs, and a Wilson interval on
+that many pairs straddles 0.5 almost whatever the outcome — which is how
+Wave 4 ended up with both cross pairs pointing the same way and neither
+clearing the per-pair bar. `--pairwise-pool` sums two (or more) finished
+`--pairwise-out` JSONs into one tally and **recomputes** the win rate, the
+tie rate and the 95 % Wilson interval on the pooled counts:
+
+```bash
+./cmd/eval/eval --pairwise-out pooled-flat-vs-mapreduce.json \
+  --pairwise-pool pw-flat1-vs-mr1.json pw-flat2-vs-mr2.json
+```
+
+The first path is the flag value, the rest are positional — so **every other
+flag must come before them**. Go's flag parsing stops at the first positional
+argument, which would turn a trailing `--pairwise-out pooled.json` into two
+more "paths" while the real flag stayed empty; the command rejects that with
+an error naming the cause instead of failing later on a missing file.
+
+Recomputed, not averaged: averaging the two win rates would weight a pair with
+4 decisive verdicts the same as one with 16. Ties stay out of every denominator exactly
+as in `--pairwise-a/-b`, so pooling 3/1/8 and 1/3/8 gives 4 wins / 4 ties /
+16 losses = **20 decisive pairs**, side B taking 16 of them: 0.800 with a
+95 % Wilson of [0.584, 0.919]. (Folding those 4 ties into the denominator
+would read 16/24 = 0.667, [0.467, 0.820] — the same data failing the rule.)
+
+Output names the perspective on every line: the pooled counts are in side
+**A's** terms, because that is how each input result is expressed, and side
+**B's** win rate with its own Wilson interval is printed underneath, since a
+rule may be stated in either direction and the bounds do not merely swap when
+the perspective flips — they reflect (`low_B = 1 − high_A`). A per-input and
+a per-route pooled table follow.
+
+Two caveats. Pooling assumes **every input assigned the same configuration to
+side A**; a pairwise JSON carries no report paths, so the command cannot check
+that and prints a warning instead. And pooling is only honest when the rule
+was registered on the pooled statistic **before** the runs — pooling after
+seeing two per-pair results that each missed is exactly the analysis W4-R7 was
+supposed to prevent. This mode reads only files: no retrieval, no judge, no
+database. Exit 0 on a completed pooling, 2 on a usage error.
+
+**Ruling W5-R1 (registered 2026-09-06, pre-registered before the extended-set
+run).** The decision rule for `chat_longcontext_mode` is stated on the POOLED
+decisive cross pairs: over N ≥ 24 questions, two cross pairs (flat1 vs mr1,
+flat2 vs mr2), pooled `map_reduce` wins / (wins + losses) ≥ 0.60 with the
+pooled Wilson lower bound (z = 1.96) > 0.50, **and** pooled mean coverage of
+`map_reduce` not below flat's by more than the flat1-vs-flat2 coverage band.
+The flat1-vs-flat2 control must stay inside a [0.35, 0.65] win rate — outside
+it the judge is unstable and the run is inconclusive. Cost is reported, not a
+veto. This replaces W4-R7 for all future runs.
+
+Worked example: `eval/golden/global-synthesis-de.acceptance.md` §4 (Wave 5
+re-measurement on the extended n=24 set) — all four sub-criteria pass
+(pooled win rate 0.9444, Wilson low 0.8186, pooled coverage delta +5.03 pp
+against a 1.39 pp band, control win rate 0.3636), so `chat_longcontext_mode`
+flips to `map_reduce`.
 
 ## Coverage judge — optional `expected_points`
 
@@ -672,12 +739,16 @@ That is not a failure of this task — see
 ## Global-synthesis set (Wave 3 Task 4)
 
 `global-synthesis-de.jsonl` — **gitignored** (derived from the JLU
-Confluence corpus; the question text names real internal projects). 12
+Confluence corpus; the question text names real internal projects). **24**
 German questions against the `PPM-Eval` KB
 (`83262307-3a1b-49bc-bd08-3b925a868a92`, 297 files / 1815 chunks), all
-`query_type: "global_synthesis"`. It exists to measure the long-context
-orchestrator (`OrchLongContext`, ruling W3-R5) and to A/B its two
-consumers, `chat_longcontext_mode = flat` vs `map_reduce` (W3-R6).
+`query_type: "global_synthesis"` — G01–G12 from Wave 3, G13–G24 added in
+Wave 5 under ruling W5-R2 (6 `expected_points` each, every point verified
+against a source chunk fragment; curation record in the acceptance file §3).
+It exists to measure the long-context orchestrator (`OrchLongContext`, ruling
+W3-R5) and to A/B its two consumers, `chat_longcontext_mode = flat` vs
+`map_reduce` (W3-R6). The n=24 size is what made the pooled rule W5-R1
+adequately powered, and that run flipped the default to `map_reduce`.
 
 **Two gates have to fire for a question to reach that orchestrator**, and
 the set is authored so both do, deterministically where possible:
@@ -762,6 +833,17 @@ of 20 pooled decisive pairs, but the pre-registered per-pair Wilson rule
 missed on one pair at n=12 — grow the set to 24–36 questions, or re-register
 the rule on the pooled pairs *before* the next run, rather than pooling after
 seeing the result.
+
+Wave 5 did both: the set grew to **24 questions** (G13–G24 authored under
+ruling W5-R2, curation record in `global-synthesis-de.acceptance.md` §3), and
+the rule was re-registered on the pooled pairs as **W5-R1** — see "Pooling two
+comparisons — `--pairwise-pool`" above for the rule text and the command. All
+four sub-criteria passed (pooled win rate 0.9444 over 36 decisive pairs,
+Wilson low 0.8186, coverage +5.03 pp against a 1.39 pp band, control 0.3636),
+so **`chat_longcontext_mode` now defaults to `map_reduce`** — record in
+`global-synthesis-de.acceptance.md` §4. Cost, reported and not a veto: 1.28×
+wall time. A run that wants the old consumer must pass `--longcontext-mode
+flat` explicitly.
 
 ## CERT recency set (Wave 2 Task 8)
 

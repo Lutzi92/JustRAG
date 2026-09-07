@@ -532,7 +532,14 @@ type fileDBRow struct {
 	RSSFeedID          *string   `db:"rss_feed_id"`
 	ConfluenceSourceID *string   `db:"confluence_source_id"`
 	CreatedAt          time.Time `db:"created_at"`
-	TotalCount         int       `db:"total_count"`
+	// Ingest prompt-injection screening verdict (migration 0072). The flag
+	// is NOT NULL DEFAULT false, so false covers both "screened and clean"
+	// and "never screened"; InjectionDetail is what tells them apart —
+	// NULL = never screened, {"screened_at": …} alone = screened and clean,
+	// a payload carrying "rule" = the finding behind a true flag.
+	InjectionFlag   bool            `db:"injection_flag"`
+	InjectionDetail json.RawMessage `db:"injection_detail"`
+	TotalCount      int             `db:"total_count"`
 }
 
 // ListFiles returns a paginated slice of files for kbID, ordered by created_at DESC,
@@ -545,6 +552,7 @@ func (s *PGStore) ListFiles(ctx context.Context, kbID string, limit, offset int)
 		SELECT id, name, type, size, status, progress, origin,
 		       error_stage, error_message, current_stage, stage_index, stage_total, stage_detail,
 		       rss_feed_id, confluence_source_id, created_at,
+		       injection_flag, injection_detail,
 		       COUNT(*) OVER ()::int AS total_count
 		FROM files
 		WHERE kb_id = $1
@@ -589,6 +597,8 @@ func (s *PGStore) ListFiles(ctx context.Context, kbID string, limit, offset int)
 			RSSFeedID:          r.RSSFeedID,
 			ConfluenceSourceID: r.ConfluenceSourceID,
 			CreatedAt:          r.CreatedAt,
+			InjectionFlag:      r.InjectionFlag,
+			InjectionDetail:    r.InjectionDetail,
 		}
 	}
 	return result, rows[0].TotalCount, nil

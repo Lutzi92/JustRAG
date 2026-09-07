@@ -149,6 +149,67 @@ describe('KBOverviewDashboard freshness columns', () => {
     });
 });
 
+// RAGAS 24h sample stats (Wave-5 Task 2): kb-1 has a sample block, kb-2 has
+// none — the FE must render the formatted "n · F/AR/CP" string for the
+// former and a plain dash for the latter, never a zeroed block.
+const ragasOverview = {
+    rows: [
+        {
+            id: 'kb-1', name: 'Alpha KB', isGlobal: false, isPublished: true, fileCount: 10, totalSizeBytes: 1024,
+            failedFileCount: 0, processingFileCount: 0, webTurns: 3, apiTurns: 1, chatCount: 1, createdAt: '2026-01-01T00:00:00Z',
+            ragas: { n24h: 5, faithfulness: 0.61, answerRelevance: 0.98, contextPrecision: 0.47 },
+        },
+        {
+            id: 'kb-2', name: 'Beta KB', isGlobal: false, isPublished: true, fileCount: 5, totalSizeBytes: 512,
+            failedFileCount: 0, processingFileCount: 0, webTurns: 0, apiTurns: 0, chatCount: 0, createdAt: '2026-01-01T00:00:00Z',
+        },
+    ],
+    queueSummary: {},
+    timestamp: '2026-09-06T12:00:00Z',
+    staleDays: 180,
+};
+
+describe('KBOverviewDashboard RAGAS column (Wave-5 Task 2)', () => {
+    beforeEach(() => {
+        installMemoryStorage();
+        mockedAxios.get = vi.fn().mockResolvedValue({ data: ragasOverview });
+        mockedAxios.delete = vi.fn().mockResolvedValue({});
+        mockedAxios.patch = vi.fn().mockResolvedValue({ data: {} });
+        mockedAxios.post = vi.fn().mockResolvedValue({ status: 204 });
+    });
+
+    it('renders "n · F/AR/CP" for a KB with samples, and a dash for one without', async () => {
+        render(<KBOverviewDashboard />);
+        await waitFor(() => expect(screen.getByText('Alpha KB')).toBeTruthy());
+
+        fireEvent.click(screen.getByRole('button', { name: 'columnsToggle' }));
+        fireEvent.click(screen.getByLabelText('colRagas'));
+
+        expect(screen.getByRole('columnheader', { name: /colRagas/ })).toBeInTheDocument();
+        expect(screen.getByText('5 · F 0.61 / AR 0.98 / CP 0.47')).toBeInTheDocument();
+
+        // Both rows' other columns can legitimately render an em dash
+        // (missing owner, no activity yet), so assert the RAGAS CELL
+        // specifically — found by its own tooltip, not the row's full text.
+        const rows = screen.getAllByRole('row').slice(1); // drop the header row
+        const betaRow = rows.find((r) => r.textContent?.includes('Beta KB'))!;
+        const betaRagasCell = Array.from(betaRow.querySelectorAll('td'))
+            .find((td) => td.getAttribute('title') === 'colRagasTooltip')!;
+        expect(betaRagasCell.textContent).toBe('—');
+    });
+
+    it('carries the three metric names in the column tooltip', async () => {
+        render(<KBOverviewDashboard />);
+        await waitFor(() => expect(screen.getByText('Alpha KB')).toBeTruthy());
+
+        fireEvent.click(screen.getByRole('button', { name: 'columnsToggle' }));
+        fireEvent.click(screen.getByLabelText('colRagas'));
+
+        const cell = screen.getByText('5 · F 0.61 / AR 0.98 / CP 0.47');
+        expect(cell.closest('td')).toHaveAttribute('title', 'colRagasTooltip');
+    });
+});
+
 // Per-kind sync status (Wave-4 Task 7 / W4-R9): a KB whose RSS feed has
 // succeeded but whose git source has NEVER succeeded must show the git
 // status — not the healthy RSS one — so a single good source can no longer
@@ -338,5 +399,52 @@ describe('KBOverviewDashboard unknown sync kind (F5)', () => {
 
         const row = screen.getByRole('row', { name: /Delta KB/ });
         expect(row.textContent).toContain('syncKindLabel_git');
+    });
+});
+
+// Wave-5 Task 6: the ingest prompt-injection screening count. It rides the
+// always-visible files column's tooltip rather than a column of its own — a
+// flag is advisory, so it must not cost table width.
+describe('KBOverviewDashboard injection screening count', () => {
+    const injectionOverview = {
+        ...overview,
+        rows: [
+            { ...overview.rows[0], injectionFlagged: 3 },
+            // kb-2 omits the field entirely, as a pod on the previous image
+            // would: the tooltip must read 0, not "undefined".
+            overview.rows[1],
+        ],
+    };
+
+    beforeEach(() => {
+        installMemoryStorage();
+        mockedAxios.get = vi.fn().mockResolvedValue({ data: injectionOverview });
+        mockedAxios.delete = vi.fn().mockResolvedValue({});
+        mockedAxios.patch = vi.fn().mockResolvedValue({ data: {} });
+        mockedAxios.post = vi.fn().mockResolvedValue({ status: 204 });
+    });
+
+    it('puts the flagged count in the files column tooltip', async () => {
+        render(<KBOverviewDashboard />);
+        await waitFor(() => expect(screen.getByText('Alpha KB')).toBeTruthy());
+
+        const rows = screen.getAllByRole('row').slice(1);
+        const alphaRow = rows.find((r) => r.textContent?.includes('Alpha KB'))!;
+        const alphaFilesCell = Array.from(alphaRow.querySelectorAll('td'))
+            .find((td) => td.getAttribute('title')?.startsWith('colInjectionFlagged'))!;
+        expect(alphaFilesCell.getAttribute('title')).toBe('colInjectionFlagged: 3');
+        // The cell still shows the file count itself — the tooltip is additive.
+        expect(alphaFilesCell.textContent).toBe('10');
+    });
+
+    it('reads 0 for a row that sends no injectionFlagged field', async () => {
+        render(<KBOverviewDashboard />);
+        await waitFor(() => expect(screen.getByText('Beta KB')).toBeTruthy());
+
+        const rows = screen.getAllByRole('row').slice(1);
+        const betaRow = rows.find((r) => r.textContent?.includes('Beta KB'))!;
+        const betaFilesCell = Array.from(betaRow.querySelectorAll('td'))
+            .find((td) => td.getAttribute('title')?.startsWith('colInjectionFlagged'))!;
+        expect(betaFilesCell.getAttribute('title')).toBe('colInjectionFlagged: 0');
     });
 });

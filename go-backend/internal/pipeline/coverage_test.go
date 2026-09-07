@@ -204,8 +204,9 @@ var ignoredKeys = map[string]string{
 	"chat_turn_budget_seconds":      "operational budget",
 
 	// Observability / sampling — no user-visible pipeline stage.
-	"ragas_sampling_enabled": "background eval sampling",
-	"ragas_sampling_rate":    "tuning knob for the out-of-scope background eval sampling",
+	"ragas_sampling_enabled":       "background eval sampling",
+	"ragas_sampling_rate":          "tuning knob for the out-of-scope background eval sampling",
+	"ragas_samples_retention_days": "storage retention for the out-of-scope background eval sampling; read by the worker's nightly pass, not by a chat turn",
 
 	// --- Resolved during Task 4's first coverage run ---
 
@@ -286,6 +287,12 @@ var ignoredKeys = map[string]string{
 	"chat_answer_history_max_chars":   "tuning knob for the answer-time conversation-history correctness fix",
 	"chat_transform_followup_enabled": "retrieval-free reformat follow-ups, default-on correctness/UX kill switch, not a retrieval/answer pipeline stage",
 
+	// Generation-layer safety guard, not a pipeline stage: it watches the
+	// answer stream for a runaway repetition and aborts the completion. It
+	// is global-only (a model failure mode, not a per-KB trade-off), so it
+	// has no registry entry and nothing for a KB admin to wire on a canvas.
+	"chat_answer_degenerate_run_limit": "degenerate-answer guard on the generation layer (aborts a runaway repeated run); a deployment-wide safety limit, not a per-KB pipeline stage",
+
 	// Operational budget siblings of the already-ignored chat_turn_budget_seconds.
 	"chat_turn_budget_tokens":     "operational budget, sibling of chat_turn_budget_seconds",
 	"chat_turn_budget_tool_calls": "operational budget, sibling of chat_turn_budget_seconds",
@@ -329,6 +336,14 @@ var ignoredKeys = map[string]string{
 	"tabular_max_file_bytes":         "ingest/upload sizing knob, not a chat-pipeline node",
 	"tabular_large_file_bytes":       "ingest/upload sizing knob, not a chat-pipeline node",
 	"tabular_large_file_concurrency": "ingest/upload sizing knob, not a chat-pipeline node",
+
+	// Conflict / supersession surfacing (Wave-5 Task 3, W5-R7): a post-
+	// assembly pass on the standard + supervisor paths — unrepresented in
+	// the phase-0/1 node vocabulary, like chat_tabular_router_* above.
+	"chat_conflict_surfacing_enabled": "conflict / supersession pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_tabular_router_*",
+	"chat_conflict_model":             "conflict / supersession pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_tabular_router_*",
+	"chat_conflict_max_chunks":        "conflict / supersession pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_tabular_router_*",
+	"chat_conflict_timeout_ms":        "conflict / supersession pass on the standard + supervisor paths — unrepresented in the phase-0/1 node vocabulary, like chat_tabular_router_*",
 }
 
 // TestEveryPipelineFlagIsDrawnOrIgnored is the anti-drift guard (spec §4.4).

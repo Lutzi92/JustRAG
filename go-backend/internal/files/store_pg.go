@@ -2,9 +2,11 @@ package files
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/kbaccess"
@@ -351,6 +353,73 @@ func (s *PGStore) MarkFileError(ctx context.Context, fileID, stage, message stri
 	_, err := s.pool.Exec(ctx, sql, stage, message, fileID)
 	if err != nil {
 		return fmt.Errorf("MarkFileError: %w", err)
+	}
+	return nil
+}
+
+// GetFileOrigin returns the files.origin value for fileID ("upload", "rss",
+// "confluence", "git", "crawl", "websearch", "research"), or "" when no such
+// file exists. Split out as its own one-column read because the ingest
+// prompt-injection screen needs the origin and nothing else — threading an
+// Origin field through ProcessFileInput instead would need every one of the
+// (currently six) construction sites to remember to populate it, and a
+// missed one fails open silently.
+func (s *PGStore) GetFileOrigin(ctx context.Context, fileID string) (string, error) {
+	const sql = `SELECT origin FROM files WHERE id = $1`
+	var origin string
+	if err := s.pool.QueryRow(ctx, sql, fileID).Scan(&origin); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("GetFileOrigin: %w", err)
+	}
+	return origin, nil
+}
+
+// SetInjectionFlag records an ingest-time prompt-injection screening hit
+// (migration 0072). detail is a promptsafety.Finding plus a screened_at
+// timestamp, marshalled by the caller. The flag is advisory only — nothing
+// in retrieval or answering reads it, it exists so an operator can see which
+// external documents carry instruction-shaped text.
+//
+// detail contains untrusted, document-derived text and must never be logged
+// in full or fed back into a prompt (same posture as SetFileParseReport).
+func (s *PGStore) SetInjectionFlag(ctx context.Context, fileID string, detail []byte) error {
+	const sql = `UPDATE files SET injection_flag = true, injection_detail = $1::jsonb WHERE id = $2`
+	if _, err := s.pool.Exec(ctx, sql, detail, fileID); err != nil {
+		return fmt.Errorf("SetInjectionFlag: %w", err)
+	}
+	return nil
+}
+
+// MarkInjectionScreenedClean records a screening pass that found nothing:
+// injection_flag = false with a detail carrying ONLY {"screened_at": …} —
+// no rule, no position, no snippet. That is what makes the three states of
+// these two columns distinguishable:
+//
+//	detail IS NULL            never screened (ingested before the screen
+//	                          existed, an origin that is never screened, or
+//	                          the kill switch was off)
+//	detail = {screened_at}    screened, clean
+//	detail carries "rule"     screened, flagged (injection_flag is true)
+//
+// It also drops a stale flag: a re-ingest of a file that was flagged on a
+// previous pass (the source page was fixed, or the pattern set changed)
+// must not keep the badge forever.
+//
+// The WHERE clause makes this a no-op for a row that is already recorded as
+// clean. Every RSS/Confluence/git poll re-ingests unchanged documents, and
+// an unconditional UPDATE would rewrite (and bloat) the files table on every
+// sweep just to store a new timestamp nothing reads. The three disjuncts are
+// exactly the rows whose verdict actually changes: currently flagged, never
+// screened, or carrying an old finding.
+func (s *PGStore) MarkInjectionScreenedClean(ctx context.Context, fileID string, detail []byte) error {
+	const sql = `
+		UPDATE files SET injection_flag = false, injection_detail = $1::jsonb
+		WHERE id = $2
+		  AND (injection_flag OR injection_detail IS NULL OR injection_detail ? 'rule')`
+	if _, err := s.pool.Exec(ctx, sql, detail, fileID); err != nil {
+		return fmt.Errorf("MarkInjectionScreenedClean: %w", err)
 	}
 	return nil
 }

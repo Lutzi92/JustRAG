@@ -34,6 +34,14 @@ type ProductionContextAdapter struct {
 	// is what a retrieval-only ablation wants.
 	recencyLister chat.RecencyLister
 
+	// fileDates resolves the cited files' published_at/created_at for the
+	// W5-R7 conflict pass's date lines. Optional — nil (the default) makes
+	// every date line render "unknown" and the detector is told not to
+	// guess a direction, so `newer` degenerates to "unknown" and a
+	// supersession measurement is impossible. cmd/eval wires the real
+	// lookup (files.PGStore) exactly as internal/app does for production.
+	fileDates chat.FileDateLookup
+
 	// cache stores the final ChatContext per question so judge-mode can
 	// reuse the assembled system prompt and context text without a second
 	// retrieval pass.
@@ -66,6 +74,18 @@ func WithTabularRouter(r *chat.TabularRouter) ProductionAdapterOption {
 // default-on behaviour in production.
 func WithRecencyLister(l chat.RecencyLister) ProductionAdapterOption {
 	return func(a *ProductionContextAdapter) { a.recencyLister = l }
+}
+
+// WithFileDates attaches the per-turn file-date lookup that production wires
+// through chat.WithFileDates. It is what lets the conflict / supersession
+// pass (W5-R7, chat_conflict_surfacing_enabled) decide DIRECTION: without it
+// every source's date line renders "unknown" and the detector is instructed
+// not to guess, so a supersession pair can never be reported with `newer`
+// set. Only meaningful under --production-context with the flag on;
+// otherwise it is inert (PrepareChatContext ignores FileDates when the
+// conflict pass is gated off).
+func WithFileDates(l chat.FileDateLookup) ProductionAdapterOption {
+	return func(a *ProductionContextAdapter) { a.fileDates = l }
 }
 
 // EvalFlags carries the flag values through the adapter without a global.
@@ -151,6 +171,7 @@ func (a *ProductionContextAdapter) buildParams(ctx context.Context, q Question, 
 		ForceEnumerationPrepass: a.flags.ForceEnumerationPrepass,
 		TabularRouter:           a.tabularRouter,
 		RecencyLister:           a.recencyLister,
+		FileDates:               a.fileDates,
 		CurrentDateLine:         chat.SystemPromptDateLine(ctx, a.siteConfigReader, q.Language),
 	}
 }
@@ -229,6 +250,19 @@ func (a *ProductionContextAdapter) AgentTraceForQuestion(questionID string) *Age
 		return nil
 	}
 	return &AgentTrace{Tabular: tab}
+}
+
+// ConflictsForQuestion satisfies the conflictTracer interface RunEval detects
+// by type assertion. Returns the W5-R7 conflict report the chat pipeline
+// attached to this question's ChatContext, in the same bare-array shape a
+// chat turn persists and streams (chat.ConflictsForWire), or nil when the
+// pass did not run or found nothing.
+func (a *ProductionContextAdapter) ConflictsForQuestion(questionID string) []chat.MessageConflict {
+	c, ok := a.ChatContextForQuestion(questionID)
+	if !ok || c == nil {
+		return nil
+	}
+	return chat.ConflictsForWire(c.Conflicts)
 }
 
 // ChatContextForQuestion returns the cached ChatContext for judge-mode answer

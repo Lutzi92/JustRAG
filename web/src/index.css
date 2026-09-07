@@ -748,6 +748,62 @@ button.source-card {
   color: var(--text-secondary);
 }
 
+/* Conflicting-sources badge (Wave 5 conflict surfacing): the answer footer
+   chip that opens the per-conflict details list. Uses the --error-* tokens
+   (not the amber --suspect-* used by suspect citations/flagged claims)
+   because a genuine contradiction between two cited sources is a stronger
+   signal than a paraphrase mismatch and deliberately reads as such. */
+.conflict-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: var(--shape-full);
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: var(--error-bg);
+  color: var(--error-text);
+  border: none;
+  cursor: pointer;
+  user-select: none;
+  font-family: inherit;
+}
+
+.conflict-badge:hover,
+.conflict-badge:focus-visible {
+  outline: 2px solid var(--error-text);
+  outline-offset: 1px;
+}
+
+.conflict-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--shape-md);
+  max-width: 420px;
+}
+
+.conflict-item {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.conflict-item .conflict-claim {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.conflict-item .conflict-files,
+.conflict-item .conflict-kind,
+.conflict-item .conflict-newer {
+  display: block;
+  margin-top: 0.15rem;
+}
+
 /* Follow-up Question Suggestions */
 .follow-up-suggestions {
   display: flex;

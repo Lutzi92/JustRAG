@@ -1,9 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useState } from 'react';
+import axios from 'axios';
 import { useChat, buildComparisonSend } from './useChat';
-import type { KnowledgeBase, FileEntry } from '../types';
+import type { KnowledgeBase, FileEntry, ChatEntry } from '../types';
 import type { ChatAttachment } from './useChatAttachment';
+
+// handleSelectChat's reload path (GET /api/chats/:id/messages) is the only
+// place in this file that touches axios directly — everything else goes
+// through the mocked useChatStream/useChatAttachment sub-hooks above.
+vi.mock('axios');
+const mockedAxios = vi.mocked(axios, true);
 
 // No pre-existing test harness for useChat (checked: `ls hooks/*.test.ts*`
 // before writing this file — no `useChat.test.ts`/`.tsx` in the repo). The
@@ -413,5 +420,57 @@ describe('buildComparisonSend', () => {
   it('gibt die Agent-/Team-Auswahl unverändert in opts zurück (statt sie zu verwerfen)', () => {
     const result = buildComparisonSend(attachment, ['formal'], 'x', 'Fallback', { agentId: 'a9' });
     expect(result.opts.agentSelection).toEqual({ agentId: 'a9' });
+  });
+});
+
+// Wave 5 conflict surfacing, reload path: `GET /api/chats/:id/messages`
+// carries `conflicts` as a bare array directly on the message row (task-3's
+// binding wire shape — no `.conflicts.conflicts` nesting). handleSelectChat
+// must map it straight onto Message.conflicts so a reloaded chat shows the
+// same badge as a freshly streamed one.
+describe('useChat.handleSelectChat — conflicts (reload path)', () => {
+  const chat: ChatEntry = {
+    id: 'c1', kbId: 'kb1', userId: 'u1', title: 'Chat', type: 'chat',
+    createdAt: '2026-01-01', updatedAt: '2026-01-01',
+  };
+
+  it('übernimmt conflicts aus der Nachricht auf Message.conflicts', async () => {
+    mockedAxios.get.mockResolvedValueOnce({
+      data: [
+        { id: 'u1', role: 'user', content: 'Wie hoch ist die Beitragshöhe?' },
+        {
+          id: 'a1', role: 'ai', content: 'Die Quellen widersprechen sich.',
+          conflicts: [
+            { claim: 'Beitragshöhe', sourceA: 1, sourceB: 2, kind: 'contradiction', newer: 'unknown', fileA: 'alt.md', fileB: 'neu.md' },
+          ],
+        },
+      ],
+    });
+    const { result } = renderUseChat();
+
+    await act(async () => {
+      await result.current.handleSelectChat(chat);
+    });
+
+    const aiMsg = result.current.messageTree.get('a1');
+    expect(aiMsg?.conflicts).toHaveLength(1);
+    expect(aiMsg?.conflicts?.[0].claim).toBe('Beitragshöhe');
+    expect(aiMsg?.conflicts?.[0].fileB).toBe('neu.md');
+  });
+
+  it('lässt conflicts undefined, wenn der Schlüssel im Response fehlt', async () => {
+    mockedAxios.get.mockResolvedValueOnce({
+      data: [
+        { id: 'u2', role: 'user', content: 'Frage ohne Widerspruch' },
+        { id: 'a2', role: 'ai', content: 'Antwort ohne Widerspruch' },
+      ],
+    });
+    const { result } = renderUseChat();
+
+    await act(async () => {
+      await result.current.handleSelectChat(chat);
+    });
+
+    expect(result.current.messageTree.get('a2')?.conflicts).toBeUndefined();
   });
 });
