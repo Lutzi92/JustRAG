@@ -53,6 +53,7 @@ Aggregate (k=%d, count=%d):
   mean_ndcg      = %.3f
   p50_recall     = %.3f
   p95_recall     = %.3f
+  mean_latency_ms = %.1f
 `,
 		rep.GeneratedAt.UTC().Format(time.RFC3339),
 		rep.GoldenPath,
@@ -67,9 +68,19 @@ Aggregate (k=%d, count=%d):
 		rep.Aggregate.MeanNDCG,
 		rep.Aggregate.P50Recall,
 		rep.Aggregate.P95Recall,
+		rep.Aggregate.MeanLatencyMs,
 	)
 	if err != nil {
 		return err
+	}
+	// mean_llm_calls (W6-R7) is printed only when at least one question
+	// carried an Agent trace — omitted otherwise (legacy retrieval-only
+	// adapters, or a pre-Wave-6 report) so the summary stays byte-stable
+	// for runs that never dispatch through an orchestrator.
+	if rep.Aggregate.MeanLLMCalls != nil {
+		if _, err := fmt.Fprintf(w, "  mean_llm_calls  = %.2f\n", *rep.Aggregate.MeanLLMCalls); err != nil {
+			return err
+		}
 	}
 	if rep.Aggregate.MeanFaithfulness != nil || rep.Aggregate.MeanAnswerRelevance != nil || rep.Aggregate.MeanContextPrecision != nil || rep.Aggregate.MeanCoverage != nil {
 		fmt.Fprintln(w)
@@ -102,8 +113,8 @@ Aggregate (k=%d, count=%d):
 				label = "unlabeled"
 			}
 			a := rep.RouteAggregates[r]
-			fmt.Fprintf(w, "  %-20s count=%-3d mean_recall=%.3f mean_precision=%.3f mrr=%.3f ndcg=%.3f\n",
-				label, a.Count, a.MeanRecall, a.MeanPrecision, a.MRR, a.MeanNDCG)
+			fmt.Fprintf(w, "  %-20s count=%-3d mean_recall=%.3f mean_precision=%.3f mrr=%.3f ndcg=%.3f latency_ms=%.1f%s\n",
+				label, a.Count, a.MeanRecall, a.MeanPrecision, a.MRR, a.MeanNDCG, a.MeanLatencyMs, meanLLMCallsSuffix(a.MeanLLMCalls))
 		}
 	}
 	if len(rep.TurnKindAggregates) > 0 {
@@ -134,8 +145,8 @@ Aggregate (k=%d, count=%d):
 				label = "unlabeled"
 			}
 			a := rep.OrchestratorAggregates[n]
-			fmt.Fprintf(w, "  %-20s count=%-3d mean_recall=%.3f mean_precision=%.3f mrr=%.3f ndcg=%.3f\n",
-				label, a.Count, a.MeanRecall, a.MeanPrecision, a.MRR, a.MeanNDCG)
+			fmt.Fprintf(w, "  %-20s count=%-3d mean_recall=%.3f mean_precision=%.3f mrr=%.3f ndcg=%.3f latency_ms=%.1f%s\n",
+				label, a.Count, a.MeanRecall, a.MeanPrecision, a.MRR, a.MeanNDCG, a.MeanLatencyMs, meanLLMCallsSuffix(a.MeanLLMCalls))
 		}
 	}
 	if rep.RoutingAccuracy != nil {
@@ -232,6 +243,18 @@ Aggregate (k=%d, count=%d):
 		}
 	}
 	return nil
+}
+
+// meanLLMCallsSuffix renders the optional " llm_calls=N.NN" tail for a
+// per-route/per-orchestrator summary line. Empty when m is nil (no question
+// in that bucket carried an Agent trace), which is how a report with no
+// orchestrator dispatch — every pre-Wave-6 report, and every run against a
+// retrieval-only adapter — keeps its exact previous line text.
+func meanLLMCallsSuffix(m *float64) string {
+	if m == nil {
+		return ""
+	}
+	return fmt.Sprintf(" llm_calls=%.2f", *m)
 }
 
 // ConflictCounts summarises the W5-R7 conflict reports across a run.

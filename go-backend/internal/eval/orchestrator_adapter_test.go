@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -623,5 +624,104 @@ func TestSelectOrchestrator_LadderAgreementCases(t *testing.T) {
 		chatpolicy.Signals{QueryType: vector.QueryTypeComplexReasoning})
 	if got != OrchestratorAgentic || reason != "complex_reasoning_agentic_gate" || dec.Matched {
 		t.Errorf("empty policy on complex: got (%q, %q, %+v), want the untouched agentic gate", got, reason, dec)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// W6-R7: Search wraps the question's ctx with ai.WithCallCounter and copies
+// the count into AgentTrace.LLMCalls on every return path.
+// ---------------------------------------------------------------------------
+
+// isComplexServer starts an httptest server whose /chat/completions handler
+// always answers with the given isComplex verdict — every LLM call this
+// test's dispatch path makes (query-complexity classification, and whatever
+// downstream orchestrator/answer calls follow) gets this same canned
+// response.
+func isComplexServer(t *testing.T, isComplex bool) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": fmt.Sprintf(`{"isComplex":%v}`, isComplex)}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestOrchestratorDispatchAdapter_StandardBranchCopiesLLMCalls pins the
+// standard-branch half of the W6-R7 wiring
+// (orchestrator_adapter.go's `if orchestrator == OrchestratorStandard`
+// case): the question-complexity classifier call that ClassifyQueryTypeForEval
+// makes BEFORE branching happens inside the ctx that Search wrapped with
+// ai.WithCallCounter, so even a question that lands on the standard fallback
+// must show that call on its trace.
+//
+// "Vergleiche" trips the heuristic-complexity marker (forcing the LLM
+// classification call rather than a short-circuit); the server answers
+// isComplex:false, so the question resolves to lookup and dispatches to the
+// standard branch (a.prod.Search), not an orchestrator.
+//
+// Mutation guard: deleting `LLMCalls: callCounter.Count()` from the standard
+// branch's AgentTrace literal makes this FAIL — the zero value would read as
+// 0 even though at least one real call was made.
+func TestOrchestratorDispatchAdapter_StandardBranchCopiesLLMCalls(t *testing.T) {
+	srv := isComplexServer(t, false)
+	aiResolver := ai.NewConfigResolver(fakeClassifierAIConfigStore{baseURL: srv.URL, model: "test-model"})
+
+	siteCfg := &stubSiteCfg{values: map[string]string{}}
+	a := NewOrchestratorDispatchAdapter(aiResolver, fakeOneChunkSearcher{}, siteCfg, nil, EvalFlags{})
+
+	q := Question{ID: "q1", KbID: "kb1", Language: "de", Question: "Vergleiche die Etats 2023 und 2024."}
+
+	if _, err := a.Search(context.Background(), q, 5); err != nil {
+		t.Fatalf("a.Search: %v", err)
+	}
+
+	trace := a.AgentTraceForQuestion(q.ID)
+	if trace == nil {
+		t.Fatal("AgentTraceForQuestion returned nil")
+	}
+	if trace.Orchestrator != OrchestratorStandard {
+		t.Fatalf("Orchestrator = %q, want %q (test setup didn't land on the standard branch)", trace.Orchestrator, OrchestratorStandard)
+	}
+	if trace.LLMCalls < 1 {
+		t.Fatalf("LLMCalls = %d, want >= 1 (the classification call happened inside the wrapped ctx)", trace.LLMCalls)
+	}
+}
+
+// TestOrchestratorDispatchAdapter_SupervisorBranchCopiesLLMCalls pins the
+// orchestrator-branch half of the same wiring (the `trace.LLMCalls =
+// callCounter.Count()` line after BuildAgentTrace): a question that
+// dispatches to the Supervisor and succeeds must report a non-zero LLMCalls,
+// since the classification call and the Supervisor's own answer-path calls
+// both go through the same alwaysComplexServer.
+//
+// Mutation guard: deleting `trace.LLMCalls = callCounter.Count()` makes this
+// FAIL the same way as the standard-branch test above.
+func TestOrchestratorDispatchAdapter_SupervisorBranchCopiesLLMCalls(t *testing.T) {
+	srv := alwaysComplexServer(t)
+	aiResolver := ai.NewConfigResolver(fakeClassifierAIConfigStore{baseURL: srv.URL, model: "test-model"})
+
+	siteCfg := &stubSiteCfg{values: map[string]string{"chat_supervisor_enabled": "true"}}
+	a := NewOrchestratorDispatchAdapter(aiResolver, fakeOneChunkSearcher{}, siteCfg, nil, EvalFlags{})
+
+	q := Question{ID: "q1", KbID: "kb1", Language: "de", Question: "Vergleiche: wie viele Gebäude gibt es insgesamt?"}
+
+	if _, err := a.Search(context.Background(), q, 5); err != nil {
+		t.Fatalf("a.Search: %v (want the Supervisor branch to succeed with fakeOneChunkSearcher)", err)
+	}
+
+	trace := a.AgentTraceForQuestion(q.ID)
+	if trace == nil {
+		t.Fatal("AgentTraceForQuestion returned nil")
+	}
+	if trace.Orchestrator != OrchestratorSupervisor {
+		t.Fatalf("Orchestrator = %q, want %q (test setup didn't land on the Supervisor branch)", trace.Orchestrator, OrchestratorSupervisor)
+	}
+	if trace.LLMCalls < 1 {
+		t.Fatalf("LLMCalls = %d, want >= 1 (the classification + Supervisor calls happened inside the wrapped ctx)", trace.LLMCalls)
 	}
 }

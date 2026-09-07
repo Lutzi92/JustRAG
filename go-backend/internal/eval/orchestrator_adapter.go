@@ -287,6 +287,13 @@ func NewOrchestratorDispatchAdapter(
 // orchestrator, runs it (or falls back to the standard adapter), and
 // returns retrieval-shaped chunks sorted by score for metric purposes.
 func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k int) ([]RetrievedChunk, error) {
+	// W6-R7: wrap the whole question's dispatch (classification, the chosen
+	// orchestrator's search/answer fan-out, and — for the standard branch —
+	// a.prod.Search) in one call counter so AgentTrace.LLMCalls reports every
+	// model-provider request this question caused, not just the ones inside
+	// a single orchestrator branch. Every trace assignment below copies
+	// callCounter.Count() before returning.
+	ctx, callCounter := ai.WithCallCounter(ctx)
 	queryType := ClassifyQueryTypeForEval(ctx, a.aiResolver, q.Question, q.KbID, q.Language)
 	orchestrator, dispatchReason, policyDec := SelectOrchestrator(ctx, a.siteCfg, queryType, q.Question, PolicySignalsForQuestion(queryType, q))
 
@@ -321,6 +328,7 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 				DispatchReason:      dispatchReason,
 				Tabular:             tab,
 				PolicyRule:          policyRule,
+				LLMCalls:            callCounter.Count(),
 			}
 		}
 		return out, err
@@ -448,6 +456,7 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 				// standard path answered, so the rule did not decide the
 				// route that produced these chunks (W6-R16's
 				// "dependencies missing" fallback).
+				LLMCalls: callCounter.Count(),
 			}
 		}
 		return out, perr
@@ -456,6 +465,7 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 	trace := BuildAgentTrace(orchestrator, dispatchReason, events, planInputs)
 	trace.ClassifiedQueryType = queryType
 	trace.PolicyRule = policyRule
+	trace.LLMCalls = callCounter.Count()
 	// Only the Supervisor path actually runs the tabular router today
 	// (RunPlanExecuteChat / RunAgenticChat never set TabularTrace), so
 	// this is a no-op for those orchestrators — TabularEvalTraceFrom
