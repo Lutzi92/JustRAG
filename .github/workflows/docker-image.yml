@@ -99,8 +99,15 @@ jobs:
           # without this the ARG keeps its "unknown" default, /version returns
           # the same string for every release, and update detection can never
           # fire. On a release tag this is exactly the tag (`v0.1.0`).
+          # The Dockerfile defaults GOPROXY to goproxy.cn because the local
+          # build network blocks Go's default module CDN. GitHub's runners are
+          # not blocked, and that mirror is flaky from them (HTTP/2
+          # INTERNAL_ERROR mid-download on large module zips, 2026-09-07);
+          # `,direct` does not help because Go only falls through on 404/410,
+          # never on a transport error. Use the official proxy here.
           build-args: |
             BUILD_VERSION=${{ steps.ver.outputs.version }}
+            GOPROXY=https://proxy.golang.org,direct
           # Attach SBOM + minimal provenance attestations to the pushed image
           # (inspectable via `docker buildx imagetools inspect <ref> --format
           # '{{ json .SBOM }}'`).
