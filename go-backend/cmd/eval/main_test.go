@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/justrag/go-backend/internal/eval"
@@ -124,16 +125,16 @@ func TestChatOverlayReader_LongContextEnabledOverride(t *testing.T) {
 // fails this test (an empty overlay entry would pin the key to the zero
 // value instead of delegating).
 func TestBuildChatOverlays_EmptyFlagsLeaveOverlayEmpty(t *testing.T) {
-	if got := buildChatOverlays("", "", "", nil); len(got) != 0 {
-		t.Fatalf("buildChatOverlays(\"\", \"\", \"\", nil) = %v, want empty map", got)
+	if got := buildChatOverlays("", "", "", "", nil); len(got) != 0 {
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"\", \"\", nil) = %v, want empty map", got)
 	}
-	got := buildChatOverlays("on", "", "", nil)
+	got := buildChatOverlays("on", "", "", "", nil)
 	if len(got) != 1 || got["chat_longcontext_enabled"] != "true" {
-		t.Fatalf("buildChatOverlays(\"on\", \"\", \"\", nil) = %v, want only chat_longcontext_enabled=true", got)
+		t.Fatalf("buildChatOverlays(\"on\", \"\", \"\", \"\", nil) = %v, want only chat_longcontext_enabled=true", got)
 	}
-	got = buildChatOverlays("off", "flat", "", nil)
+	got = buildChatOverlays("off", "flat", "", "", nil)
 	if got["chat_longcontext_enabled"] != "false" || got["chat_longcontext_mode"] != "flat" {
-		t.Fatalf("buildChatOverlays(\"off\", \"flat\", \"\", nil) = %v", got)
+		t.Fatalf("buildChatOverlays(\"off\", \"flat\", \"\", \"\", nil) = %v", got)
 	}
 }
 
@@ -145,25 +146,25 @@ func TestBuildChatOverlays_EmptyFlagsLeaveOverlayEmpty(t *testing.T) {
 // Mutation: dropping the conflict arm from buildChatOverlays (so "on"
 // produces an empty overlay) fails this test.
 func TestBuildChatOverlays_ConflictSurfacing(t *testing.T) {
-	got := buildChatOverlays("", "", "on", nil)
+	got := buildChatOverlays("", "", "on", "", nil)
 	if len(got) != 1 || got["chat_conflict_surfacing_enabled"] != "true" {
-		t.Fatalf("buildChatOverlays(\"\", \"\", \"on\", nil) = %v, want only chat_conflict_surfacing_enabled=true", got)
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"on\", \"\", nil) = %v, want only chat_conflict_surfacing_enabled=true", got)
 	}
-	got = buildChatOverlays("", "", "off", nil)
+	got = buildChatOverlays("", "", "off", "", nil)
 	if len(got) != 1 || got["chat_conflict_surfacing_enabled"] != "false" {
-		t.Fatalf("buildChatOverlays(\"\", \"\", \"off\", nil) = %v, want only chat_conflict_surfacing_enabled=false", got)
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"off\", \"\", nil) = %v, want only chat_conflict_surfacing_enabled=false", got)
 	}
 	// An unrecognised value contributes nothing (the CLI rejects it before
 	// this point; the map must not invent a value either way).
-	if got := buildChatOverlays("", "", "maybe", nil); len(got) != 0 {
-		t.Fatalf("buildChatOverlays(\"\", \"\", \"maybe\", nil) = %v, want empty map", got)
+	if got := buildChatOverlays("", "", "maybe", "", nil); len(got) != 0 {
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"maybe\", \"\", nil) = %v, want empty map", got)
 	}
-	got = buildChatOverlays("on", "flat", "on", nil)
+	got = buildChatOverlays("on", "flat", "on", "", nil)
 	if len(got) != 3 ||
 		got["chat_longcontext_enabled"] != "true" ||
 		got["chat_longcontext_mode"] != "flat" ||
 		got["chat_conflict_surfacing_enabled"] != "true" {
-		t.Fatalf("buildChatOverlays(\"on\", \"flat\", \"on\", nil) = %v, want all three keys", got)
+		t.Fatalf("buildChatOverlays(\"on\", \"flat\", \"on\", \"\", nil) = %v, want all three keys", got)
 	}
 }
 
@@ -216,14 +217,104 @@ func TestParseChatOverlayFlags_Malformed(t *testing.T) {
 // Mutation: merging extra BEFORE the named-flag switches (or merging it at
 // all) in the wrong order fails this test.
 func TestBuildChatOverlays_ExtraPrecedence(t *testing.T) {
-	got := buildChatOverlays("", "", "on", map[string]string{"chat_conflict_surfacing_enabled": "false"})
+	got := buildChatOverlays("", "", "on", "", map[string]string{"chat_conflict_surfacing_enabled": "false"})
 	if len(got) != 1 || got["chat_conflict_surfacing_enabled"] != "false" {
 		t.Fatalf("extra should win over --conflict-surfacing on: got %v, want {chat_conflict_surfacing_enabled: false}", got)
 	}
 	// A --chat-overlay key that does not collide with any named flag is
 	// simply added alongside them.
-	got = buildChatOverlays("on", "", "", map[string]string{"chat_conflict_max_chunks": "30"})
+	got = buildChatOverlays("on", "", "", "", map[string]string{"chat_conflict_max_chunks": "30"})
 	if len(got) != 2 || got["chat_longcontext_enabled"] != "true" || got["chat_conflict_max_chunks"] != "30" {
 		t.Fatalf("non-colliding extra key should be added alongside the named flag: got %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// W6-R6: --policy
+// ---------------------------------------------------------------------------
+
+const policyOneRule = `[{"when":{"query_type":["complex_reasoning"]},"orchestrator":"supervisor","mode":"force"}]`
+
+// A non-empty --policy lands verbatim on chat_orchestrator_policy; an empty
+// one contributes no entry at all (so the live site_config is read).
+// Mutation: dropping the policy arm makes the first assertion fail; writing
+// the key unconditionally makes the second fail.
+func TestBuildChatOverlays_Policy(t *testing.T) {
+	got := buildChatOverlays("", "", "", policyOneRule, nil)
+	if len(got) != 1 || got["chat_orchestrator_policy"] != policyOneRule {
+		t.Fatalf("buildChatOverlays with --policy = %v, want only chat_orchestrator_policy", got)
+	}
+	if got := buildChatOverlays("", "", "", "", nil); len(got) != 0 {
+		t.Fatalf("buildChatOverlays with an empty --policy = %v, want empty map", got)
+	}
+	// Whitespace-only is "unset", the same reading chatpolicy's parser has.
+	if got := buildChatOverlays("", "", "", "   ", nil); len(got) != 0 {
+		t.Fatalf("buildChatOverlays with a whitespace --policy = %v, want empty map", got)
+	}
+	// Composes with the other named chat overlays.
+	got = buildChatOverlays("on", "", "on", policyOneRule, nil)
+	if len(got) != 3 || got["chat_orchestrator_policy"] != policyOneRule ||
+		got["chat_longcontext_enabled"] != "true" || got["chat_conflict_surfacing_enabled"] != "true" {
+		t.Fatalf("buildChatOverlays with --policy + two named flags = %v, want all three keys", got)
+	}
+}
+
+// validatePolicyFlag runs the real chatpolicy validator, so an invalid
+// document is a usage error before the run starts rather than a silently
+// ignored flag or a mid-run reader warning.
+func TestValidatePolicyFlag(t *testing.T) {
+	tests := []struct {
+		name    string
+		policy  string
+		extra   map[string]string
+		wantErr string // substring; "" = expect success
+	}{
+		{name: "empty is valid", policy: ""},
+		{name: "whitespace is valid", policy: "  \n\t "},
+		{name: "empty array is valid", policy: "[]"},
+		{name: "one good rule", policy: policyOneRule},
+		{name: "not an array", policy: `{"when":{}}`, wantErr: "must be a JSON array"},
+		{name: "malformed json", policy: `[{"orchestrator":`, wantErr: "invalid policy JSON"},
+		{name: "trailing data", policy: `[] oops`, wantErr: "trailing data"},
+		{name: "unknown orchestrator", policy: `[{"when":{},"orchestrator":"nope","mode":"force"}]`, wantErr: "unknown orchestrator"},
+		{name: "unknown mode", policy: `[{"when":{},"orchestrator":"agentic","mode":"maybe"}]`, wantErr: "unknown mode"},
+		{name: "unknown when key", policy: `[{"when":{"nope":true},"orchestrator":"agentic","mode":"force"}]`, wantErr: "unknown field"},
+		{name: "unknown query_type", policy: `[{"when":{"query_type":["chitchat"]},"orchestrator":"agentic","mode":"force"}]`, wantErr: "unknown query_type"},
+		{
+			name:    "collides with --chat-overlay",
+			policy:  policyOneRule,
+			extra:   map[string]string{"chat_orchestrator_policy": "[]"},
+			wantErr: "conflicts with --policy",
+		},
+		{
+			// The collision is rejected even when --policy itself is empty:
+			// an unvalidated document must not reach the run through the
+			// generic escape hatch either.
+			name:    "chat-overlay alone still collides",
+			policy:  "",
+			extra:   map[string]string{"chat_orchestrator_policy": "garbage"},
+			wantErr: "conflicts with --policy",
+		},
+		{
+			name:  "unrelated chat-overlay key is fine",
+			extra: map[string]string{"chat_conflict_max_chunks": "30"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePolicyFlag(tt.policy, tt.extra)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validatePolicyFlag(%q) = %v, want nil", tt.policy, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validatePolicyFlag(%q) = nil, want an error containing %q", tt.policy, tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validatePolicyFlag(%q) = %q, want it to contain %q", tt.policy, err, tt.wantErr)
+			}
+		})
 	}
 }

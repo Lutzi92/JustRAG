@@ -99,6 +99,11 @@ type DecisionRow struct {
 	ToolCalls []ToolCallEntry
 	TeamID    *string
 	AgentID   *string
+	// PolicyRule (W6-R6, migration 0073) is the 0-based
+	// chat_orchestrator_policy rule index that pinned this turn's
+	// orchestrator. nil — SQL NULL — means the flag ladder decided.
+	// A pointer, not an int: rule 0 is an ordinary rule.
+	PolicyRule *int
 }
 
 // ToolCallEntry mirrors chat.ToolCallRecord on the persistence side.
@@ -142,7 +147,7 @@ var _ Store = (*PgStore)(nil)
 // AP-B4: toolCalls is the per-turn dispatch sequence; nil/empty means
 // the turn didn't go through the MCP dispatcher (legacy paths or
 // non-tool-aware orchestrators). Persists as a JSONB array via Insert.
-func (s *PgStore) Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []ToolCallEntry, teamID, agentID *string) {
+func (s *PgStore) Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []ToolCallEntry, teamID, agentID *string, policyRule *int) {
 	id, err := uuid.Parse(strings.TrimSpace(kbID))
 	if err != nil {
 		logctx.From(ctx).Warn("agent_decisions.record: bad kb_id", "kb_id", kbID, "error", err)
@@ -158,6 +163,8 @@ func (s *PgStore) Record(ctx context.Context, kbID, mode, outcome string, hops, 
 		ToolCalls: toolCalls,
 		TeamID:    teamID,
 		AgentID:   agentID,
+
+		PolicyRule: policyRule,
 	}); err != nil {
 		logctx.From(ctx).Warn("agent_decisions.record: insert failed", "error", err)
 	}
@@ -183,10 +190,10 @@ func (s *PgStore) Insert(ctx context.Context, r DecisionRow) error {
 		return fmt.Errorf("agent_decisions: marshal tool_calls: %w", err)
 	}
 	const q = `
-        INSERT INTO agent_decisions (kb_id, mode, outcome, hops, rounds, latency_ms, tool_calls, team_id, agent_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+        INSERT INTO agent_decisions (kb_id, mode, outcome, hops, rounds, latency_ms, tool_calls, team_id, agent_id, policy_rule)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
     `
-	_, err = s.pool.Exec(ctx, q, r.KbID, r.Mode, r.Outcome, r.Hops, r.Rounds, r.LatencyMs, payload, r.TeamID, r.AgentID)
+	_, err = s.pool.Exec(ctx, q, r.KbID, r.Mode, r.Outcome, r.Hops, r.Rounds, r.LatencyMs, payload, r.TeamID, r.AgentID, r.PolicyRule)
 	return err
 }
 

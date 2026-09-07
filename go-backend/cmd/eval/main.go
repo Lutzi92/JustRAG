@@ -27,6 +27,7 @@ import (
 	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/chat"
+	"github.com/justrag/go-backend/internal/chatpolicy"
 	"github.com/justrag/go-backend/internal/config"
 	"github.com/justrag/go-backend/internal/database"
 	"github.com/justrag/go-backend/internal/eval"
@@ -78,6 +79,7 @@ func main() {
 	longContextModeOverride := flag.String("longcontext-mode", "", `Wave-3 ruling W3-R6: per-run override for chat_longcontext_mode ("flat" | "map_reduce") — which consumer the OrchLongContext orchestrator uses. Empty = read the live site_config (whose default is "map_reduce" since Wave 5 / W5-R1; an unrecognised stored value normalises to "flat"). This is a CHAT-layer key, so it wraps siteReader like --crag (not the vector-layer overlay). Only has an effect when chat_longcontext_enabled is on and the question trips the global-synthesis classifier.`)
 	longContextEnabled := flag.String("longcontext", "", `Wave-3 ruling W3-R5: per-run override for chat_longcontext_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext-mode. "on" puts OrchLongContext at the top of the eval orchestrator ladder for questions the global-synthesis classifier accepts, so a global-synthesis golden set can be measured without mutating site_configs.`)
 	conflictSurfacing := flag.String("conflict-surfacing", "", `Wave-5 ruling W5-R7: per-run override for chat_conflict_surfacing_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext. "on" makes every turn whose assembled set spans >= 2 distinct files run the fast-tier conflict / supersession pass, and records the resulting report per question as "conflicts" in the JSON report (the same bare array a chat turn persists and streams). Effective on the standard PrepareChatContext path and, under --orchestrator-dispatch, on the Supervisor path.`)
+	policyJSON := flag.String("policy", "", `Wave-6 W6-R6/W6-R7: per-run overlay for chat_orchestrator_policy (a JSON array of routing rules, e.g. [{"when":{"query_type":["complex_reasoning"]},"orchestrator":"supervisor","mode":"force"}]). Validated with chatpolicy.ValidateOrchestratorPolicyJSON BEFORE the run — an invalid document is a usage error (exit 2), never a silently ignored flag. Empty (default) = read the live site_config, i.e. the ladder is unchanged. Applied through the same chat-layer overlay as --conflict-surfacing, so it mutates no site_configs row; passing --chat-overlay chat_orchestrator_policy=... as well is an error (use --policy, which validates).`)
 	var chatOverlayFlags chatOverlayFlag
 	flag.Var(&chatOverlayFlags, "chat-overlay", `Wave-6 W6-R18: per-run override of ONE chat-layer site_config key (the reader PrepareChatContext and the orchestrators receive), applied through the same overlay as --conflict-surfacing; repeatable; key must be non-empty and contain no '='; only keys read through the chat-layer reader are affected — vector-layer keys keep their own flags.`)
 	goldenQueryType := flag.Bool("golden-query-type", false, `Forward each golden row's curated "query_type" label into the retrieval pipeline (chat.ChatContextParams.QueryType) instead of letting the pipeline classify the question. Default false so existing --production-context reports keep their historical shape. Does NOT affect orchestrator dispatch, which classifies independently — if a question does not reach the intended orchestrator, rewrite the question, not the label.`)
@@ -166,6 +168,17 @@ func main() {
 	extraChatOverlays, err := parseChatOverlayFlags(chatOverlayFlags)
 	if err != nil {
 		slog.Error("invalid --chat-overlay value", "error", err)
+		os.Exit(2)
+	}
+
+	// W6-R6: --policy is validated by the same parser the save path and the
+	// reader use, so a run can never measure a document production would
+	// reject. It reaches the pipeline as an ordinary chat overlay, which is
+	// why the generic --chat-overlay escape hatch must not ALSO set the key:
+	// the two would race on the same map entry and the unvalidated one would
+	// win (buildChatOverlays merges extra last).
+	if err := validatePolicyFlag(*policyJSON, extraChatOverlays); err != nil {
+		slog.Error("invalid --policy value", "error", err)
 		os.Exit(2)
 	}
 
@@ -320,7 +333,7 @@ func main() {
 	// siteReader rather than the vector-layer overlay above. Chained after
 	// the CRAG wrapper so both overrides compose. One wrapper carries both
 	// keys — a second wrapper would be indistinguishable but harder to read.
-	if chatOverlays := buildChatOverlays(*longContextEnabled, *longContextModeOverride, *conflictSurfacing, extraChatOverlays); len(chatOverlays) > 0 {
+	if chatOverlays := buildChatOverlays(*longContextEnabled, *longContextModeOverride, *conflictSurfacing, *policyJSON, extraChatOverlays); len(chatOverlays) > 0 {
 		siteReader = &chatOverlayReader{inner: siteReader, overlays: chatOverlays}
 		slog.Info("eval: applying chat site_config overlays for this run", "overlays", chatOverlays)
 	}
@@ -812,7 +825,7 @@ type chatOverlayReader struct {
 // wins over that named flag (documented precedence, not map-iteration
 // luck) — e.g. --conflict-surfacing on --chat-overlay
 // chat_conflict_surfacing_enabled=false ends with the key false.
-func buildChatOverlays(longContextEnabled, longContextMode, conflictSurfacing string, extra map[string]string) map[string]string {
+func buildChatOverlays(longContextEnabled, longContextMode, conflictSurfacing, policyJSON string, extra map[string]string) map[string]string {
 	overlays := map[string]string{}
 	switch longContextEnabled {
 	case "on":
@@ -829,10 +842,41 @@ func buildChatOverlays(longContextEnabled, longContextMode, conflictSurfacing st
 	case "off":
 		overlays["chat_conflict_surfacing_enabled"] = "false"
 	}
+	// W6-R6. Empty contributes no entry for the same reason as above: an
+	// empty overlay value would pin the key to "no policy" for the run
+	// instead of delegating to the live site_config. validatePolicyFlag has
+	// already rejected an --policy that collides with a --chat-overlay for
+	// the same key, so the merge below cannot silently drop a validated
+	// document.
+	if strings.TrimSpace(policyJSON) != "" {
+		overlays[chatOrchestratorPolicyKey] = policyJSON
+	}
 	for k, v := range extra {
 		overlays[k] = v
 	}
 	return overlays
+}
+
+// chatOrchestratorPolicyKey is the site_config key --policy overlays. Named
+// once so the flag, the collision check and the overlay builder cannot drift.
+const chatOrchestratorPolicyKey = "chat_orchestrator_policy"
+
+// validatePolicyFlag checks the --policy document with the same validator the
+// admin save path runs (chatpolicy.ValidateOrchestratorPolicyJSON) and refuses
+// the ambiguous command line where --chat-overlay ALSO sets the policy key.
+//
+// Empty is always valid: it means "read the live site_config", the documented
+// default. The collision is an error rather than a precedence rule because the
+// two flags disagree on validation — --chat-overlay would smuggle an
+// unvalidated document past this check and win the merge.
+func validatePolicyFlag(policyJSON string, extra map[string]string) error {
+	if _, collides := extra[chatOrchestratorPolicyKey]; collides {
+		return fmt.Errorf("--chat-overlay %s=... conflicts with --policy; use --policy (it validates the document)", chatOrchestratorPolicyKey)
+	}
+	if strings.TrimSpace(policyJSON) == "" {
+		return nil
+	}
+	return chatpolicy.ValidateOrchestratorPolicyJSON(policyJSON)
 }
 
 // chatOverlayFlag is a repeatable flag.Value collecting raw --chat-overlay

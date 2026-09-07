@@ -274,3 +274,60 @@ func TestWriteHumanSummary_OmitsOrchestratorBlockWhenAbsent(t *testing.T) {
 		t.Errorf("'Orchestrators:' must be absent when OrchestratorAggregates is nil:\n%s", buf.String())
 	}
 }
+
+// W6-R6: the human summary gains an "Orchestrator policy" block only when at
+// least one question was routed by a rule — a report from a run without a
+// policy must keep its exact previous text.
+func TestWriteHumanSummary_PolicyRuleSection(t *testing.T) {
+	rule0, rule2 := 0, 2
+	rep := Report{Questions: []QuestionReport{
+		{Agent: &AgentTrace{Orchestrator: OrchestratorSupervisor, PolicyRule: &rule0}},
+		{Agent: &AgentTrace{Orchestrator: OrchestratorSupervisor, PolicyRule: &rule0}},
+		{Agent: &AgentTrace{Orchestrator: OrchestratorAgentic, PolicyRule: &rule2}},
+		{Agent: &AgentTrace{Orchestrator: OrchestratorStandard}},
+	}}
+	var buf bytes.Buffer
+	if err := WriteHumanSummary(&buf, rep); err != nil {
+		t.Fatalf("WriteHumanSummary: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"Orchestrator policy:",
+		"questions_routed_by_a_rule = 3/4",
+		"rule 0",
+		"rule 2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestWriteHumanSummary_NoPolicySectionWithoutRules(t *testing.T) {
+	rep := Report{Questions: []QuestionReport{
+		{Agent: &AgentTrace{Orchestrator: OrchestratorStandard}},
+		{},
+	}}
+	var buf bytes.Buffer
+	if err := WriteHumanSummary(&buf, rep); err != nil {
+		t.Fatalf("WriteHumanSummary: %v", err)
+	}
+	if strings.Contains(buf.String(), "Orchestrator policy") {
+		t.Fatalf("policy section printed for a run without a policy:\n%s", buf.String())
+	}
+}
+
+func TestPolicyRuleCounts(t *testing.T) {
+	if got := PolicyRuleCounts(nil); got != nil {
+		t.Fatalf("PolicyRuleCounts(nil) = %v, want nil", got)
+	}
+	zero := 0
+	got := PolicyRuleCounts([]QuestionReport{
+		{Agent: &AgentTrace{PolicyRule: &zero}},
+		{Agent: &AgentTrace{}},
+		{},
+	})
+	if len(got) != 1 || got[0] != 1 {
+		t.Fatalf("PolicyRuleCounts = %v, want {0:1} (rule 0 must not read as absent)", got)
+	}
+}

@@ -1558,7 +1558,7 @@ type decisionRecorderAdapter struct {
 	store *adminagentmetrics.PgStore
 }
 
-func (a *decisionRecorderAdapter) Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []chat.ToolCallRecord, teamID, agentID *string) {
+func (a *decisionRecorderAdapter) Record(ctx context.Context, kbID, mode, outcome string, hops, rounds, latencyMs int, toolCalls []chat.ToolCallRecord, teamID, agentID *string, policyRule *int) {
 	if a.store == nil {
 		return
 	}
@@ -1570,7 +1570,7 @@ func (a *decisionRecorderAdapter) Record(ctx context.Context, kbID, mode, outcom
 			Status:     c.Status,
 		}
 	}
-	a.store.Record(ctx, kbID, mode, outcome, hops, rounds, latencyMs, entries, teamID, agentID)
+	a.store.Record(ctx, kbID, mode, outcome, hops, rounds, latencyMs, entries, teamID, agentID, policyRule)
 }
 
 // fileDatesAdapter implements chat.FileDateLookup over the main-DB files

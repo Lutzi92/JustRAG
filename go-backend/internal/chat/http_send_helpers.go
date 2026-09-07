@@ -540,6 +540,12 @@ type chatResponseParams struct {
 	// agentMode overrides the mode recorded in agent_decisions; empty means
 	// the legacy "crag" (standard path).
 	agentMode string
+	// policyRule is the chat_orchestrator_policy rule index that pinned this
+	// turn's route (W6-R6), recorded on the agent_decisions row. nil means
+	// the flag ladder decided — which is what both constructors of this
+	// struct pass today, since the policy is evaluated inside tryDeepChat
+	// (see the note at each construction site).
+	policyRule *int
 }
 
 // handleTransformFollowUp answers a transform follow-up ("kannst du das als
@@ -831,7 +837,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	if mode == "" {
 		mode = "crag"
 	}
-	h.recordAgentDecision(ctx, p.kbID, mode, stdOutcome, 0, 0, time.Since(p.chatStartTime).Milliseconds(), nil, nil)
+	h.recordAgentDecision(ctx, p.kbID, mode, stdOutcome, 0, 0, time.Since(p.chatStartTime).Milliseconds(), nil, nil, p.policyRule)
 
 	writeSSEDone(ctx, w)
 	sseFinished = true

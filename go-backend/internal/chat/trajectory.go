@@ -35,6 +35,12 @@ const trajectoryChunkPreview = 5
 //	longcontext_reduce — W3-R6: map stage done; Findings is the total handed to
 //	                   the synthesis prompt, Dropped how many the token budget
 //	                   cut from the tail
+//	orchestrator_policy — W6-R6: the chat_orchestrator_policy table matched
+//	                   this turn. Decision is the orchestrator the rule names
+//	                   (or "fallthrough" when a prefer rule's flag is off),
+//	                   Mode the rule's force/prefer, PolicyRule its 0-based
+//	                   index. Not emitted when no rule matched, so its absence
+//	                   means "the flag ladder decided".
 //	conflict_surfacing — W5-R7: the conflict / supersession pass finished;
 //	                   Reason carries the outcome (found | none | timeout |
 //	                   error) and Findings the conflict count
@@ -66,6 +72,11 @@ type TrajectoryEvent struct {
 	// the length in runes of the repeated run that tripped it.
 	Limit     int `json:"limit,omitempty"`
 	RunLength int `json:"run_length,omitempty"`
+	// PolicyRule is the 0-based chat_orchestrator_policy rule index that
+	// matched, on the orchestrator_policy event (W6-R6). A POINTER, not a
+	// plain int: rule 0 is a perfectly ordinary rule, and omitempty would
+	// erase it from the wire. nil everywhere else.
+	PolicyRule *int `json:"policy_rule,omitempty"`
 }
 
 // TrajChunkRef is the per-step chunk preview surfaced to the trajectory

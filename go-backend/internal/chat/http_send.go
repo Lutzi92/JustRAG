@@ -17,6 +17,7 @@ import (
 	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/auth"
+	"github.com/justrag/go-backend/internal/chatpolicy"
 	"github.com/justrag/go-backend/internal/httputil"
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/observability"
@@ -471,6 +472,13 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		bufferedTrajectory: bufferedTrajectory,
 		chatStartTime:      time.Now(),
 		history:            answerHistory,
+		// policyRule stays nil here by construction: chat_orchestrator_policy
+		// is evaluated inside tryDeepChat, and this code is only reached when
+		// the turn never entered it (not complex / not streaming / no
+		// comparison or team) or when the orchestrator it picked ERRORED and
+		// fell through. In the fall-through case the forced route did not
+		// answer, so attributing the row to the rule would be a lie.
+		policyRule: nil,
 	}
 	if streamMode {
 		h.writeStreamingResponse(ctx, w, rp)
@@ -643,14 +651,61 @@ func (h *Handler) tryDeepChat(
 		AgenticEnabled:        agenticEnabled,
 	}
 
+	// W6-R6: the operator's per-query orchestrator policy. Read once per
+	// turn; nil (the default, and the fail-soft result of an unparseable
+	// stored document) leaves the ladder byte-identical.
+	//
+	// The signal bag is built only when a policy actually exists: two of its
+	// fields are regex classifiers over the query, and an empty policy must
+	// not pay for them. len() on a nil slice is 0, so this is the whole
+	// guard.
+	policy := ChatOrchestratorPolicy(ctx, h.siteConfigReader)
+	var policySignals chatpolicy.Signals
+	if len(policy) > 0 {
+		policySignals = chatpolicy.Signals{
+			QueryType:        queryType,
+			GlobalSynthesis:  orchIn.IsGlobalSynthesis,
+			Enumeration:      IsEnumerationQuery(searchQuery, lang),
+			RecencyListing:   IsRecencyListingQuery(searchQuery),
+			HasFileSelection: len(body.SelectedFileIDs) > 0,
+			HistoryTurns:     len(answerHistory),
+			KBID:             kbID,
+		}
+	}
+
 	// The corpus-table confirmation is an LLM call; SelectOrchestrator
 	// invokes this at most once, and only after every higher-priority gate
 	// has already failed and the cheap keyword classifier has already
 	// matched — preserving the original short-circuit that kept this call
 	// off the hot path.
-	orch := SelectOrchestrator(orchIn, func() bool {
+	orch, policyDec := SelectOrchestratorWithPolicy(orchIn, policy, policySignals, func() bool {
 		return ai.ConfirmCorpusComparison(ctx, h.aiResolver, searchQuery, kbID, lang, ChatCorpusTableModel(ctx, h.siteConfigReader))
 	})
+
+	// policyRule is what agent_decisions.policy_rule records: the rule that
+	// actually PINNED the route. A matched-but-not-applied prefer rule left
+	// the ladder in charge, so it must stay NULL on the row — the trajectory
+	// event below is where that near-miss is visible.
+	var policyRule *int
+	if policyDec.Applied {
+		idx := policyDec.RuleIndex
+		policyRule = &idx
+	}
+	if policyDec.Matched {
+		idx := policyDec.RuleIndex
+		decision, reason := policyDec.Orchestrator, "rule matched (mode="+policyDec.Mode+")"
+		if !policyDec.Applied {
+			decision = "fallthrough"
+			reason = "prefer rule matched but " + policyDec.Orchestrator + " is disabled"
+		}
+		emitTrajectory(collectEmit, TrajectoryEvent{
+			Stage:      "orchestrator_policy",
+			Decision:   decision,
+			Reason:     reason,
+			Mode:       policyDec.Mode,
+			PolicyRule: &idx,
+		}, nil)
+	}
 
 	// The `considered` denominator for rag_longcontext_route_total: the
 	// operator gate is on and the turn was eligible, but the keyword
@@ -915,12 +970,16 @@ func (h *Handler) tryDeepChat(
 			TokenBudget:     ChatPlanExecuteTokenBudget(ctx, h.siteConfigReader),
 			Plateau:         plateau,
 			Tools:           planExecuteTools,
-			DAG:             ChatPlanExecuteDAG(ctx, h.siteConfigReader),
-			MaxDAGDepth:     ChatPlanExecuteMaxDAGDepth(ctx, h.siteConfigReader),
-			MaxDAGNodes:     ChatPlanExecuteMaxDAGNodes(ctx, h.siteConfigReader),
-			GraphChunkIDs:   graphChunkIDs,
-			BridgeChunks:    bridgeChunks,
-			HyPESearch:      HyPESearchEnabled(ctx, h.siteConfigReader),
+			// W6-R16: a "plan_execute_dag" policy rule is plan-execute with
+			// the DAG pinned on for this turn — the name has no
+			// chat.Orchestrator of its own. OR, never override: a
+			// deployment with chat_plan_execute_dag already on keeps it.
+			DAG:           ChatPlanExecuteDAG(ctx, h.siteConfigReader) || policyDec.ForceDAG,
+			MaxDAGDepth:   ChatPlanExecuteMaxDAGDepth(ctx, h.siteConfigReader),
+			MaxDAGNodes:   ChatPlanExecuteMaxDAGNodes(ctx, h.siteConfigReader),
+			GraphChunkIDs: graphChunkIDs,
+			BridgeChunks:  bridgeChunks,
+			HyPESearch:    HyPESearchEnabled(ctx, h.siteConfigReader),
 		}
 		// AP-B3: tool-aware planner. Only meaningful when DAG is on
 		// AND a dispatcher is wired AND the gate is set. Catalog is
@@ -1253,7 +1312,7 @@ func (h *Handler) tryDeepChat(
 	} else {
 		hops = 0
 	}
-	h.recordAgentDecision(ctx, kbID, mode, outcome, hops, rounds, time.Since(deepChatStart).Milliseconds(), decTeamID, decAgentID)
+	h.recordAgentDecision(ctx, kbID, mode, outcome, hops, rounds, time.Since(deepChatStart).Milliseconds(), decTeamID, decAgentID, policyRule)
 
 	writeSSEDone(ctx, w)
 	sseFinished = true

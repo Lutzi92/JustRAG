@@ -9,6 +9,7 @@ import (
 
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/chat"
+	"github.com/justrag/go-backend/internal/chatpolicy"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -53,15 +54,43 @@ func ClassifyQueryTypeForEval(ctx context.Context, resolver *ai.ConfigResolver, 
 }
 
 // SelectOrchestrator replicates the dispatch predicate from tryDeepChat
-// (internal/chat/http_send.go:816-823). Returns the orchestrator label
-// and a short human-readable dispatch reason. Eval has no Enhance
-// parameter so the `body.Enhance == ""` clause is implicitly true.
+// (internal/chat/http_send.go). Returns the orchestrator label, a short
+// human-readable dispatch reason, and the chat_orchestrator_policy decision
+// that produced it. Eval has no Enhance parameter so the `body.Enhance == ""`
+// clause is implicitly true.
 //
 // query is the question text: the long-context gate keys on the
 // global-synthesis keyword classifier, not on the query type alone.
-func SelectOrchestrator(ctx context.Context, siteCfg chat.SiteConfigReader, queryType, query string) (string, string) {
+//
+// W6-R6: the policy table is evaluated FIRST here — before even the
+// query-type gate — because production evaluates it above the whole flag
+// ladder, and the ladder's complex_reasoning precondition is part of that
+// ladder. A "force lookup → supervisor" rule that the mirror refused because
+// the question is a lookup would measure a route production does not take.
+// Production's three always-first arms (comparison / team / corpus-table)
+// have no mirror at all (they are explicit-intent routes, not complex-lane
+// dispatch), so there is nothing here for the policy to jump ahead of.
+func SelectOrchestrator(ctx context.Context, siteCfg chat.SiteConfigReader, queryType, query string, sig chatpolicy.Signals) (string, string, chatpolicy.Decision) {
+	pol := chat.ChatOrchestratorPolicy(ctx, siteCfg)
+	dec := chatpolicy.Decide(pol, sig, map[string]bool{
+		"drift":       chat.ChatDriftEnabled(ctx, siteCfg),
+		"longcontext": chat.ChatLongContextEnabled(ctx, siteCfg),
+		"supervisor":  chat.ChatSupervisorEnabled(ctx, siteCfg),
+		// plan_execute_dag's enabled bit is plan-execute's, exactly as in
+		// chat.OrchestratorInputs.policyEnabled: the DAG is a shape of that
+		// orchestrator, not a separate one.
+		"plan_execute":     chat.ChatPlanExecuteEnabled(ctx, siteCfg),
+		"plan_execute_dag": chat.ChatPlanExecuteEnabled(ctx, siteCfg),
+		"agentic":          chat.ChatAgenticEnabled(ctx, siteCfg),
+	})
+	if dec.Applied {
+		return orchestratorForPolicyName(dec.Orchestrator),
+			fmt.Sprintf("policy_rule_%d_%s", dec.RuleIndex, dec.Mode),
+			dec
+	}
+
 	if queryType != vector.QueryTypeComplexReasoning {
-		return OrchestratorStandard, "fallback_query_type_" + queryType
+		return OrchestratorStandard, "fallback_query_type_" + queryType, dec
 	}
 	// W4-R3: mirrors the chat ladder's OrchDrift arm, at the same position
 	// as production (directly above long-context — DRIFT needs KG
@@ -69,25 +98,52 @@ func SelectOrchestrator(ctx context.Context, siteCfg chat.SiteConfigReader, quer
 	// answer). Comparison/Team/CorpusTable stay un-mirrored: none of them
 	// are complex-lane dispatch, so they have no place on this ladder.
 	if chat.ChatDriftEnabled(ctx, siteCfg) && chat.IsGlobalSynthesisQuery(query) {
-		return OrchestratorDrift, "complex_reasoning_drift_gate"
+		return OrchestratorDrift, "complex_reasoning_drift_gate", dec
 	}
 	// W3-R5: mirrors the chat ladder's OrchLongContext arm.
 	if chat.ChatLongContextEnabled(ctx, siteCfg) && chat.IsGlobalSynthesisQuery(query) {
-		return OrchestratorLongContext, "complex_reasoning_longcontext_gate"
+		return OrchestratorLongContext, "complex_reasoning_longcontext_gate", dec
 	}
 	if chat.ChatSupervisorEnabled(ctx, siteCfg) {
-		return OrchestratorSupervisor, "complex_reasoning_supervisor_gate"
+		return OrchestratorSupervisor, "complex_reasoning_supervisor_gate", dec
 	}
 	if chat.ChatPlanExecuteEnabled(ctx, siteCfg) {
 		if chat.ChatPlanExecuteDAG(ctx, siteCfg) {
-			return OrchestratorPlanExecuteDAG, "complex_reasoning_plan_execute_dag_gate"
+			return OrchestratorPlanExecuteDAG, "complex_reasoning_plan_execute_dag_gate", dec
 		}
-		return OrchestratorPlanExecute, "complex_reasoning_plan_execute_gate"
+		return OrchestratorPlanExecute, "complex_reasoning_plan_execute_gate", dec
 	}
 	if chat.ChatAgenticEnabled(ctx, siteCfg) {
-		return OrchestratorAgentic, "complex_reasoning_agentic_gate"
+		return OrchestratorAgentic, "complex_reasoning_agentic_gate", dec
 	}
-	return OrchestratorStandard, "fallback_no_orchestrator_enabled"
+	return OrchestratorStandard, "fallback_no_orchestrator_enabled", dec
+}
+
+// orchestratorForPolicyName maps a chatpolicy orchestrator name onto this
+// package's orchestrator label. The six flag-ladder names are byte-identical
+// to the eval constants (pinned in chat by
+// TestChatPolicyOrchestratorNamesMatchChatConstants), and "plan_execute_dag"
+// maps 1:1 onto OrchestratorPlanExecuteDAG — which is what makes the dispatch
+// switch below turn the DAG on, mirroring production's ForceDAG. An unknown
+// name cannot reach here (the parser rejects it), so the fallback is the
+// standard route rather than a panic.
+func orchestratorForPolicyName(name string) string {
+	switch name {
+	case "drift":
+		return OrchestratorDrift
+	case "longcontext":
+		return OrchestratorLongContext
+	case "supervisor":
+		return OrchestratorSupervisor
+	case "plan_execute":
+		return OrchestratorPlanExecute
+	case "plan_execute_dag":
+		return OrchestratorPlanExecuteDAG
+	case "agentic":
+		return OrchestratorAgentic
+	default:
+		return OrchestratorStandard
+	}
 }
 
 // BuildAgentTrace stitches together a populated AgentTrace from the
@@ -191,7 +247,7 @@ func NewOrchestratorDispatchAdapter(
 // returns retrieval-shaped chunks sorted by score for metric purposes.
 func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k int) ([]RetrievedChunk, error) {
 	queryType := ClassifyQueryTypeForEval(ctx, a.aiResolver, q.Question, q.KbID, q.Language)
-	orchestrator, dispatchReason := SelectOrchestrator(ctx, a.siteCfg, queryType, q.Question)
+	orchestrator, dispatchReason, policyDec := SelectOrchestrator(ctx, a.siteCfg, queryType, q.Question, PolicySignalsForQuestion(queryType, q))
 
 	slog.Info("eval.orchestrator_dispatch",
 		"question_id", q.ID,
@@ -200,6 +256,16 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 		"orchestrator", orchestrator,
 		"dispatch_reason", dispatchReason,
 	)
+
+	// W6-R6: the rule index goes on the trace only when a rule actually
+	// PINNED the route, mirroring agent_decisions.policy_rule. A matched but
+	// unapplied "prefer" rule left the ladder in charge and is visible in the
+	// dispatch reason, not here.
+	var policyRule *int
+	if policyDec.Applied {
+		idx := policyDec.RuleIndex
+		policyRule = &idx
+	}
 
 	if orchestrator == OrchestratorStandard {
 		out, err := a.prod.Search(ctx, q, k)
@@ -213,6 +279,7 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 				ClassifiedQueryType: queryType,
 				DispatchReason:      dispatchReason,
 				Tabular:             tab,
+				PolicyRule:          policyRule,
 			}
 		}
 		return out, err
@@ -336,6 +403,10 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 				Orchestrator:        OrchestratorStandard,
 				ClassifiedQueryType: queryType,
 				DispatchReason:      orchestrator + "_error_fallback",
+				// No PolicyRule: the forced orchestrator errored and the
+				// standard path answered, so the rule did not decide the
+				// route that produced these chunks (W6-R16's
+				// "dependencies missing" fallback).
 			}
 		}
 		return out, perr
@@ -343,6 +414,7 @@ func (a *OrchestratorDispatchAdapter) Search(ctx context.Context, q Question, k 
 
 	trace := BuildAgentTrace(orchestrator, dispatchReason, events, planInputs)
 	trace.ClassifiedQueryType = queryType
+	trace.PolicyRule = policyRule
 	// Only the Supervisor path actually runs the tabular router today
 	// (RunPlanExecuteChat / RunAgenticChat never set TabularTrace), so
 	// this is a no-op for those orchestrators — TabularEvalTraceFrom
@@ -430,4 +502,26 @@ func (a *OrchestratorDispatchAdapter) ConflictsForQuestion(questionID string) []
 		return nil
 	}
 	return chat.ConflictsForWire(cc.Conflicts)
+}
+
+// PolicySignalsForQuestion resolves the chatpolicy signal bag from an eval
+// question, mirroring what internal/chat builds per turn.
+//
+// Two signals are structurally unavailable here and are documented as false /
+// zero rather than guessed: a golden question carries no user file selection
+// (HasFileSelection) and single-turn eval has no conversation history
+// (HistoryTurns) — a multi-turn replay does not reach this adapter at all
+// (turns bypass orchestrator dispatch). A policy rule that keys on either of
+// them therefore never fires under eval, which is the honest outcome: the
+// harness cannot produce the turn shape it describes.
+func PolicySignalsForQuestion(queryType string, q Question) chatpolicy.Signals {
+	return chatpolicy.Signals{
+		QueryType:        queryType,
+		GlobalSynthesis:  chat.IsGlobalSynthesisQuery(q.Question),
+		Enumeration:      chat.IsEnumerationQuery(q.Question, q.Language),
+		RecencyListing:   chat.IsRecencyListingQuery(q.Question),
+		HasFileSelection: false,
+		HistoryTurns:     0,
+		KBID:             q.KbID,
+	}
 }

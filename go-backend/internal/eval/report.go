@@ -196,6 +196,28 @@ Aggregate (k=%d, count=%d):
 			flagged, len(rep.Questions), float64(flagged)/float64(len(rep.Questions)))
 		fmt.Fprintf(w, "  with_superseded_newer_known = %d\n", withNewer)
 	}
+	// Orchestrator policy (W6-R6). The per-question rule index lives on
+	// AgentTrace.PolicyRule in the JSON report; this block summarises it, and
+	// is printed ONLY when at least one question was routed by a rule — so a
+	// report from a run without a policy (every pre-Wave-6 report, and every
+	// run without --policy) keeps its exact previous text.
+	if byRule := PolicyRuleCounts(rep.Questions); len(byRule) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Orchestrator policy:")
+		rules := make([]int, 0, len(byRule))
+		for r := range byRule {
+			rules = append(rules, r)
+		}
+		sort.Ints(rules)
+		routed := 0
+		for _, r := range rules {
+			routed += byRule[r]
+		}
+		fmt.Fprintf(w, "  questions_routed_by_a_rule = %d/%d\n", routed, len(rep.Questions))
+		for _, r := range rules {
+			fmt.Fprintf(w, "  rule %-3d                   = %d\n", r, byRule[r])
+		}
+	}
 	if rep.DepthBuckets != nil {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "Depth buckets (k=%d, min_total_chunks=%d, eligible_questions=%d):\n",
@@ -238,4 +260,22 @@ func ConflictCounts(qs []QuestionReport) (flagged, withSupersededNewer int) {
 		}
 	}
 	return flagged, withSupersededNewer
+}
+
+// PolicyRuleCounts counts, per chat_orchestrator_policy rule index, how many
+// questions that rule actually routed (W6-R6). Questions the flag ladder
+// decided carry no rule and are absent from the map, so an empty result means
+// "no policy was in effect" and the printer stays silent.
+func PolicyRuleCounts(qs []QuestionReport) map[int]int {
+	var out map[int]int
+	for _, q := range qs {
+		if q.Agent == nil || q.Agent.PolicyRule == nil {
+			continue
+		}
+		if out == nil {
+			out = map[int]int{}
+		}
+		out[*q.Agent.PolicyRule]++
+	}
+	return out
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/chat"
+	"github.com/justrag/go-backend/internal/chatpolicy"
 	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/vector"
 )
@@ -75,6 +76,38 @@ type TrajectoryRunDeps struct {
 	TabularRouter *chat.TabularRouter
 }
 
+// trajectoryPolicyRule evaluates the operator's chat_orchestrator_policy for
+// one question and returns the rule index that WOULD have pinned its route,
+// or nil. It does not steer this run — --trajectory dispatches by the mode
+// flag, deliberately, so every mode is comparable on every question — it only
+// records which rule a production turn with the same signals would have hit
+// (W6-R6, W6-R7).
+//
+// The question's query type comes from the golden row's own label rather than
+// the classifier: RunTrajectory makes no LLM call of its own for routing, and
+// an unlabeled row simply cannot match a query_type rule (matching the
+// classifier here would cost one call per question for a field nothing
+// dispatches on).
+func trajectoryPolicyRule(ctx context.Context, siteCfg chat.SiteConfigReader, q Question) *int {
+	pol := chat.ChatOrchestratorPolicy(ctx, siteCfg)
+	if len(pol) == 0 {
+		return nil
+	}
+	dec := chatpolicy.Decide(pol, PolicySignalsForQuestion(q.QueryType, q), map[string]bool{
+		"drift":            chat.ChatDriftEnabled(ctx, siteCfg),
+		"longcontext":      chat.ChatLongContextEnabled(ctx, siteCfg),
+		"supervisor":       chat.ChatSupervisorEnabled(ctx, siteCfg),
+		"plan_execute":     chat.ChatPlanExecuteEnabled(ctx, siteCfg),
+		"plan_execute_dag": chat.ChatPlanExecuteEnabled(ctx, siteCfg),
+		"agentic":          chat.ChatAgenticEnabled(ctx, siteCfg),
+	})
+	if !dec.Applied {
+		return nil
+	}
+	idx := dec.RuleIndex
+	return &idx
+}
+
 // RunTrajectory runs one question through one orchestrator mode and
 // returns a TrajectoryRecord. The record's `events` slice is populated
 // from the orchestrator's emit callback; `Score` is left nil — the
@@ -82,6 +115,7 @@ type TrajectoryRunDeps struct {
 // results back into Score before persisting).
 func RunTrajectory(ctx context.Context, deps TrajectoryRunDeps, q Question, mode TrajectoryMode) TrajectoryRecord {
 	rec := TrajectoryRecord{QuestionID: q.ID, Mode: string(mode)}
+	rec.PolicyRule = trajectoryPolicyRule(ctx, deps.SiteReader, q)
 	var events []chat.TrajectoryEvent
 	emit := CollectEmit(&events)
 
