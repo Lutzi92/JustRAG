@@ -88,50 +88,25 @@ func main() {
 	pairwisePool := flag.String("pairwise-pool", "", `Wave-5 ruling W5-R1: pool two or more finished --pairwise-out JSONs into ONE win/tie/loss tally, with the win rate, the tie rate and the 95% Wilson interval RECOMPUTED on the pooled decisive pairs (never averaged across runs, which would weight a pair with 4 decisive verdicts like one with 16). Usage: --pairwise-out pooled.json --pairwise-pool a.json b.json — the first path is the flag value, the rest are positional, so EVERY other flag must come BEFORE them (Go's flag parsing stops at the first positional argument; a flag placed after the paths is rejected with an error rather than silently swallowed as a path). Ties stay out of every denominator, as in --pairwise-a/-b. Prints the pooled counts from BOTH sides' view (W5-R1 is stated from side B's) plus a per-input and a per-route pooled table. Reads only files: no retrieval, no judge, no database. Exits 0 on a completed pooling (measurement, not a gate), 2 on a usage error. Pooling assumes every input assigned the SAME configuration to side A — the pairwise JSON carries no report paths, so that cannot be verified here.`)
 	flag.Parse()
 
-	// Diagnostic mode short-circuits before --golden is required: it needs
-	// only a KB and a query.
-	if *printKeywordSQL != "" {
-		if err := validateKeywordSQLFlags(*printKeywordSQLKBID); err != nil {
-			slog.Error("invalid --print-keyword-sql invocation", "error", err)
-			os.Exit(2)
+	// The offline modes (--print-keyword-sql, --pairwise-pool,
+	// --pairwise-a/-b) short-circuit before --golden is required and before
+	// any config/DB setup. runOfflineMode keeps their precedence, their
+	// usage-error/failure exit codes and their "a completed comparison exits
+	// 0 whichever side won" contract; see cmd/eval/offline_modes.go.
+	if handled, code := runOfflineMode(offlineFlags{
+		printKeywordSQL: *printKeywordSQL,
+		kbID:            *printKeywordSQLKBID,
+		topK:            *topK,
+		pairwisePool:    *pairwisePool,
+		poolExtraPaths:  flag.Args(),
+		pairwiseA:       *pairwiseA,
+		pairwiseB:       *pairwiseB,
+		pairwiseOut:     *pairwiseOut,
+		judgeModel:      *judgeModel,
+	}); handled {
+		if code != 0 {
+			os.Exit(code)
 		}
-		if err := runPrintKeywordSQL(*printKeywordSQL, *printKeywordSQLKBID, *topK, os.Stdout); err != nil {
-			slog.Error("--print-keyword-sql failed", "error", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// Pooling short-circuits before --golden and before --pairwise-a/-b:
-	// it reads finished pairwise JSONs and touches neither a golden set
-	// nor the database, so it must not be gated behind the config/DB
-	// setup the judging modes need.
-	if *pairwisePool != "" {
-		poolPaths := append([]string{*pairwisePool}, flag.Args()...)
-		if err := validatePairwisePoolFlags(poolPaths); err != nil {
-			slog.Error("invalid --pairwise-pool invocation", "error", err)
-			os.Exit(2)
-		}
-		if err := runPairwisePoolMode(poolPaths, *pairwiseOut, os.Stdout); err != nil {
-			slog.Error("--pairwise-pool failed", "error", err)
-			os.Exit(1)
-		}
-		// Exit 0 whichever side won: this mode measures, it does not gate.
-		return
-	}
-
-	// Pairwise preference mode short-circuits before --golden as well: it
-	// compares two finished reports and never loads a golden set.
-	if *pairwiseA != "" || *pairwiseB != "" {
-		if err := validatePairwiseFlags(*pairwiseA, *pairwiseB); err != nil {
-			slog.Error("invalid --pairwise invocation", "error", err)
-			os.Exit(2)
-		}
-		if err := runPairwiseMode(*pairwiseA, *pairwiseB, *pairwiseOut, *judgeModel, os.Stdout); err != nil {
-			slog.Error("--pairwise failed", "error", err)
-			os.Exit(1)
-		}
-		// Exit 0 even when report B won: this mode measures, it does not gate.
 		return
 	}
 
@@ -160,62 +135,31 @@ func main() {
 		os.Exit(2)
 	}
 
-	var forceEnumeration *bool
-	switch *enumerationOverride {
-	case "on":
-		b := true
-		forceEnumeration = &b
-	case "off":
-		b := false
-		forceEnumeration = &b
-	case "":
-		// default classifier
-	default:
+	// nil = leave the decision to the classifier.
+	forceEnumeration, ok := parseBoolChoice(*enumerationOverride)
+	if !ok {
 		slog.Error("invalid --enumeration value", "value", *enumerationOverride)
 		os.Exit(2)
 	}
 
-	if *cragOverride != "" && *cragOverride != "on" && *cragOverride != "off" {
-		slog.Error("invalid --crag value", "value", *cragOverride)
+	// One list, checked in the order these flags were checked individually,
+	// so a command line with two bad values still reports the same one.
+	if bad, found := firstInvalidChoice([]choiceFlag{
+		{name: "--crag", value: *cragOverride, allowed: []string{"on", "off"}},
+		{name: "--bm25-mode", value: *bm25ModeOverride, allowed: []string{"ts_rank", "bm25"}},
+		{name: "--longcontext-mode", value: *longContextModeOverride, allowed: []string{"flat", "map_reduce"}},
+		{name: "--longcontext", value: *longContextEnabled, allowed: []string{"on", "off"}},
+		{name: "--bm25-tiered-boost", value: *bm25TieredBoostOverride, allowed: []string{"on", "off"}},
+		{name: "--conflict-surfacing", value: *conflictSurfacing, allowed: []string{"on", "off"}},
+		{name: "--recency-boost", value: *recencyBoostOverride, allowed: []string{"on", "off"}},
+	}); found {
+		slog.Error("invalid "+bad.name+" value", "value", bad.value)
 		os.Exit(2)
 	}
 
-	if *bm25ModeOverride != "" && *bm25ModeOverride != "ts_rank" && *bm25ModeOverride != "bm25" {
-		slog.Error("invalid --bm25-mode value", "value", *bm25ModeOverride)
-		os.Exit(2)
-	}
-	if *longContextModeOverride != "" && *longContextModeOverride != "flat" && *longContextModeOverride != "map_reduce" {
-		slog.Error("invalid --longcontext-mode value", "value", *longContextModeOverride)
-		os.Exit(2)
-	}
-	if *longContextEnabled != "" && *longContextEnabled != "on" && *longContextEnabled != "off" {
-		slog.Error("invalid --longcontext value", "value", *longContextEnabled)
-		os.Exit(2)
-	}
-	if *bm25TieredBoostOverride != "" && *bm25TieredBoostOverride != "on" && *bm25TieredBoostOverride != "off" {
-		slog.Error("invalid --bm25-tiered-boost value", "value", *bm25TieredBoostOverride)
-		os.Exit(2)
-	}
-	if *conflictSurfacing != "" && *conflictSurfacing != "on" && *conflictSurfacing != "off" {
-		slog.Error("invalid --conflict-surfacing value", "value", *conflictSurfacing)
-		os.Exit(2)
-	}
-	if *recencyBoostOverride != "" && *recencyBoostOverride != "on" && *recencyBoostOverride != "off" {
-		slog.Error("invalid --recency-boost value", "value", *recencyBoostOverride)
-		os.Exit(2)
-	}
-
-	var keepRaw *bool
-	switch *keepRawFlag {
-	case "on":
-		b := true
-		keepRaw = &b
-	case "off":
-		b := false
-		keepRaw = &b
-	case "":
-		// nil = read chat_condense_keep_raw_enabled from site_configs
-	default:
+	// nil = read chat_condense_keep_raw_enabled from site_configs.
+	keepRaw, ok := parseBoolChoice(*keepRawFlag)
+	if !ok {
 		slog.Error("invalid --keep-raw value", "value", *keepRawFlag)
 		os.Exit(2)
 	}

@@ -54,10 +54,13 @@ func (c namedCompleter) JudgeModel(context.Context) string { return c.model }
 
 func happyCompleter() *fakeJudgeCompleter {
 	return &fakeJudgeCompleter{
+		// Needles are the JSON shape each system prompt demands, never the
+		// bare word — see fakeJudgeCompleter's doc comment for why
+		// "relevant" alone made this fixture flaky.
 		responses: map[string]string{
-			"claims":   `{"claims":[{"text":"a","supported":true}]}`,
-			"score":    `{"score":5,"reasoning":"perfect"}`,
-			"relevant": `{"relevant":[true]}`,
+			`{"claims"`:   `{"claims":[{"text":"a","supported":true}]}`,
+			`{"score"`:    `{"score":5,"reasoning":"perfect"}`,
+			`{"relevant"`: `{"relevant":[true]}`,
 		},
 	}
 }
