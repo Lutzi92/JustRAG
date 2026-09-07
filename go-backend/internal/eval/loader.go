@@ -2,7 +2,9 @@ package eval
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,28 +13,70 @@ import (
 )
 
 // ParseGoldenSetContent decodes the JSONB content of an eval_golden_sets row
-// into a slice of Questions. Applies the same validation as LoadGoldenSet.
-// Returns an error with a 1-based index into the array when any question fails
-// validation.
+// into a slice of Questions. Accepts either a JSON array (the original
+// shape) or JSONL with '#' comment / blank lines (the shape a file upload
+// carries), sharing ParseGoldenSetJSONL's line parser (W6-R3): the first
+// non-whitespace byte of raw decides which — '[' means array, anything else
+// (including a bare '{' object row) is parsed as JSONL. Applies the same
+// validation as LoadGoldenSet. Returns an error with a 1-based index into
+// the array when any question fails validation on the array path, or a
+// 1-based line number on the JSONL path.
 //
-// Multi-turn rows (turns) are rejected here: ExpandTurns — the only code
-// that replays a conversation row into per-turn Questions with History —
-// is called exclusively by cmd/eval (see cmd/eval/main.go). The DB/admin
-// path this function backs (runner_inproc.go, the admin eval handlers)
-// never calls ExpandTurns, so a turns row saved through the admin UI would
-// otherwise run silently as an empty top-level question instead of the
-// authored conversation. ParseGoldenSetJSONL (the file-upload path
-// cmd/eval itself reads through) keeps accepting turns rows.
+// Multi-turn rows (turns) are rejected here on both shapes: ExpandTurns —
+// the only code that replays a conversation row into per-turn Questions
+// with History — is called exclusively by cmd/eval (see cmd/eval/main.go).
+// The DB/admin path this function backs (runner_inproc.go, the admin eval
+// handlers) never calls ExpandTurns, so a turns row saved through the admin
+// UI would otherwise run silently as an empty top-level question instead of
+// the authored conversation. ParseGoldenSetJSONL itself (the file-upload
+// path cmd/eval reads through directly) keeps accepting turns rows; the
+// rejection here is specific to this function.
 func ParseGoldenSetContent(raw json.RawMessage) ([]Question, error) {
-	var qs []Question
-	if err := json.Unmarshal(raw, &qs); err != nil {
+	trimmed := bytes.TrimLeft(raw, " \t\r\n")
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var qs []Question
+		if err := json.Unmarshal(trimmed, &qs); err != nil {
+			return nil, fmt.Errorf("parse golden set content: %w", err)
+		}
+		if err := rejectTurns(qs); err != nil {
+			return nil, err
+		}
+		return validateContentQuestions(qs)
+	}
+
+	// JSONL (the shape a file upload carries): '#' / blank lines skipped by
+	// the shared line parser, exactly as LoadGoldenSet does for cmd/eval.
+	qs, err := ParseGoldenSetJSONL(bytes.NewReader(raw))
+	if err != nil {
 		return nil, fmt.Errorf("parse golden set content: %w", err)
 	}
+	if len(qs) == 0 {
+		return nil, errors.New("parse golden set content: no questions found (neither a JSON array nor JSONL rows)")
+	}
+	if err := rejectTurns(qs); err != nil {
+		return nil, err
+	}
+	return qs, nil
+}
+
+// rejectTurns errors on the first question carrying turns — see the
+// ParseGoldenSetContent doc comment for why this function (unlike
+// ParseGoldenSetJSONL/LoadGoldenSet) refuses conversation rows outright.
+func rejectTurns(qs []Question) error {
+	for _, q := range qs {
+		if len(q.Turns) > 0 {
+			return fmt.Errorf("question %q: multi-turn rows (turns) are supported only by cmd/eval; the in-app eval runner cannot replay conversations", q.ID)
+		}
+	}
+	return nil
+}
+
+// validateContentQuestions re-validates and de-duplicates an array parsed
+// from the JSON-array shape. ParseGoldenSetJSONL already validates and
+// de-duplicates as it scans, so this is the array-path counterpart.
+func validateContentQuestions(qs []Question) ([]Question, error) {
 	seen := make(map[string]int, len(qs))
 	for i, q := range qs {
-		if len(q.Turns) > 0 {
-			return nil, fmt.Errorf("question %q: multi-turn rows (turns) are supported only by cmd/eval; the in-app eval runner cannot replay conversations", q.ID)
-		}
 		if err := validateQuestion(q); err != nil {
 			return nil, fmt.Errorf("validate question %d: %w", i+1, err)
 		}
