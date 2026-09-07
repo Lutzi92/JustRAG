@@ -210,7 +210,13 @@ func TestContextPrecision_PadsMissingBooleansWithWarning(t *testing.T) {
 }
 
 func TestContextPrecision_UnparseableJSONErrors(t *testing.T) {
-	j := NewJudge(&scriptedCompleter{responses: []string{`not json`}})
+	// A single scripted response that fails to decode now triggers W6-R4's
+	// bounded retry (any unmarshalStrict failure, not just a
+	// brace-balanced-but-invalid object) — the retry's own call then runs
+	// out of scripted responses and fails too, so the retry was genuinely
+	// ATTEMPTED and the warning (N7) is expected here, not nil.
+	completer := &scriptedCompleter{responses: []string{`not json`}}
+	j := NewJudge(completer)
 	q := Question{ID: "q", Question: "why?", Language: "en"}
 	contents := []string{"c1", "c2", "c3"}
 
@@ -221,8 +227,11 @@ func TestContextPrecision_UnparseableJSONErrors(t *testing.T) {
 	if got != 0 {
 		t.Errorf("expected 0 on error, got %f", got)
 	}
-	if warnings != nil {
-		t.Errorf("expected nil warnings on error, got %v", warnings)
+	if len(warnings) != 1 || warnings[0] != "retry:context_precision" {
+		t.Errorf("expected [retry:context_precision] (a retry was attempted), got %v", warnings)
+	}
+	if completer.invocations != 2 {
+		t.Errorf("expected exactly 2 calls (the retry), got %d", completer.invocations)
 	}
 }
 
@@ -286,7 +295,11 @@ func TestCoverage_PadsMissingBooleansWithWarning(t *testing.T) {
 }
 
 func TestCoverage_UnparseableJSONErrors(t *testing.T) {
-	j := NewJudge(&scriptedCompleter{responses: []string{`not json`}})
+	// Same reasoning as TestContextPrecision_UnparseableJSONErrors: the
+	// single-response fixture now exercises the bounded retry rather than a
+	// single unretried failure, so a retry warning (N7) is expected.
+	completer := &scriptedCompleter{responses: []string{`not json`}}
+	j := NewJudge(completer)
 	q := Question{ID: "q", Question: "why?", Language: "en", ExpectedPoints: []string{"a"}}
 
 	got, warnings, err := j.coverage(context.Background(), q, "answer")
@@ -296,8 +309,11 @@ func TestCoverage_UnparseableJSONErrors(t *testing.T) {
 	if got != 0 {
 		t.Errorf("expected 0 on error, got %f", got)
 	}
-	if warnings != nil {
-		t.Errorf("expected nil warnings on error, got %v", warnings)
+	if len(warnings) != 1 || warnings[0] != "retry:coverage" {
+		t.Errorf("expected [retry:coverage] (a retry was attempted), got %v", warnings)
+	}
+	if completer.invocations != 2 {
+		t.Errorf("expected exactly 2 calls (the retry), got %d", completer.invocations)
 	}
 }
 
@@ -455,12 +471,17 @@ func TestFaithfulnessRetry_InvalidTwiceFailsAfterOneRetry(t *testing.T) {
 	j := NewJudge(completer)
 	q := Question{ID: "q", Question: "why?", Language: "en"}
 
-	_, _, err := j.faithfulness(context.Background(), q, "answer", "context")
+	_, warnings, err := j.faithfulness(context.Background(), q, "answer", "context")
 	if err == nil {
 		t.Fatal("expected an error")
 	}
 	if !strings.Contains(err.Error(), "after retry") {
 		t.Errorf("expected error to mention 'after retry', got %v", err)
+	}
+	// N7: a retry was ATTEMPTED even though it then failed too, so the
+	// warning must still be present alongside the "after retry" error.
+	if len(warnings) != 1 || warnings[0] != "retry:faithfulness" {
+		t.Errorf("expected [retry:faithfulness] alongside the error, got %v", warnings)
 	}
 	if completer.invocations != 2 {
 		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.invocations)
@@ -547,12 +568,15 @@ func TestAnswerRelevanceRetry_InvalidTwiceFailsAfterOneRetry(t *testing.T) {
 	j := NewJudge(completer)
 	q := Question{ID: "q", Question: "why?", Language: "en"}
 
-	_, _, err := j.answerRelevance(context.Background(), q, "answer")
+	_, warnings, err := j.answerRelevance(context.Background(), q, "answer")
 	if err == nil {
 		t.Fatal("expected an error")
 	}
 	if !strings.Contains(err.Error(), "after retry") {
 		t.Errorf("expected error to mention 'after retry', got %v", err)
+	}
+	if len(warnings) != 1 || warnings[0] != "retry:answer_relevance" {
+		t.Errorf("expected [retry:answer_relevance] alongside the error, got %v", warnings)
 	}
 	if completer.invocations != 2 {
 		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.invocations)
@@ -669,12 +693,15 @@ func TestCoverageRetry_InvalidTwiceFailsAfterOneRetry(t *testing.T) {
 	j := NewJudge(completer)
 	q := Question{ID: "q", Question: "why?", Language: "en", ExpectedPoints: []string{"p1"}}
 
-	_, _, err := j.coverage(context.Background(), q, "answer")
+	_, warnings, err := j.coverage(context.Background(), q, "answer")
 	if err == nil {
 		t.Fatal("expected an error")
 	}
 	if !strings.Contains(err.Error(), "after retry") {
 		t.Errorf("expected error to mention 'after retry', got %v", err)
+	}
+	if len(warnings) != 1 || warnings[0] != "retry:coverage" {
+		t.Errorf("expected [retry:coverage] alongside the error, got %v", warnings)
 	}
 	if completer.invocations != 2 {
 		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.invocations)
@@ -738,12 +765,15 @@ func TestContextPrecisionRetry_InvalidTwiceFailsAfterOneRetry(t *testing.T) {
 	q := Question{ID: "q", Question: "why?", Language: "en"}
 	contents := []string{"c1"}
 
-	_, _, err := j.contextPrecision(context.Background(), q, contents)
+	_, warnings, err := j.contextPrecision(context.Background(), q, contents)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
 	if !strings.Contains(err.Error(), "after retry") {
 		t.Errorf("expected error to mention 'after retry', got %v", err)
+	}
+	if len(warnings) != 1 || warnings[0] != "retry:context_precision" {
+		t.Errorf("expected [retry:context_precision] alongside the error, got %v", warnings)
 	}
 	if completer.invocations != 2 {
 		t.Errorf("expected exactly 2 calls (never 3), got %d", completer.invocations)
@@ -779,14 +809,25 @@ func TestJudgeEvaluate_FaithfulnessRetryFailureRecordsErrorWithAfterRetry(t *tes
 
 	got := NewJudge(completer).Evaluate(context.Background(), q, "answer", chunks, contents)
 
-	found := false
+	foundError := false
 	for _, e := range got.JudgeErrors {
 		if strings.HasPrefix(e, "faithfulness:") && strings.Contains(e, "after retry") {
-			found = true
+			foundError = true
 		}
 	}
-	if !found {
+	if !foundError {
 		t.Errorf("expected a faithfulness error containing 'after retry', got %v", got.JudgeErrors)
+	}
+	// N7: the retry warning must be present alongside the error — a retry
+	// was attempted (and failed), which is different from "no retry".
+	foundWarning := false
+	for _, w := range got.JudgeWarnings {
+		if w == "retry:faithfulness" {
+			foundWarning = true
+		}
+	}
+	if !foundWarning {
+		t.Errorf("expected JudgeWarnings to contain retry:faithfulness alongside the error, got %v", got.JudgeWarnings)
 	}
 }
 

@@ -96,12 +96,16 @@ func (j *Judge) faithfulness(ctx context.Context, q Question, answer, contextTex
 		} `json:"claims"`
 	}
 	retried, err := j.completeJSON(ctx, "faithfulness", user, sys, q.Language, &parsed)
-	if err != nil {
-		return 0, nil, err
-	}
+	// Built before the error return (N7): a retry happened whenever
+	// completeJSON's first attempt failed to decode, regardless of whether
+	// the retry itself then succeeded or failed too — "retry:<metric>"
+	// means "a retry was attempted", not "the retry worked".
 	var warnings []string
 	if retried {
 		warnings = append(warnings, "retry:faithfulness")
+	}
+	if err != nil {
+		return 0, warnings, err
 	}
 	if len(parsed.Claims) == 0 {
 		return 1.0, warnings, nil
@@ -195,13 +199,18 @@ func (j *Judge) contextPrecision(ctx context.Context, q Question, contents []str
 		Relevant []bool `json:"relevant"`
 	}
 	retried, err := j.completeJSON(ctx, "context_precision", user, sys, q.Language, &parsed)
-	if err != nil {
-		return 0, nil, err
-	}
-	relevant, warnings := alignBooleans("context_precision", parsed.Relevant, len(contents))
+	// Built before the error return (N7): "retry:<metric>" means a retry was
+	// attempted, independent of whether it (or the downstream alignment
+	// below) then succeeded.
+	var warnings []string
 	if retried {
 		warnings = append(warnings, "retry:context_precision")
 	}
+	if err != nil {
+		return 0, warnings, err
+	}
+	relevant, alignWarnings := alignBooleans("context_precision", parsed.Relevant, len(contents))
+	warnings = append(warnings, alignWarnings...)
 	relevantCount := 0
 	for _, r := range relevant {
 		if r {
@@ -231,13 +240,18 @@ func (j *Judge) coverage(ctx context.Context, q Question, answer string) (float6
 		Covered []bool `json:"covered"`
 	}
 	retried, err := j.completeJSON(ctx, "coverage", user, sys, q.Language, &parsed)
-	if err != nil {
-		return 0, nil, err
-	}
-	covered, warnings := alignBooleans("coverage", parsed.Covered, len(points))
+	// Built before the error return (N7): "retry:<metric>" means a retry was
+	// attempted, independent of whether it (or the downstream alignment
+	// below) then succeeded.
+	var warnings []string
 	if retried {
 		warnings = append(warnings, "retry:coverage")
 	}
+	if err != nil {
+		return 0, warnings, err
+	}
+	covered, alignWarnings := alignBooleans("coverage", parsed.Covered, len(points))
+	warnings = append(warnings, alignWarnings...)
 	coveredCount := 0
 	for _, c := range covered {
 		if c {
