@@ -106,26 +106,64 @@ export function validatePolicyJSON(raw: string): { rules: PolicyRule[]; errors: 
                         errors.push(`rule ${i}: unknown when field "${k}"`);
                     }
                 }
-                if (Array.isArray(rawWhen.query_type)) {
-                    when.query_type = rawWhen.query_type as string[];
-                    for (const qt of when.query_type) {
-                        if (!(QUERY_TYPES as readonly string[]).includes(qt)) {
-                            errors.push(`rule ${i}: unknown query_type "${qt}" (known: ${QUERY_TYPES.join(', ')})`);
+                if (rawWhen.query_type !== undefined) {
+                    if (!Array.isArray(rawWhen.query_type) || !rawWhen.query_type.every(v => typeof v === 'string')) {
+                        errors.push(`rule ${i}: query_type must be an array of strings`);
+                    } else {
+                        when.query_type = rawWhen.query_type as string[];
+                        for (const qt of when.query_type) {
+                            if (!(QUERY_TYPES as readonly string[]).includes(qt)) {
+                                errors.push(`rule ${i}: unknown query_type "${qt}" (known: ${QUERY_TYPES.join(', ')})`);
+                            }
                         }
                     }
                 }
-                if (typeof rawWhen.global_synthesis === 'boolean') when.global_synthesis = rawWhen.global_synthesis;
-                if (typeof rawWhen.enumeration === 'boolean') when.enumeration = rawWhen.enumeration;
-                if (typeof rawWhen.recency_listing === 'boolean') when.recency_listing = rawWhen.recency_listing;
-                if (typeof rawWhen.has_file_selection === 'boolean') when.has_file_selection = rawWhen.has_file_selection;
-                if (typeof rawWhen.history_turns_gte === 'number') when.history_turns_gte = rawWhen.history_turns_gte;
-                if (Array.isArray(rawWhen.kb_ids)) {
-                    when.kb_ids = rawWhen.kb_ids as string[];
-                    when.kb_ids.forEach((id, j) => {
-                        if (typeof id !== 'string' || id.trim() === '') {
-                            errors.push(`rule ${i}: kb_ids[${j}] must not be empty`);
-                        }
-                    });
+                if (rawWhen.global_synthesis !== undefined) {
+                    if (typeof rawWhen.global_synthesis !== 'boolean') {
+                        errors.push(`rule ${i}: global_synthesis must be a boolean`);
+                    } else {
+                        when.global_synthesis = rawWhen.global_synthesis;
+                    }
+                }
+                if (rawWhen.enumeration !== undefined) {
+                    if (typeof rawWhen.enumeration !== 'boolean') {
+                        errors.push(`rule ${i}: enumeration must be a boolean`);
+                    } else {
+                        when.enumeration = rawWhen.enumeration;
+                    }
+                }
+                if (rawWhen.recency_listing !== undefined) {
+                    if (typeof rawWhen.recency_listing !== 'boolean') {
+                        errors.push(`rule ${i}: recency_listing must be a boolean`);
+                    } else {
+                        when.recency_listing = rawWhen.recency_listing;
+                    }
+                }
+                if (rawWhen.has_file_selection !== undefined) {
+                    if (typeof rawWhen.has_file_selection !== 'boolean') {
+                        errors.push(`rule ${i}: has_file_selection must be a boolean`);
+                    } else {
+                        when.has_file_selection = rawWhen.has_file_selection;
+                    }
+                }
+                if (rawWhen.history_turns_gte !== undefined) {
+                    if (typeof rawWhen.history_turns_gte !== 'number' || !Number.isInteger(rawWhen.history_turns_gte) || rawWhen.history_turns_gte < 0) {
+                        errors.push(`rule ${i}: history_turns_gte must be a non-negative integer`);
+                    } else {
+                        when.history_turns_gte = rawWhen.history_turns_gte;
+                    }
+                }
+                if (rawWhen.kb_ids !== undefined) {
+                    if (!Array.isArray(rawWhen.kb_ids) || !rawWhen.kb_ids.every(v => typeof v === 'string')) {
+                        errors.push(`rule ${i}: kb_ids must be an array of strings`);
+                    } else {
+                        when.kb_ids = rawWhen.kb_ids as string[];
+                        when.kb_ids.forEach((id, j) => {
+                            if (id.trim() === '') {
+                                errors.push(`rule ${i}: kb_ids[${j}] must not be empty`);
+                            }
+                        });
+                    }
                 }
             }
         }

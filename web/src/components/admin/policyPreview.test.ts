@@ -101,6 +101,51 @@ describe('validatePolicyJSON', () => {
         const { errors } = validatePolicyJSON(JSON.stringify([{ when: { kb_ids: [''] }, orchestrator: 'standard', mode: 'force' }]));
         expect(errors.length).toBeGreaterThan(0);
     });
+
+    // Every `when.*` field must be type-checked and rejected on the wrong
+    // JSON type instead of being silently dropped (which would validate the
+    // rule as if the condition were absent — matching everything on that
+    // axis, a routing change the operator did not ask for). Mirrors Go's
+    // DisallowUnknownFields + strict struct-field typing in policy.go.
+    it('rejects query_type given as a string instead of an array', () => {
+        const { errors } = validatePolicyJSON(JSON.stringify([{ when: { query_type: 'lookup' }, orchestrator: 'standard', mode: 'force' }]));
+        expect(errors.some(e => /query_type/i.test(e))).toBe(true);
+    });
+
+    it('rejects global_synthesis given as a string instead of a boolean', () => {
+        const { errors } = validatePolicyJSON(JSON.stringify([{ when: { global_synthesis: 'true' }, orchestrator: 'standard', mode: 'force' }]));
+        expect(errors.some(e => /global_synthesis/i.test(e))).toBe(true);
+    });
+
+    it('rejects enumeration given as a string instead of a boolean', () => {
+        const { errors } = validatePolicyJSON(JSON.stringify([{ when: { enumeration: 'true' }, orchestrator: 'standard', mode: 'force' }]));
+        expect(errors.some(e => /enumeration/i.test(e))).toBe(true);
+    });
+
+    it('rejects recency_listing given as a string instead of a boolean', () => {
+        const { errors } = validatePolicyJSON(JSON.stringify([{ when: { recency_listing: 'true' }, orchestrator: 'standard', mode: 'force' }]));
+        expect(errors.some(e => /recency_listing/i.test(e))).toBe(true);
+    });
+
+    it('rejects has_file_selection given as a string instead of a boolean', () => {
+        const { errors } = validatePolicyJSON(JSON.stringify([{ when: { has_file_selection: 'true' }, orchestrator: 'standard', mode: 'force' }]));
+        expect(errors.some(e => /has_file_selection/i.test(e))).toBe(true);
+    });
+
+    it('rejects history_turns_gte given as a non-integer number', () => {
+        const { errors } = validatePolicyJSON(JSON.stringify([{ when: { history_turns_gte: 1.5 }, orchestrator: 'standard', mode: 'force' }]));
+        expect(errors.some(e => /history_turns_gte/i.test(e))).toBe(true);
+    });
+
+    it('rejects history_turns_gte given as a negative integer', () => {
+        const { errors } = validatePolicyJSON(JSON.stringify([{ when: { history_turns_gte: -1 }, orchestrator: 'standard', mode: 'force' }]));
+        expect(errors.some(e => /history_turns_gte/i.test(e))).toBe(true);
+    });
+
+    it('rejects kb_ids given as a string instead of an array', () => {
+        const { errors } = validatePolicyJSON(JSON.stringify([{ when: { kb_ids: 'kb-1' }, orchestrator: 'standard', mode: 'force' }]));
+        expect(errors.some(e => /kb_ids/i.test(e))).toBe(true);
+    });
 });
 
 describe('validateToolsByRouteJSON', () => {
