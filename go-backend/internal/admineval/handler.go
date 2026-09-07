@@ -105,7 +105,6 @@ var snapshotConfigKeys = []string{
 	// search code falls back to defaults (arm disabled, entity alpha
 	// inherits). A live eval would silently run with the prototype off.
 	"bm25_simple_arm_enabled",
-	"bm25_tiered_boost_enabled",
 	// Wave-2 Task 6: BM25 scoring mode (ts_rank | bm25) + its k1/b
 	// parameters. Same reasoning as the pair above — without these in
 	// the snapshot, an eval run silently measures ts_rank even when the

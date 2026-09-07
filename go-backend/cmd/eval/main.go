@@ -75,7 +75,6 @@ func main() {
 	regressMRRPP := flag.Float64("regress-mrr-pp", eval.DefaultRegressionThresholds.MRRPP, "Max tolerated MRR drop vs --baseline, in percentage points.")
 	refreshBM25Stats := flag.Bool("refresh-bm25-stats", false, "Before running, recompute BM25 statistics (vector.BM25StatsRefresher.RefreshKB) for every KB referenced by the golden set, across every dim table that has rows for that KB, so an A/B never runs against missing/stale stats.")
 	bm25ModeOverride := flag.String("bm25-mode", "", `Wave-2 Task 6 / ruling W2-R10: per-run override for bm25_scoring_mode ("ts_rank" | "bm25"). Empty = read the live site_config. Applied the same way as --rerank-blend-alpha (wraps the vector-layer site-config reader; no site_configs mutation) — combine with --refresh-bm25-stats when testing "bm25" against a golden set whose KBs haven't had a stats refresh yet.`)
-	bm25TieredBoostOverride := flag.String("bm25-tiered-boost", "", `Per-run override for bm25_tiered_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-mode.`)
 	longContextModeOverride := flag.String("longcontext-mode", "", `Wave-3 ruling W3-R6: per-run override for chat_longcontext_mode ("flat" | "map_reduce") — which consumer the OrchLongContext orchestrator uses. Empty = read the live site_config (whose default is "map_reduce" since Wave 5 / W5-R1; an unrecognised stored value normalises to "flat"). This is a CHAT-layer key, so it wraps siteReader like --crag (not the vector-layer overlay). Only has an effect when chat_longcontext_enabled is on and the question trips the global-synthesis classifier.`)
 	longContextEnabled := flag.String("longcontext", "", `Wave-3 ruling W3-R5: per-run override for chat_longcontext_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext-mode. "on" puts OrchLongContext at the top of the eval orchestrator ladder for questions the global-synthesis classifier accepts, so a global-synthesis golden set can be measured without mutating site_configs.`)
 	conflictSurfacing := flag.String("conflict-surfacing", "", `Wave-5 ruling W5-R7: per-run override for chat_conflict_surfacing_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext. "on" makes every turn whose assembled set spans >= 2 distinct files run the fast-tier conflict / supersession pass, and records the resulting report per question as "conflicts" in the JSON report (the same bare array a chat turn persists and streams). Effective on the standard PrepareChatContext path and, under --orchestrator-dispatch, on the Supervisor path.`)
@@ -83,8 +82,8 @@ func main() {
 	var chatOverlayFlags chatOverlayFlag
 	flag.Var(&chatOverlayFlags, "chat-overlay", `Wave-6 W6-R18: per-run override of ONE chat-layer site_config key (the reader PrepareChatContext and the orchestrators receive), applied through the same overlay as --conflict-surfacing; repeatable; key must be non-empty and contain no '='; only keys read through the chat-layer reader are affected — vector-layer keys keep their own flags.`)
 	goldenQueryType := flag.Bool("golden-query-type", false, `Forward each golden row's curated "query_type" label into the retrieval pipeline (chat.ChatContextParams.QueryType) instead of letting the pipeline classify the question. Default false so existing --production-context reports keep their historical shape. Does NOT affect orchestrator dispatch, which classifies independently — if a question does not reach the intended orchestrator, rewrite the question, not the label.`)
-	recencyBoostOverride := flag.String("recency-boost", "", `Wave 2 Task 8: per-run override for recency_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-tiered-boost (a vector-layer key, applied via the searchReader overlay, not the chat-level siteReader). Lets the CERT recency fixture A/B the recency prior without a site_configs mutation.`)
-	printKeywordSQL := flag.String("print-keyword-sql", "", `Diagnostic mode (Wave-3 Task 7): print the keyword arm's SQL for this query — for BOTH scoring modes (ts_rank and bm25), with the KB's real resolved settings (chunk table, text-search config, simple arm, tiered boost, k1/b, dim-keyed stats tables) — as one JSON document on stdout, then exit 0. Requires --kb-id. Runs no search, no LLM call, and needs no golden set; --top-k sets the statement's LIMIT (pass 50 to match the legacy pre-rerank candidate depth the keyword arm actually runs with at top-k 10 with a reranker; a non-positive value falls back to 50). Each mode carries both the parameterised SQL and an "executable_sql" with the placeholders inlined, so it can be handed straight to EXPLAIN (ANALYZE, BUFFERS).`)
+	recencyBoostOverride := flag.String("recency-boost", "", `Wave 2 Task 8: per-run override for recency_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-mode (a vector-layer key, applied via the searchReader overlay, not the chat-level siteReader). Lets the CERT recency fixture A/B the recency prior without a site_configs mutation.`)
+	printKeywordSQL := flag.String("print-keyword-sql", "", `Diagnostic mode (Wave-3 Task 7): print the keyword arm's SQL for this query — for BOTH scoring modes (ts_rank and bm25), with the KB's real resolved settings (chunk table, text-search config, simple arm, k1/b, dim-keyed stats tables) — as one JSON document on stdout, then exit 0. Requires --kb-id. Runs no search, no LLM call, and needs no golden set; --top-k sets the statement's LIMIT (pass 50 to match the legacy pre-rerank candidate depth the keyword arm actually runs with at top-k 10 with a reranker; a non-positive value falls back to 50). Each mode carries both the parameterised SQL and an "executable_sql" with the placeholders inlined, so it can be handed straight to EXPLAIN (ANALYZE, BUFFERS).`)
 	printKeywordSQLKBID := flag.String("kb-id", "", "KB id for --print-keyword-sql. Ignored in every other mode (the golden set carries its own kb_id per question).")
 	pairwiseA := flag.String("pairwise-a", "", `Offline pairwise preference mode (ruling W4-R4), side A: path to a judged eval report (a run made with --judge, so every question carries judge.answer). Requires --pairwise-b. Compares the two reports' persisted answers question by question with an LLM preference judge — every pair judged TWICE with the positions swapped, counting a win only when both orders agree (position debias); pairs the judge flips on are ties. Prints win/tie/loss counts, the win rate with a 95% Wilson interval, a per-route breakdown and a per-question table. Runs no retrieval and generates no answers; short-circuits before --golden and always exits 0 on a completed comparison (measurement, not a gate). --judge-model selects the judge.`)
 	pairwiseB := flag.String("pairwise-b", "", "Pairwise preference mode, side B: the report compared against --pairwise-a. The reported win rate is A's — a win rate below 0.5 means B produced the better answers.")
@@ -153,7 +152,6 @@ func main() {
 		{name: "--bm25-mode", value: *bm25ModeOverride, allowed: []string{"ts_rank", "bm25"}},
 		{name: "--longcontext-mode", value: *longContextModeOverride, allowed: []string{"flat", "map_reduce"}},
 		{name: "--longcontext", value: *longContextEnabled, allowed: []string{"on", "off"}},
-		{name: "--bm25-tiered-boost", value: *bm25TieredBoostOverride, allowed: []string{"on", "off"}},
 		{name: "--conflict-surfacing", value: *conflictSurfacing, allowed: []string{"on", "off"}},
 		{name: "--recency-boost", value: *recencyBoostOverride, allowed: []string{"on", "off"}},
 	}); found {
@@ -311,17 +309,14 @@ func main() {
 	if *rrfWeightBM25Override >= 0 {
 		overlays["rrf_weight_bm25"] = strconv.FormatFloat(*rrfWeightBM25Override, 'f', -1, 64)
 	}
-	// bm25_scoring_mode / bm25_tiered_boost_enabled are internal/vector
-	// site_config keys (read via KBVectorConfig, not chat.SiteConfigReader),
+	// bm25_scoring_mode is an internal/vector site_config key (read via
+	// KBVectorConfig, not chat.SiteConfigReader),
 	// so they go through the same searchReader overlay as the rerank/RRF
 	// knobs above rather than the chat-level cragOverrideReader pattern —
 	// wrapping siteReader would have no effect on vector.SearchService's
 	// mode resolution.
 	if *bm25ModeOverride != "" {
 		overlays["bm25_scoring_mode"] = *bm25ModeOverride
-	}
-	if *bm25TieredBoostOverride != "" {
-		overlays["bm25_tiered_boost_enabled"] = strconv.FormatBool(*bm25TieredBoostOverride == "on")
 	}
 	if *recencyBoostOverride != "" {
 		overlays["recency_boost_enabled"] = strconv.FormatBool(*recencyBoostOverride == "on")

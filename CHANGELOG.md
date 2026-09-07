@@ -381,6 +381,35 @@ one-step rollback** (`cmd/migrate` is up-only).
 - **CI's integration-test package list gained `internal/adminagentmetrics`.**
   The step enumerates packages explicitly rather than globbing, and the
   new `policy_rule` integration test needed adding.
+- **Migration 0074 required; `bm25_tiered_boost_enabled` is removed.** The
+  key, its per-KB registry row, the keyword-arm CASE it rendered, the
+  `--bm25-tiered-boost` eval override and the admin checkbox are all gone.
+  0074 deletes any stored row from `site_configs` and `kb_site_configs`; its
+  Down is deliberately a no-op. The key shipped default **off** and was
+  deprecated in 2026-09 after the Wave-3 A/B measured it net negative on
+  every route under `ts_rank` and neutral under `bm25`
+  (`eval/golden/bm25-retune.acceptance.md`), so a deployment that left it
+  unset sees no ranking change at all — a deployment that had it **on**
+  loses that boost and its ranking changes on upgrade. As with every
+  migration-carrying release there is no one-step rollback.
+- **`cmd/eval --print-keyword-sql`'s JSON lost its `tiered_boost` field.**
+  A documented diagnostic output shape change; the rendered statements also
+  no longer carry the `* <boost>` factor (it was the constant `1` with the
+  boost off, so scores are unchanged). `eval/fixtures/bm25-scale/time-keyword-sql.sh`
+  reads only `executable_sql` and is unaffected.
+
+### Removed
+
+- **`bm25_tiered_boost_enabled` (deprecated 2026-09, Wave 3).** Removed end
+  to end: `siteconfig.kbConfigRegistry`, `vector.KBVectorConfig.BM25TieredBoost`
+  and its site-config parser, `buildBoostExpr` plus the CASE in both keyword
+  scoring modes, the `keyword_arm`/`keywordSQLInput` plumbing,
+  `keyword_sql_print.go`'s `tiered_boost` JSON field,
+  `cmd/eval --bm25-tiered-boost`, `admineval.snapshotConfigKeys`,
+  `pipeline/nodes.go`, the AdminAgentTab checkbox and its two translation
+  keys. Migration 0074 deletes the stored rows. The measurement that retired
+  it stays in `eval/golden/bm25-retune.acceptance.md` and
+  `docs/retrieval.md`.
 
 ### Fixes
 

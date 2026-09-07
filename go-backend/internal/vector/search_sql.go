@@ -314,7 +314,6 @@ func (s *SearchService) runKeywordSearch(
 		FileIDs:        fileIDs,
 		Limit:          limit,
 		SimpleArm:      arm.SimpleArm,
-		TieredBoost:    arm.TieredBoost,
 		NodeKindFilter: nodeKindFilter,
 		Mode:           mode,
 		Dim:            arm.Dim,

@@ -289,19 +289,6 @@ type KBVectorConfig struct {
 	// Default 0.1. Only applied when the chat layer supplies BridgeChunks.
 	BridgeBoostWeight float64
 
-	// BM25TieredBoost gates a multiplicative ranking adjustment in the BM25
-	// keyword arm: chunks matching the strict (AND-required) websearch
-	// form score ×100, chunks matching only the OR-tokens recall floor
-	// (or proper-noun fallback) score ×10. Single-token queries — where
-	// `composed` collapses to `websearchClause` alone — are unaffected
-	// because every match satisfies the strict form, yielding a uniform
-	// scale that re-normalises out at the RRF stage. Phrases-only queries
-	// (no remainder) skip the boost entirely (no websearch group exists).
-	// External validation reported +7.5% NDCG; flip on after onsite
-	// golden-set eval. Off by default. Tunable via
-	// "bm25_tiered_boost_enabled".
-	BM25TieredBoost bool
-
 	// BM25ScoringMode selects how the keyword arm scores candidate chunks:
 	// "ts_rank" (default, byte-identical to pre-Task-6 behaviour — term
 	// frequency only, via Postgres's built-in ts_rank()) or "bm25" (real

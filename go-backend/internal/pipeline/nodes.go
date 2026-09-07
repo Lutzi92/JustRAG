@@ -172,7 +172,6 @@ var nodes = []NodeSpec{
 			"hnsw_ef_search",
 			"rag_fusion_enabled",
 			"bm25_simple_arm_enabled",
-			"bm25_tiered_boost_enabled",
 			"bm25_scoring_mode",
 			"bm25_k1",
 			"bm25_b",

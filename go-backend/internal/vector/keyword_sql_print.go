@@ -49,16 +49,15 @@ type RenderedKeywordSQL struct {
 // KeywordSQLDiagnostics is the full resolved picture for one (KB, query):
 // the settings the keyword arm would run under plus both modes' statements.
 type KeywordSQLDiagnostics struct {
-	KBID        string  `json:"kb_id"`
-	Query       string  `json:"query"`
-	TableName   string  `json:"table"`
-	Dim         int     `json:"dim"`
-	PgConfig    string  `json:"pg_config"`
-	Limit       int     `json:"limit"`
-	SimpleArm   bool    `json:"simple_arm"`
-	TieredBoost bool    `json:"tiered_boost"`
-	K1          float64 `json:"k1"`
-	B           float64 `json:"b"`
+	KBID      string  `json:"kb_id"`
+	Query     string  `json:"query"`
+	TableName string  `json:"table"`
+	Dim       int     `json:"dim"`
+	PgConfig  string  `json:"pg_config"`
+	Limit     int     `json:"limit"`
+	SimpleArm bool    `json:"simple_arm"`
+	K1        float64 `json:"k1"`
+	B         float64 `json:"b"`
 	// ConfiguredMode is the mode this deployment would actually use
 	// (before the per-query stats-availability fallback). Both modes are
 	// rendered regardless — this records which one is live.
@@ -98,16 +97,15 @@ func (s *SearchService) RenderKeywordArmSQL(ctx context.Context, kbID, query str
 	dim := dimFromTableName(tableName)
 
 	in := keywordSQLInput{
-		TableName:   tableName,
-		Query:       query,
-		KbID:        kbID,
-		PgConfig:    pgConfig,
-		Limit:       limit,
-		SimpleArm:   cfg.BM25SimpleArmEnabled,
-		TieredBoost: cfg.BM25TieredBoost,
-		Dim:         dim,
-		K1:          cfg.BM25K1,
-		B:           cfg.BM25B,
+		TableName: tableName,
+		Query:     query,
+		KbID:      kbID,
+		PgConfig:  pgConfig,
+		Limit:     limit,
+		SimpleArm: cfg.BM25SimpleArmEnabled,
+		Dim:       dim,
+		K1:        cfg.BM25K1,
+		B:         cfg.BM25B,
 	}
 
 	return KeywordSQLDiagnostics{
@@ -118,7 +116,6 @@ func (s *SearchService) RenderKeywordArmSQL(ctx context.Context, kbID, query str
 		PgConfig:       pgConfig,
 		Limit:          limit,
 		SimpleArm:      in.SimpleArm,
-		TieredBoost:    in.TieredBoost,
 		K1:             in.K1,
 		B:              in.B,
 		ConfiguredMode: cfg.BM25ScoringMode,
