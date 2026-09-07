@@ -124,16 +124,16 @@ func TestChatOverlayReader_LongContextEnabledOverride(t *testing.T) {
 // fails this test (an empty overlay entry would pin the key to the zero
 // value instead of delegating).
 func TestBuildChatOverlays_EmptyFlagsLeaveOverlayEmpty(t *testing.T) {
-	if got := buildChatOverlays("", "", ""); len(got) != 0 {
-		t.Fatalf("buildChatOverlays(\"\", \"\", \"\") = %v, want empty map", got)
+	if got := buildChatOverlays("", "", "", nil); len(got) != 0 {
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"\", nil) = %v, want empty map", got)
 	}
-	got := buildChatOverlays("on", "", "")
+	got := buildChatOverlays("on", "", "", nil)
 	if len(got) != 1 || got["chat_longcontext_enabled"] != "true" {
-		t.Fatalf("buildChatOverlays(\"on\", \"\", \"\") = %v, want only chat_longcontext_enabled=true", got)
+		t.Fatalf("buildChatOverlays(\"on\", \"\", \"\", nil) = %v, want only chat_longcontext_enabled=true", got)
 	}
-	got = buildChatOverlays("off", "flat", "")
+	got = buildChatOverlays("off", "flat", "", nil)
 	if got["chat_longcontext_enabled"] != "false" || got["chat_longcontext_mode"] != "flat" {
-		t.Fatalf("buildChatOverlays(\"off\", \"flat\", \"\") = %v", got)
+		t.Fatalf("buildChatOverlays(\"off\", \"flat\", \"\", nil) = %v", got)
 	}
 }
 
@@ -145,24 +145,85 @@ func TestBuildChatOverlays_EmptyFlagsLeaveOverlayEmpty(t *testing.T) {
 // Mutation: dropping the conflict arm from buildChatOverlays (so "on"
 // produces an empty overlay) fails this test.
 func TestBuildChatOverlays_ConflictSurfacing(t *testing.T) {
-	got := buildChatOverlays("", "", "on")
+	got := buildChatOverlays("", "", "on", nil)
 	if len(got) != 1 || got["chat_conflict_surfacing_enabled"] != "true" {
-		t.Fatalf("buildChatOverlays(\"\", \"\", \"on\") = %v, want only chat_conflict_surfacing_enabled=true", got)
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"on\", nil) = %v, want only chat_conflict_surfacing_enabled=true", got)
 	}
-	got = buildChatOverlays("", "", "off")
+	got = buildChatOverlays("", "", "off", nil)
 	if len(got) != 1 || got["chat_conflict_surfacing_enabled"] != "false" {
-		t.Fatalf("buildChatOverlays(\"\", \"\", \"off\") = %v, want only chat_conflict_surfacing_enabled=false", got)
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"off\", nil) = %v, want only chat_conflict_surfacing_enabled=false", got)
 	}
 	// An unrecognised value contributes nothing (the CLI rejects it before
 	// this point; the map must not invent a value either way).
-	if got := buildChatOverlays("", "", "maybe"); len(got) != 0 {
-		t.Fatalf("buildChatOverlays(\"\", \"\", \"maybe\") = %v, want empty map", got)
+	if got := buildChatOverlays("", "", "maybe", nil); len(got) != 0 {
+		t.Fatalf("buildChatOverlays(\"\", \"\", \"maybe\", nil) = %v, want empty map", got)
 	}
-	got = buildChatOverlays("on", "flat", "on")
+	got = buildChatOverlays("on", "flat", "on", nil)
 	if len(got) != 3 ||
 		got["chat_longcontext_enabled"] != "true" ||
 		got["chat_longcontext_mode"] != "flat" ||
 		got["chat_conflict_surfacing_enabled"] != "true" {
-		t.Fatalf("buildChatOverlays(\"on\", \"flat\", \"on\") = %v, want all three keys", got)
+		t.Fatalf("buildChatOverlays(\"on\", \"flat\", \"on\", nil) = %v, want all three keys", got)
+	}
+}
+
+// TestParseChatOverlayFlags_ParseOK covers the W6-R18 happy path: one or
+// more well-formed "key=value" pairs parse into a map with the exact keys
+// and values given, and a value itself containing '=' (e.g. a JSON blob)
+// stays intact because strings.Cut only ever splits at the FIRST '='.
+func TestParseChatOverlayFlags_ParseOK(t *testing.T) {
+	got, err := parseChatOverlayFlags(nil)
+	if err != nil || got != nil {
+		t.Fatalf("parseChatOverlayFlags(nil) = (%v, %v), want (nil, nil)", got, err)
+	}
+	got, err = parseChatOverlayFlags([]string{"chat_conflict_max_chunks=30"})
+	if err != nil {
+		t.Fatalf("parseChatOverlayFlags single pair: unexpected error %v", err)
+	}
+	if len(got) != 1 || got["chat_conflict_max_chunks"] != "30" {
+		t.Fatalf("parseChatOverlayFlags single pair = %v, want {chat_conflict_max_chunks: 30}", got)
+	}
+	got, err = parseChatOverlayFlags([]string{"a=1", "b=2==3"})
+	if err != nil {
+		t.Fatalf("parseChatOverlayFlags two pairs: unexpected error %v", err)
+	}
+	if len(got) != 2 || got["a"] != "1" || got["b"] != "2==3" {
+		t.Fatalf("parseChatOverlayFlags two pairs = %v, want {a:1, b:2==3} (value keeps every '=' after the first)", got)
+	}
+}
+
+// TestParseChatOverlayFlags_Malformed covers the two rejected shapes: no
+// '=' at all, and an empty key before the '='. Both must return a non-nil
+// error (main() turns that into exit 2) rather than silently dropping the
+// pair or inventing a key.
+func TestParseChatOverlayFlags_Malformed(t *testing.T) {
+	if _, err := parseChatOverlayFlags([]string{"no_equals_sign"}); err == nil {
+		t.Fatal("parseChatOverlayFlags(\"no_equals_sign\") = nil error, want an error (missing '=')")
+	}
+	if _, err := parseChatOverlayFlags([]string{"=value_only"}); err == nil {
+		t.Fatal("parseChatOverlayFlags(\"=value_only\") = nil error, want an error (empty key)")
+	}
+	// One good pair ahead of a bad one must still error — the whole flag
+	// set is validated before any of it is used, not applied partially.
+	if _, err := parseChatOverlayFlags([]string{"good=1", "bad"}); err == nil {
+		t.Fatal("parseChatOverlayFlags([\"good=1\", \"bad\"]) = nil error, want an error")
+	}
+}
+
+// TestBuildChatOverlays_ExtraPrecedence pins the W6-R18 precedence rule
+// documented on buildChatOverlays: a --chat-overlay entry for a key one of
+// the three named flags ALSO sets wins, because extra is merged in last.
+// Mutation: merging extra BEFORE the named-flag switches (or merging it at
+// all) in the wrong order fails this test.
+func TestBuildChatOverlays_ExtraPrecedence(t *testing.T) {
+	got := buildChatOverlays("", "", "on", map[string]string{"chat_conflict_surfacing_enabled": "false"})
+	if len(got) != 1 || got["chat_conflict_surfacing_enabled"] != "false" {
+		t.Fatalf("extra should win over --conflict-surfacing on: got %v, want {chat_conflict_surfacing_enabled: false}", got)
+	}
+	// A --chat-overlay key that does not collide with any named flag is
+	// simply added alongside them.
+	got = buildChatOverlays("on", "", "", map[string]string{"chat_conflict_max_chunks": "30"})
+	if len(got) != 2 || got["chat_longcontext_enabled"] != "true" || got["chat_conflict_max_chunks"] != "30" {
+		t.Fatalf("non-colliding extra key should be added alongside the named flag: got %v", got)
 	}
 }

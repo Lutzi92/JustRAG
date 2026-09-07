@@ -78,6 +78,8 @@ func main() {
 	longContextModeOverride := flag.String("longcontext-mode", "", `Wave-3 ruling W3-R6: per-run override for chat_longcontext_mode ("flat" | "map_reduce") — which consumer the OrchLongContext orchestrator uses. Empty = read the live site_config (whose default is "map_reduce" since Wave 5 / W5-R1; an unrecognised stored value normalises to "flat"). This is a CHAT-layer key, so it wraps siteReader like --crag (not the vector-layer overlay). Only has an effect when chat_longcontext_enabled is on and the question trips the global-synthesis classifier.`)
 	longContextEnabled := flag.String("longcontext", "", `Wave-3 ruling W3-R5: per-run override for chat_longcontext_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext-mode. "on" puts OrchLongContext at the top of the eval orchestrator ladder for questions the global-synthesis classifier accepts, so a global-synthesis golden set can be measured without mutating site_configs.`)
 	conflictSurfacing := flag.String("conflict-surfacing", "", `Wave-5 ruling W5-R7: per-run override for chat_conflict_surfacing_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext. "on" makes every turn whose assembled set spans >= 2 distinct files run the fast-tier conflict / supersession pass, and records the resulting report per question as "conflicts" in the JSON report (the same bare array a chat turn persists and streams). Effective on the standard PrepareChatContext path and, under --orchestrator-dispatch, on the Supervisor path.`)
+	var chatOverlayFlags chatOverlayFlag
+	flag.Var(&chatOverlayFlags, "chat-overlay", `Wave-6 W6-R18: per-run override of ONE chat-layer site_config key (the reader PrepareChatContext and the orchestrators receive), applied through the same overlay as --conflict-surfacing; repeatable; key must be non-empty and contain no '='; only keys read through the chat-layer reader are affected — vector-layer keys keep their own flags.`)
 	goldenQueryType := flag.Bool("golden-query-type", false, `Forward each golden row's curated "query_type" label into the retrieval pipeline (chat.ChatContextParams.QueryType) instead of letting the pipeline classify the question. Default false so existing --production-context reports keep their historical shape. Does NOT affect orchestrator dispatch, which classifies independently — if a question does not reach the intended orchestrator, rewrite the question, not the label.`)
 	recencyBoostOverride := flag.String("recency-boost", "", `Wave 2 Task 8: per-run override for recency_boost_enabled ("on" | "off"). Empty = read the live site_config. Same overlay mechanism as --bm25-tiered-boost (a vector-layer key, applied via the searchReader overlay, not the chat-level siteReader). Lets the CERT recency fixture A/B the recency prior without a site_configs mutation.`)
 	printKeywordSQL := flag.String("print-keyword-sql", "", `Diagnostic mode (Wave-3 Task 7): print the keyword arm's SQL for this query — for BOTH scoring modes (ts_rank and bm25), with the KB's real resolved settings (chunk table, text-search config, simple arm, tiered boost, k1/b, dim-keyed stats tables) — as one JSON document on stdout, then exit 0. Requires --kb-id. Runs no search, no LLM call, and needs no golden set; --top-k sets the statement's LIMIT (pass 50 to match the legacy pre-rerank candidate depth the keyword arm actually runs with at top-k 10 with a reranker; a non-positive value falls back to 50). Each mode carries both the parameterised SQL and an "executable_sql" with the placeholders inlined, so it can be handed straight to EXPLAIN (ANALYZE, BUFFERS).`)
@@ -154,6 +156,16 @@ func main() {
 		{name: "--recency-boost", value: *recencyBoostOverride, allowed: []string{"on", "off"}},
 	}); found {
 		slog.Error("invalid "+bad.name+" value", "value", bad.value)
+		os.Exit(2)
+	}
+
+	// W6-R18: parse the repeated --chat-overlay key=value pairs once, here,
+	// so a malformed pair exits 2 with the same usage-error shape as every
+	// other CLI validation above, rather than surfacing later as a puzzling
+	// site_config read.
+	extraChatOverlays, err := parseChatOverlayFlags(chatOverlayFlags)
+	if err != nil {
+		slog.Error("invalid --chat-overlay value", "error", err)
 		os.Exit(2)
 	}
 
@@ -308,7 +320,7 @@ func main() {
 	// siteReader rather than the vector-layer overlay above. Chained after
 	// the CRAG wrapper so both overrides compose. One wrapper carries both
 	// keys — a second wrapper would be indistinguishable but harder to read.
-	if chatOverlays := buildChatOverlays(*longContextEnabled, *longContextModeOverride, *conflictSurfacing); len(chatOverlays) > 0 {
+	if chatOverlays := buildChatOverlays(*longContextEnabled, *longContextModeOverride, *conflictSurfacing, extraChatOverlays); len(chatOverlays) > 0 {
 		siteReader = &chatOverlayReader{inner: siteReader, overlays: chatOverlays}
 		slog.Info("eval: applying chat site_config overlays for this run", "overlays", chatOverlays)
 	}
@@ -791,11 +803,16 @@ type chatOverlayReader struct {
 }
 
 // buildChatOverlays turns the chat-layer CLI flags (the two long-context
-// ones and --conflict-surfacing) into the overlay map. An empty flag
-// contributes NO entry, which is the whole point: an entry with an empty
-// value would pin the key to the zero value for the run instead of
-// delegating to the live site_config.
-func buildChatOverlays(longContextEnabled, longContextMode, conflictSurfacing string) map[string]string {
+// ones and --conflict-surfacing) into the overlay map, then merges in extra
+// (the parsed --chat-overlay key=value pairs, W6-R18) LAST. An empty named
+// flag contributes NO entry, which is the whole point: an entry with an
+// empty value would pin the key to the zero value for the run instead of
+// delegating to the live site_config. Because extra is merged last, a
+// --chat-overlay entry for a key one of the three named flags ALSO sets
+// wins over that named flag (documented precedence, not map-iteration
+// luck) — e.g. --conflict-surfacing on --chat-overlay
+// chat_conflict_surfacing_enabled=false ends with the key false.
+func buildChatOverlays(longContextEnabled, longContextMode, conflictSurfacing string, extra map[string]string) map[string]string {
 	overlays := map[string]string{}
 	switch longContextEnabled {
 	case "on":
@@ -812,7 +829,57 @@ func buildChatOverlays(longContextEnabled, longContextMode, conflictSurfacing st
 	case "off":
 		overlays["chat_conflict_surfacing_enabled"] = "false"
 	}
+	for k, v := range extra {
+		overlays[k] = v
+	}
 	return overlays
+}
+
+// chatOverlayFlag is a repeatable flag.Value collecting raw --chat-overlay
+// key=value strings in the order they appeared on the command line.
+// Validation and key=value splitting happen once, in
+// parseChatOverlayFlags, after flag.Parse() returns — a Set() error would
+// abort flag.Parse() itself with a less useful message than the
+// usage-error/exit(2) pattern every other CLI validation in this file
+// uses, so Set() only collects.
+type chatOverlayFlag []string
+
+func (f *chatOverlayFlag) String() string {
+	if f == nil {
+		return ""
+	}
+	return strings.Join(*f, ",")
+}
+
+func (f *chatOverlayFlag) Set(v string) error {
+	*f = append(*f, v)
+	return nil
+}
+
+// parseChatOverlayFlags splits each raw "key=value" pair from repeated
+// --chat-overlay flags into a map. A later entry for the same key wins
+// (matches Go flag semantics elsewhere: last one wins), which is also what
+// makes --chat-overlay's precedence over the three named chat-overlay
+// flags well-defined in buildChatOverlays (a single, consistent
+// last-write-wins rule end to end). strings.Cut splits at the FIRST '=',
+// so the key half can never itself contain '=' — only a missing '=' or an
+// empty key before it are rejected.
+func parseChatOverlayFlags(raw []string) (map[string]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(raw))
+	for _, pair := range raw {
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok {
+			return nil, fmt.Errorf("--chat-overlay %q is missing '=' (want key=value)", pair)
+		}
+		if key == "" {
+			return nil, fmt.Errorf("--chat-overlay %q has an empty key", pair)
+		}
+		out[key] = value
+	}
+	return out, nil
 }
 
 func (w *chatOverlayReader) GetSiteConfigValue(ctx context.Context, key string) (*string, error) {
