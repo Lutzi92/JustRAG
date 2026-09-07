@@ -97,8 +97,10 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
     const isQueryCacheEnabled = siteConfigs.query_cache_enabled === 'true' || siteConfigs.query_cache_enabled === '1';
     const isCorpusTableEnabled = siteConfigs.chat_corpus_table_enabled === 'true' || siteConfigs.chat_corpus_table_enabled === '1';
     const isLongcontextEnabled = siteConfigs.chat_longcontext_enabled === 'true' || siteConfigs.chat_longcontext_enabled === '1';
-    // The two map knobs only do anything in map_reduce mode.
-    const isLongcontextMapReduce = isLongcontextEnabled && siteConfigs.chat_longcontext_mode === 'map_reduce';
+    // The two map knobs only do anything in map_reduce mode. An unset key is
+    // map_reduce since Wave 5 (W5-R1), so the fallback has to match the backend
+    // default or the knobs would be hidden on exactly the deployments that use them.
+    const isLongcontextMapReduce = isLongcontextEnabled && (siteConfigs.chat_longcontext_mode || 'map_reduce') === 'map_reduce';
 
     const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => {
         try {
@@ -763,7 +765,7 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                         <label htmlFor="chat-longcontext-mode">{t('chatLongcontextMode')}</label>
                         <select
                             id="chat-longcontext-mode"
-                            value={siteConfigs.chat_longcontext_mode || 'flat'}
+                            value={siteConfigs.chat_longcontext_mode || 'map_reduce'}
                             onChange={e => setSiteConfigs(prev => ({ ...prev, chat_longcontext_mode: e.target.value }))}
                             disabled={!isLongcontextEnabled}
                             style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', padding: '1rem', borderRadius: '8px', color: 'var(--text-primary)' }}

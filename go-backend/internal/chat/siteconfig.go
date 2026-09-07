@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/justrag/go-backend/internal/ai"
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/siteconfig"
 )
 
@@ -697,22 +698,38 @@ func ChatLongContextTopK(ctx context.Context, reader SiteConfigReader) int {
 // ChatLongContextMode selects how the OrchLongContext consumer turns the
 // wide chunk pool into an answer prompt:
 //
-//   - "flat" (default) hands the whole token-budgeted pool to the answer LLM
-//     raw — byte-identical to the pre-Wave-3 behaviour.
-//   - "map_reduce" first extracts per-group findings (claim + verbatim quote,
-//     tagged with the source's `[N]`) with one fast-tier call per chunk group,
-//     then hands the answer LLM only those findings plus the source headers.
-//     Trades N/GroupSize cheap calls for a far shorter answer prompt and much
-//     less position bias across a 200-chunk pool.
+//   - "map_reduce" (default since Wave 5) first extracts per-group findings
+//     (claim + verbatim quote, tagged with the source's `[N]`) with one
+//     fast-tier call per chunk group, then hands the answer LLM only those
+//     findings plus the source headers. Trades N/GroupSize cheap calls for a
+//     far shorter answer prompt and much less position bias across a
+//     200-chunk pool.
+//   - "flat" hands the whole token-budgeted pool to the answer LLM raw —
+//     byte-identical to the pre-Wave-3 behaviour.
 //
-// Unknown values normalise to "flat" so a typo never changes behaviour.
-// Tunable via "chat_longcontext_mode".
+// W5-R1 (pre-registered 2026-09-06, decided on the 24-question
+// global-synthesis set): map_reduce won 34/36 pooled decisive judge pairs
+// (0.944, Wilson low 0.819), coverage +5.0 pp against a 1.4 pp same-mode band,
+// control pair 0.364 — all four criteria passed, at 1.28x wall time.
+//
+// Two DIFFERENT fallbacks, deliberately: an UNSET key means "the operator
+// never chose", so it reads the new default; an UNRECOGNISED value is a typo,
+// and a typo must never silently buy the expensive mode — it normalises to the
+// safe "flat" and logs a warning. Tunable via "chat_longcontext_mode".
 func ChatLongContextMode(ctx context.Context, reader SiteConfigReader) string {
 	v := strings.ToLower(strings.TrimSpace(readString(ctx, reader, "chat_longcontext_mode")))
-	if v == LongContextModeMapReduce {
+	switch v {
+	case "":
 		return LongContextModeMapReduce
+	case LongContextModeMapReduce:
+		return LongContextModeMapReduce
+	case LongContextModeFlat:
+		return LongContextModeFlat
+	default:
+		logctx.From(ctx).Warn("chat_longcontext_mode: unrecognised value, falling back to flat",
+			"value", v, "known", []string{LongContextModeFlat, LongContextModeMapReduce})
+		return LongContextModeFlat
 	}
-	return LongContextModeFlat
 }
 
 // ChatLongContextMapGroupSize is how many chunks one map-stage extraction call
