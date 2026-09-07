@@ -751,9 +751,9 @@ newer, and `published_at` is NULL throughout:
 e.g. `WID-SEC-2026-0104`: NEU `2026-08-31 04:53:56`, UPDATE
 `2026-09-06 04:53:56`.
 
-## Result 1 — the eight rewritten pair questions: still 0/8, and still not the detector's fault
+## Result 1 — the eight rewritten pair questions: still 0/8, and it is a detector-window finding, not a retrieval-assembly finding
 
-| Question | WID | Product | both_assembled (top-10, `cert-on`) | flagged | newer_is_update |
+| Question | WID | Product | both_assembled (`cert-on`, top-10 report view) | flagged | newer_is_update |
 |---|---|---|---|---|---|
 | cert-p01 | WID-SEC-2026-0104 | Fortinet FortiOS | UPDATE only | no | no |
 | cert-p02 | WID-SEC-2026-0106 | Ivanti Connect Secure | NEU only | no | no |
@@ -763,16 +763,38 @@ e.g. `WID-SEC-2026-0104`: NEU `2026-08-31 04:53:56`, UPDATE
 | cert-p06 | WID-SEC-2026-0113 | Citrix NetScaler | NEU only | no | no |
 | cert-p07 | WID-SEC-2026-0119 | Atlassian Confluence | UPDATE only | no | no |
 | cert-p08 | WID-SEC-2026-0123 | GitLab | NEU only | no | no |
-| **totals** | | | **0/8 both present** | **0/8** | **0/8** |
+| **totals** | | | **0/8 both present in top-10** | **0/8** | **0/8** |
 
 Rewriting the question to name the advisory and ask for the delta did
-**not** change this: at the report's default `k=10` view (the production
-turn shape), none of the eight pair questions assemble both halves. That
-is shown directly by `cert-on.json`'s `retrieved` arrays (the table
-above). It is **not** evidence that "the conflict detector never gets the
-chance to flag a NEU/UPDATE pair on this corpus" — see Result 1a below,
-which shows the same `cert-on` run flagging five of these eight pairs
-correctly through other questions.
+**not** change this "top-10" column. But this column is a **report-side
+view**, not a second, narrower retrieval pass: `--top-k` (which defaults
+to 10 and is what this table's "top-10" reflects) never reaches
+`chat.PrepareChatContext` — `internal/eval/production_adapter.go`'s
+`SearchWithQuery` calls `PrepareChatContext` with no `k`/limit parameter
+at all, takes the resulting `FinalChunks` (whatever the KB's own
+`top_n_*` config assembled), re-sorts that pool by score, and *only then*
+slices it to `k` — purely to produce the report's `retrieved` view for
+recall/MRR scoring. **There is one retrieval shape here, not two**:
+`"final_docs":30` appears in every one of the 16 `rag.search.stages`
+lines in `t1-out/pairs-isolated.log` (the 8 pair questions, run in
+isolation with the eval CLI's *default* `--top-k 10`) and in the
+overwhelming majority of `cert-on.log`/`cert-off.log`'s stages lines
+(a handful of non-pair, non-lookup-route questions assemble a
+different-sized pool under their own route config, irrelevant to the 8
+pair questions). The pipeline assembled the same 30-chunk pool whether
+the eval CLI's `--top-k` was left at its default (10) or raised to 30 —
+`--top-k` widened the *report's view* onto that pool, not the pool
+itself.
+
+Given that, "0/8 both present in top-10" is not "the pair questions never
+retrieve both halves" — Result 1a below and the isolation section that
+follows show both halves of every pair ARE in the one 30-chunk assembled
+set the pipeline actually built, and that the conflict detector's own
+selection from that set has a narrower cap (`chat_conflict_max_chunks`,
+default 12) than 15, which is where the second half of each pair likely
+drops out. See "Detector-window isolation" below for the mechanism and
+what is directly shown vs. inferred, and Result 1a for confirmation that
+the detector is not structurally blind to this corpus's pairs.
 
 ### Result 1a — what the detector actually does on this corpus (`cert-on`, same run)
 
@@ -797,25 +819,49 @@ by `t1-analyse.py`'s `supersession_summary()`:
 Of the 8 WIDs covered (0104, 0106, 0107, 0109, 0111, 0115, 0121, 0123),
 **five are `cert-p01`..`cert-p08` target pairs** (0104, 0106, 0107, 0109,
 0123) — the detector correctly identified and directed those exact
-NEU/UPDATE supersessions, just through the recency-listing (`cert-r02`,
-`cert-r05`, `cert-r06`), CVE-lookup (`cert-c04`, `cert-n01`) and
-enumeration (`cert-e01`, `cert-e02`, `cert-e03`) questions, whose top-10
-(or top-30, for the enumeration/listing routes) assembled both halves
-where the pair questions' top-10 did not. This is the same shape of result
-Wave 5 reported for its own pair questions ("12 of 37 opportunities …
-direction correct 12/12, zero invented pairs") — the mechanism keeps
-working; what fails specifically is the pair questions' own retrieval
-shape.
+NEU/UPDATE supersessions, just through other questions whose own
+retrieval shape put both halves inside the detector's window: the
+recency-listing questions (`cert-r02`, `cert-r05`, `cert-r06`) inject the
+complete file listing for their date window as a system-prompt addendum
+(not ordinary chunk retrieval at all — see `chat_recency_listing_enabled`
+in `CLAUDE.md`), the CVE-lookup questions (`cert-c04`, `cert-n01`) match
+an exact CVE string that lives in only the UPDATE half, and the
+enumeration questions (`cert-e01`..`cert-e03`) extract candidates from a
+wider net by design (cross-advisory "which files mention X" questions).
+This is the same shape of result Wave 5 reported for its own pair
+questions ("12 of 37 opportunities … direction correct 12/12, zero
+invented pairs") — the mechanism keeps working; what fails specifically
+is the pair questions' own retrieval-then-detector-cap shape.
 
-### Retrieval-reason isolation: what is shown vs. what is inferred
+### Detector-window isolation: what is shown vs. what is inferred
 
 Each pair question was re-run in isolation (`--question-id cert-p0N
---top-k 30`, standard path, dispatch off) to see the whole `final_docs`
-pool (30 chunks; the eval report's default `k=10` view only shows the
-first third of it). **Shown, directly, from the JSON reports:** both
-halves of every pair ARE present somewhere in that 30-doc pool, in all 8
-cases — the `retrieved` array for `pair-cert-p0N-k30.json` contains both
-the NEU and UPDATE file names for every `N`. What differs is their rank:
+--top-k 30`, standard path, dispatch off) to see the whole assembled pool
+past the report's default `--top-k 10` view. **First, the k-confusion
+this section corrects:** an earlier draft of this record treated
+`--top-k 10` and `--top-k 30` as two different retrieval passes (a
+narrower "production k=10 shape" vs. a wider "k=30 diagnostic"). They are
+not. `internal/eval/production_adapter.go`'s `SearchWithQuery` calls
+`chat.PrepareChatContext` with no `k`/limit parameter at all; `k` is
+applied **after** that call returns, as a report-side sort-and-slice
+purely to shape the `retrieved` field for recall/MRR scoring
+(`production_adapter.go:141-207`; the comment there: "Re-sort by score
+descending here, so the eval measures retrieval quality, not LLM-context
+layout"). `internal/eval/runner.go:96-98`'s generic path does the same
+kind of post-hoc `chunks[:k]` trim for the (non-`--production-context`)
+legacy adapters. **Evidence, not inference:** every one of the 16
+`rag.search.stages` lines in `t1-out/pairs-isolated.log` — the 8 pair
+questions, run at the eval CLI's *default* `--top-k 10` — reads
+`"final_docs":30`, identical to the `--top-k 30` isolation runs. So there
+is **one retrieval shape**, and both `--top-k` values are two different
+report-side views onto the exact same 30-chunk pool the pipeline
+assembled.
+
+**Shown, directly, from the JSON reports:** both halves of every pair ARE
+present in that one 30-chunk pool, in all 8 cases — the `retrieved` array
+for `pair-cert-p0N-k30.json` contains both the NEU and UPDATE file names
+for every `N`, and so (necessarily, since it is the same pool) does the
+default-`--top-k` isolation run. What differs is their rank by score:
 
 | Question | Product | NEU rank | UPDATE rank |
 |---|---|---|---|
@@ -828,7 +874,7 @@ the NEU and UPDATE file names for every `N`. What differs is their rank:
 | cert-p07 | Atlassian Confluence | 15 | **1** |
 | cert-p08 | GitLab | **1** | 15 |
 
-The `rag.search.stages` line for `cert-p01` (all 8 stages lines in
+The `rag.search.stages` line for `cert-p01` (all 16 stages lines in
 `t1-out/pairs-isolated.log` share this shape — `vector_docs`/
 `keyword_docs` around 36–40, `rrf_docs`/`rerank_docs` 40, `mmr_docs`/
 `final_docs` 30):
@@ -843,13 +889,13 @@ The `rag.search.stages` line for `cert-p01` (all 8 stages lines in
 
 **What this log line does NOT show**: it carries only stage
 *cardinalities* (`rerank_docs:40 → mmr_docs:30`), never a per-chunk rank.
-The rank-1-vs-15 table above comes entirely from the `--top-k 30` report's
-`retrieved` array — the *post-everything* order — not from anything the
-stages log records. An earlier draft of this record attributed the split
-to "MMR pushes the near-duplicate to the midpoint of the pool", stated as
-an observation ("logs show"). That attribution is corrected here: it was
-an inference the stages log cannot support, and a simpler, directly
-verifiable mechanism accounts for the exact pattern instead.
+The rank-1-vs-15 table above comes entirely from the `retrieved` array —
+the *post-everything* order — not from anything the stages log records.
+An earlier draft of this record attributed the split to "MMR pushes the
+near-duplicate to the midpoint of the pool", stated as an observation
+("logs show"). That attribution is corrected here: it was an inference
+the stages log cannot support, and a simpler, directly verifiable
+mechanism accounts for the exact pattern instead.
 
 **What IS shown, from the `retrieved` array's `score` field**: ranks 1–15
 in every one of the 8 isolated `--top-k 30` reports carry the identical
@@ -865,30 +911,45 @@ clamps each floor-protected chunk's score **up to the current top score**
 boundary rather than the lost-in-the-middle region) — that clamp is what
 produces the tie, and the demoted half of each pair sits at the *last*
 slot of that tie block (rank 15) in every single case. The `bm25_floor_reinserted:1`
-field in the (top-10) stages log confirms the floor mechanism fired on
-these queries; it is a plausible and directly-supported explanation for
-"the half is in the pool at all" and for "the tie block is exactly 15
-wide" — it says nothing, by itself, about which half is at rank 1 vs.
-rank 15 within the tie (the tie-breaking order inside a 15-way score tie
-was not isolated in this task and is not claimed here).
+field in the stages log confirms the floor mechanism fired on these
+queries; it is a plausible and directly-supported explanation for "the
+half is in the pool at all" and for "the tie block is exactly 15 wide" —
+it says nothing, by itself, about which half is at rank 1 vs. rank 15
+within the tie (the tie-breaking order inside a 15-way score tie was not
+isolated in this task and is not claimed here).
 
-**What is NOT shown, and is explicitly left open:** which stage puts the
-demoted half specifically at the *last* position of the tie block rather
-than elsewhere within it, and — separately — whether the same split
-happens at the production `k=10` shape. The `k=30` rank table above
-**cannot be carried over** to the `cert-on` (`k=10`) turn: the BM25-floor
-budget (`limit/2`), the MMR pool size and the final trim all scale with
-`limit`, so `BM25FloorMaxFilesFor(10) = 4`, not `15`, and the tie
-structure at `k=10` was **not isolated** in this task (no per-rank stages
-data exists for the production-shaped run — only the `retrieved`
-top-10 list, which is what the Result 1 table above already reads
-directly). What the `k=10` `cert-on` run **does** show directly, without
-any inference, is the conclusion that matters for the pass/fail rule:
-across all 8 pair questions, only one half of the pair is in the
-production-shaped assembled set (`cert-on.json`'s `retrieved`, k=10, per
-question), in every case. That is a direct read of the report, not a
-carry-over from the `k=30` diagnostic. No `site_config` was changed to
-produce or investigate any of this.
+**Why this is a detector-WINDOW finding, not a retrieval-assembly
+finding.** The conflict detector does not consume the raw 30-chunk pool
+either — `internal/chat/conflicts.go`'s `pickConflictSources` (`:399-411`)
+re-sorts the turn's numbered `sources` list by **score descending** and
+keeps only the top `chat_conflict_max_chunks` (default 12, clamped
+[2, 30] by `ChatConflictMaxChunks`, `internal/chat/siteconfig.go:1899-1900`)
+before the pass ever runs — verified directly from the source, not
+inferred. Since the demoted half of every pair sits at score-rank 15 in
+the pool the detector selects from, and the default cap keeps only the
+top 12 by that same score, rank 15 falls outside the window the detector
+actually compares — a **12-vs-15** cap mismatch, not a "the pair is never
+in the assembled set" retrieval failure.
+
+**What is honestly NOT shown, and is left open:** the turn's real
+`sources` list — the one `pickConflictSources` actually receives at
+answer time — was **not independently captured or dumped** in this task;
+the eval report's `retrieved` array (re-sorted by the SAME `Score` field
+that flows into `ChatSource.Score`) is used as a stand-in because it
+comes from the same `FinalChunks` lineage, but the two are not proven
+byte-identical here (an intervening stage — token-budget truncation,
+ECoRAG compression if enabled, tabular-router injection — could in
+principle reorder or drop chunks between the search stages log and the
+`sources` list `pickConflictSources` sees). So "rank 15 exceeds the cap of
+12" is **strongly indicated by direct code reading plus the assembled-set
+evidence above, but not empirically proven** from a captured `sources`
+list. Section "Conflict surfacing re-measured at `chat_conflict_max_chunks
+= 30`" below is the empirical test of exactly this hypothesis: if raising
+the cap to 30 (its max) makes the pairs flag, that confirms the cap was
+the bottleneck; if it does not, the "sources list not captured" hedge
+above is where the next investigation should start. No `site_config` was
+changed to produce anything in this section — the cap-30 run is a
+`cmd/eval` overlay, covered separately below.
 
 ## Result 2 — cost and retrieval neutrality (25 CERT questions)
 
@@ -979,37 +1040,44 @@ for RSS/advisory KBs, and `chat_conflict_surfacing_enabled` stays default
 Both criteria fail, and the Wave-6 rewrite narrows down exactly why each
 one does:
 
-1. **0/8 is a retrieval-shape finding specific to how the pair questions
-   retrieve, not evidence the detector cannot handle this corpus.** The
-   Wave-5 hypothesis ("the pair questions were authored to test promotion,
-   not co-retrieval, so of course both halves aren't retrieved together")
+1. **0/8 is a detector-window finding, not a retrieval-assembly finding —
+   and not evidence the detector cannot handle this corpus.** The Wave-5
+   hypothesis ("the pair questions were authored to test promotion, not
+   co-retrieval, so of course both halves aren't retrieved together")
    predicted that naming the advisory and asking for the delta would fix
-   it. It did not: at the production `k=10` shape, every one of the 8 pair
-   questions' `retrieved` list contains only one half of its pair (shown
-   directly, Result 1's table). What is **not** established is the
-   mechanism inside retrieval that produces this — the `k=30` diagnostic
-   shows both halves present in the wider 30-doc pool for all 8 pairs,
-   split by a BM25-floor score-boost tie block whose width
-   (`BM25FloorMaxFilesFor(30)=15`) is shown, but that tie's internal
-   ordering (why one half lands at rank 1 and the other at exactly rank
-   15, rather than the reverse or some other position within the tie) was
-   not isolated, and the `k=30` structure does not carry over arithmetically
-   to the `k=10` production shape (floor budget, MMR pool and trim all
-   scale with `limit`). And — importantly — **Result 1a shows the detector
-   is not structurally blind to this corpus's NEU/UPDATE pairs**: on the
-   very same `cert-on` run, it correctly flagged and directed 5 of these 8
-   exact pairs through other questions (recency-listing, CVE-lookup,
-   enumeration) whose retrieval shape happened to assemble both halves —
-   10 `superseded` entries, direction correct 10/10, zero invented pairs.
-   So the finding is specifically that **these 8 pair questions' own
-   retrieval shape** does not put both halves of their own target pair
-   into the assembled set, not that conflict surfacing cannot work on
-   this KB. Investigating why (an MMR/BM25-floor tuning change, a
-   fixture/detector design that does not depend on the *queried* pair's
-   own top-k, e.g. widening `chat_conflict_max_chunks` past 12) is a
-   retrieval-tuning question, explicitly out of scope for this task per
-   the brief ("do NOT tune anything, do NOT change any site_config") —
-   flagged here as a roadmap item, not attempted or measured.
+   it. Naming the advisory did not change the 0/8 top-10 outcome, but the
+   reason is different from what an earlier draft of this record claimed:
+   there is **one retrieval shape**, not a narrower one at production
+   scale — `--top-k` is a report-side view, never reaching
+   `chat.PrepareChatContext` (`internal/eval/production_adapter.go:141-207`),
+   and every one of the 8 pair questions' `rag.search.stages` lines reads
+   `"final_docs":30` regardless of `--top-k` (`t1-out/pairs-isolated.log`).
+   **Both halves of every pair ARE in that one assembled 30-chunk pool**
+   (score-ranks 1 and 15, "Detector-window isolation" above), split by a
+   BM25-floor score-boost tie block whose width (`BM25FloorMaxFilesFor(30)
+   = 15`) is shown directly from source. The **leading candidate cause**
+   is the conflict detector's own selection cap: `pickConflictSources`
+   (`internal/chat/conflicts.go:399-411`) re-sorts the turn's sources by
+   score and keeps only the top `chat_conflict_max_chunks` (default 12,
+   clamp [2, 30]) — verified directly from source — so the demoted half at
+   score-rank 15 sits outside that default window. This is **strongly
+   indicated, not proven**: the turn's actual `sources` list at answer
+   time was not independently captured in this task, only inferred from
+   the same `Score`-lineage `retrieved` view the eval report also uses
+   (the honest hedge is spelled out above). Section "Conflict surfacing
+   re-measured at `chat_conflict_max_chunks = 30`" below is the direct
+   empirical test: raising the cap to its clamp maximum (30) and
+   re-measuring under the SAME pre-registered rule (W6-R18) — see that
+   section for the result. And — importantly — **Result 1a shows the
+   detector is not structurally blind to this corpus's NEU/UPDATE pairs**:
+   on the very same `cert-on` run, at the DEFAULT cap of 12, it correctly
+   flagged and directed 5 of these 8 exact pairs through other questions
+   whose own retrieval/addendum shape put both halves inside the
+   detector's 12-source window — 10 `superseded` entries, direction
+   correct 10/10, zero invented pairs. So the finding is specifically that
+   **these 8 pair questions' own retrieval-then-cap shape** excludes the
+   second half from the default 12-source window, not that conflict
+   surfacing cannot work on this KB at all.
 2. **0.112 / 0.101 confirms the Wave-5 upper-bound claim was directionally
    right**: the corrected detector (self-pair dropped, mirrored duplicates
    collapsed) does score lower than the pre-fix 0.124, but it remains above
@@ -1042,5 +1110,213 @@ Gitignored (not committed), under
 | `t1-out/pair-cert-p0N.json` | isolated single-question runs (top-10) |
 | `t1-out/pair-cert-p0N-k30.json` | isolated single-question runs (top-30, rank table above) |
 | `t1-out/pairs-isolated.log` | stderr for the top-10 isolation runs |
-| `t1-out/t1-analysis.txt` | the analysis script's full output |
+| `t1-out/t1-analysis.txt` | the analysis script's full output (cap12) |
+| `t1-out/cert-on-cap30.json` / `.log` | CERT, flag on, `chat_conflict_max_chunks=30` (W6-R18) |
+| `t1-out/ppm-on-cap30-1.json` / `.log` | PPM, flag on, cap30, run 1 |
+| `t1-out/ppm-on-cap30-2.json` / `.log` | PPM, flag on, cap30, run 2 |
+| `t1-out/t1-analysis-cap30.txt` | the analysis script's full output for the cap30 report set (`python3 t1-analyse.py cap30`) |
 | `eval/golden/cert-recency-de.local.jsonl` | the runnable golden set (KB id resolved) |
+
+---
+
+# Conflict surfacing re-measured at chat_conflict_max_chunks = 30 (Wave 6, W6-R18)
+
+- **Date:** 2026-09-07
+- **Ruling:** W6-R18 (`.superpowers/sdd/2026-09-07-rag-sota-wave6/rulings.md`,
+  appended after the fix-round-1 re-review): the "Detector-window
+  isolation" section above establishes that both halves of every
+  NEU/UPDATE pair ARE in the pipeline's one assembled 30-chunk pool, and
+  that `pickConflictSources` (`internal/chat/conflicts.go:399-411`)
+  re-sorts that pool by score and keeps only the top
+  `chat_conflict_max_chunks` (default 12) before the detector ever runs —
+  a **12-vs-15** cap mismatch, strongly indicated but not directly proven
+  (the answer-time `sources` list was not independently captured). This
+  section is the direct empirical test: raise the cap to its clamp
+  maximum (`ChatConflictMaxChunks` clamps to `[2, 30]`,
+  `internal/chat/siteconfig.go:1899-1900` — verified directly from
+  source) and re-measure under the **same, unmodified** pre-registered
+  W6-R1 rule.
+
+## RULE (restated verbatim, same rule, same cap on both criteria)
+
+```
+RULE (W6-R1, pre-registered 2026-09-07; re-applied unchanged for the cap-30
+re-measurement per W6-R18): PASS iff (a) >= 6/8 pairs have both_assembled
+AND flagged AND newer_is_update, and (b) PPM flag rate <= 0.10 on BOTH
+runs. Only a PASS makes the recipe recommend chat_conflict_surfacing_enabled
+(at that cap) for RSS/advisory KBs; the default cap and the default OFF
+stay either way.
+```
+
+Same three-way conjunction for criterion (a) as the cap-12 measurement
+(`both_assembled` — both halves present, by name, in the question's
+`retrieved` **top-10 report view**, unchanged definition; `flagged` — a
+`conflicts` entry names exactly the pair; `newer_is_update` — that entry
+has `kind=="superseded"` and `newer` resolves to the UPDATE file). No new
+`site_config` was mutated: the cap-30 runs use `--chat-overlay
+chat_conflict_max_chunks=30`, the `cmd/eval` overlay added in this fix
+round.
+
+## Setup — exact commands
+
+```bash
+# CERT, standard path, dispatch OFF, flag on, cap raised to its clamp max:
+bash .superpowers/sdd/2026-09-07-rag-sota-wave6/run-eval.sh \
+  --golden eval/golden/cert-recency-de.local.jsonl --production-context \
+  --orchestrator-dispatch=false --conflict-surfacing on \
+  --chat-overlay chat_conflict_max_chunks=30 \
+  --output .superpowers/sdd/2026-09-07-rag-sota-wave6/t1-out/cert-on-cap30.json
+
+# PPM, two independent runs, same overlay:
+bash .superpowers/sdd/2026-09-07-rag-sota-wave6/run-eval.sh \
+  --golden eval/golden/production-ppm-2026-08.jsonl --production-context \
+  --orchestrator-dispatch=false --conflict-surfacing on \
+  --chat-overlay chat_conflict_max_chunks=30 \
+  --output .superpowers/sdd/2026-09-07-rag-sota-wave6/t1-out/ppm-on-cap30-1.json
+bash .superpowers/sdd/2026-09-07-rag-sota-wave6/run-eval.sh \
+  --golden eval/golden/production-ppm-2026-08.jsonl --production-context \
+  --orchestrator-dispatch=false --conflict-surfacing on \
+  --chat-overlay chat_conflict_max_chunks=30 \
+  --output .superpowers/sdd/2026-09-07-rag-sota-wave6/t1-out/ppm-on-cap30-2.json
+
+# Every number below is reproduced by:
+python3 .superpowers/sdd/2026-09-07-rag-sota-wave6/t1-analyse.py cap30
+```
+
+`--top-k` was **deliberately left at its default (10)** for these runs —
+only `chat_conflict_max_chunks` was raised, via `--chat-overlay`, so the
+result below isolates the effect of the detector's own cap from any
+change to the eval report's view. `--conflict-surfacing on
+--chat-overlay chat_conflict_max_chunks=30` composes: per
+`buildChatOverlays`'s documented precedence, `--chat-overlay` entries win
+over the three named flags for the same key, but there is no collision
+here (`--conflict-surfacing` sets `chat_conflict_surfacing_enabled`, a
+different key).
+
+## Result — per-pair table (`cert-on-cap30`, top-10 report view for `both_assembled`)
+
+| Question | WID | Product | both_assembled (top-10 view) | flagged | newer_is_update |
+|---|---|---|---|---|---|
+| cert-p01 | WID-SEC-2026-0104 | Fortinet FortiOS | UPDATE only | **yes** | **yes** |
+| cert-p02 | WID-SEC-2026-0106 | Ivanti Connect Secure | NEU only | **yes** | **yes** |
+| cert-p03 | WID-SEC-2026-0107 | Cisco IOS XE | NEU only | **yes** | **yes** |
+| cert-p04 | WID-SEC-2026-0108 | VMware ESXi | UPDATE only | **yes** | **yes** |
+| cert-p05 | WID-SEC-2026-0109 | OpenSSL | UPDATE only | **yes** | **yes** |
+| cert-p06 | WID-SEC-2026-0113 | Citrix NetScaler | NEU only | **yes** | **yes** |
+| cert-p07 | WID-SEC-2026-0119 | Atlassian Confluence | UPDATE only | **yes** | **yes** |
+| cert-p08 | WID-SEC-2026-0123 | GitLab | NEU only | **yes** | **yes** |
+| **totals** | | | **0/8** | **8/8** | **8/8** |
+| **conjunction (rule criterion a)** | | | | | **0/8** |
+
+**This is the sharpest confirmation this task produced, and it needs
+stating precisely rather than rounded off.** `flagged` and
+`newer_is_update` are **8/8** — the detector, fed from its own raised-cap
+selection (which draws from the full 30-chunk pool, not the report's
+top-10 cut), genuinely saw and correctly directed **every single one** of
+the 8 NEU/UPDATE pairs (all `kind=superseded`, `newer` resolving to the
+UPDATE half in all 8 cases — verified directly against
+`cert-on-cap30.json`). This is exactly what the "Detector-window
+isolation" section's hypothesis predicted, and it is now proven, not
+merely indicated: the detector's own cap — not retrieval assembly — was
+the bottleneck at the default `chat_conflict_max_chunks=12`.
+
+**But `both_assembled` is still 0/8**, because that column is defined
+against the eval report's `retrieved` **top-10 view** — and `--top-k` was
+deliberately left untouched in this run, so the report's top-10 still
+shows only the higher-scored half of each pair (the same score-rank-1
+half from the "Detector-window isolation" table above). This is not a
+bug in the measurement; it is direct, additional proof that the
+detector's `sources` list and the eval report's `retrieved` top-10 view
+are genuinely **not the same set** — the earlier hedge ("not proven
+byte-identical") is now resolved: they demonstrably differ, because
+widening only the DETECTOR'S cap (not `--top-k`) was sufficient to fix
+detection, with nothing else changed.
+
+**Applying the pre-registered rule exactly as written** (the literal
+three-way conjunction, per this fix round's instruction to restore it):
+criterion (a) is **0/8 < 6/8**, because `both_assembled` — as originally
+and unchangedly defined — reads the top-10 report view, which this run
+did not widen. Read this as intended by the RULE's own NOTE ("the top-10
+view is therefore a slight UNDER-count of what the detector could see")
+and criterion (a)'s *substance* — whether the detector actually flagged
+the pair with the correct direction — is **8/8 ≥ 6/8**, a clean pass.
+Both readings are reported; see "Decision" below for why it does not
+change the final verdict either way.
+
+## PPM false-positive rate at cap30 (89 questions, two runs)
+
+| Run | wall time | mean per-question latency | flagged | flag rate |
+|---|---|---|---|---|
+| ppm on-1 (cap30) | 20m28.3s | 13800.6 ms | 25/89 | **0.281** |
+| ppm on-2 (cap30) | 20m27.4s | 13790.6 ms | 27/89 | **0.303** |
+
+Both rates are roughly **2.5–3×** the cap-12 measurement's 0.112/0.101.
+The two cap30 runs' flagged sets overlap heavily with each other (23 of
+25/27 ids in common — run 1 uniquely flags `Q031`/`Q055`, run 2 uniquely
+flags `Q032`/`Q087`/`Q093`/`Q094`), and mostly, but **not entirely**,
+superset the cap-12 run's flagged questions: `Q012`, `Q013`, `Q023`,
+`Q030`, `Q071`, `Q085`, `Q091`, `Q095` all recur at cap30 alongside a
+large new set (`Q010`, `Q011`, `Q021`, `Q027`, `Q028`, `Q046`, `Q047`,
+`Q051`, `Q052`, `Q056`, `Q059`, `Q063`, `Q067`, `Q096`, `Q098` and
+others) — but `Q038`, `Q062` and `Q084` (all flagged at cap12) do **not**
+appear in the cap30 run-1 flagged set at all, showing the wider source
+list does not just add findings, it also changes which pairs the
+fast-tier call happens to surface (consistent with the same run-to-run
+non-determinism this fixture has shown since Wave 2). All entries at
+cap30 are still `kind=contradiction`, `newer=unknown` on this KB — raising
+the cap did not manufacture any spurious `superseded` claims on a
+non-NEU/UPDATE corpus, but it did roughly triple the volume of undirected
+`contradiction` findings, because the detector now compares up to 30
+sources per turn instead of 12 — a much larger space of
+plausible-sounding-but-unconfirmed pairings between loosely related
+project documents (e.g. `Q010`/`Q011`: two documents both naming the
+same two people in different roles; `Q027`: two documents that both
+happen to mention JupyterHub without actually disagreeing).
+
+## Cost at cap30
+
+CERT wall time: **1m35.6s** (17/25 questions flagged, vs. 8/25 at cap12)
+— mean per-question latency **3821.7 ms** vs. cap12's 2976.5 ms
+(+845.2 ms, +28.4%). PPM latency **13800.6 ms** / **13790.6 ms** vs.
+cap12's 12723.5 ms / 12719.5 ms (+1077.1 ms / +1071.1 ms, +8.5% / +8.4%).
+The extra cost is proportional to the larger source list each detector
+call now compares (up to 30 vs. up to 12), on top of the base per-turn
+detector call this feature always adds.
+
+## Decision
+
+| Criterion | Threshold | Measured (cap30) | Met? |
+|---|---|---|---|
+| pairs with both_assembled AND flagged AND newer_is_update (literal) | ≥ 6/8 | **0/8** | no |
+| — substance: flagged AND newer_is_update alone | ≥ 6/8 | **8/8** | yes |
+| PPM flag rate, run 1 | ≤ 0.10 | **0.281** | no |
+| PPM flag rate, run 2 | ≤ 0.10 | **0.303** | no |
+
+**Verdict: FAIL — decisively, on criterion (b) alone, regardless of how
+criterion (a) is read.** Even granting the most generous reading of
+criterion (a) (8/8, substance-only), the PPM false-positive rate at
+cap30 (0.281 / 0.303) is not merely above the ≤ 0.10 gate, it is roughly
+**3× worse** than the already-failing cap-12 measurement (0.112 /
+0.101). Raising `chat_conflict_max_chunks` to 30 **does** fix the
+NEU/UPDATE pair-detection problem this whole re-measurement chain was
+chasing — cleanly and completely, 8/8 with correct direction — but it
+does so by feeding the detector a source list wide enough that false
+positives on ordinary (non-advisory) KBs roughly triple. That is not a
+close call: no operator-facing recommendation follows from this result,
+for RSS/advisory KBs or otherwise, at cap 30.
+
+Per W6-R18: `chat_conflict_surfacing_enabled` stays default **OFF**, and
+`chat_conflict_max_chunks` stays default **12** — no default flip at any
+cap. The mechanism finding is nonetheless useful and worth recording
+precisely, because it closes the investigation this task's earlier
+sections left open ("strongly indicated, not proven"): the cap, not
+retrieval, is confirmed as the reason the pair questions score 0/8 at the
+default cap — and the cost of removing that specific limitation is now
+measured, not merely predicted. A future recipe considering a **per-KB**
+cap increase (rather than a global default flip) for advisory-shaped
+KBs specifically — where the PPM-style false-positive cost does not
+apply because there is no large, loosely-related project-documentation
+corpus to generate `contradiction` noise from — is the only path this
+result leaves open, and it is not measured here (this task tested one
+global cap value against one advisory corpus and one non-advisory PPM
+corpus; a genuinely per-KB-scoped measurement is a roadmap item).
