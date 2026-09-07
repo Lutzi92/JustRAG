@@ -137,14 +137,52 @@ describe('validatePolicyJSON', () => {
         expect(errors.some(e => /history_turns_gte/i.test(e))).toBe(true);
     });
 
-    it('rejects history_turns_gte given as a negative integer', () => {
-        const { errors } = validatePolicyJSON(JSON.stringify([{ when: { history_turns_gte: -1 }, orchestrator: 'standard', mode: 'force' }]));
-        expect(errors.some(e => /history_turns_gte/i.test(e))).toBe(true);
+    // S3 (final review): chatpolicy.When.HistoryTurnsGTE is an unconstrained
+    // *int server-side (policy.go has no sign check) — Go accepts a negative
+    // value too, it would just never match a real turn's history length. The
+    // FE must not be a stricter gate than the server it mirrors.
+    it('accepts history_turns_gte given as a negative integer, matching the server', () => {
+        const { errors, rules } = validatePolicyJSON(JSON.stringify([{ when: { history_turns_gte: -1 }, orchestrator: 'standard', mode: 'force' }]));
+        expect(errors).toEqual([]);
+        expect(rules[0].when.history_turns_gte).toBe(-1);
     });
 
     it('rejects kb_ids given as a string instead of an array', () => {
         const { errors } = validatePolicyJSON(JSON.stringify([{ when: { kb_ids: 'kb-1' }, orchestrator: 'standard', mode: 'force' }]));
         expect(errors.some(e => /kb_ids/i.test(e))).toBe(true);
+    });
+
+    // S3 (final review): encoding/json decodes a JSON `null` into the zero
+    // value of whatever it targets. Rule.When is a non-pointer struct field,
+    // so `"when": null` leaves it at its zero value server-side — exactly
+    // like `when` being absent (an empty when matches every turn). Each
+    // individual `when.*` field is itself a Go pointer or slice, so a null
+    // THERE also decodes to that field's zero value — again identical to
+    // the field being absent. The FE must accept every one of these, or it
+    // rejects a document Go's own save-time validator accepts.
+    it('treats "when": null the same as when omitted (matches every turn)', () => {
+        const { errors, rules } = validatePolicyJSON(JSON.stringify([{ when: null, orchestrator: 'standard', mode: 'force' }]));
+        expect(errors).toEqual([]);
+        expect(rules[0].when).toEqual({});
+    });
+
+    it('treats each when.* field as absent when given as null', () => {
+        const doc = [{
+            when: {
+                query_type: null,
+                global_synthesis: null,
+                enumeration: null,
+                recency_listing: null,
+                has_file_selection: null,
+                history_turns_gte: null,
+                kb_ids: null,
+            },
+            orchestrator: 'standard',
+            mode: 'force',
+        }];
+        const { errors, rules } = validatePolicyJSON(JSON.stringify(doc));
+        expect(errors).toEqual([]);
+        expect(rules[0].when).toEqual({});
     });
 });
 
@@ -182,6 +220,32 @@ describe('validateToolsByRouteJSON', () => {
     it('rejects a duplicate tool within one route', () => {
         const { errors } = validateToolsByRouteJSON(JSON.stringify({ lookup: ['kb_search', 'kb_search'] }));
         expect(errors.some(e => /duplicate/i.test(e))).toBe(true);
+    });
+
+    // S13 (final review): code_exec is a recognized KNOWN_TOOLS name but is
+    // excluded from the answer-time catalog by MCPDispatcher.AnswerToolCatalog,
+    // so naming it would validate and then silently produce an empty catalog
+    // for that route. Mirrors chatpolicy's answerToolsExcludedFromCatalog.
+    it('rejects code_exec on every route with a message naming it as excluded', () => {
+        for (const route of ROUTES) {
+            const { errors } = validateToolsByRouteJSON(JSON.stringify({ [route]: ['code_exec'] }));
+            expect(errors.length).toBeGreaterThan(0);
+            expect(errors.some(e => e.includes('code_exec') && /exclude/i.test(e))).toBe(true);
+        }
+    });
+
+    it('rejects code_exec even alongside an otherwise-valid tool', () => {
+        const { errors } = validateToolsByRouteJSON(JSON.stringify({ lookup: ['kb_search', 'code_exec'] }));
+        expect(errors.some(e => e.includes('code_exec'))).toBe(true);
+    });
+
+    // S3 (final review): AnswerToolsByRoute is a Go map[string][]string — a
+    // JSON `null` route value decodes to a nil (empty) slice server-side, so
+    // `{"lookup": null}` is byte-identical to `{"lookup": []}`: a real
+    // restriction (no tools on that route), not an error.
+    it('accepts a null route value the same as an empty array (a real restriction)', () => {
+        expect(validateToolsByRouteJSON(JSON.stringify({ lookup: null }))).toEqual({ errors: [] });
+        expect(validateToolsByRouteJSON(JSON.stringify({ lookup: [] }))).toEqual({ errors: [] });
     });
 });
 
@@ -250,5 +314,48 @@ describe('previewPolicy', () => {
         expect(rows[2].ruleIndex).toBeNull();
         // complex_reasoning + global_synthesis -> rule 1 (longcontext/prefer)
         expect(rows[3]).toMatchObject({ ruleIndex: 1, orchestrator: 'longcontext', mode: 'prefer' });
+    });
+
+    // S5 (final review): a matched `prefer` rule whose orchestrator's flag
+    // is off does not apply — chatpolicy.Decide's Applied is false, and the
+    // turn falls through to the ladder. The preview must say so rather than
+    // rendering it identically to an applied rule.
+    describe('appliedFallthrough (S5)', () => {
+        it('a prefer rule is NOT applied when its orchestrator flag is off (default: no enabled map)', () => {
+            const rules: PolicyRule[] = [{ when: {}, orchestrator: 'longcontext', mode: 'prefer' }];
+            const rows = previewPolicy(rules);
+            expect(rows[0]).toMatchObject({ ruleIndex: 0, orchestrator: 'longcontext', mode: 'prefer', appliedFallthrough: true });
+        });
+
+        it('a prefer rule IS applied when its orchestrator flag is on', () => {
+            const rules: PolicyRule[] = [{ when: {}, orchestrator: 'longcontext', mode: 'prefer' }];
+            const rows = previewPolicy(rules, { longcontext: true });
+            expect(rows[0]).toMatchObject({ ruleIndex: 0, orchestrator: 'longcontext', mode: 'prefer', appliedFallthrough: false });
+        });
+
+        it('a force rule is always applied regardless of the flag', () => {
+            const rules: PolicyRule[] = [{ when: {}, orchestrator: 'agentic', mode: 'force' }];
+            const rows = previewPolicy(rules, { agentic: false });
+            expect(rows[0]).toMatchObject({ ruleIndex: 0, orchestrator: 'agentic', mode: 'force', appliedFallthrough: false });
+        });
+
+        it('a "standard"-orchestrator prefer rule is always applied — it has no flag', () => {
+            const rules: PolicyRule[] = [{ when: {}, orchestrator: 'standard', mode: 'prefer' }];
+            const rows = previewPolicy(rules, {});
+            expect(rows[0]).toMatchObject({ ruleIndex: 0, orchestrator: 'standard', mode: 'prefer', appliedFallthrough: false });
+        });
+
+        it('a row with no matching rule at all reports appliedFallthrough: false', () => {
+            const rows = previewPolicy([]);
+            for (const row of rows) {
+                expect(row.appliedFallthrough).toBe(false);
+            }
+        });
+
+        it('plan_execute_dag reads the same enabled-map key as documented (no separate key)', () => {
+            const rules: PolicyRule[] = [{ when: {}, orchestrator: 'plan_execute_dag', mode: 'prefer' }];
+            expect(previewPolicy(rules, { plan_execute_dag: false })[0].appliedFallthrough).toBe(true);
+            expect(previewPolicy(rules, { plan_execute_dag: true })[0].appliedFallthrough).toBe(false);
+        });
     });
 });

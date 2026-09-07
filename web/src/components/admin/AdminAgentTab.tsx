@@ -5,7 +5,7 @@ import { useReducedMotion, getMotionProps } from '../../hooks/useReducedMotion';
 import { useTheme } from '../../contexts/ThemeContext';
 import AdminAgentMetricsCard from './AdminAgentMetricsCard';
 import AdminMCPSection from './AdminMCPSection';
-import { validatePolicyJSON, validateToolsByRouteJSON, previewPolicy } from './policyPreview';
+import { validatePolicyJSON, validateToolsByRouteJSON, previewPolicy, type PolicyEnabledMap } from './policyPreview';
 
 interface AdminAgentTabProps {
     siteConfigs: Record<string, string>;
@@ -24,7 +24,7 @@ const SECTION_CONFIGS = [
     { id: 'queryEnh', titleKey: 'agentSectionQueryEnhancement', i18nKeys: ['autoSpellCorrect', 'stepBackEnabled', 'queryDecomposeEnabled', 'queryDecomposeModel', 'chatLongcontextEnabled', 'chatLongcontextMaxTokens', 'chatLongcontextMode', 'chatLongcontextMapGroupSize', 'chatLongcontextMapConcurrency', 'queryCacheEnabled', 'queryCacheSimilarityThreshold', 'queryCacheSimilarityThresholdLookup', 'queryCacheSimilarityThresholdEnumeration', 'queryCacheSimilarityThresholdComplexReasoning', 'queryCacheTtlHours'], settingKeys: ['auto_spell_correct', 'step_back_enabled', 'query_decompose_enabled', 'query_decompose_model', 'chat_longcontext_enabled', 'chat_longcontext_max_tokens', 'chat_longcontext_mode', 'chat_longcontext_map_group_size', 'chat_longcontext_map_concurrency', 'query_cache_enabled', 'query_cache_similarity_threshold', 'query_cache_similarity_threshold_lookup', 'query_cache_similarity_threshold_enumeration', 'query_cache_similarity_threshold_complex_reasoning', 'query_cache_ttl_hours'] },
     { id: 'crag', titleKey: 'agentSectionCragAdaptive', i18nKeys: ['cragEnabled', 'cragMinRelevantChunks', 'adaptiveRoutingEnabled'], settingKeys: ['crag_enabled', 'crag_min_relevant_chunks', 'adaptive_routing_enabled'] },
     { id: 'graph', titleKey: 'agentSectionGraph', i18nKeys: ['kgExtractionEnabled', 'chatGraphRoutingEnabled', 'chatGraphRoutingInjectChunks', 'chatGraphRoutingMaxChunks', 'chatGraphRoutingPathMode', 'chatGraphRoutingPPRDamping', 'chatGraphRoutingPPRMaxIter', 'chatGraphRoutingPPRTopEntities', 'chatGraphRoutingPathsMaxLen', 'chatGraphRoutingPathsMaxPaths'], settingKeys: ['kg_extraction_enabled', 'chat_graph_routing_enabled', 'chat_graph_routing_inject_chunks', 'chat_graph_routing_max_chunks', 'chat_graph_routing_path_mode', 'chat_graph_routing_ppr_damping', 'chat_graph_routing_ppr_max_iter', 'chat_graph_routing_ppr_top_entities', 'chat_graph_routing_paths_max_len', 'chat_graph_routing_paths_max_paths'] },
-    { id: 'multistep', titleKey: 'agentSectionMultiStep', i18nKeys: ['chatKBRouterEnabled', 'chatKBRouterMinConfidence', 'chatTurnBudgetSeconds', 'chatTurnBudgetTokens', 'chatTurnBudgetToolCalls', 'chatAgenticEnabled', 'chatAgenticMaxHops', 'chatPlanExecuteEnabled', 'chatPlanExecuteMaxSubQueries', 'chatPlanExecuteMaxIterations', 'chatPlanExecuteTokenBudget', 'chatPlanExecuteToolAware', 'chatPlanExecuteDAGIterative', 'chatAnswerToolsEnabled', 'chatAnswerToolsMaxRounds', 'chatOrchestratorPolicy', 'chatOrchestratorPolicyHelp', 'chatOrchestratorPolicyPreview', 'chatOrchestratorPolicyNoRule', 'chatAnswerToolsByRoute', 'chatAnswerToolsByRouteHelp', 'chatSupervisorEnabled', 'chatSupervisorMultiSpecialist', 'chatDriftEnabled', 'chatCommunitySearchEnabled'], settingKeys: ['chat_kb_router_enabled', 'chat_kb_router_min_confidence', 'chat_turn_budget_seconds', 'chat_turn_budget_tokens', 'chat_turn_budget_tool_calls', 'chat_agentic_enabled', 'chat_agentic_max_hops', 'chat_plan_execute_enabled', 'chat_plan_execute_max_sub_queries', 'chat_plan_execute_max_iterations', 'chat_plan_execute_token_budget', 'chat_plan_execute_tool_aware', 'chat_plan_execute_dag_iterative', 'chat_answer_tools_enabled', 'chat_answer_tools_max_rounds', 'chat_orchestrator_policy', 'chat_answer_tools_by_route', 'chat_supervisor_enabled', 'chat_supervisor_multi_specialist', 'chat_drift_enabled', 'chat_community_search_enabled'] },
+    { id: 'multistep', titleKey: 'agentSectionMultiStep', i18nKeys: ['chatKBRouterEnabled', 'chatKBRouterMinConfidence', 'chatTurnBudgetSeconds', 'chatTurnBudgetTokens', 'chatTurnBudgetToolCalls', 'chatAgenticEnabled', 'chatAgenticMaxHops', 'chatPlanExecuteEnabled', 'chatPlanExecuteMaxSubQueries', 'chatPlanExecuteMaxIterations', 'chatPlanExecuteTokenBudget', 'chatPlanExecuteToolAware', 'chatPlanExecuteDAGIterative', 'chatAnswerToolsEnabled', 'chatAnswerToolsMaxRounds', 'chatOrchestratorPolicy', 'chatOrchestratorPolicyHelp', 'chatOrchestratorPolicyPreview', 'chatOrchestratorPolicyNoRule', 'chatOrchestratorPolicyFlagOff', 'chatAnswerToolsByRoute', 'chatAnswerToolsByRouteHelp', 'chatSupervisorEnabled', 'chatSupervisorMultiSpecialist', 'chatDriftEnabled', 'chatCommunitySearchEnabled'], settingKeys: ['chat_kb_router_enabled', 'chat_kb_router_min_confidence', 'chat_turn_budget_seconds', 'chat_turn_budget_tokens', 'chat_turn_budget_tool_calls', 'chat_agentic_enabled', 'chat_agentic_max_hops', 'chat_plan_execute_enabled', 'chat_plan_execute_max_sub_queries', 'chat_plan_execute_max_iterations', 'chat_plan_execute_token_budget', 'chat_plan_execute_tool_aware', 'chat_plan_execute_dag_iterative', 'chat_answer_tools_enabled', 'chat_answer_tools_max_rounds', 'chat_orchestrator_policy', 'chat_answer_tools_by_route', 'chat_supervisor_enabled', 'chat_supervisor_multi_specialist', 'chat_drift_enabled', 'chat_community_search_enabled'] },
     { id: 'conversation', titleKey: 'agentSectionConversation', i18nKeys: ['chatAnswerHistoryEnabled', 'chatAnswerHistoryMessages', 'chatAnswerHistoryMaxChars', 'chatTransformFollowupEnabled'], settingKeys: ['chat_answer_history_enabled', 'chat_answer_history_messages', 'chat_answer_history_max_chars', 'chat_transform_followup_enabled'] },
     { id: 'corpusTable', titleKey: 'agentSectionCorpusTable', i18nKeys: ['chatCorpusTableEnabled', 'chatCorpusTableModel', 'chatCorpusTableMaxFiles', 'chatCorpusTableConcurrency', 'chatCorpusTableRouterLlmEnabled'], settingKeys: ['chat_corpus_table_enabled', 'chat_corpus_table_model', 'chat_corpus_table_max_files', 'chat_corpus_table_concurrency', 'chat_corpus_table_router_llm_enabled'] },
     { id: 'compare', titleKey: 'agentSectionCompare', i18nKeys: ['chatCompareEnabled', 'chatCompareModel', 'chatCompareMaxSections', 'chatCompareConcurrency', 'chatComparePeersPerSection', 'chatCompareAttachmentTtlHours', 'chatCompareMaxFileBytes'], settingKeys: ['chat_compare_enabled', 'chat_compare_model', 'chat_compare_max_sections', 'chat_compare_concurrency', 'chat_compare_peers_per_section', 'chat_compare_attachment_ttl_hours', 'chat_compare_max_file_bytes'] },
@@ -109,9 +109,35 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
     // before they hit Save and drives the rule preview below.
     const policyValidation = useMemo(() => validatePolicyJSON(siteConfigs.chat_orchestrator_policy || ''), [siteConfigs.chat_orchestrator_policy]);
     const toolsByRouteValidation = useMemo(() => validateToolsByRouteJSON(siteConfigs.chat_answer_tools_by_route || ''), [siteConfigs.chat_answer_tools_by_route]);
+    // S5 (final review): the live orchestrator flags, read from the same
+    // siteConfigs the rest of this component already has, so the preview
+    // can tell a `prefer` row that actually applies from one that falls
+    // through to the ladder because its orchestrator's flag is off.
+    // "standard" is deliberately absent — chatpolicy.Decide always treats
+    // it as enabled (it has no flag of its own).
+    const policyEnabledFlags: PolicyEnabledMap = useMemo(() => {
+        const isOn = (v: string | undefined) => v === 'true' || v === '1';
+        return {
+            drift: isOn(siteConfigs.chat_drift_enabled),
+            longcontext: isOn(siteConfigs.chat_longcontext_enabled),
+            supervisor: isOn(siteConfigs.chat_supervisor_enabled),
+            plan_execute: isOn(siteConfigs.chat_plan_execute_enabled),
+            // plan_execute_dag shares chat_plan_execute_enabled server-side
+            // (policyEnabledFromConfig, http_send.go) — there is no separate
+            // flag for the DAG shape in the policy-enabled map.
+            plan_execute_dag: isOn(siteConfigs.chat_plan_execute_enabled),
+            agentic: isOn(siteConfigs.chat_agentic_enabled),
+        };
+    }, [
+        siteConfigs.chat_drift_enabled,
+        siteConfigs.chat_longcontext_enabled,
+        siteConfigs.chat_supervisor_enabled,
+        siteConfigs.chat_plan_execute_enabled,
+        siteConfigs.chat_agentic_enabled,
+    ]);
     const policyPreviewRows = useMemo(
-        () => (policyValidation.errors.length === 0 ? previewPolicy(policyValidation.rules) : []),
-        [policyValidation],
+        () => (policyValidation.errors.length === 0 ? previewPolicy(policyValidation.rules, policyEnabledFlags) : []),
+        [policyValidation, policyEnabledFlags],
     );
     const hasPolicyEditorErrors = policyValidation.errors.length > 0 || toolsByRouteValidation.errors.length > 0;
 
@@ -1362,7 +1388,12 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                                             <tr key={row.label} style={{ borderTop: '1px solid var(--border-color)' }}>
                                                 <td style={{ padding: '0.35rem 0.5rem 0.35rem 0' }}>{t(row.label)}</td>
                                                 <td style={{ padding: '0.35rem 0.5rem', opacity: 0.75 }}>{row.ruleIndex === null ? t('chatOrchestratorPolicyNoRule') : `#${row.ruleIndex}`}</td>
-                                                <td style={{ padding: '0.35rem 0.5rem' }}>{row.orchestrator ?? '—'}</td>
+                                                <td style={{ padding: '0.35rem 0.5rem' }}>
+                                                    {row.orchestrator ?? '—'}
+                                                    {row.appliedFallthrough && (
+                                                        <span style={{ opacity: 0.7 }}> {t('chatOrchestratorPolicyFlagOff')}</span>
+                                                    )}
+                                                </td>
                                                 <td style={{ padding: '0.35rem 0' }}>{row.mode ?? '—'}</td>
                                             </tr>
                                         ))}
@@ -2871,9 +2902,16 @@ export default function AdminAgentTab({ siteConfigs, setSiteConfigs, onSubmit }:
                     </div>
                 </Section>
 
-                <button type="submit" className="search-button" style={{ width: 'fit-content' }} disabled={hasPolicyEditorErrors}>
-                    <Save size={18} /> {t('saveSettings')}
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-start' }}>
+                    <button type="submit" className="search-button" style={{ width: 'fit-content' }} disabled={hasPolicyEditorErrors}>
+                        <Save size={18} /> {t('saveSettings')}
+                    </button>
+                    {hasPolicyEditorErrors && (
+                        <span role="alert" style={{ color: 'var(--color-error, #d32f2f)', fontSize: '0.875rem' }}>
+                            {t('saveDisabledPolicyErrorHint').replace('{{section}}', t('agentSectionMultiStep'))}
+                        </span>
+                    )}
+                </div>
             </form>
 
             <AdminAgentMetricsCard />

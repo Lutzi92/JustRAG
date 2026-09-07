@@ -30,6 +30,18 @@ export const KNOWN_TOOLS = [
 ] as const;
 export type KnownTool = typeof KNOWN_TOOLS[number];
 
+/**
+ * Recognized names (KNOWN_TOOLS members) that MCPDispatcher.AnswerToolCatalog
+ * never puts in the answer-time catalog, so naming one in a route allowlist
+ * would validate and then silently leave that route with no tools at all.
+ * Mirrors chatpolicy.answerToolsExcludedFromCatalog (S13, final review) — the
+ * name stays in KNOWN_TOOLS (only for the mcp/builtin registry cross-check on
+ * the Go side) but is rejected here with an explicit reason.
+ */
+const EXCLUDED_ANSWER_TOOLS: Partial<Record<KnownTool, string>> = {
+    code_exec: 'excluded from the answer-time tool catalog by design (MCPDispatcher.AnswerToolCatalog never includes it) — naming it would validate but silently leave that route with no tools at all',
+};
+
 const MAX_RULES = 32;
 
 const WHEN_FIELDS = [
@@ -95,7 +107,12 @@ export function validatePolicyJSON(raw: string): { rules: PolicyRule[]; errors: 
             }
         }
 
-        const rawWhen = item.when;
+        // S3 (final review): Go's encoding/json decodes a JSON `null` into
+        // the zero value of whatever it targets — a non-pointer struct field
+        // like Rule.When just stays its zero value, so `"when": null` is
+        // byte-identical to omitting `when` entirely server-side. Treat it
+        // the same way here, or the FE rejects a document Go accepts.
+        const rawWhen = item.when === null ? undefined : item.when;
         const when: PolicyRule['when'] = {};
         if (rawWhen !== undefined) {
             if (!isPlainObject(rawWhen)) {
@@ -106,7 +123,12 @@ export function validatePolicyJSON(raw: string): { rules: PolicyRule[]; errors: 
                         errors.push(`rule ${i}: unknown when field "${k}"`);
                     }
                 }
-                if (rawWhen.query_type !== undefined) {
+                // Each field below skips validation on a JSON `null`, not
+                // only `undefined` (S3, final review): every `when.*` field
+                // is a Go pointer or slice, so `null` decodes to that
+                // field's zero value server-side — exactly the same as the
+                // key being absent — and the FE must not be stricter.
+                if (rawWhen.query_type !== undefined && rawWhen.query_type !== null) {
                     if (!Array.isArray(rawWhen.query_type) || !rawWhen.query_type.every(v => typeof v === 'string')) {
                         errors.push(`rule ${i}: query_type must be an array of strings`);
                     } else {
@@ -118,42 +140,48 @@ export function validatePolicyJSON(raw: string): { rules: PolicyRule[]; errors: 
                         }
                     }
                 }
-                if (rawWhen.global_synthesis !== undefined) {
+                if (rawWhen.global_synthesis !== undefined && rawWhen.global_synthesis !== null) {
                     if (typeof rawWhen.global_synthesis !== 'boolean') {
                         errors.push(`rule ${i}: global_synthesis must be a boolean`);
                     } else {
                         when.global_synthesis = rawWhen.global_synthesis;
                     }
                 }
-                if (rawWhen.enumeration !== undefined) {
+                if (rawWhen.enumeration !== undefined && rawWhen.enumeration !== null) {
                     if (typeof rawWhen.enumeration !== 'boolean') {
                         errors.push(`rule ${i}: enumeration must be a boolean`);
                     } else {
                         when.enumeration = rawWhen.enumeration;
                     }
                 }
-                if (rawWhen.recency_listing !== undefined) {
+                if (rawWhen.recency_listing !== undefined && rawWhen.recency_listing !== null) {
                     if (typeof rawWhen.recency_listing !== 'boolean') {
                         errors.push(`rule ${i}: recency_listing must be a boolean`);
                     } else {
                         when.recency_listing = rawWhen.recency_listing;
                     }
                 }
-                if (rawWhen.has_file_selection !== undefined) {
+                if (rawWhen.has_file_selection !== undefined && rawWhen.has_file_selection !== null) {
                     if (typeof rawWhen.has_file_selection !== 'boolean') {
                         errors.push(`rule ${i}: has_file_selection must be a boolean`);
                     } else {
                         when.has_file_selection = rawWhen.has_file_selection;
                     }
                 }
-                if (rawWhen.history_turns_gte !== undefined) {
-                    if (typeof rawWhen.history_turns_gte !== 'number' || !Number.isInteger(rawWhen.history_turns_gte) || rawWhen.history_turns_gte < 0) {
-                        errors.push(`rule ${i}: history_turns_gte must be a non-negative integer`);
+                if (rawWhen.history_turns_gte !== undefined && rawWhen.history_turns_gte !== null) {
+                    // No `< 0` check here (S3): chatpolicy.When.HistoryTurnsGTE
+                    // is an unconstrained *int server-side — Go accepts a
+                    // negative value too (it would just never match, since
+                    // sig.HistoryTurns is never negative), so rejecting it
+                    // here would be a Save-blocking error the server does
+                    // not agree with.
+                    if (typeof rawWhen.history_turns_gte !== 'number' || !Number.isInteger(rawWhen.history_turns_gte)) {
+                        errors.push(`rule ${i}: history_turns_gte must be an integer`);
                     } else {
                         when.history_turns_gte = rawWhen.history_turns_gte;
                     }
                 }
-                if (rawWhen.kb_ids !== undefined) {
+                if (rawWhen.kb_ids !== undefined && rawWhen.kb_ids !== null) {
                     if (!Array.isArray(rawWhen.kb_ids) || !rawWhen.kb_ids.every(v => typeof v === 'string')) {
                         errors.push(`rule ${i}: kb_ids must be an array of strings`);
                     } else {
@@ -216,14 +244,26 @@ export function validateToolsByRouteJSON(raw: string): { errors: string[] } {
             errors.push(`unknown route "${route}" (known: ${ROUTES.join(', ')})`);
             continue;
         }
-        if (!Array.isArray(tools)) {
+        // S3 (final review): AnswerToolsByRoute is a Go map[string][]string
+        // — a JSON `null` route value decodes to a nil (empty) slice, so
+        // `{"lookup": null}` is byte-identical server-side to
+        // `{"lookup": []}`: a real restriction (no tools on that route),
+        // not an error and not "no restriction" (which is the route being
+        // ABSENT from the document entirely, an orthogonal case).
+        const toolNames = tools === null ? [] : tools;
+        if (!Array.isArray(toolNames)) {
             errors.push(`route "${route}": must be an array of tool names`);
             continue;
         }
         const seen = new Set<string>();
-        for (const name of tools) {
+        for (const name of toolNames) {
             if (typeof name !== 'string' || !(KNOWN_TOOLS as readonly string[]).includes(name)) {
                 errors.push(`route "${route}": unknown tool ${JSON.stringify(name)} (known: ${KNOWN_TOOLS.join(', ')})`);
+                continue;
+            }
+            const excludedReason = EXCLUDED_ANSWER_TOOLS[name as KnownTool];
+            if (excludedReason !== undefined) {
+                errors.push(`route "${route}": ${JSON.stringify(name)} is ${excludedReason}`);
                 continue;
             }
             if (seen.has(name)) {
@@ -244,7 +284,25 @@ export type PreviewRow = {
     ruleIndex: number | null;
     orchestrator: string | null;
     mode: string | null;
+    /**
+     * S5 (final review): true when the matched rule is `mode: "prefer"` and
+     * its orchestrator's own feature flag is off — mirroring
+     * chatpolicy.Decide, where `Applied` is false in exactly this case and
+     * the turn falls through to the ordinary flag ladder instead of the
+     * named orchestrator. `orchestrator`/`mode` above still describe what
+     * MATCHED (useful for debugging an ordering mistake); this flag is what
+     * tells the caller whether that match actually took effect.
+     */
+    appliedFallthrough: boolean;
 };
+
+/**
+ * Orchestrator names whose live feature flag `previewPolicy`'s `enabled` map
+ * may report — every value chatpolicy.Orchestrators carries EXCEPT
+ * "standard", which chatpolicy.Decide always treats as enabled (it is the
+ * fallback route and has no flag of its own).
+ */
+export type PolicyEnabledMap = Partial<Record<Exclude<Orchestrator, 'standard'>, boolean>>;
 
 type PreviewSignals = {
     queryType: string;
@@ -292,13 +350,21 @@ const PREVIEW_SCENARIOS: { label: string; sig: PreviewSignals }[] = [
 /**
  * Runs the four canonical turns against a parsed policy and reports which
  * rule (if any) each one hits — first match wins, mirroring
- * chatpolicy.OrchestratorPolicy.Match.
+ * chatpolicy.OrchestratorPolicy.Match — and, via `appliedFallthrough`,
+ * whether a matched `prefer` rule actually took effect (chatpolicy.Decide's
+ * `Applied`). `enabled` should be the deployment's LIVE orchestrator flags
+ * (the caller already has them in siteConfigs); omitted/missing entries
+ * read as off, same as the Go reader's fail-soft default. A `force` rule,
+ * and any rule naming `standard`, is always applied regardless of `enabled`
+ * — mirroring chatpolicy.Decide exactly.
  */
-export function previewPolicy(rules: PolicyRule[]): PreviewRow[] {
+export function previewPolicy(rules: PolicyRule[], enabled: PolicyEnabledMap = {}): PreviewRow[] {
     return PREVIEW_SCENARIOS.map(({ label, sig }) => {
         const idx = rules.findIndex(r => whenMatches(r.when, sig));
-        if (idx === -1) return { label, ruleIndex: null, orchestrator: null, mode: null };
+        if (idx === -1) return { label, ruleIndex: null, orchestrator: null, mode: null, appliedFallthrough: false };
         const rule = rules[idx];
-        return { label, ruleIndex: idx, orchestrator: rule.orchestrator, mode: rule.mode };
+        const applied = rule.mode === 'force' || rule.orchestrator === 'standard' ||
+            !!enabled[rule.orchestrator as Exclude<Orchestrator, 'standard'>];
+        return { label, ruleIndex: idx, orchestrator: rule.orchestrator, mode: rule.mode, appliedFallthrough: !applied };
     });
 }

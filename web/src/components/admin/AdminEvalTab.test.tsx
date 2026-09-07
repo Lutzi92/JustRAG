@@ -120,7 +120,16 @@ describe('AdminEvalTab', () => {
                 return Promise.resolve({ data: { jobs: [] } });
             }
             if (url.includes('/runs')) {
-                return Promise.resolve({ data: { runs: [runOne, runTwo], total: 2 } });
+                // S9 (final review): server order is [runTwo, runOne] —
+                // deliberately NOT ascending by mean_recall (runOne=0.5 <
+                // runTwo=0.9) — so the third ('none') click's "back to
+                // fetch order" assertion below (['Run Two', 'Run One'])
+                // differs from the second ('asc') click's assertion
+                // (['Run One', 'Run Two']). With the original same-as-asc
+                // fetch order, the third-click assertion was byte-identical
+                // to the second click's and could never fail; this ordering
+                // makes it a real check of the desc -> asc -> none cycle.
+                return Promise.resolve({ data: { runs: [runTwo, runOne], total: 2 } });
             }
             return Promise.resolve({ data: {} });
         });
@@ -141,8 +150,8 @@ describe('AdminEvalTab', () => {
                 .filter(text => text.includes('Run One') || text.includes('Run Two'))
                 .map(text => (text.includes('Run One') ? 'Run One' : 'Run Two'));
 
-        // Fetch order (server order): Run One, then Run Two.
-        expect(rowLabelOrder()).toEqual(['Run One', 'Run Two']);
+        // Fetch order (server order): Run Two, then Run One.
+        expect(rowLabelOrder()).toEqual(['Run Two', 'Run One']);
 
         const scoreHeader = screen.getByText('Score');
 
@@ -154,9 +163,11 @@ describe('AdminEvalTab', () => {
         fireEvent.click(scoreHeader);
         expect(rowLabelOrder()).toEqual(['Run One', 'Run Two']);
 
-        // Third click: back to original fetch order.
+        // Third click: back to original fetch order (Run Two, Run One) —
+        // NOT the same as the asc order above, so this fails if the 'none'
+        // leg of the sort cycle is dropped or broken.
         fireEvent.click(scoreHeader);
-        expect(rowLabelOrder()).toEqual(['Run One', 'Run Two']);
+        expect(rowLabelOrder()).toEqual(['Run Two', 'Run One']);
     });
 
     it('shows the last team run recall/MRR next to the team selector', async () => {
