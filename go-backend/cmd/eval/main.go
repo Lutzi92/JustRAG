@@ -79,7 +79,7 @@ func main() {
 	longContextModeOverride := flag.String("longcontext-mode", "", `Wave-3 ruling W3-R6: per-run override for chat_longcontext_mode ("flat" | "map_reduce") — which consumer the OrchLongContext orchestrator uses. Empty = read the live site_config (whose default is "map_reduce" since Wave 5 / W5-R1; an unrecognised stored value normalises to "flat"). This is a CHAT-layer key, so it wraps siteReader like --crag (not the vector-layer overlay). Only has an effect when chat_longcontext_enabled is on and the question trips the global-synthesis classifier.`)
 	longContextEnabled := flag.String("longcontext", "", `Wave-3 ruling W3-R5: per-run override for chat_longcontext_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext-mode. "on" puts OrchLongContext at the top of the eval orchestrator ladder for questions the global-synthesis classifier accepts, so a global-synthesis golden set can be measured without mutating site_configs.`)
 	conflictSurfacing := flag.String("conflict-surfacing", "", `Wave-5 ruling W5-R7: per-run override for chat_conflict_surfacing_enabled ("on" | "off"). Empty = read the live site_config. Chat-layer key, applied through the same overlay as --longcontext. "on" makes every turn whose assembled set spans >= 2 distinct files run the fast-tier conflict / supersession pass, and records the resulting report per question as "conflicts" in the JSON report (the same bare array a chat turn persists and streams). Effective on the standard PrepareChatContext path and, under --orchestrator-dispatch, on the Supervisor path.`)
-	policyJSON := flag.String("policy", "", `Wave-6 W6-R6/W6-R7: per-run overlay for chat_orchestrator_policy (a JSON array of routing rules, e.g. [{"when":{"query_type":["complex_reasoning"]},"orchestrator":"supervisor","mode":"force"}]). Validated with chatpolicy.ValidateOrchestratorPolicyJSON BEFORE the run — an invalid document is a usage error (exit 2), never a silently ignored flag. Empty (default) = read the live site_config, i.e. the ladder is unchanged. Applied through the same chat-layer overlay as --conflict-surfacing, so it mutates no site_configs row; passing --chat-overlay chat_orchestrator_policy=... as well is an error (use --policy, which validates).`)
+	policyJSON := flag.String("policy", "", `Wave-6 W6-R6/W6-R7: per-run overlay for chat_orchestrator_policy (a JSON array of routing rules, e.g. [{"when":{"query_type":["complex_reasoning"]},"orchestrator":"supervisor","mode":"force"}]). Validated with chatpolicy.ValidateOrchestratorPolicyJSON BEFORE the run — an invalid document is a usage error (exit 2), never a silently ignored flag. Empty (default) = read the live site_config, i.e. the ladder is unchanged. Applied through the same chat-layer overlay as --conflict-surfacing, so it mutates no site_configs row; passing --chat-overlay chat_orchestrator_policy=... as well is an error (use --policy, which validates). REQUIRES --production-context --orchestrator-dispatch=true (the default) to actually be applied — a run in any other shape never reads chat_orchestrator_policy and is rejected as a usage error, EXCEPT --trajectory, where the document is accepted but is informational only (it reaches the report's policy_rule join key, not SelectOrchestratorWithPolicy's routing decision).`)
 	var chatOverlayFlags chatOverlayFlag
 	flag.Var(&chatOverlayFlags, "chat-overlay", `Wave-6 W6-R18: per-run override of ONE chat-layer site_config key (the reader PrepareChatContext and the orchestrators receive), applied through the same overlay as --conflict-surfacing; repeatable; key must be non-empty and contain no '='; only keys read through the chat-layer reader are affected — vector-layer keys keep their own flags.`)
 	goldenQueryType := flag.Bool("golden-query-type", false, `Forward each golden row's curated "query_type" label into the retrieval pipeline (chat.ChatContextParams.QueryType) instead of letting the pipeline classify the question. Default false so existing --production-context reports keep their historical shape. Does NOT affect orchestrator dispatch, which classifies independently — if a question does not reach the intended orchestrator, rewrite the question, not the label.`)
@@ -179,6 +179,19 @@ func main() {
 	// win (buildChatOverlays merges extra last).
 	if err := validatePolicyFlag(*policyJSON, extraChatOverlays); err != nil {
 		slog.Error("invalid --policy value", "error", err)
+		os.Exit(2)
+	}
+
+	// S12 (Wave-6 final review): --policy is silently a no-op unless the run
+	// actually reaches SelectOrchestratorWithPolicy. Off the --trajectory
+	// path (where it is informational only — it reaches the report's
+	// policy_rule join key, but is not what "ran"), that means
+	// --production-context --orchestrator-dispatch=true; nothing on the
+	// retrieval-only or --orchestrator-dispatch=false path reads
+	// chat_orchestrator_policy at all. Catch it here rather than letting an
+	// operator run a long measurement that measures nothing.
+	if err := checkPolicyFlagReachable(*policyJSON, *productionContext, *orchestratorDispatch, *trajectoryMode); err != nil {
+		slog.Error(err.Error())
 		os.Exit(2)
 	}
 
@@ -877,6 +890,30 @@ func validatePolicyFlag(policyJSON string, extra map[string]string) error {
 		return nil
 	}
 	return chatpolicy.ValidateOrchestratorPolicyJSON(policyJSON)
+}
+
+// checkPolicyFlagReachable rejects a --policy value that the run cannot
+// possibly apply, per the final-review S12 finding: nothing on the
+// retrieval-only path or the --orchestrator-dispatch=false path reads
+// chat_orchestrator_policy, so a run in either shape silently measures
+// nothing while looking like a real measurement. --trajectory is exempted
+// (not required to also carry --production-context/--orchestrator-dispatch)
+// because the policy document there is informational only — it reaches the
+// per-decision policy_rule join key, never SelectOrchestratorWithPolicy's
+// actual routing decision for a trajectory run — so it is never a silent
+// no-op there, only a lesser measurement than --production-context
+// --orchestrator-dispatch=true would give.
+func checkPolicyFlagReachable(policyJSON string, productionContext, orchestratorDispatch, trajectoryMode bool) error {
+	if strings.TrimSpace(policyJSON) == "" {
+		return nil
+	}
+	if trajectoryMode {
+		return nil
+	}
+	if productionContext && orchestratorDispatch {
+		return nil
+	}
+	return fmt.Errorf("--policy has no effect without --production-context --orchestrator-dispatch=true (or --trajectory, where it is informational only) — chat_orchestrator_policy is never read on the retrieval-only or --orchestrator-dispatch=false path")
 }
 
 // chatOverlayFlag is a repeatable flag.Value collecting raw --chat-overlay

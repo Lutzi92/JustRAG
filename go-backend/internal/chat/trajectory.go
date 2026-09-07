@@ -37,10 +37,13 @@ const trajectoryChunkPreview = 5
 //	                   cut from the tail
 //	orchestrator_policy — W6-R6: the chat_orchestrator_policy table matched
 //	                   this turn. Decision is the orchestrator the rule names
-//	                   (or "fallthrough" when a prefer rule's flag is off),
-//	                   Mode the rule's force/prefer, PolicyRule its 0-based
-//	                   index. Not emitted when no rule matched, so its absence
-//	                   means "the flag ladder decided".
+//	                   (or "fallthrough" — emitted either when a prefer
+//	                   rule's flag is off, or when a forced orchestrator's
+//	                   dependencies were missing and it fell back through
+//	                   the orchestrator-error path), Mode the rule's
+//	                   force/prefer, PolicyRule its 0-based index. Not
+//	                   emitted when no rule matched, so its absence means
+//	                   "the flag ladder decided".
 //	conflict_surfacing — W5-R7: the conflict / supersession pass finished;
 //	                   Reason carries the outcome (found | none | timeout |
 //	                   error) and Findings the conflict count

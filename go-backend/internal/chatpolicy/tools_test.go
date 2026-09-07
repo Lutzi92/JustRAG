@@ -92,16 +92,51 @@ func TestParseAnswerToolsByRoute_Errors(t *testing.T) {
 }
 
 // TestParseAnswerToolsByRoute_AllKnownToolsAccepted keeps the parser and the
-// documented tool list from drifting apart.
+// documented tool list from drifting apart — except the tools S13 explicitly
+// excludes from the answer-time catalog (TestParseAnswerToolsByRoute_
+// ExcludedFromCatalog covers those instead), which stay in KnownAnswerTools
+// only for the internal/mcp/builtin registry cross-check.
 func TestParseAnswerToolsByRoute_AllKnownToolsAccepted(t *testing.T) {
 	t.Parallel()
 	for _, name := range KnownAnswerTools {
+		if _, excluded := answerToolsExcludedFromCatalog[name]; excluded {
+			continue
+		}
 		for _, route := range Routes {
 			raw := `{"` + route + `": ["` + name + `"]}`
 			if _, err := ParseAnswerToolsByRoute(raw); err != nil {
 				t.Fatalf("route %q tool %q rejected: %v", route, name, err)
 			}
 		}
+	}
+}
+
+// TestParseAnswerToolsByRoute_ExcludedFromCatalog is S13 (final review):
+// code_exec is a KnownAnswerTools member (the mcp/builtin cross-check needs
+// it there) but MCPDispatcher.AnswerToolCatalog never includes it in the
+// answer-time catalog — naming it in a route allowlist must be a save-time
+// 400, not a silent empty catalog for that route.
+func TestParseAnswerToolsByRoute_ExcludedFromCatalog(t *testing.T) {
+	t.Parallel()
+	for _, route := range Routes {
+		raw := `{"` + route + `": ["code_exec"]}`
+		_, err := ParseAnswerToolsByRoute(raw)
+		if err == nil {
+			t.Fatalf("route %q: code_exec accepted, want a save-time error", route)
+		}
+		if !strings.Contains(err.Error(), "code_exec") || !strings.Contains(err.Error(), "excluded") {
+			t.Fatalf("route %q: error %q does not name code_exec as excluded", route, err.Error())
+		}
+	}
+	// Mixed with an ordinary tool, the excluded one still fails the whole
+	// document rather than being silently dropped.
+	if _, err := ParseAnswerToolsByRoute(`{"lookup": ["kb_search", "code_exec"]}`); err == nil {
+		t.Fatal("code_exec alongside a valid tool accepted, want an error")
+	}
+	// Still a KnownAnswerTools member, for the mcp/builtin registry
+	// cross-check test.
+	if !slices.Contains(KnownAnswerTools, "code_exec") {
+		t.Fatal("code_exec removed from KnownAnswerTools — the mcp/builtin cross-check depends on it staying there")
 	}
 }
 

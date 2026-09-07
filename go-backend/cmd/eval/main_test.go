@@ -318,3 +318,37 @@ func TestValidatePolicyFlag(t *testing.T) {
 		})
 	}
 }
+
+// checkPolicyFlagReachable is the final-review S12 guard: --policy must not
+// silently measure nothing. Table covers every reachable/unreachable
+// combination of the three governing flags, plus the "unset --policy is
+// always fine" escape.
+func TestCheckPolicyFlagReachable(t *testing.T) {
+	tests := []struct {
+		name                                                string
+		policy                                              string
+		productionContext, orchestratorDispatch, trajectory bool
+		wantErr                                             bool
+	}{
+		{name: "unset policy is always fine, even with nothing else set", policy: "", productionContext: false, orchestratorDispatch: false, trajectory: false, wantErr: false},
+		{name: "unset policy is fine even with dispatch off", policy: "", productionContext: true, orchestratorDispatch: false, trajectory: false, wantErr: false},
+		{name: "whitespace-only policy is treated as unset", policy: "   ", productionContext: false, orchestratorDispatch: false, trajectory: false, wantErr: false},
+		{name: "reachable: production-context + dispatch on", policy: policyOneRule, productionContext: true, orchestratorDispatch: true, trajectory: false, wantErr: false},
+		{name: "reachable: trajectory mode alone", policy: policyOneRule, productionContext: false, orchestratorDispatch: false, trajectory: true, wantErr: false},
+		{name: "reachable: trajectory mode even with dispatch off", policy: policyOneRule, productionContext: false, orchestratorDispatch: false, trajectory: true, wantErr: false},
+		{name: "unreachable: retrieval-only (no production-context)", policy: policyOneRule, productionContext: false, orchestratorDispatch: true, trajectory: false, wantErr: true},
+		{name: "unreachable: production-context but dispatch off", policy: policyOneRule, productionContext: true, orchestratorDispatch: false, trajectory: false, wantErr: true},
+		{name: "unreachable: neither production-context nor dispatch nor trajectory", policy: policyOneRule, productionContext: false, orchestratorDispatch: false, trajectory: false, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkPolicyFlagReachable(tt.policy, tt.productionContext, tt.orchestratorDispatch, tt.trajectory)
+			if tt.wantErr && err == nil {
+				t.Fatalf("checkPolicyFlagReachable(policy=%q, pc=%v, od=%v, traj=%v) = nil, want an error", tt.policy, tt.productionContext, tt.orchestratorDispatch, tt.trajectory)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("checkPolicyFlagReachable(policy=%q, pc=%v, od=%v, traj=%v) = %v, want nil", tt.policy, tt.productionContext, tt.orchestratorDispatch, tt.trajectory, err)
+			}
+		})
+	}
+}

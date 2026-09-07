@@ -26,6 +26,20 @@ var KnownAnswerTools = []string{
 	"count_mentions", "document_outline", "sql_query", "table_query", "graph_search",
 }
 
+// answerToolsExcludedFromCatalog names built-ins that are in KnownAnswerTools
+// (kept there unchanged — the internal/mcp/builtin cross-check test pins
+// KnownAnswerTools against the MCP registry's full tool list) but that
+// MCPDispatcher.AnswerToolCatalog (internal/chat/tool_dispatcher.go)
+// deliberately never includes in the answer-time catalog it builds. Naming
+// one in a chat_answer_tools_by_route route would otherwise validate (it IS
+// a known tool) and then silently produce an EMPTY catalog for that route —
+// the operator's restriction "just this tool" reads as "no tools at all".
+// Rejecting it at save time with an explicit reason (S13, final review)
+// turns that silent trap into an immediate 400.
+var answerToolsExcludedFromCatalog = map[string]string{
+	"code_exec": `"code_exec" is excluded from the answer-time tool catalog by design (MCPDispatcher.AnswerToolCatalog never includes it) — naming it in a chat_answer_tools_by_route route would validate but silently leave that route with no tools at all`,
+}
+
 // AnswerToolsByRoute maps a route to the tool names the answer-time tool
 // catalog is filtered down to on that route. An entry with an EMPTY list is a
 // real restriction ("no tools on this route"), distinct from a missing entry
@@ -74,6 +88,9 @@ func (m AnswerToolsByRoute) validate() error {
 		for _, name := range tools {
 			if !slices.Contains(KnownAnswerTools, name) {
 				return fmt.Errorf("route %q: unknown tool %q (known: %s)", route, name, strings.Join(KnownAnswerTools, ", "))
+			}
+			if reason, excluded := answerToolsExcludedFromCatalog[name]; excluded {
+				return fmt.Errorf("route %q: %s", route, reason)
 			}
 			if seen[name] {
 				return fmt.Errorf("route %q: duplicate tool %q", route, name)

@@ -542,16 +542,22 @@ type chatResponseParams struct {
 	agentMode string
 	// policyRule is the chat_orchestrator_policy rule index that pinned this
 	// turn's route (W6-R6), recorded on the agent_decisions row. nil means
-	// the flag ladder decided — which is what both constructors of this
-	// struct pass today, since the policy is evaluated inside tryDeepChat
-	// (see the note at each construction site).
+	// the flag ladder decided (no rule matched, a prefer rule's flag was
+	// off, or the policy is empty). The standard-path constructor passes
+	// standardPathPolicyRule(turnPol, deepChatAttempted) — a non-nil rule
+	// index when a "force standard" (or matched "prefer standard") rule
+	// pinned this turn AND the deep-chat dispatch was never attempted for
+	// it; the deep-chat constructor records its own rule separately via
+	// recordAgentDecision inside tryDeepChat.
 	policyRule *int
 	// queryType is the classifier's verdict for this turn (cls.QueryType),
 	// used by the per-route answer-tool allowlist (W6-R8,
 	// chat_answer_tools_by_route). Empty on handleTransformFollowUp, which
-	// skips retrieval/classification entirely — an empty query type never
-	// matches a configured route key, so Allowlist correctly reports "no
-	// restriction" for that turn.
+	// skips retrieval/classification entirely — resolveAnswerToolsRoute
+	// treats an empty query type as FULLY RESTRICTED (not "no restriction")
+	// whenever chat_answer_tools_by_route configures at least one route, so
+	// an unclassified turn can never be a classification-based escape hatch
+	// around an operator's restriction.
 	queryType string
 	// isGlobalSynthesis mirrors IsGlobalSynthesisQuery(searchQuery) at
 	// construction time; the "global_synthesis" route key wins over
