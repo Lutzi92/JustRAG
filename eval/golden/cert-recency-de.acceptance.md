@@ -766,34 +766,56 @@ e.g. `WID-SEC-2026-0104`: NEU `2026-08-31 04:53:56`, UPDATE
 | **totals** | | | **0/8 both present** | **0/8** | **0/8** |
 
 Rewriting the question to name the advisory and ask for the delta did
-**not** change the outcome: the pair is never assembled together, so the
-conflict detector never gets the chance to flag it. This confirms the
-Wave-5 hypothesis (the phrasing was not the cause) rather than refuting it.
+**not** change this: at the report's default `k=10` view (the production
+turn shape), none of the eight pair questions assemble both halves. That
+is shown directly by `cert-on.json`'s `retrieved` arrays (the table
+above). It is **not** evidence that "the conflict detector never gets the
+chance to flag a NEU/UPDATE pair on this corpus" — see Result 1a below,
+which shows the same `cert-on` run flagging five of these eight pairs
+correctly through other questions.
 
-### Retrieval-reason isolation: a deterministic rank-1-vs-rank-15 split
+### Result 1a — what the detector actually does on this corpus (`cert-on`, same run)
+
+Every `kind=superseded` entry the detector produced in the same `cert-on`
+run, across ALL 25 questions (not just the 8 pair questions) — reproduced
+by `t1-analyse.py`'s `supersession_summary()`:
+
+| Question | WID | `newer` points at | Direction correct |
+|---|---|---|---|
+| cert-r02 | WID-SEC-2026-0107 | UPDATE | yes |
+| cert-r05 | WID-SEC-2026-0106 | UPDATE | yes |
+| cert-r06 | WID-SEC-2026-0104 | UPDATE | yes |
+| cert-r06 | WID-SEC-2026-0106 | UPDATE | yes |
+| cert-c04 | WID-SEC-2026-0121 | UPDATE | yes |
+| cert-c04 | WID-SEC-2026-0115 | UPDATE | yes |
+| cert-e01 | WID-SEC-2026-0115 | UPDATE | yes |
+| cert-e02 | WID-SEC-2026-0109 | UPDATE | yes |
+| cert-e03 | WID-SEC-2026-0123 | UPDATE | yes |
+| cert-n01 | WID-SEC-2026-0111 | UPDATE | yes |
+| **totals** | **10 entries, 8 questions** | | **10/10 correct** |
+
+Of the 8 WIDs covered (0104, 0106, 0107, 0109, 0111, 0115, 0121, 0123),
+**five are `cert-p01`..`cert-p08` target pairs** (0104, 0106, 0107, 0109,
+0123) — the detector correctly identified and directed those exact
+NEU/UPDATE supersessions, just through the recency-listing (`cert-r02`,
+`cert-r05`, `cert-r06`), CVE-lookup (`cert-c04`, `cert-n01`) and
+enumeration (`cert-e01`, `cert-e02`, `cert-e03`) questions, whose top-10
+(or top-30, for the enumeration/listing routes) assembled both halves
+where the pair questions' top-10 did not. This is the same shape of result
+Wave 5 reported for its own pair questions ("12 of 37 opportunities …
+direction correct 12/12, zero invented pairs") — the mechanism keeps
+working; what fails specifically is the pair questions' own retrieval
+shape.
+
+### Retrieval-reason isolation: what is shown vs. what is inferred
 
 Each pair question was re-run in isolation (`--question-id cert-p0N
 --top-k 30`, standard path, dispatch off) to see the whole `final_docs`
 pool (30 chunks; the eval report's default `k=10` view only shows the
-first third of it). The `rag.search.stages` line for `cert-p01` (the other
-seven are structurally identical — `vector_docs`/`keyword_docs` around
-36–40, `rrf_docs`/`rerank_docs` 40, `mmr_docs`/`final_docs` 30):
-
-```
-{"msg":"rag.search.stages","stage":"search_stages","vector_docs":40,"vector_files":40,
- "keyword_docs":36,"keyword_files":36,"rrf_docs":40,"rrf_files":40,"rerank_docs":40,
- "rerank_files":40,"dedup_docs":40,"dedup_files":40,"mmr_docs":30,"mmr_files":30,
- "bm25_floor_reinserted":1,"final_docs":30,"final_files":30,"rerank_used":true,
- "mmr_lambda":0.7,"rerank_depth":120,"hnsw_ef_search":151}
-```
-
-Both vector and keyword arms return the file (the corpus is only 40 files,
-so `vector_docs=40` covers everything); RRF and the reranker keep all 40;
-**MMR (`mmr_lambda":0.7`) drops the pool from 40 to 30**, and that is where
-one half of every pair disappears from the *effective* ranking, not from
-whether it was retrieved at all. Checking each pair's exact rank within the
-30-doc `final_docs` pool (the same pool the conflict detector's
-`chat_conflict_max_chunks`=12 window is drawn from):
+first third of it). **Shown, directly, from the JSON reports:** both
+halves of every pair ARE present somewhere in that 30-doc pool, in all 8
+cases — the `retrieved` array for `pair-cert-p0N-k30.json` contains both
+the NEU and UPDATE file names for every `N`. What differs is their rank:
 
 | Question | Product | NEU rank | UPDATE rank |
 |---|---|---|---|
@@ -806,21 +828,67 @@ whether it was retrieved at all. Checking each pair's exact rank within the
 | cert-p07 | Atlassian Confluence | 15 | **1** |
 | cert-p08 | GitLab | **1** | 15 |
 
-Every single pair splits **exactly** rank 1 vs. rank 15 — the more
-topically on-point half (by rerank score) takes rank 1, and MMR's diversity
-penalty pushes its near-duplicate to precisely the midpoint of the 30-doc
-pool, in every one of the 8 cases. Rank 15 is outside both the eval
-report's default top-10 view **and** the conflict detector's top-12
-`chat_conflict_max_chunks` window — so this is not a k=10 eval-harness
-artifact, it is the real turn's context: the answer LLM and the conflict
-detector genuinely never see both halves together, regardless of how the
-question is phrased. **This is the retrieval finding the brief asks to
-isolate rather than tune**: MMR near-duplicate suppression (not top-k
-truncation, not the recency-listing name-match arm — this fixture routes
-through the standard lookup path, not `IsRecencyListingQuery`) is the
-mechanism, and it is deterministic enough on this fixture to reproduce the
-same 1-vs-15 split on every pair. No `site_config` was changed to produce
-or work around this.
+The `rag.search.stages` line for `cert-p01` (all 8 stages lines in
+`t1-out/pairs-isolated.log` share this shape — `vector_docs`/
+`keyword_docs` around 36–40, `rrf_docs`/`rerank_docs` 40, `mmr_docs`/
+`final_docs` 30):
+
+```
+{"msg":"rag.search.stages","stage":"search_stages","vector_docs":40,"vector_files":40,
+ "keyword_docs":36,"keyword_files":36,"rrf_docs":40,"rrf_files":40,"rerank_docs":40,
+ "rerank_files":40,"dedup_docs":40,"dedup_files":40,"mmr_docs":30,"mmr_files":30,
+ "bm25_floor_reinserted":1,"final_docs":30,"final_files":30,"rerank_used":true,
+ "mmr_lambda":0.7,"rerank_depth":120,"hnsw_ef_search":151}
+```
+
+**What this log line does NOT show**: it carries only stage
+*cardinalities* (`rerank_docs:40 → mmr_docs:30`), never a per-chunk rank.
+The rank-1-vs-15 table above comes entirely from the `--top-k 30` report's
+`retrieved` array — the *post-everything* order — not from anything the
+stages log records. An earlier draft of this record attributed the split
+to "MMR pushes the near-duplicate to the midpoint of the pool", stated as
+an observation ("logs show"). That attribution is corrected here: it was
+an inference the stages log cannot support, and a simpler, directly
+verifiable mechanism accounts for the exact pattern instead.
+
+**What IS shown, from the `retrieved` array's `score` field**: ranks 1–15
+in every one of the 8 isolated `--top-k 30` reports carry the identical
+score (`1.0` in 7 of 8 pairs; `0.9996426…` in `cert-p07`), i.e. a 15-wide
+score tie, confirmed for all 8 pairs by `t1-analyse.py`'s
+`tie_width_table()` (`t1-out/t1-analysis.txt`, "BM25-floor tie-block width
+at k=30" section). That width, `15`, is exactly
+`BM25FloorMaxFilesFor(limit=30)` — `limit/2` —
+(`go-backend/internal/vector/rrf.go:270-276`). `ApplyBM25Floor`
+(`rrf.go:309-`) walks the top-`maxFiles` BM25-ranked distinct files and
+clamps each floor-protected chunk's score **up to the current top score**
+(so it survives token-budget trimming and lands at a sandwich-order
+boundary rather than the lost-in-the-middle region) — that clamp is what
+produces the tie, and the demoted half of each pair sits at the *last*
+slot of that tie block (rank 15) in every single case. The `bm25_floor_reinserted:1`
+field in the (top-10) stages log confirms the floor mechanism fired on
+these queries; it is a plausible and directly-supported explanation for
+"the half is in the pool at all" and for "the tie block is exactly 15
+wide" — it says nothing, by itself, about which half is at rank 1 vs.
+rank 15 within the tie (the tie-breaking order inside a 15-way score tie
+was not isolated in this task and is not claimed here).
+
+**What is NOT shown, and is explicitly left open:** which stage puts the
+demoted half specifically at the *last* position of the tie block rather
+than elsewhere within it, and — separately — whether the same split
+happens at the production `k=10` shape. The `k=30` rank table above
+**cannot be carried over** to the `cert-on` (`k=10`) turn: the BM25-floor
+budget (`limit/2`), the MMR pool size and the final trim all scale with
+`limit`, so `BM25FloorMaxFilesFor(10) = 4`, not `15`, and the tie
+structure at `k=10` was **not isolated** in this task (no per-rank stages
+data exists for the production-shaped run — only the `retrieved`
+top-10 list, which is what the Result 1 table above already reads
+directly). What the `k=10` `cert-on` run **does** show directly, without
+any inference, is the conclusion that matters for the pass/fail rule:
+across all 8 pair questions, only one half of the pair is in the
+production-shaped assembled set (`cert-on.json`'s `retrieved`, k=10, per
+question), in every case. That is a direct read of the report, not a
+carry-over from the `k=30` diagnostic. No `site_config` was changed to
+produce or investigate any of this.
 
 ## Result 2 — cost and retrieval neutrality (25 CERT questions)
 
@@ -862,13 +930,23 @@ is the pre-registered two-run PPM check):
 
 Both runs exceed the ≤ 0.10 gate (run 1 by 1.2 pp, run 2 by 0.1 pp — the
 smallest possible margin above the threshold, since 9/89 = 0.1011...). Nine
-of the eleven `entries` overlap between the two runs by claim text and file
-pair (`Q012`, `Q013`, `Q030`, `Q038`, `Q062`, `Q084`, `Q085`, `Q091`,
-`Q095` all recur; `Q071` from the Wave-5 measurement did not fire in either
-Wave-6 run). All 20 entries across both runs are `kind=contradiction`,
-`newer=unknown` — same shape as Wave 5: no superseded pair was found on
-this KB, which has no NEU/UPDATE convention. Two representative entries
-(seen in both runs):
+of the ten flagged question ids overlap between the two runs (`Q012`,
+`Q013`, `Q030`, `Q038`, `Q062`, `Q084`, `Q085`, `Q091`, `Q095` all recur);
+run 1 additionally flags `Q071` (`Entwurf Grußwort VPW.md` vs.
+`Planungsprojekt Neue Wege mit KI.md`, `kind=contradiction`), which is
+exactly the one question that accounts for the 10-vs-9 gap between the
+two runs — it did **not** fail to fire in Wave 6 (an earlier draft of this
+record said the opposite; corrected here against `t1-out/t1-analysis.txt`,
+which lists `Q071` under "ppm on-1 flagged question ids" and under "ids in
+run 1 only"). Separately, `Q091`'s claim text differs between the two runs
+even though the file pair is the same (run 1: "Die Priorisierung erfolgt
+über die Kategorien strategische Relevanz und Nutzen…"; run 2: "Die
+Bewertung der Priorisierung erfolgt über die Kategorien Wichtigkeit und
+Dringlichkeit…") — the *pair* recurs, the wording the fast-tier call
+produced for it does not. All 20 entries across both runs are
+`kind=contradiction`, `newer=unknown` — same shape as Wave 5: no
+superseded pair was found on this KB, which has no NEU/UPDATE convention.
+Two representative entries (seen in both runs):
 
 > `[Q012]` claim: *"Der Zeitraum des Planungsprojekts 'Neue Wege mit KI'"*
 > A: `Planungsprojekt Neue Wege mit KI.md`
@@ -901,22 +979,37 @@ for RSS/advisory KBs, and `chat_conflict_surfacing_enabled` stays default
 Both criteria fail, and the Wave-6 rewrite narrows down exactly why each
 one does:
 
-1. **0/8 is now conclusively a retrieval-side finding, not a fixture
-   phrasing artifact.** The Wave-5 hypothesis ("the pair questions were
-   authored to test promotion, not co-retrieval, so of course both halves
-   aren't retrieved together") predicted that naming the advisory and
-   asking for the delta would fix it. It did not: MMR near-duplicate
-   suppression splits every single NEU/UPDATE pair to exactly rank 1 vs.
-   rank 15 of a 30-chunk pool, regardless of question phrasing, so the
-   pair is never in the same context window the conflict detector (or the
-   answer LLM) sees. Fixing this would require either an MMR change that
-   treats a same-topic near-duplicate specially (a retrieval change, out of
-   scope for this task per the brief — "do NOT tune anything, do NOT
-   change any site_config") or a fixture/detector design that does not
-   depend on both halves surviving MMR together (e.g. widening
-   `chat_conflict_max_chunks` past 12, or a KB-level exemption from MMR
-   dedup for advisory-style corpora — both are roadmap items, not
-   measured here).
+1. **0/8 is a retrieval-shape finding specific to how the pair questions
+   retrieve, not evidence the detector cannot handle this corpus.** The
+   Wave-5 hypothesis ("the pair questions were authored to test promotion,
+   not co-retrieval, so of course both halves aren't retrieved together")
+   predicted that naming the advisory and asking for the delta would fix
+   it. It did not: at the production `k=10` shape, every one of the 8 pair
+   questions' `retrieved` list contains only one half of its pair (shown
+   directly, Result 1's table). What is **not** established is the
+   mechanism inside retrieval that produces this — the `k=30` diagnostic
+   shows both halves present in the wider 30-doc pool for all 8 pairs,
+   split by a BM25-floor score-boost tie block whose width
+   (`BM25FloorMaxFilesFor(30)=15`) is shown, but that tie's internal
+   ordering (why one half lands at rank 1 and the other at exactly rank
+   15, rather than the reverse or some other position within the tie) was
+   not isolated, and the `k=30` structure does not carry over arithmetically
+   to the `k=10` production shape (floor budget, MMR pool and trim all
+   scale with `limit`). And — importantly — **Result 1a shows the detector
+   is not structurally blind to this corpus's NEU/UPDATE pairs**: on the
+   very same `cert-on` run, it correctly flagged and directed 5 of these 8
+   exact pairs through other questions (recency-listing, CVE-lookup,
+   enumeration) whose retrieval shape happened to assemble both halves —
+   10 `superseded` entries, direction correct 10/10, zero invented pairs.
+   So the finding is specifically that **these 8 pair questions' own
+   retrieval shape** does not put both halves of their own target pair
+   into the assembled set, not that conflict surfacing cannot work on
+   this KB. Investigating why (an MMR/BM25-floor tuning change, a
+   fixture/detector design that does not depend on the *queried* pair's
+   own top-k, e.g. widening `chat_conflict_max_chunks` past 12) is a
+   retrieval-tuning question, explicitly out of scope for this task per
+   the brief ("do NOT tune anything, do NOT change any site_config") —
+   flagged here as a roadmap item, not attempted or measured.
 2. **0.112 / 0.101 confirms the Wave-5 upper-bound claim was directionally
    right**: the corrected detector (self-pair dropped, mirrored duplicates
    collapsed) does score lower than the pre-fix 0.124, but it remains above

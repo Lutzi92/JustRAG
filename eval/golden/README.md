@@ -917,11 +917,22 @@ and each row carries an `expected_points` array (1–2 points per pair) drawn
 from the fixture's own `Update: …` line, for the coverage judge. This is the
 pre-registered W6-R1 measurement's fixture; see the acceptance doc's
 "Conflict surfacing re-measured (Wave 6)" section for the result — even with
-the rewritten phrasing, 0/8 pairs assembled both halves within the top-30
-final chunk set (isolated per-question `rag.search.stages` logs show, e.g.,
-the `cert-p01` NEU half ranking 15th against the UPDATE half at rank 1), so
-the finding is retrieval-side (reranker + MMR near-duplicate suppression),
-not a property of question phrasing.
+the rewritten phrasing, 0/8 pairs assemble both halves at the production
+`k=10` shape (`cert-on.json`'s `retrieved`), so the pair questions never
+give the conflict detector a chance to see both halves of their own
+target pair together. This is **not** because the detector fails on this
+corpus: an isolated `--top-k 30` diagnostic shows both halves ARE present
+in the wider 30-chunk pool for all 8 pairs, split by a BM25-floor
+score-tie boundary (`BM25FloorMaxFilesFor(30)=15`,
+`go-backend/internal/vector/rrf.go:270`) — e.g. the `cert-p01` NEU half
+ranks 15th against the UPDATE half at rank 1, within that wider pool — and
+on the very same run the detector correctly flagged and directed 5 of
+these 8 exact NEU/UPDATE pairs through other questions (recency-listing,
+CVE-lookup, enumeration) whose own retrieval shape assembled both halves.
+The finding is specific to the pair questions' own retrieval shape, not a
+property of question phrasing and not a detector limitation on this
+corpus; the acceptance record's "Result 1a" and "Retrieval-reason
+isolation" sections have the full evidence and what remains unestablished.
 
 `kb_id` in the committed file is the placeholder
 `REPLACE_WITH_FIXTURE_KB_ID` (see "Ground truth by name, not by UUID"
