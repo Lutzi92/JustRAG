@@ -245,3 +245,88 @@ func TestRecordAgentDecision_NilPolicyRuleStaysNil(t *testing.T) {
 		t.Fatalf("policyRule = %v, want nil", snap.policyRule)
 	}
 }
+
+// W7-R3: the non-streaming JSON path (writeJSONResponse) must record the
+// same agent_decisions row the streaming standard path does, through the
+// shared recordStandardPathDecision helper so the two cannot drift. These
+// tests exercise the helper directly (the way both writers call it) rather
+// than driving the whole handler, since writeJSONResponse's other
+// dependencies (AI completion, post-response tasks) aren't faked here.
+func TestRecordStandardPathDecision_DefaultsToCragAndAnswered(t *testing.T) {
+	fake := &fakeDecisionRecorder{}
+	h := NewHandler(nil, nil, nil, WithDecisionRecorder(fake))
+
+	rule := 3
+	p := chatResponseParams{
+		kbID:          "kb-1",
+		chatStartTime: time.Now(),
+		policyRule:    &rule,
+		// agentMode left empty -> defaults to "crag"
+	}
+	h.recordStandardPathDecision(context.Background(), p, nil)
+
+	snap := waitForRecord(t, fake)
+	if snap.kbID != "kb-1" {
+		t.Errorf("kbID = %q, want kb-1", snap.kbID)
+	}
+	if snap.mode != "crag" {
+		t.Errorf("mode = %q, want crag", snap.mode)
+	}
+	if snap.outcome != "answered" {
+		t.Errorf("outcome = %q, want answered", snap.outcome)
+	}
+	if snap.policyRule == nil || *snap.policyRule != rule {
+		t.Errorf("policyRule = %v, want %d", snap.policyRule, rule)
+	}
+	if snap.teamID != nil || snap.agentID != nil {
+		t.Errorf("teamID/agentID = %v/%v, want nil/nil", snap.teamID, snap.agentID)
+	}
+}
+
+// A transform follow-up (handleTransformFollowUp) sets agentMode to
+// "transform_followup" — the recorded mode must carry it through unchanged,
+// not fall back to "crag".
+func TestRecordStandardPathDecision_ForwardsTransformMode(t *testing.T) {
+	fake := &fakeDecisionRecorder{}
+	h := NewHandler(nil, nil, nil, WithDecisionRecorder(fake))
+
+	p := chatResponseParams{
+		kbID:          "kb-2",
+		chatStartTime: time.Now(),
+		agentMode:     "transform_followup",
+	}
+	h.recordStandardPathDecision(context.Background(), p, nil)
+
+	snap := waitForRecord(t, fake)
+	if snap.mode != "transform_followup" {
+		t.Errorf("mode = %q, want transform_followup", snap.mode)
+	}
+	if snap.outcome != "answered" {
+		t.Errorf("outcome = %q, want answered", snap.outcome)
+	}
+	if snap.policyRule != nil {
+		t.Errorf("policyRule = %v, want nil", snap.policyRule)
+	}
+}
+
+// A non-empty bufferedTrajectory carrying a final answer-stage event
+// overrides the "answered" default (mirrors agentOutcomeFromEvents'
+// existing contract).
+func TestRecordStandardPathDecision_OutcomeFromEvents(t *testing.T) {
+	fake := &fakeDecisionRecorder{}
+	h := NewHandler(nil, nil, nil, WithDecisionRecorder(fake))
+
+	p := chatResponseParams{
+		kbID:          "kb-3",
+		chatStartTime: time.Now(),
+	}
+	events := []map[string]any{
+		{"agentTrajectory": TrajectoryEvent{Stage: "answer", Decision: "abstained"}},
+	}
+	h.recordStandardPathDecision(context.Background(), p, events)
+
+	snap := waitForRecord(t, fake)
+	if snap.outcome != "abstained" {
+		t.Errorf("outcome = %q, want abstained", snap.outcome)
+	}
+}

@@ -64,3 +64,27 @@ func agentOutcomeFromEvents(events []map[string]any) (outcome string, hops int, 
 	}
 	return outcome, hops, rounds
 }
+
+// recordStandardPathDecision records the agent_decisions row for a turn
+// that went through the standard (no-orchestrator) path — CRAG via
+// PrepareChatContext, or a transform follow-up. It is shared by the
+// streaming and non-streaming response writers (writeStreamingResponse /
+// writeJSONResponse) so the mode/outcome/latency computation cannot drift
+// between them (W7-R3): mode falls back to "crag" when p.agentMode is
+// unset, outcome comes from the buffered trajectory's final answer-stage
+// event (agentOutcomeFromEvents) and defaults to "answered" when that
+// event never fired, and latency is measured from p.chatStartTime.
+// events is normally p.bufferedTrajectory — passed explicitly so callers
+// stay in control of which buffer they hand in (the non-streaming path
+// only ever populates one for the transform-follow-up branch).
+func (h *Handler) recordStandardPathDecision(ctx context.Context, p chatResponseParams, events []map[string]any) {
+	outcome, _, _ := agentOutcomeFromEvents(events)
+	if outcome == "" {
+		outcome = "answered"
+	}
+	mode := p.agentMode
+	if mode == "" {
+		mode = "crag"
+	}
+	h.recordAgentDecision(ctx, p.kbID, mode, outcome, 0, 0, time.Since(p.chatStartTime).Milliseconds(), nil, nil, p.policyRule)
+}

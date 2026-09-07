@@ -390,6 +390,12 @@ one-step rollback** (`cmd/migrate` is up-only).
   accepts the fractional-second component it was trying to catch); a page
   whose `version.when` is unparseable is now logged once per sync and treated
   as unchanged (previously silent, same "unchanged" outcome).
+- **Non-streaming chat turns now record an `agent_decisions` row.** The
+  non-streaming JSON response path (`writeJSONResponse`) previously recorded
+  nothing, leaving every `stream=false` standard-path turn invisible to the
+  admin agent-metrics panel. It now shares `recordStandardPathDecision` with
+  the streaming standard path, so the mode/outcome/latency computation cannot
+  drift between the two. No migration.
 
 ## v0.10.0 — 2026-08-19
 

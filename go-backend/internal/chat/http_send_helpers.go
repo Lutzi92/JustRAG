@@ -879,15 +879,9 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	// outcome is recorded in the global metrics; per-chat logging
 	// for the admin panel uses mode=crag with outcome derived from
 	// the buffered trajectory's final decision event (when present).
-	stdOutcome, _, _ := agentOutcomeFromEvents(p.bufferedTrajectory)
-	if stdOutcome == "" {
-		stdOutcome = "answered"
-	}
-	mode := p.agentMode
-	if mode == "" {
-		mode = "crag"
-	}
-	h.recordAgentDecision(ctx, p.kbID, mode, stdOutcome, 0, 0, time.Since(p.chatStartTime).Milliseconds(), nil, nil, p.policyRule)
+	// Shared with writeJSONResponse via recordStandardPathDecision
+	// (W7-R3) so the two cannot drift.
+	h.recordStandardPathDecision(ctx, p, p.bufferedTrajectory)
 
 	writeSSEDone(ctx, w)
 	sseFinished = true
@@ -966,6 +960,12 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 			logctx.From(ctx).Warn("failed to persist message trace_id", "messageId", aiMsg.ID, "error", err)
 		}
 	}
+
+	// W7-R3: the non-streaming path previously recorded no agent_decisions
+	// row at all, leaving every non-streaming standard-path turn invisible
+	// to the admin metrics panel. Shared with writeStreamingResponse via
+	// recordStandardPathDecision so the two cannot drift.
+	h.recordStandardPathDecision(ctx, p, p.bufferedTrajectory)
 
 	answerForClient := result.Content
 	if refinedAnswer != "" {

@@ -111,6 +111,8 @@ Persists every orchestrator decision into `agent_decisions` (migration 0042) and
 
 `agent_decisions.policy_rule` (migration **0073**, nullable smallint) is the newest column: the 0-based [`chat_orchestrator_policy`](#per-query-orchestrator-policy-chat_orchestrator_policy) rule index that pinned this turn's orchestrator, or NULL when the flag ladder decided instead. It is set only when the policy **applied** — a matched-but-unapplied `prefer` rule, or a `force` rule that fell through because its orchestrator's dependencies were missing, both leave the row NULL (the row must never claim a route that did not actually answer the turn); those two cases are visible in the trajectory stream instead, not in this column.
 
+Since Wave 7 (W7-R3), the non-streaming JSON standard path (`writeJSONResponse`) also records a row — through `recordStandardPathDecision`, the same helper the streaming standard path calls — so a deployment answering `stream=false` turns is no longer invisible to this panel.
+
 ### MCP tool registry (`chat_use_mcp_tools`)
 
 The shared registry that backs every tool-calling code path (planner-time, answer-time, agent specialists). Built-in tools live in `internal/mcp/builtin/`; admin-registered MCP servers add to the same registry. **Why:** a single registry means orchestrators don't each carry their own tool wiring — adding a new tool surfaces it in every code path that opted into tools.
