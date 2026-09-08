@@ -1,6 +1,6 @@
 module github.com/justrag/go-backend
 
-go 1.26
+go 1.26.0
 
 // Pin the build toolchain to a stdlib release that carries the crypto/x509,
 // crypto/tls, net/http, net/url, html/template, net/textproto, encoding/xml,
@@ -36,7 +36,7 @@ require (
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/rs/cors v1.11.1
 	github.com/xuri/excelize/v2 v2.10.1
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/text v0.41.0
