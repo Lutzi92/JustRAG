@@ -55,8 +55,9 @@ func openBM25TestPools(t *testing.T) (mainPool, vectorPool *pgxpool.Pool) {
 }
 
 // TestBM25StatsRefreshAndStaleness seeds a KB with 3 chunks in
-// document_chunks_768 (dim 768 is present in the dev vector DB fixture),
-// runs RefreshKB, and asserts both the per-KB and per-term stats it
+// document_chunks_768 (created here via EnsureChunkTable — the migrations
+// only build the un-suffixed document_chunks, dim tables are created lazily
+// at runtime, so a fresh CI database has no 768 table), runs RefreshKB, and asserts both the per-KB and per-term stats it
 // produces, then exercises StaleKBs' "no stats row yet / stats older than
 // newest chunk / stats older than maxAge" detection (W2-R5).
 //
@@ -68,6 +69,9 @@ func TestBM25StatsRefreshAndStaleness(t *testing.T) {
 	mainPool, vectorPool := openBM25TestPools(t)
 	ctx := context.Background()
 
+	if err := EnsureChunkTable(ctx, PgxpoolExec{Pool: vectorPool}, 768); err != nil {
+		t.Fatalf("EnsureChunkTable(768): %v", err)
+	}
 	if err := EnsureBM25StatsTables(ctx, PgxpoolExec{Pool: vectorPool}, 768); err != nil {
 		t.Fatalf("EnsureBM25StatsTables(768): %v", err)
 	}
