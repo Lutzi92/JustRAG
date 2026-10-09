@@ -4,6 +4,7 @@ package websearch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -130,31 +131,26 @@ func (h *Handler) WebSearch(w http.ResponseWriter, r *http.Request) {
 		req.Language = "en"
 	}
 
-	// 2. Check web_search_enabled site config.
-	enabledVal, err := h.store.GetSiteConfigValue(ctx, "web_search_enabled")
-	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to read site config")
-		return
-	}
-	if enabledVal == nil || *enabledVal != "true" {
+	// 2./3. web_search_enabled + Google API credentials (shared check, see
+	// Resolve).
+	creds, err := Resolve(ctx, h.store)
+	switch {
+	case errors.Is(err, ErrDisabled):
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusForbidden, "web search is not enabled")
 		return
-	}
-
-	// 3. Get Google API credentials.
-	apiKeyVal, err := h.store.GetSiteConfigValue(ctx, "google_search_api_key")
-	if err != nil || apiKeyVal == nil || *apiKeyVal == "" {
+	case errors.Is(err, ErrAPIKeyMissing):
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "Google Search API key is not configured")
 		return
-	}
-	cxVal, err := h.store.GetSiteConfigValue(ctx, "google_search_cx")
-	if err != nil || cxVal == nil || *cxVal == "" {
+	case errors.Is(err, ErrCXMissing):
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "Google Search CX is not configured")
+		return
+	case err != nil:
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to read site config")
 		return
 	}
 
 	// 4. Call Google Custom Search API.
-	results, err := callGoogleSearch(ctx, *apiKeyVal, *cxVal, req.Query, req.Limit, req.Language)
+	results, err := callGoogleSearch(ctx, creds.APIKey, creds.CX, req.Query, req.Limit, req.Language)
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadGateway, fmt.Sprintf("Google Search API error: %s", httputil.SanitizeError(err)))
 		return

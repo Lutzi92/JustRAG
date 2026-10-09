@@ -132,41 +132,21 @@ func TestInjectionVerdictThreeStates(t *testing.T) {
 	}
 }
 
-func TestGetFileOrigin(t *testing.T) {
+func TestGetFileScreeningInfoJoinsKBVisibility(t *testing.T) {
 	pool := openMainPool(t)
 	store := files.NewStore(pool)
 	ctx := context.Background()
-	_, fileID := seedErrorFile(t, pool, "completed")
+	_, fileID := seedErrorFile(t, pool, "processing") // seeds a PUBLIC kb, origin defaults to 'upload'
 
-	// seedErrorFile does not set origin, so the column default applies —
-	// which is exactly the value the screen must see for a plain upload.
-	got, err := store.GetFileOrigin(ctx, fileID)
+	origin, vis, err := store.GetFileScreeningInfo(ctx, fileID)
 	if err != nil {
-		t.Fatalf("GetFileOrigin: %v", err)
+		t.Fatalf("GetFileScreeningInfo: %v", err)
 	}
-	if got != "upload" {
-		t.Errorf("origin = %q, want upload (the files.origin default)", got)
+	if origin != "upload" || vis != "public" {
+		t.Fatalf("got (%q, %q), want (upload, public)", origin, vis)
 	}
-
-	if _, err := pool.Exec(ctx,
-		`UPDATE files SET origin = 'rss' WHERE id = $1::uuid`, fileID); err != nil {
-		t.Fatalf("set origin: %v", err)
-	}
-	got, err = store.GetFileOrigin(ctx, fileID)
-	if err != nil {
-		t.Fatalf("GetFileOrigin after update: %v", err)
-	}
-	if got != "rss" {
-		t.Errorf("origin = %q, want rss", got)
-	}
-
-	// A missing row is "", nil — never an error: a file deleted mid-ingest
-	// must not turn into a failed ingestion.
-	got, err = store.GetFileOrigin(ctx, "00000000-0000-0000-0000-000000000000")
-	if err != nil {
-		t.Fatalf("GetFileOrigin(missing): unexpected error %v", err)
-	}
-	if got != "" {
-		t.Errorf("missing file: origin = %q, want \"\"", got)
+	origin, vis, err = store.GetFileScreeningInfo(ctx, "00000000-0000-0000-0000-000000000000")
+	if err != nil || origin != "" || vis != "" {
+		t.Fatalf("missing row: got (%q, %q, %v), want empty + nil", origin, vis, err)
 	}
 }

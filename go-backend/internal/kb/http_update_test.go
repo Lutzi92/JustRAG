@@ -329,3 +329,90 @@ func TestListFiles_StageFieldsSerialized(t *testing.T) {
 		t.Errorf("stageTotal must be omitted for idle files: %s", body)
 	}
 }
+
+func listFilesAs(t *testing.T, st *mockUpdateStore, role string, withAccess bool) []map[string]any {
+	t.Helper()
+	h := kb.NewUpdateHandler(st, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/kb-1/files", nil)
+	req.SetPathValue("id", "kb-1")
+	if withAccess {
+		req = req.WithContext(kbaccess.WithAccess(req.Context(), &kbaccess.KBAccessResult{
+			KB: &kbaccess.KnowledgeBase{ID: "kb-1"}, Role: role,
+		}))
+	}
+	rr := httptest.NewRecorder()
+	h.ListFiles(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return rows
+}
+
+func filesWithUploader() *mockUpdateStore {
+	return &mockUpdateStore{files: []kb.FileRow{
+		{ID: "f1", Name: "a.pdf", UploadedBy: &kb.FileUploader{ID: "u1", DisplayName: "Ada Lovelace"}},
+		{ID: "f2", Name: "feed.md"}, // source-owned: no uploader
+	}}
+}
+
+func TestListFiles_UploaderVisibleToEditors(t *testing.T) {
+	for _, role := range []string{kbaccess.RoleEdit, kbaccess.RoleAdmin, kbaccess.RoleOwner} {
+		rows := listFilesAs(t, filesWithUploader(), role, true)
+		ub, ok := rows[0]["uploadedBy"].(map[string]any)
+		if !ok || ub["id"] != "u1" || ub["displayName"] != "Ada Lovelace" {
+			t.Errorf("role %s: uploadedBy = %v, want {u1, Ada Lovelace}", role, rows[0]["uploadedBy"])
+		}
+		if _, present := rows[1]["uploadedBy"]; present {
+			t.Errorf("role %s: a row without uploader must omit the key, got %v", role, rows[1]["uploadedBy"])
+		}
+	}
+}
+
+func TestListFiles_UploaderHiddenFromViewers(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		role       string
+		withAccess bool
+	}{
+		{"view role", kbaccess.RoleView, true},
+		{"no access in context", "", false},
+	} {
+		rows := listFilesAs(t, filesWithUploader(), tc.role, tc.withAccess)
+		for i, r := range rows {
+			if _, present := r["uploadedBy"]; present {
+				t.Errorf("%s: row %d leaks uploadedBy = %v", tc.name, i, r["uploadedBy"])
+			}
+		}
+	}
+}
+
+// TestListFiles_UserFileID pins the userFileId key: present for a library
+// copy, omitted for a plain file.
+func TestListFiles_UserFileID(t *testing.T) {
+	linked := makeFileRow("f-1", "a.pdf")
+	uf := "7b0c9f64-2b1e-4a39-9d51-0a6a1f0e2c11"
+	linked.UserFileID = &uf
+	store := &mockUpdateStore{files: []kb.FileRow{linked, makeFileRow("f-2", "b.pdf")}, total: 2}
+	h := kb.NewUpdateHandler(store, nil)
+	r := injectKBAccess(httptest.NewRequest(http.MethodGet, "/api/kb/kb-1/files", nil), "kb-1")
+	w := httptest.NewRecorder()
+	h.ListFiles(w, r)
+
+	var raw []map[string]any
+	if err := json.NewDecoder(w.Result().Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(raw) != 2 {
+		t.Fatalf("rows = %d", len(raw))
+	}
+	if raw[0]["userFileId"] != uf {
+		t.Errorf("linked row userFileId = %v", raw[0]["userFileId"])
+	}
+	if _, ok := raw[1]["userFileId"]; ok {
+		t.Errorf("plain row must omit userFileId")
+	}
+}

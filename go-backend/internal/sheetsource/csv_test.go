@@ -152,3 +152,22 @@ func TestCSVBlankLinesAreGapRows(t *testing.T) {
 		t.Errorf("RowCount=%d, want 6", extras.RowCount)
 	}
 }
+
+func TestOpenCSVNamedSheetName(t *testing.T) {
+	src, err := Open("testdata/decimal_comma.csv", "Umsatz 2025.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	if got := src.Sheets()[0].Name; got != "Umsatz 2025" {
+		t.Fatalf("sheet name = %q, want original file stem", got)
+	}
+	plain, err := OpenCSV("testdata/decimal_comma.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plain.Close()
+	if got := plain.Sheets()[0].Name; got != "decimal_comma" {
+		t.Fatalf("path-derived name = %q", got)
+	}
+}

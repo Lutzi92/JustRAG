@@ -5,6 +5,7 @@ package publicapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -164,6 +165,19 @@ func (a chatStoreAdapter) UpdateMessageTraceID(_ context.Context, _ string, _ st
 }
 func (a chatStoreAdapter) UpdateChatAgentSelection(_ context.Context, _ string, _, _ *string) error {
 	return nil
+}
+
+// errChatStoreUnsupported is returned by the chat.Store methods the public
+// API never routes to, so an accidental call fails loudly instead of
+// reporting a success that did nothing.
+var errChatStoreUnsupported = errors.New("publicapi: operation not supported by the public API chat store")
+
+func (a chatStoreAdapter) UpdateChatTitle(_ context.Context, _, _, _ string) error {
+	return fmt.Errorf("UpdateChatTitle: %w", errChatStoreUnsupported)
+}
+
+func (a chatStoreAdapter) StarterContext(_ context.Context, _ string, _ int) (chat.StarterSource, error) {
+	return chat.StarterSource{}, fmt.Errorf("StarterContext: %w", errChatStoreUnsupported)
 }
 
 // ---------------------------------------------------------------------------

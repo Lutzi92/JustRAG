@@ -22,6 +22,15 @@ type ParseResult struct {
 	// processor splits the full Text as a single unpaginated document.
 	Pages      []PageText
 	IsMarkdown bool // true when Text/Pages content is markdown (headings, lists, etc.)
+	// Degraded is set when the result came from a fallback parser after the
+	// preferred one failed (e.g. Docling timed out and pdftotext answered).
+	// The result is still usable for this ingest but must not be cached under
+	// the preferred parser's configuration. Not serialized.
+	//
+	// Known limitation: a Docling run that succeeds but silently drops
+	// picture descriptions (per-image timeout, no error) is not detectable
+	// here and is not marked Degraded.
+	Degraded bool `json:"-"`
 }
 
 // PageText holds the extracted text for a single page.

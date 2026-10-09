@@ -67,16 +67,25 @@ type fetchURLPreviewResponse struct {
 // SSRF helpers — see fetcher.ValidateURL / fetcher.SafeHTTPClient.
 // ---------------------------------------------------------------------------
 
-// validateURL is a thin wrapper that pre-checks URL length, then delegates
-// the scheme + private-IP check to fetcher.ValidateURL. The actual fetch
-// re-resolves at dial time via fetcher.SafeHTTPClient, closing the DNS-
-// rebinding window.
-func validateURL(ctx context.Context, rawURL string) error {
+// checkFetchURL pre-checks URL length, then delegates the scheme +
+// private-IP check to fetcher.ValidateURL. The actual fetch re-resolves at
+// dial time via fetcher.SafeHTTPClient, closing the DNS-rebinding window.
+func checkFetchURL(ctx context.Context, rawURL string) error {
 	if len(rawURL) > 2048 {
 		return fmt.Errorf("URL exceeds maximum length of 2048 characters")
 	}
 	return fetcher.ValidateURL(ctx, rawURL)
 }
+
+// validateURL (production value: checkFetchURL) and fetchURL (production
+// value: fetchSafeURL, the SSRF-safe fetch) are package-level indirections
+// so export_test.go can stub them: the SSRF check and the SSRF-safe dialer both reject the
+// loopback httptest servers a unit test has to use. Production never
+// reassigns them.
+var (
+	validateURL = checkFetchURL
+	fetchURL    = fetchSafeURL
+)
 
 // ---------------------------------------------------------------------------
 // HTTP fetch helper
@@ -148,10 +157,10 @@ type fetchURLResponse struct {
 	ContentType string
 }
 
-// fetchURL fetches rawURL with a 30-second timeout and returns a streaming
+// fetchSafeURL fetches rawURL with a 30-second timeout and returns a streaming
 // reader and Content-Type. The caller must close Body when done.
 // The body is limited to 100 MB to prevent OOM on large downloads.
-func fetchURL(ctx context.Context, rawURL string) (*fetchURLResponse, error) {
+func fetchSafeURL(ctx context.Context, rawURL string) (*fetchURLResponse, error) {
 	client := fetcher.SafeHTTPClient(30 * time.Second)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -283,6 +292,7 @@ func (h *Handler) AddTextSource(w http.ResponseWriter, r *http.Request) {
 	// 5. Create file record (status: pending, origin: text).
 	fileRecord, err := h.store.CreateFile(r.Context(), CreateFileData{
 		KbID:        kbID,
+		UploadedBy:  user.ID,
 		Name:        req.Title,
 		Type:        "text/plain",
 		Size:        len(content),
@@ -521,6 +531,7 @@ func (h *Handler) FetchURL(w http.ResponseWriter, r *http.Request) {
 
 	fileRecord, err := h.store.CreateFile(r.Context(), CreateFileData{
 		KbID:        kbID,
+		UploadedBy:  user.ID,
 		Name:        filename,
 		Type:        fetched.MimeType,
 		Size:        len(fetched.Body),
@@ -663,6 +674,7 @@ func (h *Handler) AddSources(w http.ResponseWriter, r *http.Request) {
 		// Create DB record.
 		fileRecord, err := h.store.CreateFile(r.Context(), CreateFileData{
 			KbID:        kbID,
+			UploadedBy:  user.ID,
 			Name:        filename,
 			Type:        "text/markdown",
 			Size:        len(content),

@@ -218,6 +218,9 @@ type Store interface {
 	GetChatByID(ctx context.Context, chatID string) (*ChatRow, error)
 	CreateChat(ctx context.Context, kbID, userID, title string) (*ChatRow, error)
 	DeleteChat(ctx context.Context, chatID string) error
+	// UpdateChatTitle renames chatID if userID owns it; store.ErrNotFound
+	// when no such chat belongs to the user. Leaves updated_at untouched.
+	UpdateChatTitle(ctx context.Context, chatID, userID, title string) error
 	GetChatMessages(ctx context.Context, chatID string) ([]MessageRow, error)
 	GetMessageAncestors(ctx context.Context, messageID, chatID string) ([]MessageRow, error)
 	AddMessage(ctx context.Context, params AddMessageParams) (*MessageRow, error)
@@ -227,4 +230,7 @@ type Store interface {
 	UpdateMessageTraceID(ctx context.Context, messageID string, traceID string) error
 	GetKBSystemPrompt(ctx context.Context, kbID string) (*string, error)
 	UpdateChatAgentSelection(ctx context.Context, chatID string, teamID, agentID *string) error
+	// StarterContext returns what the starter questions of an empty chat
+	// are generated from: the KB's name and up to limit of its documents.
+	StarterContext(ctx context.Context, kbID string, limit int) (StarterSource, error)
 }

@@ -19,7 +19,7 @@ Optional, depending on what you touch:
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/Lutzi92/JustRAG.git
+git clone https://github.com/KI4JLU/JustRAG.git
 cd JustRAG
 npm install
 ```

@@ -63,6 +63,11 @@ func NewMiddleware(store KBStore) *Middleware {
 // internal/openaicompat, internal/academic) call it directly instead of
 // hand-rolling their own owner/IsGlobal/superadmin special-cases — those
 // would drift from this ladder.
+//
+// KEEP IN SYNC WITH VisibleKBsCTE (visible_sql.go), the SQL rendering of this
+// ladder that row-filtering queries (internal/globalsearch) use. Change both
+// in the same commit; TestVisibilityAgreesWithEffectiveRole in
+// internal/globalsearch checks that they agree.
 func EffectiveRole(kb *KnowledgeBase, sysRole, memberRole string) string {
 	if sysRole == auth.RoleSuperAdmin {
 		return RoleOwner

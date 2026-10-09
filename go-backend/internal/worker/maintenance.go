@@ -14,6 +14,7 @@ import (
 	"github.com/justrag/go-backend/internal/ragassamples"
 	"github.com/justrag/go-backend/internal/safego"
 	"github.com/justrag/go-backend/internal/tabular"
+	"github.com/justrag/go-backend/internal/userfiles"
 	"github.com/justrag/go-backend/internal/vector"
 )
 
@@ -53,6 +54,10 @@ type MaintenanceConfig struct {
 	// one).
 	TabularOrphanSweeper *tabular.OrphanSweeper
 
+	// UserFileOrphanSweeper deletes orphaned library blobs and parse caches
+	// under users/ (P4-R3). Nil disables the loop.
+	UserFileOrphanSweeper *userfiles.OrphanSweeper
+
 	// TabularOrphanInterval is how often the tabular orphan-table sweep
 	// runs. Default: 6 hours.
 	TabularOrphanInterval time.Duration
@@ -80,6 +85,20 @@ type MaintenanceConfig struct {
 	// RagasDailyInterval is how often the RAGAS aggregate + retention pass
 	// runs. Default: 24 hours.
 	RagasDailyInterval time.Duration
+
+	// AgentRunExpirer abandons interrupted agent runs past their expiry
+	// (adkbridge.RunStore.ExpireStale). Nil disables the loop entirely.
+	AgentRunExpirer interface {
+		ExpireStale(context.Context) (int64, error)
+	}
+
+	// AgentRunExpireInterval is how often the agent-run expiry pass runs.
+	// Default: 15 minutes.
+	AgentRunExpireInterval time.Duration
+
+	// agentRunExpireDelay is the startup delay before the first pass
+	// (default 2 minutes); a test seam.
+	agentRunExpireDelay time.Duration
 
 	// BM25StatsMaxAge is the staleness threshold (W2-R5) applied to the
 	// sweep's StaleKBs call — a KB whose stats are older than this is
@@ -119,6 +138,12 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 	}
 	if cfg.BM25StatsMaxAge == 0 {
 		cfg.BM25StatsMaxAge = 24 * time.Hour
+	}
+	if cfg.AgentRunExpireInterval == 0 {
+		cfg.AgentRunExpireInterval = 15 * time.Minute
+	}
+	if cfg.agentRunExpireDelay == 0 {
+		cfg.agentRunExpireDelay = 2 * time.Minute
 	}
 	if cfg.RagasDailyInterval == 0 {
 		cfg.RagasDailyInterval = 24 * time.Hour
@@ -221,6 +246,7 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 
 	// Metrics collection (every 5 min by default).
 	launch("metrics_snapshot", func() {
+		libraryTotals := userfiles.NewOrphanStore(cfg.MainDB)
 		// Initial delay to let the system stabilize.
 		startupDelay := time.NewTimer(1 * time.Minute)
 		defer startupDelay.Stop()
@@ -228,7 +254,7 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 		case <-ctx.Done():
 			return
 		case <-startupDelay.C:
-			recordMetricsSnapshot(ctx, cfg.MainDB)
+			recordMetricsSnapshot(ctx, cfg.MainDB, libraryTotals)
 		}
 
 		ticker := time.NewTicker(cfg.MetricsInterval)
@@ -238,7 +264,7 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				recordMetricsSnapshot(ctx, cfg.MainDB)
+				recordMetricsSnapshot(ctx, cfg.MainDB, libraryTotals)
 			}
 		}
 	})
@@ -292,6 +318,40 @@ func StartMaintenance(ctx context.Context, cfg MaintenanceConfig) (stop func()) 
 					sweepTabularOrphans(ctx, cfg.TabularOrphanSweeper)
 				}
 			}
+		})
+	}
+
+	// Agent-run expiry: abandons interrupted ADK agent runs past their
+	// expiry. Nil expirer skips the loop entirely.
+	if cfg.AgentRunExpirer != nil {
+		launch("agent_runs_expire", func() {
+			startupDelay := time.NewTimer(cfg.agentRunExpireDelay)
+			defer startupDelay.Stop()
+			select {
+			case <-ctx.Done():
+				return
+			case <-startupDelay.C:
+				expireAgentRuns(ctx, cfg.AgentRunExpirer)
+			}
+
+			ticker := time.NewTicker(cfg.AgentRunExpireInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					expireAgentRuns(ctx, cfg.AgentRunExpirer)
+				}
+			}
+		})
+	}
+
+	// Library orphan sweep (P4-R3): first run 10 min after start, then every
+	// 6h; the sweeper's Run owns the schedule.
+	if cfg.UserFileOrphanSweeper != nil {
+		launch("userfiles_orphan_sweep", func() {
+			cfg.UserFileOrphanSweeper.Run(ctx)
 		})
 	}
 
@@ -423,6 +483,20 @@ func sweepTabularOrphans(ctx context.Context, sweeper *tabular.OrphanSweeper) {
 	}
 }
 
+// expireAgentRuns runs one agent-run expiry pass and logs the count when > 0.
+func expireAgentRuns(ctx context.Context, e interface {
+	ExpireStale(context.Context) (int64, error)
+}) {
+	n, err := e.ExpireStale(ctx)
+	if err != nil {
+		slog.Error("agent runs expiry failed", "error", err)
+		return
+	}
+	if n > 0 {
+		slog.Info("agent runs expired", "count", n)
+	}
+}
+
 // refreshBM25Stats runs one BM25 stats sweep (W2-R5), capped at 20 KBs per
 // tick so a large stale backlog spreads across several ticks instead of
 // holding the maintenance goroutine for one long run.
@@ -443,7 +517,7 @@ func refreshBM25Stats(ctx context.Context, r *vector.BM25StatsRefresher) {
 
 // recordMetricsSnapshot captures live system metrics and stores them in the
 // system_metrics table for the historical dashboard.
-func recordMetricsSnapshot(ctx context.Context, mainDB *pgxpool.Pool) {
+func recordMetricsSnapshot(ctx context.Context, mainDB *pgxpool.Pool, libraryTotals userfiles.TotalsSource) {
 	if mainDB == nil {
 		return
 	}
@@ -476,6 +550,10 @@ func recordMetricsSnapshot(ctx context.Context, mainDB *pgxpool.Pool) {
 	}
 
 	refreshSourceSyncAge(ctx, mainDB)
+
+	if err := userfiles.RefreshLibraryGauges(ctx, libraryTotals, observability.SetUserFileTotals); err != nil {
+		slog.Error("metrics snapshot: library totals failed", "error", err)
+	}
 
 	slog.Debug("metrics snapshot recorded")
 }

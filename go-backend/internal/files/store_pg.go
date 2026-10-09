@@ -146,6 +146,21 @@ type createFileDBRow struct {
 	CreatedAt   time.Time `db:"created_at"`
 }
 
+// GetKBCopy returns the id of the files row in kbID backed by library file
+// userFileID, or "" when the KB holds no copy.
+func (s *PGStore) GetKBCopy(ctx context.Context, kbID, userFileID string) (string, error) {
+	var id string
+	err := s.pool.QueryRow(ctx,
+		`SELECT id::text FROM files WHERE kb_id = $1 AND user_file_id = $2::uuid`, kbID, userFileID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("GetKBCopy: %w", err)
+	}
+	return id, nil
+}
+
 // CreateFile inserts a new file record with status 'pending' and returns the created row.
 func (s *PGStore) CreateFile(ctx context.Context, data CreateFileData) (*FileRecord, error) {
 	var sqlStr string
@@ -157,16 +172,16 @@ func (s *PGStore) CreateFile(ctx context.Context, data CreateFileData) (*FileRec
 	// created_at) falls back to the ingest timestamp at every read site.
 	if data.RSSFeedID != "" {
 		sqlStr = `
-			INSERT INTO files (kb_id, name, type, size, status, origin, storage_path, rss_feed_id, published_at)
-			VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
+			INSERT INTO files (kb_id, name, type, size, status, origin, storage_path, rss_feed_id, published_at, uploaded_by, user_file_id)
+			VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, NULLIF($9, '')::uuid, NULLIF($10, '')::uuid)
 			RETURNING id, kb_id, name, type, size, status, progress, origin, storage_path, created_at`
-		args = []any{data.KbID, data.Name, data.Type, data.Size, data.Origin, data.StoragePath, data.RSSFeedID, data.PublishedAt}
+		args = []any{data.KbID, data.Name, data.Type, data.Size, data.Origin, data.StoragePath, data.RSSFeedID, data.PublishedAt, data.UploadedBy, data.UserFileID}
 	} else {
 		sqlStr = `
-			INSERT INTO files (kb_id, name, type, size, status, origin, storage_path, published_at)
-			VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
+			INSERT INTO files (kb_id, name, type, size, status, origin, storage_path, published_at, uploaded_by, user_file_id)
+			VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, NULLIF($8, '')::uuid, NULLIF($9, '')::uuid)
 			RETURNING id, kb_id, name, type, size, status, progress, origin, storage_path, created_at`
-		args = []any{data.KbID, data.Name, data.Type, data.Size, data.Origin, data.StoragePath, data.PublishedAt}
+		args = []any{data.KbID, data.Name, data.Type, data.Size, data.Origin, data.StoragePath, data.PublishedAt, data.UploadedBy, data.UserFileID}
 	}
 
 	rows, err := pgxutil.QueryRows[createFileDBRow](ctx, s.pool, sqlStr, args...)
@@ -187,6 +202,7 @@ func (s *PGStore) CreateFile(ctx context.Context, data CreateFileData) (*FileRec
 		Progress:    r.Progress,
 		Origin:      r.Origin,
 		StoragePath: r.StoragePath,
+		UserFileID:  data.UserFileID,
 		CreatedAt:   r.CreatedAt,
 	}, nil
 }
@@ -266,9 +282,22 @@ func (s *PGStore) GetKBFileLimits(ctx context.Context, kbID string) (*KBFileLimi
 // any recorded error detail — every non-error transition (pending,
 // processing, completed, partial) invalidates a previous failure reason.
 // Error transitions go through MarkFileError / MarkFileErrorIfUnset instead.
+//
+// A transition to 'processing' also clears index_fingerprint: the file's
+// index is about to be rebuilt (ingest, re-embed, retry, copy), so it must
+// stop qualifying as a copy donor (P2-R3) until the run that rebuilds it
+// stamps a fresh fingerprint at completion.
+//
+// It also bumps progress_updated_at, the donor generation token copy mode
+// re-checks (FindCopyDonor / DonorStillValid): an unchanged-settings re-ingest
+// re-stamps the SAME fingerprint, so only the generation token reveals that a
+// donor's index was rebuilt while a copy was reading it.
 func (s *PGStore) UpdateFileStatus(ctx context.Context, fileID, status string) error {
-	const sql = `UPDATE files SET status = $1, error_stage = NULL, error_message = NULL WHERE id = $2`
-	_, err := s.pool.Exec(ctx, sql, status, fileID)
+	const sql = `UPDATE files SET status = $1, error_stage = NULL, error_message = NULL,
+		index_fingerprint = CASE WHEN $3 THEN NULL ELSE index_fingerprint END,
+		progress_updated_at = CASE WHEN $3 THEN NOW() ELSE progress_updated_at END
+		WHERE id = $2`
+	_, err := s.pool.Exec(ctx, sql, status, fileID, status == "processing")
 	if err != nil {
 		return fmt.Errorf("UpdateFileStatus: %w", err)
 	}
@@ -310,6 +339,121 @@ func (s *PGStore) ClearFileStage(ctx context.Context, fileID string) error {
 	const sql = `UPDATE files SET current_stage = NULL, stage_index = NULL, stage_total = NULL, stage_detail = NULL WHERE id = $1`
 	if _, err := s.pool.Exec(ctx, sql, fileID); err != nil {
 		return fmt.Errorf("ClearFileStage: %w", err)
+	}
+	return nil
+}
+
+// SetIndexFingerprint records the index fingerprint of a completed
+// library-backed ingest (P2-R4).
+func (s *PGStore) SetIndexFingerprint(ctx context.Context, fileID, fp string) error {
+	const sql = `UPDATE files SET index_fingerprint = $2 WHERE id = $1`
+	if _, err := s.pool.Exec(ctx, sql, fileID, fp); err != nil {
+		return fmt.Errorf("SetIndexFingerprint: %w", err)
+	}
+	return nil
+}
+
+// FindCopyDonor returns the id of a 'completed' KB copy of userFileID other
+// than excludeFileID whose index_fingerprint = fp, or "" (most recently
+// created first). Only 'completed' rows qualify (P2-R3): 'partial' and
+// 'error' indexes are incomplete, and a file being rebuilt is 'processing'
+// with its fingerprint cleared.
+//
+// generation is the donor's generation token: progress_updated_at in its
+// text form ("" when NULL). Every re-ingest bumps it (UpdateFileStatus to
+// 'processing', progress and stage writes), so DonorStillValid can tell a
+// donor rebuilt mid-copy from an untouched one even when the rebuild
+// re-stamped the same fingerprint. The text form round-trips exactly (the
+// column is a plain timestamp, so no session time zone applies).
+func (s *PGStore) FindCopyDonor(ctx context.Context, userFileID, fp, excludeFileID string) (id, generation string, err error) {
+	const sql = `
+		SELECT id::text, COALESCE(progress_updated_at::text, '')
+		  FROM files
+		 WHERE user_file_id = $1::uuid
+		   AND id <> $3::uuid
+		   AND status = 'completed'
+		   AND index_fingerprint = $2
+		 ORDER BY created_at DESC, id
+		 LIMIT 1`
+	if userFileID == "" || fp == "" {
+		return "", "", nil
+	}
+	if err := s.pool.QueryRow(ctx, sql, userFileID, fp, excludeFileID).Scan(&id, &generation); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", nil
+		}
+		return "", "", fmt.Errorf("FindCopyDonor: %w", err)
+	}
+	return id, generation, nil
+}
+
+// DonorStillValid reports whether donorID is still the same valid copy donor
+// for (userFileID, fp): 'completed' with that fingerprint AND an unchanged
+// generation token (as FindCopyDonor returned it). Copy mode re-checks the
+// SPECIFIC donor it copied from after the copy committed — a newer donor
+// appearing meanwhile does not invalidate the copy, but any re-ingest of the
+// donor in between does, even one that re-stamped the same fingerprint. A
+// false invalidation only costs a fallback to ingest.
+func (s *PGStore) DonorStillValid(ctx context.Context, donorID, generation, userFileID, fp string) (bool, error) {
+	const sql = `
+		SELECT EXISTS (
+			SELECT 1 FROM files
+			 WHERE id = $1::uuid
+			   AND user_file_id = $2::uuid
+			   AND status = 'completed'
+			   AND index_fingerprint = $3
+			   AND COALESCE(progress_updated_at::text, '') = $4)`
+	if donorID == "" || userFileID == "" || fp == "" {
+		return false, nil
+	}
+	var ok bool
+	if err := s.pool.QueryRow(ctx, sql, donorID, userFileID, fp, generation).Scan(&ok); err != nil {
+		return false, fmt.Errorf("DonorStillValid: %w", err)
+	}
+	return ok, nil
+}
+
+// LibraryLink returns the library link of a KB file: its user_file_id and the
+// library file's owner, both "" for a non-library file. The worker reads it
+// from the row instead of trusting the task payload, so re-embeds and retries
+// (whose payloads carry no UserFileID) keep the fingerprint and caches. A
+// missing files row is an error.
+func (s *PGStore) LibraryLink(ctx context.Context, fileID string) (userFileID, ownerUserID string, err error) {
+	const sql = `
+		SELECT COALESCE(f.user_file_id::text, ''), COALESCE(uf.owner_user_id::text, '')
+		  FROM files f
+		  LEFT JOIN user_files uf ON uf.id = f.user_file_id
+		 WHERE f.id = $1::uuid`
+	if err := s.pool.QueryRow(ctx, sql, fileID).Scan(&userFileID, &ownerUserID); err != nil {
+		return "", "", fmt.Errorf("LibraryLink: %w", err)
+	}
+	return userFileID, ownerUserID, nil
+}
+
+// CurrentStoragePath returns files.storage_path ("" when NULL). Queued tasks
+// carry the path from enqueue time; library adoption can re-key the blob in
+// between, so the worker re-reads the current value.
+func (s *PGStore) CurrentStoragePath(ctx context.Context, fileID string) (string, error) {
+	var p string
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(storage_path,'') FROM files WHERE id = $1::uuid`, fileID).Scan(&p)
+	if err != nil {
+		return "", fmt.Errorf("CurrentStoragePath: %w", err)
+	}
+	return p, nil
+}
+
+// MarkCopied sets status='completed', progress=100, index_fingerprint=fp,
+// clears error/stage columns — the terminal write of a successful copy.
+func (s *PGStore) MarkCopied(ctx context.Context, fileID, fp string) error {
+	const sql = `
+		UPDATE files
+		   SET status = 'completed', progress = 100, progress_updated_at = NOW(),
+		       index_fingerprint = $2,
+		       error_stage = NULL, error_message = NULL,
+		       current_stage = NULL, stage_index = NULL, stage_total = NULL, stage_detail = NULL
+		 WHERE id = $1`
+	if _, err := s.pool.Exec(ctx, sql, fileID, fp); err != nil {
+		return fmt.Errorf("MarkCopied: %w", err)
 	}
 	return nil
 }
@@ -357,23 +501,23 @@ func (s *PGStore) MarkFileError(ctx context.Context, fileID, stage, message stri
 	return nil
 }
 
-// GetFileOrigin returns the files.origin value for fileID ("upload", "rss",
-// "confluence", "git", "crawl", "websearch", "research"), or "" when no such
-// file exists. Split out as its own one-column read because the ingest
-// prompt-injection screen needs the origin and nothing else — threading an
-// Origin field through ProcessFileInput instead would need every one of the
-// (currently six) construction sites to remember to populate it, and a
-// missed one fails open silently.
-func (s *PGStore) GetFileOrigin(ctx context.Context, fileID string) (string, error) {
-	const sql = `SELECT origin FROM files WHERE id = $1`
-	var origin string
-	if err := s.pool.QueryRow(ctx, sql, fileID).Scan(&origin); err != nil {
+// GetFileScreeningInfo returns files.origin and the owning KB's visibility
+// for fileID — the two inputs to processor.ShouldScreen. ("", "", nil) when
+// the row is gone (deleted mid-ingest), which ShouldScreen treats as "skip".
+func (s *PGStore) GetFileScreeningInfo(ctx context.Context, fileID string) (string, string, error) {
+	const sql = `
+		SELECT f.origin, kb.visibility
+		  FROM files f
+		  JOIN knowledge_bases kb ON kb.id = f.kb_id
+		 WHERE f.id = $1`
+	var origin, visibility string
+	if err := s.pool.QueryRow(ctx, sql, fileID).Scan(&origin, &visibility); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", nil
+			return "", "", nil
 		}
-		return "", fmt.Errorf("GetFileOrigin: %w", err)
+		return "", "", fmt.Errorf("GetFileScreeningInfo: %w", err)
 	}
-	return origin, nil
+	return origin, visibility, nil
 }
 
 // SetInjectionFlag records an ingest-time prompt-injection screening hit
@@ -390,6 +534,35 @@ func (s *PGStore) SetInjectionFlag(ctx context.Context, fileID string, detail []
 		return fmt.Errorf("SetInjectionFlag: %w", err)
 	}
 	return nil
+}
+
+// UnscreenedFile is one row ListUnscreenedUserFiles returns.
+type UnscreenedFile struct {
+	ID     string `db:"id"`
+	Name   string `db:"name"`
+	Type   string `db:"type"`
+	Origin string `db:"origin"`
+}
+
+// ListUnscreenedUserFiles returns the KB's files whose origin is in origins
+// (the caller passes processor.PublicOnlyOrigins(): upload, text, url,
+// research) that were never screened (injection_detail IS NULL) and finished
+// ingesting, so their chunk text exists. Used when a KB is published: its
+// files went in while it was private, where user content is not screened.
+func (s *PGStore) ListUnscreenedUserFiles(ctx context.Context, kbID string, origins []string) ([]UnscreenedFile, error) {
+	const sql = `
+		SELECT id::text, name, type, origin
+		  FROM files
+		 WHERE kb_id = $1
+		   AND origin = ANY($2::text[])
+		   AND injection_detail IS NULL
+		   AND status IN ('completed', 'partial')
+		 ORDER BY created_at`
+	rows, err := pgxutil.QueryRows[UnscreenedFile](ctx, s.pool, sql, kbID, origins)
+	if err != nil {
+		return nil, fmt.Errorf("ListUnscreenedUserFiles: %w", err)
+	}
+	return rows, nil
 }
 
 // MarkInjectionScreenedClean records a screening pass that found nothing:
@@ -528,4 +701,16 @@ func (s *PGStore) ListSpreadsheetFiles(ctx context.Context, kbID string) ([]*Fil
 		})
 	}
 	return out, nil
+}
+
+// UserFileOwner returns the owner of a user-library file (worker: parse-cache
+// key). A missing row is an error.
+func (s *PGStore) UserFileOwner(ctx context.Context, userFileID string) (string, error) {
+	var owner string
+	err := s.pool.QueryRow(ctx,
+		`SELECT owner_user_id::text FROM user_files WHERE id = $1::uuid`, userFileID).Scan(&owner)
+	if err != nil {
+		return "", fmt.Errorf("files: user file owner: %w", err)
+	}
+	return owner, nil
 }

@@ -1,0 +1,172 @@
+name: Promote Release Candidate
+
+# Turns a release candidate that passed staging into a release WITHOUT
+# rebuilding it. Prod runs `:stable`, so on k8s this IS the deploy trigger:
+# run the release's migrations (with the RC image) BEFORE promoting, then
+# `kubectl rollout restart` — see docs/runbooks/release.md.
+#
+# What it does: the RC image's digest gets the tags `:vX.Y.Z`, `:vX.Y` and
+# (only if this is the highest release) `:stable`, and the annotated git tag
+# `vX.Y.Z` is created on the RC's commit. Prod therefore runs exactly the
+# image staging tested. docker-image.yml builds only `main` and `v*-rc.*`
+# tags, so the git tag pushed here builds nothing (and a tag pushed with
+# GITHUB_TOKEN would not trigger another workflow anyway).
+#
+# Every step is safe to re-run: an image or git tag that already points at
+# the RC is left alone, one that points anywhere else fails the run, so a
+# release can never be silently re-pointed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: "Release candidate to promote, e.g. v0.12.0-rc.2"
+        required: true
+        type: string
+
+concurrency:
+  group: promote-release
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the release git tag
+      packages: write # add tags to the RC image
+
+    steps:
+      - name: Parse the release candidate
+        id: v
+        env:
+          RC_TAG: ${{ inputs.rc_tag }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          if [[ ! "$RC_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-rc\.[0-9]+$ ]]; then
+            echo "::error::rc_tag must look like v0.12.0-rc.1, got '$RC_TAG'"
+            exit 1
+          fi
+          {
+            echo "rc=$RC_TAG"
+            echo "release=v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+            echo "minor=v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+            echo "image=${IMAGE,,}" # GHCR image names are lowercase
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0 # all tags, for the checks below
+
+      # The release-prep commit (changelog section, package.json) must
+      # already be INSIDE the RC: the release tag goes on the RC's
+      # commit, and that tree is what `git checkout vX.Y.Z` deploys.
+      - name: Check the release candidate's tree
+        id: check
+        env:
+          RC: ${{ steps.v.outputs.rc }}
+          RELEASE: ${{ steps.v.outputs.release }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          # `grep >/dev/null`, never `grep -q`, after `git show |`: -q exits on
+          # the first match, git show dies of SIGPIPE, and pipefail turns a
+          # found line into a failed check.
+
+          git rev-parse -q --verify "refs/tags/$RC" >/dev/null || fail "tag $RC does not exist"
+          commit=$(git rev-parse "$RC^{commit}")
+
+          git show "$commit:CHANGELOG.md" | grep "^## $RELEASE " >/dev/null \
+            || fail "CHANGELOG.md at $RC has no '## $RELEASE' section — cut the release-prep commit first"
+          git show "$commit:package.json" | grep "\"version\": \"${RELEASE#v}\"" >/dev/null \
+            || fail "package.json at $RC is not version ${RELEASE#v}"
+
+          if existing=$(git rev-parse -q --verify "refs/tags/$RELEASE^{commit}"); then
+            [[ "$existing" == "$commit" ]] \
+              || fail "$RELEASE already exists on $existing, not on $RC ($commit)"
+            echo "git_tag_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "git_tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # `:stable` is the default of every unpinned compose deployment, so
+          # it only moves forward: a hotfix on an older line (v0.11.3 while
+          # v0.12.0 is out) gets its own tags but leaves `:stable` alone.
+          highest=$( { git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; echo "$RELEASE"; } | sort -V | tail -1)
+          if [[ "$highest" == "$RELEASE" ]]; then
+            echo "move_stable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "move_stable=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$RELEASE is older than $highest — :stable stays where it is"
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Tag the RC image as the release
+        env:
+          IMAGE: ${{ steps.v.outputs.image }}
+          RC: ${{ steps.v.outputs.rc }}
+          RELEASE: ${{ steps.v.outputs.release }}
+          MINOR: ${{ steps.v.outputs.minor }}
+          MOVE_STABLE: ${{ steps.check.outputs.move_stable }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          digest_of() {
+            docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest
+          }
+
+          rc_digest=$(digest_of "$IMAGE:$RC") || true
+          [[ "$rc_digest" == sha256:* ]] || fail "image $IMAGE:$RC not found — did the RC build succeed?"
+
+          # Release tags are immutable: fine if a re-run finds them already on
+          # the RC, an error if they point at anything else.
+          if release_digest=$(digest_of "$IMAGE:$RELEASE") && [[ "$release_digest" == sha256:* ]]; then
+            [[ "$release_digest" == "$rc_digest" ]] \
+              || fail "$IMAGE:$RELEASE already exists with a different digest ($release_digest)"
+          fi
+
+          tags=(-t "$IMAGE:$RELEASE" -t "$IMAGE:$MINOR")
+          [[ "$MOVE_STABLE" == "true" ]] && tags+=(-t "$IMAGE:stable")
+          # One source, no annotations: the index (attestations included) is
+          # pushed as-is, so every new tag resolves to the RC's digest.
+          docker buildx imagetools create "${tags[@]}" "$IMAGE@$rc_digest"
+
+          check=("$RELEASE" "$MINOR")
+          [[ "$MOVE_STABLE" == "true" ]] && check+=(stable)
+          for t in "${check[@]}"; do
+            got=$(digest_of "$IMAGE:$t")
+            [[ "$got" == "$rc_digest" ]] || fail "$IMAGE:$t resolves to $got, expected $rc_digest"
+          done
+
+          {
+            echo "### Promoted $RC → $RELEASE"
+            echo ""
+            echo "Digest \`$rc_digest\`, tagged: \`${check[*]}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the release git tag
+        if: steps.check.outputs.git_tag_exists != 'true'
+        env:
+          RC: ${{ steps.v.outputs.rc }}
+          RELEASE: ${{ steps.v.outputs.release }}
+          COMMIT: ${{ steps.check.outputs.commit }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Annotated: `git describe` prefers annotated tags.
+          git tag -a "$RELEASE" "$COMMIT" -m "$RELEASE (promoted from $RC)"
+          git push origin "refs/tags/$RELEASE"

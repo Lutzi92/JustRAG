@@ -3,6 +3,7 @@ package kbvisibility_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,6 +77,41 @@ func TestPublishAlreadyPublicReturns409(t *testing.T) {
 	rec := request(t, h.Publish, http.MethodPost, "/api/admin/kb/kb-1/publish", "", "kb-1")
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+}
+
+func TestPublish_EnqueuesScreening(t *testing.T) {
+	h := kbvisibility.NewHandler(&fakeStore{}, &noopAudit{})
+	var got string
+	h.SetScreeningEnqueuer(func(_ context.Context, kbID string) error { got = kbID; return nil })
+
+	rec := request(t, h.Publish, http.MethodPost, "/api/admin/kb/kb-1/publish", "", "kb-1")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+	if got != "kb-1" {
+		t.Fatalf("screening enqueued for %q, want kb-1", got)
+	}
+}
+
+// The publish already committed; failing the request would make the
+// operator retry against a now-public KB (409).
+func TestPublish_EnqueueFailureStillReturns204(t *testing.T) {
+	h := kbvisibility.NewHandler(&fakeStore{}, &noopAudit{})
+	h.SetScreeningEnqueuer(func(context.Context, string) error { return errors.New("redis down") })
+	rec := request(t, h.Publish, http.MethodPost, "/api/admin/kb/kb-1/publish", "", "kb-1")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 despite enqueue failure, got %d", rec.Code)
+	}
+}
+
+func TestPublish_FailedPublishDoesNotEnqueue(t *testing.T) {
+	h := kbvisibility.NewHandler(&fakeStore{publishErr: kbvisibility.ErrAlreadyPublic}, &noopAudit{})
+	called := false
+	h.SetScreeningEnqueuer(func(context.Context, string) error { called = true; return nil })
+	request(t, h.Publish, http.MethodPost, "/api/admin/kb/kb-1/publish", "", "kb-1")
+	if called {
+		t.Fatal("a rejected publish must not enqueue screening")
 	}
 }
 

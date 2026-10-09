@@ -1807,3 +1807,29 @@ func TestChatTabularGuidanceMaxTokens_DefaultsAndRange(t *testing.T) {
 		t.Errorf("ChatTabularGuidanceMaxTokens below-min = %d, want default 6000", got)
 	}
 }
+
+func TestUserFileQuotaBytes(t *testing.T) {
+	ctx := context.Background()
+	if got := UserFileQuotaBytes(ctx, nil); got != 0 {
+		t.Errorf("nil reader = %d, want 0", got)
+	}
+	cases := map[string]int64{
+		"1073741824":    1 << 30,
+		" 5000 ":        5000,
+		"0":             0,
+		"-1":            0,
+		"abc":           0,
+		"":              0,
+		"1099511627776": 1_099_511_627_776,
+		"1099511627777": 0, // above the 1 TiB ceiling
+	}
+	for in, want := range cases {
+		r := &fakeSiteConfigReader{values: map[string]*string{"user_file_quota_bytes": strPtr(in)}}
+		if got := UserFileQuotaBytes(ctx, r); got != want {
+			t.Errorf("UserFileQuotaBytes(%q) = %d, want %d", in, got, want)
+		}
+	}
+	if got := UserFileQuotaBytes(ctx, &fakeSiteConfigReader{values: map[string]*string{}}); got != 0 {
+		t.Errorf("unset = %d, want 0", got)
+	}
+}

@@ -60,13 +60,13 @@ jobs:
         # the v2 config schema in go-backend/.golangci.yml.
         uses: golangci/golangci-lint-action@v9
         with:
-          # Must stay recent enough for the Go toolchain in go.mod: the linter
+          # Must stay recent enough for the Go version in the go.mod go directive: the linter
           # version pins honnef.co/go/tools, and a staticcheck that predates
           # the toolchain's Go release mis-analyses the stdlib. v2.1.6
           # (staticcheck v0.6.1, Go <=1.24) could not see that testing.T.Fatal
           # terminates under Go 1.26 and emitted bogus SA5011 "possible nil
           # pointer dereference" on every `if x == nil { t.Fatal() }` guard.
-          # Bump this together with the go.mod toolchain line.
+          # Bump this together with the go.mod go directive.
           version: v2.12.2
           # The prebuilt binary may be compiled with a Go toolchain that
           # refuses go.mod targets newer than it; goinstall builds it with the
@@ -91,7 +91,7 @@ jobs:
           psql -h localhost -U justrag -d justrag -c "CREATE DATABASE justrag_vector OWNER justrag"
           go run ./cmd/migrate
       - name: test (integration, DB-backed)
-        run: go test -tags integration -race -count=1 ./internal/cascade/... ./internal/vector/... ./internal/kg/... ./internal/tabular/... ./internal/processor/... ./internal/adminkboverview/... ./internal/adminglobalkbs/... ./internal/kbmembers/... ./internal/kb/... ./internal/authhandler/... ./internal/kbvisibility/... ./internal/kbsubs/... ./internal/agentteams/... ./internal/usage/... ./internal/kbinvites/... ./internal/syncsched/... ./internal/sheetsource/... ./internal/files/... ./internal/eval/... ./internal/chat/... ./internal/ragassamples/... ./internal/adminagentmetrics/...
+        run: go test -tags integration -race -count=1 ./internal/cascade/... ./internal/vector/... ./internal/kg/... ./internal/tabular/... ./internal/processor/... ./internal/adminkboverview/... ./internal/adminglobalkbs/... ./internal/kbmembers/... ./internal/kb/... ./internal/authhandler/... ./internal/kbvisibility/... ./internal/kbsubs/... ./internal/agentteams/... ./internal/usage/... ./internal/kbinvites/... ./internal/syncsched/... ./internal/sheetsource/... ./internal/files/... ./internal/eval/... ./internal/chat/... ./internal/ragassamples/... ./internal/adminagentmetrics/... ./internal/userfiles/... ./internal/adkbridge/... ./internal/agui/... ./internal/globalsearch/...
       - name: benchmark smoke
         run: go test -run='^$' -bench=. -benchtime=1x -benchmem ./...
 

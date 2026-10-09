@@ -24,6 +24,7 @@ var publicConfigKeys = map[string]bool{
 	"chat_footer":             true,
 	"confluence_enabled":      true,
 	"web_search_enabled":      true,
+	"chat_web_search_enabled": true, // per-turn web-search gate: the UI hides its toggle when off
 	"academic_search_enabled": true,
 	"academic_search_name":    true,
 	"git_repo_enabled":        true,

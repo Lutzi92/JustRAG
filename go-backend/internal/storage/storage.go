@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -33,7 +34,19 @@ type Storage interface {
 	DeleteFiles(ctx context.Context, storagePaths []string) error
 	DeleteDirectory(ctx context.Context, prefix string) error
 	FileExists(ctx context.Context, storagePath string) (bool, error)
+	// List returns every object whose key starts with prefix (S3 string-prefix
+	// semantics), with its modification time and size. Keys are relative to
+	// the storage root and use forward slashes. A prefix with no objects
+	// yields an empty slice and a nil error.
+	List(ctx context.Context, prefix string) ([]ObjectInfo, error)
 	IsS3() bool
+}
+
+// ObjectInfo describes one stored object as returned by Storage.List.
+type ObjectInfo struct {
+	Key     string
+	ModTime time.Time
+	Size    int64
 }
 
 // Config holds storage configuration sourced from environment variables.
@@ -200,6 +213,77 @@ func (l *localStorage) FileExists(ctx context.Context, storagePath string) (bool
 		return false, nil
 	}
 	return false, fmt.Errorf("storage: stat file: %w", err)
+}
+
+func (l *localStorage) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	// Resolve the prefix itself first so a traversal attempt is refused even
+	// when the prefix is a partial name.
+	if _, err := l.localPath(prefix); err != nil {
+		return nil, err
+	}
+	// Walk the directory that contains the prefix, then filter by string
+	// prefix to match S3 semantics ("users/u1/ab" matches "users/u1/abc").
+	dirKey := prefix
+	if dirKey != "" && !strings.HasSuffix(dirKey, "/") {
+		dirKey = pathDir(dirKey)
+	}
+	root, err := l.localPath(dirKey)
+	if err != nil {
+		return nil, err
+	}
+	base, err := filepath.Abs(l.dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("storage: resolve data dir: %w", err)
+	}
+	out := []ObjectInfo{}
+	walkErr := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(base, abs)
+		if err != nil {
+			return err
+		}
+		key := filepath.ToSlash(rel)
+		if !strings.HasPrefix(key, prefix) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil // vanished between readdir and stat
+			}
+			return err
+		}
+		out = append(out, ObjectInfo{Key: key, ModTime: info.ModTime(), Size: info.Size()})
+		return nil
+	})
+	if walkErr != nil {
+		return nil, fmt.Errorf("storage: list: %w", walkErr)
+	}
+	return out, nil
+}
+
+// pathDir returns the slash-separated parent of key ("a/b/c" -> "a/b/", "a" -> "").
+func pathDir(key string) string {
+	i := strings.LastIndex(key, "/")
+	if i < 0 {
+		return ""
+	}
+	return key[:i+1]
 }
 
 // contextReader wraps an io.Reader and checks for context cancellation on
@@ -496,6 +580,35 @@ func (s *s3Storage) DeleteDirectory(ctx context.Context, prefix string) error {
 		}
 	}
 	return nil
+}
+
+func (s *s3Storage) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	return listS3Objects(ctx, s.client, s.bucket, prefix)
+}
+
+// listS3Objects pages through ListObjectsV2 (continuation tokens handled by
+// the SDK paginator). Split out over the SDK's ListObjectsV2APIClient so
+// pagination is unit-testable with a fake.
+func listS3Objects(ctx context.Context, api s3.ListObjectsV2APIClient, bucket, prefix string) ([]ObjectInfo, error) {
+	paginator := s3.NewListObjectsV2Paginator(api, &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String(prefix),
+	})
+	out := []ObjectInfo{}
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("storage: s3 list objects: %w", err)
+		}
+		for _, obj := range page.Contents {
+			info := ObjectInfo{Key: aws.ToString(obj.Key), Size: aws.ToInt64(obj.Size)}
+			if obj.LastModified != nil {
+				info.ModTime = *obj.LastModified
+			}
+			out = append(out, info)
+		}
+	}
+	return out, nil
 }
 
 func (s *s3Storage) FileExists(ctx context.Context, storagePath string) (bool, error) {

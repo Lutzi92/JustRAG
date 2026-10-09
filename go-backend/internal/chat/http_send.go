@@ -57,8 +57,15 @@ type sendMessageRequest struct {
 	Enhance          string   `json:"enhance"` // "rewrite", "expand", "spell", or ""
 	ReasoningEnabled bool     `json:"reasoningEnabled"`
 	ReasoningLevel   string   `json:"reasoningLevel"` // "low", "medium", "high"
-	AttachmentID     string   `json:"attachmentId"`
-	ComparisonModes  []string `json:"comparisonModes"`
+	// WebSearch is the user's per-turn web-search switch (the "Websuche"
+	// capability in the composer). Tri-state: absent keeps the upstream
+	// behaviour, true asks for the web_search tool on this turn (needs the
+	// admin gate chat_web_search_enabled, else 422), false keeps web_search
+	// out of the turn even when chat_answer_tools_enabled is on. See
+	// web_search_turn.go.
+	WebSearch       *bool    `json:"webSearch"`
+	AttachmentID    string   `json:"attachmentId"`
+	ComparisonModes []string `json:"comparisonModes"`
 	// RegenerateOfMessageID names an AI message to answer again. The turn
 	// then carries no question of its own: the stored question is re-answered
 	// and the new answer becomes a sibling of the named one. Overrides
@@ -69,6 +76,9 @@ type sendMessageRequest struct {
 	// Mutually exclusive; TeamID wins if both are set.
 	TeamID  string `json:"teamId"`
 	AgentID string `json:"agentId"`
+	// FileIDs selects the user-library files of a KB-less library chat turn
+	// (POST /api/library/chat, P3-R4). The KB send path ignores it.
+	FileIDs []string `json:"fileIds"`
 }
 
 // SanitizeParentMessageID returns a pointer to id when it is a valid UUID, and
@@ -222,6 +232,14 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Web search asked for on a turn that cannot honour it: refuse here,
+	// before the KB router, the chat row and the usage record, so a refusal
+	// leaves nothing behind (see refuseWebSearchTurn for what is checked).
+	if status, msg := h.refuseWebSearchTurn(ctx, body, streamMode); status != 0 {
+		httputil.WriteErrorCtx(ctx, w, status, msg)
+		return
+	}
+
 	// Never on a regenerate: the KB was decided when the question was first
 	// answered, and re-routing would either move the answer to a different
 	// corpus than the one above it in the thread, or — since the chat is bound
@@ -269,7 +287,8 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// SQLSTATE 22P02 on both the ancestor lookup and the message insert, which
 	// silently drops the whole conversation history. Treating it as absent falls
 	// back to full-chat history instead.
-	parentMsgID := SanitizeParentMessageID(body.ParentMessageID)
+	// A parent from another chat is dropped the same way (cross-chat history).
+	parentMsgID := h.parentInChat(ctx, chatID, SanitizeParentMessageID(body.ParentMessageID))
 
 	// "Antwort neu generieren": no new question is written, the answer becomes
 	// a sibling of the one being replaced, and the turn re-answers the STORED
@@ -511,6 +530,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		lang:               lang,
 		userMessage:        body.Message,
 		reasoningLevel:     reasoningLevel,
+		webSearch:          body.WebSearch,
 		userMsgID:          userMsg.ID,
 		chatCtx:            chatCtx,
 		bufferedTrajectory: bufferedTrajectory,
@@ -1275,36 +1295,19 @@ func (h *Handler) tryDeepChat(
 	// carries the same kind of team-synthesised content via KbSystemPrompt,
 	// so it needs the same exclusion as a pure OrchTeam turn — not just
 	// "orch != OrchTeam", which teamAuthoredTurn is what makes this drop.
-	useAnswerTools := !teamAuthoredTurn(orch, comparisonTeamAnswered) && ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
-	// answerToolsDispatcher/catalog default to the unrestricted pair; a
-	// per-route allowlist (W6-R8) narrows both together below so the catalog
+	// answerToolsForTurn resolves the base catalog (admin flag and/or the
+	// user's per-turn webSearch switch) and then the per-route allowlist
+	// (W6-R8), narrowing dispatcher and catalog together so the catalog
 	// projection and the dispatch boundary can never drift apart.
-	var answerToolsDispatcher ToolDispatcher = h.toolDispatcher
-	var catalog []ai.ChatTool
-	if useAnswerTools {
-		mcpDisp, _ := h.toolDispatcher.(*MCPDispatcher)
-		if mcpDisp != nil {
-			catalog = mcpDisp.AnswerToolCatalog(kbID)
-		}
-		byRoute := ChatAnswerToolsByRoute(ctx, h.siteConfigReader)
-		if allow, ok, decision, reason := resolveAnswerToolsRoute(byRoute, queryType, orchIn.IsGlobalSynthesis); ok {
-			answerToolsDispatcher, catalog = restrictToolsForRoute(h.toolDispatcher, catalog, allow, true)
-			routeEvt := TrajectoryEvent{
-				Stage:    "answer_tools_route",
-				Decision: decision,
-				Reason:   reason,
-				Findings: len(catalog),
-			}
-			if routeEvt.Reason == "" && len(catalog) == 0 {
-				// Findings is omitempty, so a bare {stage, decision} frame
-				// cannot be told apart from "no findings key" — this is the
-				// one case an operator debugging a route restriction most
-				// wants to see (the loop is about to be skipped entirely).
-				routeEvt.Reason = "catalog empty; tool loop skipped"
-			}
-			emitTrajectory(func(pl map[string]any) { writeSSE(ctx, w, pl) }, routeEvt, nil)
-		}
-	}
+	answerTools, useAnswerTools := h.answerToolsForTurn(ctx, answerToolsInput{
+		kbID:              kbID,
+		lang:              lang,
+		queryType:         queryType,
+		isGlobalSynthesis: orchIn.IsGlobalSynthesis,
+		webSearch:         body.WebSearch,
+		teamAuthored:      teamAuthoredTurn(orch, comparisonTeamAnswered),
+	}, func(pl map[string]any) { writeSSE(ctx, w, pl) })
+	catalog := answerTools.catalog
 	// A route restriction can filter the catalog down to empty; running the
 	// tool loop with zero tools would be pointless scaffolding, so that case
 	// falls through to the plain streaming answer below instead.
@@ -1325,11 +1328,11 @@ func (h *Handler) tryDeepChat(
 			AIResolver:      h.aiResolver,
 			KbID:            kbID,
 			ChatID:          chatID,
-			SystemPrompt:    chatCtx.SystemPrompt,
+			SystemPrompt:    answerTools.systemPrompt(chatCtx.SystemPrompt),
 			UserPrompt:      body.Message,
 			History:         answerHistory,
 			Tools:           catalog,
-			Dispatcher:      answerToolsDispatcher,
+			Dispatcher:      answerTools.dispatcher,
 			MaxRounds:       ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
 			ReasoningEffort: reasoningLevel,
 			Temperature:     ChatAnswerTemperature(ctx, h.siteConfigReader),
@@ -1414,6 +1417,7 @@ func (h *Handler) tryDeepChat(
 		// restriction (or fix-round-2's unknown-query-type case) can
 		// leave useAnswerTools true while this is false.
 		"answer_tools_path", runAnswerTools,
+		"web_search_requested", webSearchLogValue(body.WebSearch),
 		"tool_calls", toolCallsThisTurn,
 	)
 	observability.RecordCompletion(true, time.Since(deepChatStart).Seconds())

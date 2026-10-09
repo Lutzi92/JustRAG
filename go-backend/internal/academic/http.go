@@ -345,7 +345,7 @@ func (h *Handler) AddPapers(w http.ResponseWriter, r *http.Request) {
 			id = stableID(paper.PdfURL)
 		}
 
-		if err := h.downloadAndStorePaper(r.Context(), httpClient, user.Username, body.KbID, paper); err != nil {
+		if err := h.downloadAndStorePaper(r.Context(), httpClient, user.Username, user.ID, body.KbID, paper); err != nil {
 			result.Failed = append(result.Failed, id)
 			continue
 		}
@@ -355,9 +355,14 @@ func (h *Handler) AddPapers(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusOK, result)
 }
 
-// validateURL checks that a URL is safe to fetch (SSRF protection). The
+// validateURL is a package-level indirection so export_test.go can stub it
+// (the loopback httptest server fails the SSRF check); production never
+// reassigns it.
+var validateURL = checkFetchURL
+
+// checkFetchURL checks that a URL is safe to fetch (SSRF protection). The
 // resolver call takes ctx so a hung DNS server cannot outlive the request.
-func validateURL(ctx context.Context, rawURL string) error {
+func checkFetchURL(ctx context.Context, rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid URL")
@@ -383,7 +388,7 @@ func validateURL(ctx context.Context, rawURL string) error {
 func (h *Handler) downloadAndStorePaper(
 	ctx context.Context,
 	client *http.Client,
-	username, kbID string,
+	username, userID, kbID string,
 	paper AcademicPaper,
 ) error {
 	// If the URL points to a JustFind catalogue page rather than a direct
@@ -439,6 +444,7 @@ func (h *Handler) downloadAndStorePaper(
 
 	fileRecord, err := h.store.CreateFile(ctx, files.CreateFileData{
 		KbID:        kbID,
+		UploadedBy:  userID,
 		Name:        filename,
 		Type:        "application/pdf",
 		Size:        len(pdfBytes),

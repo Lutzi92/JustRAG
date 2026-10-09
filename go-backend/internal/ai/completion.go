@@ -66,11 +66,9 @@ func GenerateCompletionWithModel(ctx context.Context, resolver *ConfigResolver, 
 	if err != nil {
 		return nil, fmt.Errorf("ai: resolve config: %w", err)
 	}
-	model := config.ChatModel
+	model := config.EffectiveChatModel(modelOverride)
 	if modelOverride != "" {
-		if slices.Contains(config.ChatModels, modelOverride) {
-			model = modelOverride
-		} else {
+		if model != modelOverride {
 			observability.RecordModelFallback("not_in_chat_models")
 			slog.Warn("ai: model override not available in resolved config, falling back to ChatModel",
 				"modelOverride", modelOverride,
@@ -90,11 +88,9 @@ func GenerateCompletionWithModelDeterministic(ctx context.Context, resolver *Con
 	if err != nil {
 		return nil, fmt.Errorf("ai: resolve config: %w", err)
 	}
-	model := config.ChatModel
+	model := config.EffectiveChatModel(modelOverride)
 	if modelOverride != "" {
-		if slices.Contains(config.ChatModels, modelOverride) {
-			model = modelOverride
-		} else {
+		if model != modelOverride {
 			observability.RecordModelFallback("not_in_chat_models")
 			slog.Warn("ai: model override not available in resolved config, falling back to ChatModel",
 				"modelOverride", modelOverride,
@@ -127,11 +123,9 @@ func GenerateCompletionStructured(ctx context.Context, resolver *ConfigResolver,
 	if err != nil {
 		return nil, fmt.Errorf("ai: resolve config: %w", err)
 	}
-	model := config.ChatModel
+	model := config.EffectiveChatModel(modelOverride)
 	if modelOverride != "" {
-		if slices.Contains(config.ChatModels, modelOverride) {
-			model = modelOverride
-		} else {
+		if model != modelOverride {
 			observability.RecordModelFallback("not_in_chat_models")
 			slog.Warn("ai: model override not available in resolved config, falling back to ChatModel",
 				"modelOverride", modelOverride,
@@ -321,4 +315,16 @@ func stripThinkTags(text string) (reasoning, content string) {
 	content = strings.TrimSpace(content)
 
 	return reasoning, content
+}
+
+// EffectiveChatModel returns the chat model a completion call with
+// modelOverride actually uses: the override when the resolved provider offers
+// it, otherwise the KB's resolved ChatModel (also for an empty override). It
+// is the single selection rule shared by the completion entry points and by
+// callers (the index fingerprint) that must know which model really ran.
+func (c *ResolvedConfig) EffectiveChatModel(modelOverride string) string {
+	if modelOverride != "" && slices.Contains(c.ChatModels, modelOverride) {
+		return modelOverride
+	}
+	return c.ChatModel
 }

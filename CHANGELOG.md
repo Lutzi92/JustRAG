@@ -10,6 +10,63 @@ migrations, changed `site_config` defaults, and re-ingest requirements.
 Those are not generated — a release whose notes list a migration has **no
 one-step rollback** (`cmd/migrate` is up-only).
 
+## Unreleased
+
+<!-- Not a git-cliff section (every other heading below is a released, tagged
+     version). This one exists because the user-file-library phase 0 work landed
+     its hand-written upgrade notes before a release was cut. When cutting the
+     next release, `git cliff --unreleased --tag vX.Y.Z --prepend` will insert
+     the generated "## vX.Y.Z — <date>" section ABOVE this one — fold this
+     block's content into that new section's "### ⚠ Upgrade notes" and delete
+     this heading rather than leaving both. -->
+
+### ⚠ Upgrade notes
+
+- **Release process:** every release now goes through a release candidate (`vX.Y.Z-rc.N`) tested on staging and is then *promoted* without a rebuild (Actions → Promote Release Candidate); a plain `vX.Y.Z` tag no longer builds an image. The k8s worker manifests now pull `:stable` with `imagePullPolicy: Always` instead of a literal version pin, so promoting IS the prod deploy: run the migrations with the RC image first, then promote, then `kubectl rollout restart`. The out-of-repo `go-server` Deployment must also use `:stable` with an explicit `imagePullPolicy: Always`. Going back is Actions → Roll Back Stable. `GET /version` in prod reports the promoted RC (e.g. `v0.12.0-rc.2`). Procedure: `docs/runbooks/release.md`.
+- Migration **0075** adds `files.uploaded_by` (no backfill — existing files show no uploader).
+- Ingest no longer drops a chunk because another file in the KB already holds the same text. Re-ingested and new files may store duplicate chunks across files; no re-ingest is required, and existing KBs are unaffected until files are re-ingested. **However**, the old cross-file drop was already active on 4096-dim prod since v0.11.0: files ingested under v0.11.x may be missing chunks that another file of the same KB already held, and lost them permanently if that other file was later deleted. Re-ingest affected KBs (at minimum those with file deletions since upgrading to v0.11.0) to restore them.
+- User uploads / text / URL sources / academic imports added to a **public** KB are now prompt-injection screened (flag only, nothing filtered). Publishing a KB screens its existing user files in a background `kb-screening` task.
+- User file library, phase 1: migrations **0076** (`user_files`, `users.file_quota_bytes`, `files.user_file_id`), **0077** and **0078** (indexes on `files`, built `CONCURRENTLY`: on a large `files` table they take time but do not block writes). Run `cmd/migrate` before rolling out the new image (k8s: the manual migrate step). No backfill — uploads from before this release are not library files.
+- `POST /api/kb/{id}/files` now stores the bytes in the uploader's library first. Its success shape is unchanged (the 201 body gains `userFileId`), but two new error responses exist: `413 {"error":"quota_exceeded","usedBytes":…,"quotaBytes":…}` and `409 {"error":"already_in_kb","fileId":…}`. Re-uploading bytes into a KB that already holds them (same uploader) now answers 409 instead of silently creating a duplicate.
+- New global-only site_config key `user_file_quota_bytes` (default `0` = unlimited, so behaviour is unchanged until an operator sets one) and a per-user override `users.file_quota_bytes` (DB only, no admin-UI field yet).
+- New API `/api/library/...` and `POST /api/kb/{id}/files/from-library`; deleting a library file removes it from every KB, and deleting a user deletes their library. **KB uploads made after this release are library files of the uploader; deleting that user account deletes them from every KB, public KBs included** (uploads from before this release are unaffected). Contract: `docs/api-contracts/user-file-library.md`.
+- User file library, phase 2: migrations **0079** (`files.index_fingerprint`) and **0080** (`kg_extraction_cache`), both idempotent, no backfill. Apply before deploying the new server/worker.
+- Adding a library file to another KB whose settings match (same embedding model/dims/provider, chunking, language, enrichment, HyPE, RAPTOR, KG and parse options) now **copies the finished index** server-side instead of re-ingesting: no embedding or LLM cost, and the KB copy can reach `completed` without the usual stage progression. Spreadsheets, images and audio are never copied (their transcription/caption provider is not part of the match). A failed copy cleans up and falls back to a normal ingest. KG data is replayed from the new extraction cache (no LLM calls for chunks whose extraction is already cached); on parent-child or late-chunking KBs, which build no KG on ingest, a copy builds none either. An ingest whose Docling parse fell back to the built-in parser is never used as a copy source.
+- Operator-visible behaviour changes: `UpdateFileStatus('processing')` now clears `files.index_fingerprint` on every ingest; the re-embed handler flips a file to `processing` BEFORE deleting its old index. Re-embeds (incl. `re-embed-all`) and the per-file retry endpoint always run a full ingest (never a copy), but the worker now reads a file's library link from its `files` row, so a re-embedded/retried library copy is re-stamped (it stays a copy donor) and uses the parse and KG caches. Asynq retries of the original add task may still copy.
+- New metrics: `rag_user_file_add_total{mode=copy|ingest|ingest_cached_parse}` and `rag_kg_extraction_cache_total{outcome=hit|miss}`.
+- Parse-cache objects now live in object storage (or local disk) under `users/<uid>/parses/<user_file_id>/<hash>.json`, one JSON per (library file, parse config). Plan S3 capacity accordingly; they are deleted with the library file. Degraded (Docling-fallback) parses, spreadsheets, images and audio are never cached.
+- User file library, phase 3 (KB-less library chat): migration **0081** (`chats.kb_id` becomes nullable; new `chat_file_refs`). Apply before deploying the new server. **Rolling back 0081 deletes every library chat** (the Down removes all `chats` rows with `kb_id IS NULL` before restoring NOT NULL).
+- New endpoints `POST /api/library/chat[?stream=true]`, `GET /api/library/chats`, `GET /api/library/chats/{id}`; chat sources of library turns carry `userFileId` instead of `fileId`. New global-only site_config key `chat_library_fulltext_max_tokens` (default `60000`, range 4000–200000): below it the selected files' full text is the context, above it up to `chat_longcontext_max_tokens` a map_reduce pass runs, beyond that the request is a 400. Library chat needs no flag; audio files cannot be used (built-in parsers only). Contract: `docs/api-contracts/user-file-library.md`.
+- Library chat parses uncached files on the **web pods** (pdftotext / OCR fallback), at most 3 at a time per process and up to 120 s per file. Size web pods' CPU for occasional OCR, or expect library turns on large scanned PDFs to queue.
+- **⚠ Operator warning — `sql_query` exposes library chat content cross-user (pre-existing tool, sharper impact).** With answer tools enabled and `JUSTRAG_DB_URL_READONLY` set, the `sql_query` tool can `SELECT` from `messages`/`chats` unscoped, so any user's model can read other users' `messages.sources` — which now include snippets (≤ 600 runes per source) of library chats' private files. On a multi-user deployment using library chat, keep `sql_query` unavailable (no read-only DSN, or leave it out via `chat_answer_tools_by_route`) or revoke the read-only role's SELECT on `messages` and `chats`.
+- Behaviour change on KB chat: message history is now scoped to the chat (`GetMessageAncestors`), and a `parentMessageId` that belongs to another chat or does not exist is stored as no parent (the turn uses the chat's linear history). Previously a nonexistent id returned 500 and a foreign one could pull in another chat's messages.
+- User file library, phase 4 (**no migration**): new `POST /api/kb/{id}/files/adopt` moves pre-library KB uploads into their uploader's library without touching the index (owner of a private KB, or system admin on a public KB; 1–100 ids per call; per-file skip reasons in the response). Nothing runs automatically; the KB owner or an operator calls it. Contract: `docs/api-contracts/user-file-library.md`. Files that are `pending`/`processing` are skipped as `busy`; identical duplicates in one KB are skipped as `duplicate_in_kb`. After adoption the uploader owns the library file and can delete it everywhere, including the KB copy and its index, even if no longer a KB member.
+- New worker maintenance loop `userfiles_orphan_sweep` (first run 10 min after start, then every 6 h; **requires `WORKER_MAINTENANCE`**, runs on every worker with it enabled). It deletes library blobs and parse-cache objects that no database row references, **only under the `users/` prefix**, only objects older than 24 h, at most 500 per run; a storage or database error aborts the run. Storage backends gained a `List` operation (local disk and S3; S3 credentials need `s3:ListBucket`).
+- New metrics: `rag_user_file_adopt_total{outcome}`, `rag_user_file_orphans_deleted_total{kind=blob|cache}`, `rag_user_files_total`, `rag_user_files_bytes` (gauges on the worker metrics tick, needs `WORKER_MAINTENANCE`; every maintenance worker reports them, so use `max()` across workers, not `sum()`) and `rag_library_chat_turn_total{mode=fulltext|map_reduce|too_large}`.
+- Library chat in stream mode now emits `{"stage":"library_parse","file","index","total"}` frames before each file is read; the chat-text cache write has its own 10 s timeout.
+- Developer note: bump `parseCacheVersion` (`internal/processor/parsecache.go`) when parser or page-rebuild output changes, `fingerprintVersion` (`internal/processor/fingerprint.go`) on any index-shaping code change, and `prompts.KGPromptVersion` on KG prompt changes.
+- Global search (`GET /api/search`): migrations **0084** (`CREATE EXTENSION pg_trgm` + five GIN trigram indexes on `knowledge_bases`, `files`, `chats`) and **0085** (a GIN full-text expression index over all of `messages.content`). Both build `CONCURRENTLY` (no write lock), but on a large `messages` table 0085 can run for a long time, and each build waits for every older open transaction. **The migrating role needs the CREATE privilege on the database** for `pg_trgm` (a trusted extension, no superuser) — otherwise create the extension once as an operator and re-run. Run a **single** `cmd/migrate` instance (on k8s, the one `kubectl run … /app/migrate` step, with no short timeout): two concurrent migrators deadlock on the concurrent builds (40P01) and leave an invalid index that the migration file explains how to drop.
+
+## v0.11.2 — 2026-10-08
+
+### ⚠ Upgrade notes
+
+No migration (still 0074), no changed `site_config` default, no re-ingest.
+The repository moved to `github.com/KI4JLU/JustRAG`, and images are now
+published as **`ghcr.io/ki4jlu/justrag`** (`:vX.Y.Z`, `:vX.Y`, `:stable`).
+The old `ghcr.io/lutzi92/justrag` receives no new builds and has no
+redirect: a deployment still pulling `ghcr.io/lutzi92/justrag:stable` keeps
+running v0.11.1 without any error. Point every compose host (update its
+checkout or set the image explicitly), the k8s worker manifests and the
+separately managed `go-server` Deployment at the new path; if the package is
+private, the cluster's `imagePullSecret` needs read access to the KI4JLU
+package. Images up to v0.11.1 exist only at the old path. The compose files
+also pull minio from the `pgsty/minio` community fork now, because
+`minio/minio` was removed from Docker Hub.
+
+### Fixes
+- Pull minio from the pgsty community fork (cad0e58)
+
 ## v0.11.1 — 2026-10-06
 
 ### ⚠ Upgrade notes

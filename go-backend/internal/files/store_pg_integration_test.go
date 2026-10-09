@@ -307,3 +307,51 @@ func TestListSpreadsheetFiles(t *testing.T) {
 		t.Fatalf("FileInfo incomplete: %+v", got[0])
 	}
 }
+
+// TestCreateFileRecordsUploader pins migration 0075: CreateFile writes
+// UploadedBy, and an empty UploadedBy stays NULL (source-owned origins).
+func TestCreateFileRecordsUploader(t *testing.T) {
+	pool := openMainPool(t)
+	store := files.NewStore(pool)
+	ctx := context.Background()
+	kbID, _ := seedErrorFile(t, pool, "completed")
+
+	var userID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO users (username, password_hash, role)
+		VALUES ('uploader-'||gen_random_uuid()::text, 'x', 'user')
+		RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	t.Cleanup(func() { pool.Exec(ctx, `DELETE FROM users WHERE id = $1::uuid`, userID) }) //nolint:errcheck
+
+	for _, tc := range []struct {
+		name, uploadedBy string
+		wantNull         bool
+	}{
+		{"with uploader", userID, false},
+		{"source-owned", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, err := store.CreateFile(ctx, files.CreateFileData{
+				KbID: kbID, Name: "a.txt", Type: "text/plain", Size: 1,
+				Origin: "upload", StoragePath: "u/k/a.txt", UploadedBy: tc.uploadedBy,
+			})
+			if err != nil {
+				t.Fatalf("CreateFile: %v", err)
+			}
+			t.Cleanup(func() { pool.Exec(ctx, `DELETE FROM files WHERE id = $1::uuid`, rec.ID) }) //nolint:errcheck
+
+			var got *string
+			if err := pool.QueryRow(ctx, `SELECT uploaded_by::text FROM files WHERE id = $1::uuid`, rec.ID).Scan(&got); err != nil {
+				t.Fatalf("read uploaded_by: %v", err)
+			}
+			if tc.wantNull && got != nil {
+				t.Fatalf("uploaded_by = %q, want NULL", *got)
+			}
+			if !tc.wantNull && (got == nil || *got != tc.uploadedBy) {
+				t.Fatalf("uploaded_by = %v, want %q", got, tc.uploadedBy)
+			}
+		})
+	}
+}
