@@ -160,7 +160,7 @@ type ConfluenceFileRow struct {
 type Handler struct {
 	store        ConfluenceStore
 	jwtSecret    string
-	asynqClient  *asynq.Client
+	asynqClient  Enqueuer // nil = no queue wired
 	tableDropper TableDropper
 }
 
@@ -169,9 +169,14 @@ type Handler struct {
 func NewHandler(store ConfluenceStore, jwtSecret string, asynqClient ...*asynq.Client) *Handler {
 	h := &Handler{store: store, jwtSecret: jwtSecret}
 	if len(asynqClient) > 0 {
-		h.asynqClient = asynqClient[0]
+		h.asynqClient = nonNilEnqueuer(asynqClient[0])
 	}
 	return h
+}
+
+// importer returns the Importer sharing this handler's store and queue.
+func (h *Handler) importer() *Importer {
+	return &Importer{store: h.store, enq: h.asynqClient}
 }
 
 // SetTableDropper injects the spreadsheet table cleanup hook for
@@ -379,26 +384,13 @@ func (h *Handler) CreateSource(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	source, err := h.store.CreateConfluenceSource(ctx, kbID, body.ConnectionID, body.SpaceKey,
+	// A first sync that was not queued is already logged; the endpoint still
+	// answers 201 (the source exists and can be synced from the UI).
+	source, _, err := h.importer().createSource(ctx, kbID, body.ConnectionID, body.SpaceKey,
 		body.RootPageID, body.RootPageTitle, body.IncludeAttachments, syncSchedule)
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to create Confluence source")
 		return
-	}
-
-	// Enqueue initial sync job so the worker fetches pages immediately.
-	if h.asynqClient != nil {
-		payload, marshalErr := json.Marshal(map[string]string{"sourceId": source.ID})
-		if marshalErr == nil {
-			if _, enqErr := h.asynqClient.Enqueue(
-				asynq.NewTask(jobs.TypeConfluenceSync, payload),
-				asynq.Queue(jobs.QueueHeavy),
-				asynq.MaxRetry(3),
-				asynq.Timeout(jobs.TimeoutFor(jobs.TypeConfluenceSync)),
-			); enqErr != nil {
-				logctx.From(ctx).Error("failed to enqueue initial confluence sync", "sourceId", source.ID, "error", enqErr)
-			}
-		}
 	}
 
 	httputil.WriteJSONCtx(r.Context(), w, http.StatusCreated, source)

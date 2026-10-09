@@ -18,6 +18,7 @@ import (
 	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/sserelay"
 	"github.com/justrag/go-backend/internal/vector"
+	"github.com/justrag/go-backend/internal/websearch"
 )
 
 // ---------------------------------------------------------------------------
@@ -281,13 +282,13 @@ func (h *Handler) StartWebResearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check site config.
-	enabled, err := h.store.GetSiteConfigValue(r.Context(), "web_search_enabled")
+	// Check site config (the shared web_search_enabled parse).
+	enabled, err := websearch.Enabled(r.Context(), h.store)
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to read site config")
 		return
 	}
-	if enabled == nil || *enabled != "true" {
+	if !enabled {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusForbidden, "web search is not enabled")
 		return
 	}

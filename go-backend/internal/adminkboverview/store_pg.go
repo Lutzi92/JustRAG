@@ -223,6 +223,7 @@ func (s *PGStore) ChatStatsByKB(ctx context.Context) (map[string]ChatStats, erro
 		       COUNT(DISTINCT m.chat_id)::int   AS chat_count
 		FROM messages m
 		JOIN chats c ON c.id = m.chat_id
+		WHERE c.kb_id IS NOT NULL
 		GROUP BY c.kb_id`
 	rows, err := pgxutil.QueryRows[chatStatRow](ctx, s.pool, sql)
 	if err != nil {

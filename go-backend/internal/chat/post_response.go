@@ -489,3 +489,62 @@ func (h *Handler) runPostResponseTasks(
 
 	return fuRes.followUps, verification, refinedAnswer
 }
+
+// libraryCitationValidator is the validator runLibraryPostResponseTasks
+// calls; a seam so a test can assert it receives the full, uncapped source
+// content (the streamed/persisted copy is snippet-capped, see wireSources).
+var libraryCitationValidator = RunCitationValidation
+
+// runLibraryPostResponseTasks is the post-response pipeline of a KB-less
+// library chat turn (P3-R5). It runs only the KB-independent part of
+// runPostResponseTasks: follow-up questions and the citation validator
+// (deterministic n-gram pass + semantic fallback), both with kbID "" so the
+// global active provider answers. Everything KB-bound is deliberately absent —
+// long-term memory, the tabular query log, factcheck, the factuality / Self-RAG
+// verifier and its refine gate, span verification, RAGAS sampling and RAPTOR
+// expansion — so no KB-scoped table receives a row from a library chat.
+func (h *Handler) runLibraryPostResponseTasks(
+	ctx context.Context,
+	userMessage, aiResponse, lang, aiMsgID string,
+	sources []ChatSource,
+) ([]string, *MessageVerification) {
+	// Detached like runPostResponseTasks: the AI message is already persisted.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postResponseTimeout)
+	defer cancel()
+
+	var (
+		followUps []string
+		citations []CitationStatus
+		wg        sync.WaitGroup
+	)
+	wg.Add(1)
+	safego.GoCtx(ctx, func() {
+		defer wg.Done()
+		followUps, _ = ai.GenerateFollowUpQuestions(ctx, h.aiResolver, userMessage, aiResponse, "", lang)
+	})
+	if CitationValidationEnabled(ctx, h.siteConfigReader) {
+		wg.Add(1)
+		safego.GoCtx(ctx, func() {
+			defer wg.Done()
+			sem := &SemanticConfig{
+				Embed: func(ctx context.Context, text string) ([]float64, error) {
+					return ai.GenerateEmbedding(ctx, h.aiResolver, text, "", nil)
+				},
+				Threshold: CitationValidationSemanticThreshold(ctx, h.siteConfigReader),
+			}
+			citations = libraryCitationValidator(ctx, aiResponse, sources, sem)
+			for _, c := range citations {
+				observability.RecordCitationAttribution(c.Verified, c.Method)
+			}
+		})
+	}
+	wg.Wait()
+
+	verification := mergeVerification(nil, citations, nil, nil, nil)
+	if verification != nil {
+		if err := h.store.UpdateMessageVerification(ctx, aiMsgID, verification); err != nil {
+			logctx.From(ctx).Warn("failed to persist message verification", "messageId", aiMsgID, "error", err)
+		}
+	}
+	return followUps, verification
+}

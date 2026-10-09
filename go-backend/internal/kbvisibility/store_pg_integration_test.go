@@ -233,3 +233,59 @@ func TestUnpublishImpactListsAdminsAndSubscribers(t *testing.T) {
 		t.Fatalf("candidates = %+v, want the ex-owner (now admin)", impact.Candidates)
 	}
 }
+
+// Oracle: kbaccess.EffectiveRole on a private KB — after Unpublish only the
+// new owner (a member) can still open it, so only the owner's star and
+// category link survive; the former subscriber's go.
+func TestUnpublishForgetsFiltersOfUsersWhoLoseAccess(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbvisibility.NewStore(pool)
+
+	owner := insertUser(t, pool, "kbvis-owner-filters")
+	reader := insertUser(t, pool, "kbvis-reader-filters")
+	kbID := insertOwnedKB(t, pool, "kbvis-unpublish-filters", owner)
+	if err := store.Publish(ctx, kbID); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	for _, u := range []string{owner, reader} {
+		var cat string
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO kb_user_categories (user_id, name) VALUES ($1::uuid, 'Studium')
+			RETURNING id::text`, u).Scan(&cat); err != nil {
+			t.Fatalf("insert category: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO kb_favorites (user_id, kb_id) VALUES ($1::uuid, $2::uuid);`, u, kbID); err != nil {
+			t.Fatalf("insert favorite: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO kb_user_category_links (user_id, category_id, kb_id)
+			VALUES ($1::uuid, $2::uuid, $3::uuid)`, u, cat, kbID); err != nil {
+			t.Fatalf("insert category link: %v", err)
+		}
+	}
+
+	if err := store.Unpublish(ctx, kbID, owner); err != nil {
+		t.Fatalf("Unpublish: %v", err)
+	}
+
+	for _, table := range []string{"kb_favorites", "kb_user_category_links"} {
+		rows, err := pool.Query(ctx, `SELECT user_id::text FROM `+table+` WHERE kb_id = $1::uuid`, kbID)
+		if err != nil {
+			t.Fatalf("select %s: %v", table, err)
+		}
+		var got []string
+		for rows.Next() {
+			var u string
+			if err := rows.Scan(&u); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, u)
+		}
+		rows.Close()
+		if len(got) != 1 || got[0] != owner {
+			t.Errorf("%s users = %v, want only the owner %s", table, got, owner)
+		}
+	}
+}

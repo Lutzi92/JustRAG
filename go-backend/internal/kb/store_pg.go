@@ -93,6 +93,7 @@ const kbStatsCols = `,
        COALESCE(fs.failed_file_count, 0)::int     AS failed_file_count,
        COALESCE(fs.processing_file_count, 0)::int AS processing_file_count,
        fs.oldest_file_at                          AS oldest_file_at,
+       fs.last_ingested_at                        AS last_ingested_at,
        COALESCE(us.turn_count, 0)::int            AS turn_count,
        us.last_activity_at                        AS last_activity_at`
 
@@ -104,7 +105,14 @@ const kbStatsJoins = `
                   -- Effective date, the same COALESCE the retrieval
                   -- date-window filter uses, so "the corpus reaches back to
                   -- X" on a card agrees with what a date-scoped search sees.
-                  MIN(COALESCE(published_at, created_at))                    AS oldest_file_at
+                  MIN(COALESCE(published_at, created_at))                    AS oldest_file_at,
+                  -- When content was last ingested (the card's „Aktualisiert"
+                  -- line): the worker's last heartbeat on a successfully
+                  -- ingested file. Ingest time, not document date, so no
+                  -- published_at; see KBRow.LastIngestedAt for why
+                  -- progress_updated_at and not created_at.
+                  MAX(COALESCE(progress_updated_at, created_at))
+                      FILTER (WHERE status IN ('completed','partial'))      AS last_ingested_at
            FROM files f WHERE f.kb_id = kb.id
        ) fs ON true
        LEFT JOIN LATERAL (
@@ -133,6 +141,40 @@ func kbMembershipCols(userIDParam string) string {
 	return `,
        (SELECT role FROM kb_members WHERE kb_id = kb.id AND user_id = ` + userIDParam + `) AS my_role,
        (SELECT COUNT(*)::int FROM kb_members WHERE kb_id = kb.id)         AS member_count`
+}
+
+// kbUserFilterCols surfaces the caller's own per-user topic filters
+// (migration 0086, owned by internal/kbfilters): whether this KB is starred,
+// and which of the caller's own categories it carries. Joined into the
+// session-facing reads rather than fetched per row afterwards — the chip row
+// filters client-side off one payload, and a follow-up request per card is
+// exactly the N+1 the card metadata above already avoids.
+//
+// Same shape and the same reason as kbMembershipCols: it needs a "the caller"
+// bind parameter, which the Create/Update RETURNING clauses have no place
+// for, so it stays out of kbSelectCols. Correlates against `kb.id`, so the
+// caller's FROM clause must alias knowledge_bases as `kb`.
+//
+// The COALESCE to an empty array is what keeps userCategoryIds [] rather than
+// null in the JSON: pgx scans a NULL array into a nil slice without error,
+// and nothing downstream replaces it.
+//
+// withFilters=false is the API-key variant: the same two column names, both
+// NULL, so the kbListRow scan shape stays one struct and toKBRowWithStats
+// leaves KBRow.UserFilters nil. The per-user subqueries do not run at all.
+func kbUserFilterCols(userIDParam string, withFilters bool) string {
+	if !withFilters {
+		return `,
+       NULL::boolean AS is_favorite,
+       NULL::text[]  AS user_category_ids`
+	}
+	return `,
+       EXISTS (SELECT 1 FROM kb_favorites fav
+               WHERE fav.kb_id = kb.id AND fav.user_id = ` + userIDParam + `) AS is_favorite,
+       COALESCE((SELECT array_agg(ucl.category_id::text)
+                 FROM kb_user_category_links ucl
+                 WHERE ucl.kb_id = kb.id AND ucl.user_id = ` + userIDParam + `),
+                ARRAY[]::text[]) AS user_category_ids`
 }
 
 func toKBRow(r kbFullRow) KBRow {
@@ -172,10 +214,15 @@ type kbListRow struct {
 	FailedFileCount     int        `db:"failed_file_count"`
 	ProcessingFileCount int        `db:"processing_file_count"`
 	OldestFileAt        *time.Time `db:"oldest_file_at"`
+	LastIngestedAt      *time.Time `db:"last_ingested_at"`
 	TurnCount           int        `db:"turn_count"`
 	LastActivityAt      *time.Time `db:"last_activity_at"`
 	MyRole              *string    `db:"my_role"`
 	MemberCount         int        `db:"member_count"`
+	// NULL in both columns means the query ran without the per-user
+	// subqueries (kbUserFilterCols withFilters=false).
+	IsFavorite      *bool    `db:"is_favorite"`
+	UserCategoryIDs []string `db:"user_category_ids"`
 }
 
 func toKBRowWithStats(r kbListRow) KBRow {
@@ -184,10 +231,14 @@ func toKBRowWithStats(r kbListRow) KBRow {
 	row.FailedFileCount = r.FailedFileCount
 	row.ProcessingFileCount = r.ProcessingFileCount
 	row.OldestFileAt = r.OldestFileAt
+	row.LastIngestedAt = r.LastIngestedAt
 	row.TurnCount = r.TurnCount
 	row.LastActivityAt = r.LastActivityAt
 	row.MyRole = r.MyRole
 	row.MemberCount = r.MemberCount
+	if r.IsFavorite != nil {
+		row.UserFilters = &UserFilters{IsFavorite: *r.IsFavorite, UserCategoryIDs: r.UserCategoryIDs}
+	}
 	return row
 }
 
@@ -215,10 +266,26 @@ const listKnowledgeBasesMaxLimit = 1000
 // to be stated. Duplicating such a KB is not merely cosmetic: HomeView's
 // personal card offers "leave", which would drop the curator's own admin row
 // and their chats with it.
-// Results are ordered by created_at DESC with limit/offset pagination.
+// Results are ordered by created_at DESC, then id DESC as a tiebreak so
+// limit/offset pages are stable when several KBs share a created_at.
 // limit is clamped to listKnowledgeBasesMaxLimit and silently coerced to 1
 // when ≤ 0; offset < 0 is coerced to 0.
+//
+// This is the API-key variant (GET /api/v1/kb, /openai/v1/models, the KB
+// router): KBRow.UserFilters stays nil and the per-user subqueries do not
+// run. The session UI calls ListKnowledgeBasesWithUserFilters.
 func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, offset int) ([]KBRow, error) {
+	return s.listKnowledgeBases(ctx, userID, limit, offset, false)
+}
+
+// ListKnowledgeBasesWithUserFilters is ListKnowledgeBases plus the caller's
+// own favorite and category state on every row (KBRow.UserFilters). Backs
+// GET /api/kb.
+func (s *PGStore) ListKnowledgeBasesWithUserFilters(ctx context.Context, userID string, limit, offset int) ([]KBRow, error) {
+	return s.listKnowledgeBases(ctx, userID, limit, offset, true)
+}
+
+func (s *PGStore) listKnowledgeBases(ctx context.Context, userID string, limit, offset int, withFilters bool) ([]KBRow, error) {
 	if limit <= 0 {
 		limit = 1
 	}
@@ -243,7 +310,7 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 		SELECT ` + kbSelectCols + `,
 		       u.first_name AS owner_first_name,
 		       u.last_name  AS owner_last_name,
-		       u.username   AS owner_username` + kbStatsCols + kbMembershipCols("$1") + `
+		       u.username   AS owner_username` + kbStatsCols + kbMembershipCols("$1") + kbUserFilterCols("$1", withFilters) + `
 		FROM knowledge_bases kb
 		LEFT JOIN users u ON kb.user_id = u.id` + kbStatsJoins + `
 		WHERE kb.visibility = 'private'
@@ -251,7 +318,10 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 		    SELECT 1 FROM kb_members
 		    WHERE kb_id = kb.id AND user_id = $1
 		)
-		ORDER BY kb.created_at DESC
+		-- kb.id breaks created_at ties. Without it, rows sharing a timestamp
+		-- have no defined order, so LIMIT/OFFSET pages can skip or repeat
+		-- them. GET /api/kb is paged by the UI through the full list.
+		ORDER BY kb.created_at DESC, kb.id DESC
 		LIMIT $2 OFFSET $3`
 
 	rows, err := pgxutil.QueryRows[kbListRow](ctx, s.pool, sql, userID, limit, offset)
@@ -292,11 +362,28 @@ func (s *PGStore) ListKnowledgeBases(ctx context.Context, userID string, limit, 
 // global KB the caller has an explicit kb_members row on (e.g. an admin- or
 // self-added membership) reports that role instead of the implicit-viewer
 // null.
+//
+// Like ListKnowledgeBases this is the API-key variant (openaicompat's model
+// list is its only caller, and the only one passing isAdmin=true):
+// KBRow.UserFilters stays nil. The session UI calls
+// ListGlobalKnowledgeBasesWithUserFilters.
 func (s *PGStore) ListGlobalKnowledgeBases(ctx context.Context, userID string, isAdmin bool) ([]KBRow, error) {
+	return s.listGlobalKnowledgeBases(ctx, userID, isAdmin, false)
+}
+
+// ListGlobalKnowledgeBasesWithUserFilters is ListGlobalKnowledgeBases plus
+// the caller's own favorite and category state on every row. Backs
+// GET /api/kb/global.
+func (s *PGStore) ListGlobalKnowledgeBasesWithUserFilters(ctx context.Context, userID string, isAdmin bool) ([]KBRow, error) {
+	return s.listGlobalKnowledgeBases(ctx, userID, isAdmin, true)
+}
+
+func (s *PGStore) listGlobalKnowledgeBases(ctx context.Context, userID string, isAdmin, withFilters bool) ([]KBRow, error) {
+	filterCols := kbUserFilterCols("$1", withFilters)
 	var sql string
 	if isAdmin {
 		sql = `
-			SELECT ` + kbSelectColsNoAlias + kbStatsCols + kbMembershipCols("$1") + `
+			SELECT ` + kbSelectColsNoAlias + kbStatsCols + kbMembershipCols("$1") + filterCols + `
 			FROM knowledge_bases kb` + kbStatsJoins + `
 			WHERE visibility = 'public'
 			ORDER BY created_at DESC
@@ -308,7 +395,7 @@ func (s *PGStore) ListGlobalKnowledgeBases(ctx context.Context, userID string, i
 		// emitted and index-driven sorting/pagination survives (see the
 		// comment on ListKnowledgeBases above for the full rationale).
 		sql = `
-			SELECT ` + kbSelectColsNoAlias + kbStatsCols + kbMembershipCols("$1") + `
+			SELECT ` + kbSelectColsNoAlias + kbStatsCols + kbMembershipCols("$1") + filterCols + `
 			FROM knowledge_bases kb` + kbStatsJoins + `
 			WHERE visibility = 'public'
 			  -- An explicit opt-out hides the tile for everyone, members
@@ -354,8 +441,14 @@ func (s *PGStore) ListGlobalKnowledgeBases(ctx context.Context, userID string, i
 }
 
 // GetKnowledgeBase returns a single KB in the same shape the list endpoints
-// produce — base columns, owner attribution, card stats and the caller's own
-// membership. Returns (nil, nil) when no such KB exists.
+// produce — base columns, owner attribution, card stats, the caller's own
+// membership and their own topic filters. Returns (nil, nil) when no such KB
+// exists.
+//
+// The caller's topic filters (KBRow.UserFilters) are always included: every
+// caller is session-facing — GET /api/kb/{id}, and PATCH /api/kb/{id}, which
+// re-reads its result through here so the UI can replace its card with the
+// response without losing the star, the categories or the stats.
 //
 // It deliberately carries **no** visibility predicate of its own. Access is
 // the route's job: the handler sits on kbViewChain, whose
@@ -373,7 +466,8 @@ func (s *PGStore) GetKnowledgeBase(ctx context.Context, kbID, userID string) (*K
 		SELECT ` + kbSelectCols + `,
 		       u.first_name AS owner_first_name,
 		       u.last_name  AS owner_last_name,
-		       u.username   AS owner_username` + kbStatsCols + kbMembershipCols("$2") + `
+		       u.username   AS owner_username` + kbStatsCols + kbMembershipCols("$2") +
+		kbUserFilterCols("$2", true) + `
 		FROM knowledge_bases kb
 		LEFT JOIN users u ON kb.user_id = u.id` + kbStatsJoins + `
 		WHERE kb.id = $1`
@@ -414,6 +508,11 @@ func (s *PGStore) CreateKnowledgeBase(ctx context.Context, name string, descript
 			return fmt.Errorf("CreateKnowledgeBase: no row returned")
 		}
 		r := toKBRow(*row)
+		// A KB that did not exist a moment ago carries no favorite or
+		// category link for anyone, so the creator's filters are known
+		// without a query. Set explicitly so POST /api/kb returns the same
+		// keys as the GET routes the UI merges it with.
+		r.UserFilters = &UserFilters{UserCategoryIDs: []string{}}
 
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1, $2, $3)`,
@@ -539,7 +638,12 @@ type fileDBRow struct {
 	// a payload carrying "rule" = the finding behind a true flag.
 	InjectionFlag   bool            `db:"injection_flag"`
 	InjectionDetail json.RawMessage `db:"injection_detail"`
-	TotalCount      int             `db:"total_count"`
+	// Uploader identity (migration 0075), both NULL when the file has no
+	// uploader or the user row is gone (ON DELETE SET NULL).
+	UploaderID          *string `db:"uploader_id"`
+	UploaderDisplayName *string `db:"uploader_display_name"`
+	UserFileID          *string `db:"user_file_id"`
+	TotalCount          int     `db:"total_count"`
 }
 
 // ListFiles returns a paginated slice of files for kbID, ordered by created_at DESC,
@@ -549,14 +653,18 @@ type fileDBRow struct {
 // disagree under concurrent inserts/deletes.
 func (s *PGStore) ListFiles(ctx context.Context, kbID string, limit, offset int) ([]FileRow, int, error) {
 	const listSQL = `
-		SELECT id, name, type, size, status, progress, origin,
-		       error_stage, error_message, current_stage, stage_index, stage_total, stage_detail,
-		       rss_feed_id, confluence_source_id, created_at,
-		       injection_flag, injection_detail,
+		SELECT f.id, f.name, f.type, f.size, f.status, f.progress, f.origin,
+		       f.error_stage, f.error_message, f.current_stage, f.stage_index, f.stage_total, f.stage_detail,
+		       f.rss_feed_id, f.confluence_source_id, f.created_at,
+		       f.injection_flag, f.injection_detail,
+		       u.id::text AS uploader_id,
+		       COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username) AS uploader_display_name,
+		       f.user_file_id::text AS user_file_id,
 		       COUNT(*) OVER ()::int AS total_count
-		FROM files
-		WHERE kb_id = $1
-		ORDER BY created_at DESC
+		FROM files f
+		LEFT JOIN users u ON u.id = f.uploaded_by
+		WHERE f.kb_id = $1
+		ORDER BY f.created_at DESC
 		LIMIT $2 OFFSET $3`
 
 	rows, err := pgxutil.QueryRows[fileDBRow](ctx, s.pool, listSQL, kbID, limit, offset)
@@ -599,6 +707,10 @@ func (s *PGStore) ListFiles(ctx context.Context, kbID string, limit, offset int)
 			CreatedAt:          r.CreatedAt,
 			InjectionFlag:      r.InjectionFlag,
 			InjectionDetail:    r.InjectionDetail,
+			UserFileID:         r.UserFileID,
+		}
+		if r.UploaderID != nil && r.UploaderDisplayName != nil {
+			result[i].UploadedBy = &FileUploader{ID: *r.UploaderID, DisplayName: *r.UploaderDisplayName}
 		}
 	}
 	return result, rows[0].TotalCount, nil

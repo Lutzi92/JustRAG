@@ -403,3 +403,68 @@ func TestCatalog_HeaderTextIsSearchedAndDisplayed(t *testing.T) {
 		t.Errorf("description = %v, want the explicit description to win over header_text", d)
 	}
 }
+
+// TestCatalog_UserFilterColumnsArePerCaller pins the two per-user topic
+// filter columns (migration 0086) the catalog query now joins in.
+//
+// Oracle: the fixture rows this test writes by hand before the query runs —
+// it knows who starred and tagged the KB because it inserted those rows. The
+// second, untouched user is the load-bearing half: a query that lost its
+// user_id predicate would still look right for the first one.
+func TestCatalog_UserFilterColumnsArePerCaller(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := kbsubs.NewStore(pool)
+
+	starrer := insertUser(t, pool, "kbsubs-uf-starrer")
+	bystander := insertUser(t, pool, "kbsubs-uf-bystander")
+	kbID := insertKB(t, pool, "kbsubs-uf-kb", "", "public", true, false)
+
+	var catID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO kb_user_categories (user_id, name) VALUES ($1::uuid, 'kbsubs-uf-cat')
+		RETURNING id::text`, starrer).Scan(&catID); err != nil {
+		t.Fatalf("insert kb_user_categories: %v", err)
+	}
+	mustExec(t, pool, `INSERT INTO kb_favorites (user_id, kb_id) VALUES ($1::uuid, $2::uuid)`,
+		starrer, kbID)
+	mustExec(t, pool, `INSERT INTO kb_user_category_links (user_id, category_id, kb_id)
+	                   VALUES ($1::uuid, $2::uuid, $3::uuid)`, starrer, catID, kbID)
+
+	mine, err := store.Catalog(ctx, starrer, "kbsubs-uf-", nil)
+	if err != nil {
+		t.Fatalf("Catalog(starrer): %v", err)
+	}
+	entry, ok := byID(mine)[kbID]
+	if !ok {
+		t.Fatalf("KB %s missing from the catalog", kbID)
+	}
+	if !entry.IsFavorite {
+		t.Error("isFavorite = false for the user who starred it, want true")
+	}
+	if len(entry.UserCategoryIDs) != 1 || entry.UserCategoryIDs[0] != catID {
+		t.Errorf("userCategoryIds = %v, want [%s]", entry.UserCategoryIDs, catID)
+	}
+
+	theirs, err := store.Catalog(ctx, bystander, "kbsubs-uf-", nil)
+	if err != nil {
+		t.Fatalf("Catalog(bystander): %v", err)
+	}
+	other, ok := byID(theirs)[kbID]
+	if !ok {
+		t.Fatalf("KB %s missing from the bystander's catalog", kbID)
+	}
+	if other.IsFavorite {
+		t.Error("isFavorite = true for a user who never starred it")
+	}
+	if len(other.UserCategoryIDs) != 0 {
+		t.Errorf("userCategoryIds = %v, want empty — those are another user's categories", other.UserCategoryIDs)
+	}
+	// The SQL's COALESCE(..., ARRAY[]::text[]) is what keeps this non-nil:
+	// pgx scans a NULL array into a nil slice without error (it does not fail
+	// the scan), and CatalogEntry is serialised as scanned, so without the
+	// COALESCE the JSON would read null instead of [].
+	if other.UserCategoryIDs == nil {
+		t.Error("userCategoryIds is nil, want an empty slice")
+	}
+}

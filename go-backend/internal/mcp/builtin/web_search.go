@@ -3,11 +3,14 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
 
+	"github.com/justrag/go-backend/internal/logctx"
 	"github.com/justrag/go-backend/internal/mcp"
+	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/research"
+	"github.com/justrag/go-backend/internal/websearch"
 )
 
 // WebSearchArgs is the documented argument shape for the web_search
@@ -44,6 +47,12 @@ func NewWebSearch(client *research.WebClient) mcp.Tool {
 	}
 }
 
+// Generic tool errors for the model (see webSearchHandler).
+var (
+	errWebSearchUnavailable = errors.New("web_search: web search is not available")
+	errWebSearchFailed      = errors.New("web_search: the web search failed")
+)
+
 func webSearchHandler(client *research.WebClient) mcp.ToolHandlerFunc {
 	return func(ctx context.Context, raw json.RawMessage) (mcp.ToolResult, error) {
 		var args WebSearchArgs
@@ -53,27 +62,29 @@ func webSearchHandler(client *research.WebClient) mcp.ToolHandlerFunc {
 		if args.Query == "" {
 			return mcp.ToolResult{}, fmt.Errorf("web_search: query is required")
 		}
+		// The error text goes back to the model, which may repeat it to the
+		// user: it stays generic and never names admin config keys. The
+		// detail (which switch or credential is missing) goes to the log.
 		if client == nil {
-			return mcp.ToolResult{}, fmt.Errorf("web_search: web client not configured (check google_search_api_key + web_search_enabled)")
+			logctx.From(ctx).Warn("web_search: tool called without a web client")
+			return mcp.ToolResult{}, errWebSearchUnavailable
 		}
 		pages, err := client.Search(ctx, args.Query, args.Limit, args.Language)
 		if err != nil {
-			return mcp.ToolResult{}, fmt.Errorf("web_search: %w", err)
-		}
-		var b strings.Builder
-		for i, p := range pages {
-			if i > 0 {
-				b.WriteString("\n\n---\n\n")
+			logctx.From(ctx).Warn("web_search: search failed", "error", err)
+			if websearch.IsUnavailable(err) {
+				return mcp.ToolResult{}, errWebSearchUnavailable
 			}
-			b.WriteString("[")
-			b.WriteString(p.URL)
-			b.WriteString("] ")
-			b.WriteString(p.Title)
-			b.WriteByte('\n')
-			b.WriteString(p.Content)
+			return mcp.ToolResult{}, errWebSearchFailed
+		}
+		// Fetched pages are attacker-controllable text: frame them as
+		// untrusted data before any model reads them (prompts.WebSearchResults).
+		framed := make([]prompts.WebSearchResultPage, len(pages))
+		for i, p := range pages {
+			framed[i] = prompts.WebSearchResultPage{URL: p.URL, Title: p.Title, Content: p.Content}
 		}
 		return mcp.ToolResult{
-			Text: b.String(),
+			Text: prompts.WebSearchResults(framed),
 			Meta: map[string]any{"page_count": len(pages)},
 		}, nil
 	}

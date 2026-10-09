@@ -23,6 +23,9 @@ func TestIsUploadExempt(t *testing.T) {
 		{http.MethodPost, "/api/describe-image", true},
 		{http.MethodPost, "/api/admin/agent/template", true},
 		{http.MethodPost, "/api/admin/eval/golden-sets", true},
+		{http.MethodPost, "/api/library/files", true},
+		{http.MethodPatch, "/api/library/files", false},
+		{http.MethodPost, "/api/library/files/123", false},
 
 		// Non-POST never exempt.
 		{http.MethodGet, "/api/kb/123/files", false},

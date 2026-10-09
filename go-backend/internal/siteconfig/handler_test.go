@@ -52,6 +52,7 @@ func makeRows() []siteconfig.SiteConfigRow {
 		{Key: "chat_footer", Value: strPtr("Footer text")},
 		{Key: "confluence_enabled", Value: strPtr("true")},
 		{Key: "web_search_enabled", Value: strPtr("true")},
+		{Key: "chat_web_search_enabled", Value: strPtr("false")},
 		{Key: "academic_search_enabled", Value: strPtr("false")},
 		{Key: "academic_search_name", Value: strPtr("Scholar")},
 		{Key: "google_search_api_key", Value: strPtr("secret-api-key")},
@@ -77,10 +78,12 @@ func TestGetSiteConfig_Unauthenticated(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	// Public keys should be present
+	// Public keys should be present. chat_web_search_enabled is public so the
+	// UI can hide the per-turn web-search toggle when the admin gate is off.
 	publicKeys := []string{
 		"logo_path", "imprint", "kb_header", "example_prompts",
 		"chat_footer", "confluence_enabled", "web_search_enabled",
+		"chat_web_search_enabled",
 		"academic_search_enabled", "academic_search_name",
 	}
 	for _, k := range publicKeys {

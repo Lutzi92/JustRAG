@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/kbfilters"
 	"github.com/justrag/go-backend/internal/pgxutil"
 )
 
@@ -129,30 +130,43 @@ func (s *PGStore) SetRole(ctx context.Context, kbID, userID, role, grantedBy str
 // alone: a revocation is an administrative act, and destroying another user's
 // work on a mis-click must not be possible. Self-service leaving goes through
 // LeaveKB, which does delete them.
+//
+// The removed user's favorite and category links on this KB go too, in the
+// same transaction — but only when the removal cost them sight of the KB
+// (forgetFiltersIfUnreachable). On a private or staged KB they are stars and
+// tags on a topic the user can no longer open, and would silently reappear if
+// the user were ever re-added. On a published public KB the user still has
+// view, and the star is still theirs to use, so it stays. Their categories
+// themselves are never touched.
 func (s *PGStore) RemoveMember(ctx context.Context, kbID, userID string) error {
-	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM kb_members
-		 WHERE kb_id = $1::uuid AND user_id = $2::uuid AND role <> 'owner'`,
-		kbID, userID)
-	if err != nil {
-		return fmt.Errorf("RemoveMember: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		// Entweder gab es keine Zeile, oder es war die Owner-Zeile. Ein
-		// Folge-SELECT unterscheidet das fuer eine brauchbare Fehlermeldung.
-		var role string
-		err := s.pool.QueryRow(ctx,
-			`SELECT role FROM kb_members WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
-			kbID, userID).Scan(&role)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
+	return pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM kb_members
+			 WHERE kb_id = $1::uuid AND user_id = $2::uuid AND role <> 'owner'`,
+			kbID, userID)
 		if err != nil {
-			return fmt.Errorf("RemoveMember: classify: %w", err)
+			return fmt.Errorf("RemoveMember: %w", err)
 		}
-		return ErrOwnerImmutable
-	}
-	return nil
+		if tag.RowsAffected() == 0 {
+			// Entweder gab es keine Zeile, oder es war die Owner-Zeile. Ein
+			// Folge-SELECT unterscheidet das fuer eine brauchbare Fehlermeldung.
+			var role string
+			err := tx.QueryRow(ctx,
+				`SELECT role FROM kb_members WHERE kb_id = $1::uuid AND user_id = $2::uuid`,
+				kbID, userID).Scan(&role)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if err != nil {
+				return fmt.Errorf("RemoveMember: classify: %w", err)
+			}
+			return ErrOwnerImmutable
+		}
+		if err := forgetFiltersIfUnreachable(ctx, tx, kbID, userID); err != nil {
+			return fmt.Errorf("RemoveMember: %w", err)
+		}
+		return nil
+	})
 }
 
 // TransferOwner moves ownership in one transaction: the current owner is
@@ -183,7 +197,9 @@ func (s *PGStore) TransferOwner(ctx context.Context, kbID, newOwnerID string) er
 }
 
 // LeaveKB removes the caller's own membership, deletes their chats in this KB,
-// and records them as opted out of it — all in one transaction. Deliberately
+// drops their favorite and category links on it when they can no longer see
+// it afterwards (forgetFiltersIfUnreachable), and records them as opted out of
+// it — all in one transaction. Deliberately
 // destructive and deliberately self-service only: an admin revoking someone's
 // role must NOT delete their chats (see RemoveMember).
 //
@@ -235,12 +251,28 @@ func (s *PGStore) LeaveKB(ctx context.Context, kbID, userID string) (int, error)
 			}
 			return ErrOwnerImmutable
 		}
+		// The agent chat's ADK sessions and runs (app 'agentchat', id /
+		// thread_id = chat id, no FK to chats) go with the chats.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM adk_sessions WHERE app_name = 'agentchat' AND id IN
+			   (SELECT id::text FROM chats WHERE kb_id = $1::uuid AND user_id = $2::uuid)`, kbID, userID); err != nil {
+			return fmt.Errorf("LeaveKB: delete agent sessions: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM agent_runs WHERE app_name = 'agentchat' AND thread_id IN
+			   (SELECT id::text FROM chats WHERE kb_id = $1::uuid AND user_id = $2::uuid)`, kbID, userID); err != nil {
+			return fmt.Errorf("LeaveKB: delete agent runs: %w", err)
+		}
 		chatTag, err := tx.Exec(ctx,
 			`DELETE FROM chats WHERE kb_id = $1::uuid AND user_id = $2::uuid`, kbID, userID)
 		if err != nil {
 			return fmt.Errorf("LeaveKB: delete chats: %w", err)
 		}
 		deleted = int(chatTag.RowsAffected())
+
+		if err := forgetFiltersIfUnreachable(ctx, tx, kbID, userID); err != nil {
+			return fmt.Errorf("LeaveKB: %w", err)
+		}
 
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO kb_subscriptions (kb_id, user_id, state)
@@ -252,6 +284,37 @@ func (s *PGStore) LeaveKB(ctx context.Context, kbID, userID string) (int, error)
 		return nil
 	})
 	return deleted, err
+}
+
+// forgetFiltersIfUnreachable drops userID's favorite and category links on
+// kbID (kbfilters.ForgetKB) when, with their kb_members row already deleted in
+// tx, they no longer resolve to any role on the KB. The decision is the real
+// ladder — kbaccess.EffectiveRole with an empty member role — fed from the KB
+// and user rows read inside the same transaction, not a SQL copy of it. A
+// published public KB still grants view, so the star there survives a leave or
+// a removal; a private or staged KB does not, so it goes.
+//
+// No row for the pair (KB or user vanished concurrently) means there is
+// nothing left to see either, so the filters are dropped.
+func forgetFiltersIfUnreachable(ctx context.Context, tx pgx.Tx, kbID, userID string) error {
+	var (
+		kb      kbaccess.KnowledgeBase
+		sysRole string
+	)
+	err := tx.QueryRow(ctx, `
+		SELECT kb.id::text, (kb.visibility = 'public'), kb.is_published, u.role
+		FROM knowledge_bases kb, users u
+		WHERE kb.id = $1::uuid AND u.id = $2::uuid`, kbID, userID).
+		Scan(&kb.ID, &kb.IsGlobal, &kb.IsPublished, &sysRole)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// Fall through to the cleanup below.
+	case err != nil:
+		return fmt.Errorf("read KB and user for filter cleanup: %w", err)
+	case kbaccess.EffectiveRole(&kb, sysRole, "") != "":
+		return nil
+	}
+	return kbfilters.ForgetKB(ctx, tx, userID, kbID)
 }
 
 // CountOwnChats backs the leave-confirmation dialog, which names how many chats

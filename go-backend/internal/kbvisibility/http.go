@@ -24,11 +24,20 @@ type AuditLogger interface {
 type Handler struct {
 	store Store
 	audit AuditLogger
+
+	enqueueScreening func(ctx context.Context, kbID string) error
 }
 
 // NewHandler creates a Handler over store, auditing through audit.
 func NewHandler(store Store, audit AuditLogger) *Handler {
 	return &Handler{store: store, audit: audit}
+}
+
+// SetScreeningEnqueuer installs the hook Publish calls after a successful
+// publish to screen the KB's never-screened user files (user file library
+// spec §11.2). Nil (the default) disables it.
+func (h *Handler) SetScreeningEnqueuer(fn func(ctx context.Context, kbID string) error) {
+	h.enqueueScreening = fn
 }
 
 // Publish handles POST /api/admin/kb/{id}/publish.
@@ -46,6 +55,13 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteInternalErrorCtx(ctx, w, fmt.Errorf("failed to publish: %w", err))
 	default:
 		h.log(ctx, "kb_publish", kbID, nil)
+		if h.enqueueScreening != nil {
+			// Best-effort: the publish is committed, and a 5xx here would
+			// send the operator into a retry that now answers 409.
+			if err := h.enqueueScreening(ctx, kbID); err != nil {
+				logctx.From(ctx).Warn("kb publish: enqueue screening failed", "kb_id", kbID, "error", err)
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

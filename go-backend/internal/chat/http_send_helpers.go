@@ -73,14 +73,8 @@ func parseAndValidateMessage(w http.ResponseWriter, r *http.Request, userID stri
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "message is required")
 		return body, false
 	}
-	if len(body.Message) > MaxMessageLength {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "message exceeds maximum length of 32,000 characters")
-		return body, false
-	}
-	validation := ValidatePromptInput(body.Message, "message")
-	if !validation.IsValid {
-		LogSecurityWarning(userID, body.Message, validation.Warnings)
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "message contains disallowed content")
+	if msg := messageTextError(userID, body.Message); msg != "" {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, msg)
 		return body, false
 	}
 	// Regenerate is shape-checked here rather than where it is resolved,
@@ -100,6 +94,21 @@ func parseAndValidateMessage(w http.ResponseWriter, r *http.Request, userID stri
 		}
 	}
 	return body, true
+}
+
+// messageTextError applies the length and prompt-security checks to a new
+// user message and returns the client error text, "" when it passes. Shared
+// by the legacy chat and the agent chat so both refuse the same input.
+func messageTextError(userID, message string) string {
+	if len(message) > MaxMessageLength {
+		return "message exceeds maximum length of 32,000 characters"
+	}
+	validation := ValidatePromptInput(message, "message")
+	if !validation.IsValid {
+		LogSecurityWarning(userID, message, validation.Warnings)
+		return "message contains disallowed content"
+	}
+	return ""
 }
 
 // maybeRouteKB applies the AP-A4 sub-KB router when the URL carries
@@ -149,18 +158,21 @@ func (h *Handler) resolveOrCreateChat(ctx context.Context, w http.ResponseWriter
 		}
 		return chatID, true
 	}
-	title := message
-	runes := []rune(title)
-	if len(runes) > 50 {
-		title = string(runes[:50])
-	}
-	newChat, err := h.store.CreateChat(ctx, kbID, userID, title)
+	newChat, err := h.store.CreateChat(ctx, kbID, userID, chatTitle(message))
 	if err != nil {
 		logctx.From(ctx).Error("chat.send: create chat", "error", err, "user_id", userID, "kb_id", kbID)
 		httputil.WriteErrorCtx(ctx, w, http.StatusInternalServerError, "failed to create chat")
 		return "", false
 	}
 	return newChat.ID, true
+}
+
+// chatTitle is a new chat's title: the first 50 runes of its first message.
+func chatTitle(message string) string {
+	if runes := []rune(message); len(runes) > 50 {
+		return string(runes[:50])
+	}
+	return message
 }
 
 // queryClassification captures the routing decisions derived from the
@@ -529,6 +541,7 @@ type chatResponseParams struct {
 	lang               string
 	userMessage        string
 	reasoningLevel     string
+	webSearch          *bool
 	userMsgID          string
 	chatCtx            *ChatContext
 	bufferedTrajectory []map[string]any
@@ -564,6 +577,13 @@ type chatResponseParams struct {
 	// queryType's own entry only when this is true. False (the zero value)
 	// on handleTransformFollowUp for the same reason as queryType above.
 	isGlobalSynthesis bool
+	// library marks a KB-less library chat turn (P3-R5): kbID is "" and the
+	// writers skip everything KB-bound — source-date enrichment, answer-time
+	// tools, the KB post-response pipeline (longmem, tabular log, factcheck,
+	// verifier, refine, RAGAS) and the agent_decisions row. Frames, the
+	// degenerate guard, history, citation validation, follow-up questions
+	// and [DONE] stay. False everywhere on the KB paths.
+	library bool
 }
 
 // handleTransformFollowUp answers a transform follow-up ("kannst du das als
@@ -619,6 +639,7 @@ func (h *Handler) handleTransformFollowUp(
 		lang:               lang,
 		userMessage:        body.Message,
 		reasoningLevel:     resolveReasoningLevel(body),
+		webSearch:          body.WebSearch,
 		userMsgID:          userMsg.ID,
 		chatCtx:            chatCtx,
 		bufferedTrajectory: bufferedTrajectory,
@@ -633,6 +654,56 @@ func (h *Handler) handleTransformFollowUp(
 	h.writeJSONResponse(ctx, w, rp)
 }
 
+// lowConfidence is the "fewer than 3 sources" retrieval signal. A library turn
+// is not retrieval — a full-text context legitimately has one source per page
+// or file — so it never counts as low confidence.
+func (p chatResponseParams) lowConfidence(sourceCount int) bool {
+	return !p.library && sourceCount < 3
+}
+
+// librarySourceSnippetRunes caps each library source's Content in the copy
+// that is streamed and persisted. A library context is whole pages, so the
+// uncapped pool would put megabytes into the opening SSE frame,
+// messages.sources and every message reload.
+const librarySourceSnippetRunes = 600
+
+// wireSources returns the sources to stream and persist: the turn's own slice
+// on a KB turn (byte-identical), or a copy with each Content capped to
+// librarySourceSnippetRunes on a library turn. Citation validation keeps
+// reading the full in-memory p.chatCtx.Sources.
+func (p chatResponseParams) wireSources() []ChatSource {
+	if !p.library {
+		return p.chatCtx.Sources
+	}
+	out := make([]ChatSource, len(p.chatCtx.Sources))
+	copy(out, p.chatCtx.Sources)
+	for i := range out {
+		out[i].Content = truncateRunes(out[i].Content, librarySourceSnippetRunes)
+	}
+	return out
+}
+
+// enrichResponseSources stamps freshness dates onto the turn's sources. A
+// library turn has no `files` rows to look up (its sources carry UserFileID,
+// never FileID), so it is skipped there (P3-R5).
+func (h *Handler) enrichResponseSources(ctx context.Context, p chatResponseParams) {
+	if p.library {
+		return
+	}
+	enrichSourceDates(ctx, h.fileDates, p.chatCtx.Sources)
+}
+
+// runResponsePostTasks runs the post-response pipeline for the writers: the
+// full KB pipeline, or for a library turn only its KB-independent part
+// (follow-up questions + citation validation, P3-R5).
+func (h *Handler) runResponsePostTasks(ctx context.Context, p chatResponseParams, answer, aiMsgID string, emit func(map[string]any)) ([]string, *MessageVerification, string) {
+	if p.library {
+		followUps, verification := h.runLibraryPostResponseTasks(ctx, p.userMessage, answer, p.lang, aiMsgID, p.chatCtx.Sources)
+		return followUps, verification, ""
+	}
+	return h.runPostResponseTasks(ctx, p.userMessage, answer, p.chatCtx.Context, p.kbID, p.lang, aiMsgID, p.chatCtx.Sources, emit, p.chatCtx.TabularTrace)
+}
+
 // writeStreamingResponse handles the SSE branch of SendMessage: sets
 // headers, streams the AI response, persists the AI message, runs
 // post-response tasks, and records the final agent_decision row.
@@ -642,8 +713,8 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	// Freshness dates for the cited files (one batch query, fail-soft).
 	// Runs before the `sources` frame below AND before the AddMessage that
 	// persists the same slice, so the SSE payload and messages.sources agree.
-	enrichSourceDates(ctx, h.fileDates, p.chatCtx.Sources)
-	sources := p.chatCtx.Sources
+	h.enrichResponseSources(ctx, p)
+	sources := p.wireSources()
 	enhancedQuery := p.chatCtx.EnhancedQuery
 	systemPrompt := p.chatCtx.SystemPrompt
 
@@ -682,36 +753,21 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		func(s string) { writeSSE(ctx, w, map[string]string{"content": s}) },
 		func(s string) { writeSSE(ctx, w, map[string]string{"reasoning": s}) },
 	)
-	useAnswerTools := ChatAnswerToolsEnabled(ctx, h.siteConfigReader) && h.toolDispatcher != nil
-	// answerToolsDispatcher/catalog default to the unrestricted pair; a
-	// per-route allowlist (W6-R8) narrows both together below so the catalog
+	// A library turn never gets answer-time tools (P3-R5): every catalog tool
+	// is KB-scoped, and kbID is "" there; answerToolsForTurn enforces it.
+	// answerToolsForTurn resolves the base catalog (admin flag and/or the
+	// user's per-turn webSearch switch) and then the per-route allowlist
+	// (W6-R8), narrowing dispatcher and catalog together so the catalog
 	// projection and the dispatch boundary can never drift apart.
-	var answerToolsDispatcher ToolDispatcher = h.toolDispatcher
-	var catalog []ai.ChatTool
-	if useAnswerTools {
-		mcpDisp, _ := h.toolDispatcher.(*MCPDispatcher)
-		if mcpDisp != nil {
-			catalog = mcpDisp.AnswerToolCatalog(p.kbID)
-		}
-		byRoute := ChatAnswerToolsByRoute(ctx, h.siteConfigReader)
-		if allow, ok, decision, reason := resolveAnswerToolsRoute(byRoute, p.queryType, p.isGlobalSynthesis); ok {
-			answerToolsDispatcher, catalog = restrictToolsForRoute(h.toolDispatcher, catalog, allow, true)
-			routeEvt := TrajectoryEvent{
-				Stage:    "answer_tools_route",
-				Decision: decision,
-				Reason:   reason,
-				Findings: len(catalog),
-			}
-			if routeEvt.Reason == "" && len(catalog) == 0 {
-				// Findings is omitempty, so a bare {stage, decision} frame
-				// cannot be told apart from "no findings key" — this is the
-				// one case an operator debugging a route restriction most
-				// wants to see (the loop is about to be skipped entirely).
-				routeEvt.Reason = "catalog empty; tool loop skipped"
-			}
-			emitTrajectory(func(pl map[string]any) { writeSSE(ctx, w, pl) }, routeEvt, nil)
-		}
-	}
+	answerTools, useAnswerTools := h.answerToolsForTurn(ctx, answerToolsInput{
+		kbID:              p.kbID,
+		lang:              p.lang,
+		queryType:         p.queryType,
+		isGlobalSynthesis: p.isGlobalSynthesis,
+		webSearch:         p.webSearch,
+		library:           p.library,
+	}, func(pl map[string]any) { writeSSE(ctx, w, pl) })
+	catalog := answerTools.catalog
 	// A route restriction can filter the catalog down to empty; running the
 	// tool loop with zero tools would be pointless scaffolding, so that case
 	// falls through to the plain streaming answer below instead.
@@ -732,11 +788,11 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 			AIResolver:      h.aiResolver,
 			KbID:            p.kbID,
 			ChatID:          p.chatID,
-			SystemPrompt:    systemPrompt,
+			SystemPrompt:    answerTools.systemPrompt(systemPrompt),
 			UserPrompt:      p.userMessage,
 			History:         p.history,
 			Tools:           catalog,
-			Dispatcher:      answerToolsDispatcher,
+			Dispatcher:      answerTools.dispatcher,
 			MaxRounds:       ChatAnswerToolsMaxRounds(ctx, h.siteConfigReader),
 			ReasoningEffort: p.reasoningLevel,
 			Temperature:     ChatAnswerTemperature(ctx, h.siteConfigReader),
@@ -810,13 +866,14 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		"reasoning_len", reasoningBuf.Len(),
 		"reasoning_level", p.reasoningLevel,
 		"source_count", len(sources),
-		"low_confidence", len(sources) < 3,
+		"low_confidence", p.lowConfidence(len(sources)),
 		"stream", true,
 		// answer_tools_path means "the tool loop actually ran" (W6-R8
 		// fix round 1), not merely "tools were configured" — a route
 		// restriction (or fix-round-2's unknown-query-type case) can
 		// leave useAnswerTools true while this is false.
 		"answer_tools_path", runAnswerTools,
+		"web_search_requested", webSearchLogValue(p.webSearch),
 		"tool_calls", toolCallsThisTurn,
 	)
 	p.span.SetAttributes(
@@ -824,7 +881,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 		attribute.Int("chat.answer_len", len(fullResponse)),
 	)
 	observability.RecordCompletion(true, time.Since(streamStart).Seconds())
-	if len(sources) < 3 {
+	if p.lowConfidence(len(sources)) {
 		observability.RecordLowConfidence()
 	}
 
@@ -860,7 +917,7 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 	// mutates the painted answer in place. The full refined text
 	// is still persisted to DB by runPostResponseTasks.
 	emit := func(pl map[string]any) { writeSSE(ctx, w, pl) }
-	followUps, verification, _ := h.runPostResponseTasks(ctx, p.userMessage, fullResponse, p.chatCtx.Context, p.kbID, p.lang, aiMsg.ID, p.chatCtx.Sources, emit, p.chatCtx.TabularTrace)
+	followUps, verification, _ := h.runResponsePostTasks(ctx, p, fullResponse, aiMsg.ID, emit)
 	if len(followUps) > 0 {
 		writeSSE(ctx, w, map[string]any{"followUpQuestions": followUps})
 	}
@@ -894,8 +951,8 @@ func (h *Handler) writeStreamingResponse(ctx context.Context, w http.ResponseWri
 // (no painted-text mismatch concern since there's no SSE channel).
 func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, p chatResponseParams) {
 	// Same one-shot enrichment as the streaming branch — see there.
-	enrichSourceDates(ctx, h.fileDates, p.chatCtx.Sources)
-	sources := p.chatCtx.Sources
+	h.enrichResponseSources(ctx, p)
+	sources := p.wireSources()
 	enhancedQuery := p.chatCtx.EnhancedQuery
 	systemPrompt := p.chatCtx.SystemPrompt
 
@@ -920,7 +977,7 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 		"answer_len", len(result.Content),
 		"reasoning_len", len(result.Reasoning),
 		"source_count", len(sources),
-		"low_confidence", len(sources) < 3,
+		"low_confidence", p.lowConfidence(len(sources)),
 		"stream", false,
 	)
 	p.span.SetAttributes(
@@ -928,7 +985,7 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 		attribute.Int("chat.answer_len", len(result.Content)),
 	)
 	observability.RecordCompletion(false, time.Since(nonStreamStart).Seconds())
-	if len(sources) < 3 {
+	if p.lowConfidence(len(sources)) {
 		observability.RecordLowConfidence()
 	}
 
@@ -953,7 +1010,7 @@ func (h *Handler) writeJSONResponse(ctx context.Context, w http.ResponseWriter, 
 
 	// Non-streaming path: no SSE channel exists, so emit is nil.
 	// The refined answer surfaces via the JSON `answer` field instead.
-	followUps, verification, refinedAnswer := h.runPostResponseTasks(ctx, p.userMessage, result.Content, p.chatCtx.Context, p.kbID, p.lang, aiMsg.ID, p.chatCtx.Sources, nil, p.chatCtx.TabularTrace)
+	followUps, verification, refinedAnswer := h.runResponsePostTasks(ctx, p, result.Content, aiMsg.ID, nil)
 
 	if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsValid() {
 		if err := h.store.UpdateMessageTraceID(ctx, aiMsg.ID, sc.TraceID().String()); err != nil {

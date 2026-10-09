@@ -24,7 +24,7 @@ type mockStore struct {
 	kbs []kb.KBRow
 	kb  *kb.KBRow
 	err error
-	// gotIsAdmin records the last isAdmin argument ListGlobalKnowledgeBases
+	// gotIsAdmin records the last isAdmin argument ListGlobalKnowledgeBasesWithUserFilters
 	// was called with, so tests can pin which store arm the overview picks.
 	gotIsAdmin bool
 	// gotKBID records the id GetKnowledgeBase was called with.
@@ -40,11 +40,11 @@ type mockStore struct {
 	gotFileID      string
 }
 
-func (m *mockStore) ListKnowledgeBases(_ context.Context, _ string, _, _ int) ([]kb.KBRow, error) {
+func (m *mockStore) ListKnowledgeBasesWithUserFilters(_ context.Context, _ string, _, _ int) ([]kb.KBRow, error) {
 	return m.kbs, m.err
 }
 
-func (m *mockStore) ListGlobalKnowledgeBases(_ context.Context, _ string, isAdmin bool) ([]kb.KBRow, error) {
+func (m *mockStore) ListGlobalKnowledgeBasesWithUserFilters(_ context.Context, _ string, isAdmin bool) ([]kb.KBRow, error) {
 	m.gotIsAdmin = isAdmin
 	return m.kbs, m.err
 }
@@ -380,5 +380,42 @@ func TestCreateKnowledgeBase_Unauthenticated(t *testing.T) {
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)
+	}
+}
+
+// TestKBRowJSON_UserFiltersOnlyWhenSet pins the wire contract the API-key
+// listings rely on: a KBRow without UserFilters carries neither isFavorite
+// nor userCategoryIds (not even as false/null), and one with them carries
+// both, with an empty category list as [] rather than null. Oracle: the
+// expected key sets, written out here — not a re-marshal of the same struct.
+func TestKBRowJSON_UserFiltersOnlyWhenSet(t *testing.T) {
+	keys := func(row kb.KBRow) map[string]json.RawMessage {
+		t.Helper()
+		b, err := json.Marshal(row)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return m
+	}
+
+	plain := keys(makeKB("kb-1", "plain"))
+	for _, k := range []string{"isFavorite", "userCategoryIds"} {
+		if _, ok := plain[k]; ok {
+			t.Errorf("row without UserFilters serialised %q, want the key absent", k)
+		}
+	}
+
+	withFilters := makeKB("kb-2", "mine")
+	withFilters.UserFilters = &kb.UserFilters{UserCategoryIDs: []string{}}
+	got := keys(withFilters)
+	if string(got["isFavorite"]) != "false" {
+		t.Errorf("isFavorite = %s, want false", got["isFavorite"])
+	}
+	if string(got["userCategoryIds"]) != "[]" {
+		t.Errorf("userCategoryIds = %s, want []", got["userCategoryIds"])
 	}
 }

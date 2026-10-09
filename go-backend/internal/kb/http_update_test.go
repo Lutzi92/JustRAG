@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,10 +28,29 @@ type mockUpdateStore struct {
 	files []kb.FileRow
 	total int
 	err   error
+
+	// reread, when set, is what GetKnowledgeBase returns instead of kb, so a
+	// test can tell the re-read row apart from the update's RETURNING row.
+	reread                         *kb.KBRow
+	rereadErr                      error
+	rereadCalls                    int
+	gotRereadKBID, gotRereadUserID string
 }
 
 func (m *mockUpdateStore) UpdateKnowledgeBase(_ context.Context, _ string, _ kb.KBUpdate) (*kb.KBRow, error) {
 	return m.kb, m.err
+}
+
+func (m *mockUpdateStore) GetKnowledgeBase(_ context.Context, kbID, userID string) (*kb.KBRow, error) {
+	m.rereadCalls++
+	m.gotRereadKBID, m.gotRereadUserID = kbID, userID
+	if m.rereadErr != nil {
+		return nil, m.rereadErr
+	}
+	if m.reread != nil {
+		return m.reread, nil
+	}
+	return m.kb, nil
 }
 
 func (m *mockUpdateStore) ListFiles(_ context.Context, _ string, _, _ int) ([]kb.FileRow, int, error) {
@@ -149,6 +169,74 @@ func TestUpdateKB_NotFound(t *testing.T) {
 	if w.Result().StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Result().StatusCode)
 	}
+}
+
+// TestUpdateKB_ReturnsTheCallerAwareRow pins the PATCH response shape: the UI
+// replaces its card with it, so it must be the caller-aware GET row (stats,
+// favorite, categories), not the update's RETURNING row. The fake returns
+// two visibly different rows from the two calls; the oracle is which one the
+// test put where, and the user id the request was authenticated as.
+func TestUpdateKB_ReturnsTheCallerAwareRow(t *testing.T) {
+	returning := makeKBRow("kb-1", "Renamed")
+	reread := makeKBRow("kb-1", "Renamed")
+	reread.FileCount = 7
+	reread.UserFilters = &kb.UserFilters{IsFavorite: true, UserCategoryIDs: []string{"cat-1"}}
+	st := &mockUpdateStore{kb: returning, reread: reread}
+	h := kb.NewUpdateHandler(st, nil)
+
+	r := httptest.NewRequest(http.MethodPatch, "/api/kb/kb-1", strings.NewReader(`{"description":"d"}`))
+	r = injectKBAccess(r, "kb-1")
+	w := httptest.NewRecorder()
+	h.UpdateKB(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body)
+	}
+	if st.rereadCalls != 1 || st.gotRereadKBID != "kb-1" || st.gotRereadUserID != "user-1" {
+		t.Fatalf("re-read calls=%d kb=%q user=%q, want one call for (kb-1, user-1)",
+			st.rereadCalls, st.gotRereadKBID, st.gotRereadUserID)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["fileCount"] != float64(7) {
+		t.Errorf("fileCount = %v, want 7 from the re-read row", got["fileCount"])
+	}
+	if got["isFavorite"] != true {
+		t.Errorf("isFavorite = %v, want true from the re-read row", got["isFavorite"])
+	}
+	if ids, ok := got["userCategoryIds"].([]any); !ok || len(ids) != 1 || ids[0] != "cat-1" {
+		t.Errorf("userCategoryIds = %v, want [cat-1]", got["userCategoryIds"])
+	}
+}
+
+// A KB deleted between the write and the re-read is a 404, and a failed
+// re-read is a 500 — never a silent fallback to the incomplete RETURNING row.
+func TestUpdateKB_RereadFailures(t *testing.T) {
+	h := kb.NewUpdateHandler(&goneAfterUpdateStore{&mockUpdateStore{kb: makeKBRow("kb-1", "x")}}, nil)
+	r := injectKBAccess(httptest.NewRequest(http.MethodPatch, "/api/kb/kb-1", strings.NewReader(`{}`)), "kb-1")
+	w := httptest.NewRecorder()
+	h.UpdateKB(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("deleted before re-read: status = %d, want 404", w.Code)
+	}
+
+	broken := &mockUpdateStore{kb: makeKBRow("kb-1", "x"), rereadErr: errors.New("db down")}
+	h = kb.NewUpdateHandler(broken, nil)
+	r = injectKBAccess(httptest.NewRequest(http.MethodPatch, "/api/kb/kb-1", strings.NewReader(`{}`)), "kb-1")
+	w = httptest.NewRecorder()
+	h.UpdateKB(w, r)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("failed re-read: status = %d, want 500", w.Code)
+	}
+}
+
+// goneAfterUpdateStore succeeds the update and then finds no row on re-read.
+type goneAfterUpdateStore struct{ *mockUpdateStore }
+
+func (g *goneAfterUpdateStore) GetKnowledgeBase(_ context.Context, _, _ string) (*kb.KBRow, error) {
+	return nil, nil
 }
 
 // TestUpdateKB_InvalidBody checks that a malformed body yields 400.
@@ -327,5 +415,92 @@ func TestListFiles_StageFieldsSerialized(t *testing.T) {
 	}
 	if strings.Count(body, "stageTotal") != 1 {
 		t.Errorf("stageTotal must be omitted for idle files: %s", body)
+	}
+}
+
+func listFilesAs(t *testing.T, st *mockUpdateStore, role string, withAccess bool) []map[string]any {
+	t.Helper()
+	h := kb.NewUpdateHandler(st, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/kb/kb-1/files", nil)
+	req.SetPathValue("id", "kb-1")
+	if withAccess {
+		req = req.WithContext(kbaccess.WithAccess(req.Context(), &kbaccess.KBAccessResult{
+			KB: &kbaccess.KnowledgeBase{ID: "kb-1"}, Role: role,
+		}))
+	}
+	rr := httptest.NewRecorder()
+	h.ListFiles(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return rows
+}
+
+func filesWithUploader() *mockUpdateStore {
+	return &mockUpdateStore{files: []kb.FileRow{
+		{ID: "f1", Name: "a.pdf", UploadedBy: &kb.FileUploader{ID: "u1", DisplayName: "Ada Lovelace"}},
+		{ID: "f2", Name: "feed.md"}, // source-owned: no uploader
+	}}
+}
+
+func TestListFiles_UploaderVisibleToEditors(t *testing.T) {
+	for _, role := range []string{kbaccess.RoleEdit, kbaccess.RoleAdmin, kbaccess.RoleOwner} {
+		rows := listFilesAs(t, filesWithUploader(), role, true)
+		ub, ok := rows[0]["uploadedBy"].(map[string]any)
+		if !ok || ub["id"] != "u1" || ub["displayName"] != "Ada Lovelace" {
+			t.Errorf("role %s: uploadedBy = %v, want {u1, Ada Lovelace}", role, rows[0]["uploadedBy"])
+		}
+		if _, present := rows[1]["uploadedBy"]; present {
+			t.Errorf("role %s: a row without uploader must omit the key, got %v", role, rows[1]["uploadedBy"])
+		}
+	}
+}
+
+func TestListFiles_UploaderHiddenFromViewers(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		role       string
+		withAccess bool
+	}{
+		{"view role", kbaccess.RoleView, true},
+		{"no access in context", "", false},
+	} {
+		rows := listFilesAs(t, filesWithUploader(), tc.role, tc.withAccess)
+		for i, r := range rows {
+			if _, present := r["uploadedBy"]; present {
+				t.Errorf("%s: row %d leaks uploadedBy = %v", tc.name, i, r["uploadedBy"])
+			}
+		}
+	}
+}
+
+// TestListFiles_UserFileID pins the userFileId key: present for a library
+// copy, omitted for a plain file.
+func TestListFiles_UserFileID(t *testing.T) {
+	linked := makeFileRow("f-1", "a.pdf")
+	uf := "7b0c9f64-2b1e-4a39-9d51-0a6a1f0e2c11"
+	linked.UserFileID = &uf
+	store := &mockUpdateStore{files: []kb.FileRow{linked, makeFileRow("f-2", "b.pdf")}, total: 2}
+	h := kb.NewUpdateHandler(store, nil)
+	r := injectKBAccess(httptest.NewRequest(http.MethodGet, "/api/kb/kb-1/files", nil), "kb-1")
+	w := httptest.NewRecorder()
+	h.ListFiles(w, r)
+
+	var raw []map[string]any
+	if err := json.NewDecoder(w.Result().Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(raw) != 2 {
+		t.Fatalf("rows = %d", len(raw))
+	}
+	if raw[0]["userFileId"] != uf {
+		t.Errorf("linked row userFileId = %v", raw[0]["userFileId"])
+	}
+	if _, ok := raw[1]["userFileId"]; ok {
+		t.Errorf("plain row must omit userFileId")
 	}
 }

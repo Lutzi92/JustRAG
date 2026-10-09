@@ -22,6 +22,10 @@ func TestValidateGlobalValues(t *testing.T) {
 	goodTools := `{"lookup":["kb_search","chunk_read"]}`
 	badTools := `{"lookup":["kb_serch"]}`
 	other := `not json at all`
+	goodQuota, zeroQuota, maxQuota := "5368709120", "0", "1099511627776"
+	typoQuota, negQuota, hugeQuota := "5GB", "-1", "1099511627777"
+
+	ftOK, ftLow, ftHigh, ftTypo := "60000", "3999", "200001", "60k"
 
 	cases := []struct {
 		name    string
@@ -36,6 +40,16 @@ func TestValidateGlobalValues(t *testing.T) {
 		{"valid policy", []siteconfig.KeyValue{{Key: "chat_orchestrator_policy", Value: &goodPolicy}}, ""},
 		{"invalid policy", []siteconfig.KeyValue{{Key: "chat_orchestrator_policy", Value: &badPolicy}}, "chat_orchestrator_policy"},
 		{"nil value clears the tool map", []siteconfig.KeyValue{{Key: "chat_answer_tools_by_route", Value: nil}}, ""},
+		{"quota valid", []siteconfig.KeyValue{{Key: "user_file_quota_bytes", Value: &goodQuota}}, ""},
+		{"quota zero", []siteconfig.KeyValue{{Key: "user_file_quota_bytes", Value: &zeroQuota}}, ""},
+		{"quota max", []siteconfig.KeyValue{{Key: "user_file_quota_bytes", Value: &maxQuota}}, ""},
+		{"quota typo", []siteconfig.KeyValue{{Key: "user_file_quota_bytes", Value: &typoQuota}}, "user_file_quota_bytes"},
+		{"quota negative", []siteconfig.KeyValue{{Key: "user_file_quota_bytes", Value: &negQuota}}, "user_file_quota_bytes"},
+		{"quota above max", []siteconfig.KeyValue{{Key: "user_file_quota_bytes", Value: &hugeQuota}}, "user_file_quota_bytes"},
+		{"fulltext ok", []siteconfig.KeyValue{{Key: "chat_library_fulltext_max_tokens", Value: &ftOK}}, ""},
+		{"fulltext low", []siteconfig.KeyValue{{Key: "chat_library_fulltext_max_tokens", Value: &ftLow}}, "chat_library_fulltext_max_tokens"},
+		{"fulltext high", []siteconfig.KeyValue{{Key: "chat_library_fulltext_max_tokens", Value: &ftHigh}}, "chat_library_fulltext_max_tokens"},
+		{"fulltext typo", []siteconfig.KeyValue{{Key: "chat_library_fulltext_max_tokens", Value: &ftTypo}}, "chat_library_fulltext_max_tokens"},
 		{"valid tool map", []siteconfig.KeyValue{{Key: "chat_answer_tools_by_route", Value: &goodTools}}, ""},
 		{"invalid tool map", []siteconfig.KeyValue{{Key: "chat_answer_tools_by_route", Value: &badTools}}, "chat_answer_tools_by_route"},
 		{

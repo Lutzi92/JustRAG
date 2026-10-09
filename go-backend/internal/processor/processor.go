@@ -29,11 +29,6 @@ import (
 	"github.com/justrag/go-backend/internal/vector"
 )
 
-// HashLookup is the minimum interface dedupBatch needs from a chunk store.
-type HashLookup interface {
-	GetExistingChunkHashes(ctx context.Context, kbID string, dimensions int, hashes []string) (map[string]struct{}, error)
-}
-
 // reingestCleaner removes a file's existing chunks before (re-)ingestion so
 // that an Asynq retry of a partially-failed ProcessFile attempt replaces
 // rather than duplicates rows. *vector.ChunkService satisfies it.
@@ -45,124 +40,41 @@ type reingestCleaner interface {
 // dedupResult holds the indices of survivor chunks in the original batch
 // (those that should be embedded + stored), the parallel hashes, and a count
 // of how many were dropped.
-//
-// allHashes is set ONLY on the cross-file lookup error path, and contains
-// the texts-aligned hash slice (one entry per input text, in input order)
-// so callers that want to fall back to "embed everything" can do so without
-// recomputing SHA-256 over every chunk again.
 type dedupResult struct {
 	survivorIdx  []int
 	hashes       []string
-	allHashes    []string
 	droppedCount int
 }
 
-// dedupBatch performs in-batch + cross-file deduplication for one embedding
-// batch. Returns the indices of chunks that should actually be embedded.
+// dedupBatch collapses repeated chunks WITHIN one embedding batch of one
+// file, keeping the first occurrence per non-empty content hash.
 //
-// chunkSvc may be nil — the function then performs only in-batch dedup.
-// dimensions is passed to chunkSvc.GetExistingChunkHashes and must be the
-// KB's real embedding dimension (see dedupDimensions): every dim-keyed chunk
-// table carries content_hash via the schema.go backfill, so the lookup must
-// target the table the KB's embeddings actually land in.
-//
-// On a cross-file lookup error, the returned dedupResult still contains the
-// in-batch-dedup survivors and their hashes alongside the error. Callers
-// that want to fall back to "embed everything" on lookup failure can use
-// the parallel `texts`-aligned hash slice via dedupAllHashes, but if the
-// in-batch-dedup result is acceptable (it always is — it's a strict subset
-// of "embed everything") they can use the partial result and avoid a
-// duplicate SHA-256 pass.
-func dedupBatch(ctx context.Context, chunkSvc HashLookup, kbID string, dimensions int, texts []string) (dedupResult, error) {
+// It deliberately does not look at chunks other files already stored. That
+// cross-file drop (removed in user-file-library phase 0) tied a file's
+// content to another file's lifecycle - deleting file B silently removed a
+// chunk file A had been relying on - and contradicted vector.Deduplicate,
+// which treats cross-file chunks as independent evidence. Duplicate text
+// without a contextual prefix is an embedding-cache hit, so keeping it costs
+// storage, not provider calls.
+func dedupBatch(texts []string) dedupResult {
 	res := dedupResult{}
 	if len(texts) == 0 {
-		return res, nil
+		return res
 	}
-
-	hashes := make([]string, len(texts))
+	seen := make(map[string]struct{}, len(texts))
 	for i, t := range texts {
-		hashes[i] = vector.HashContent(t)
-	}
-
-	// In-batch dedup: keep first occurrence per non-empty hash.
-	seenInBatch := make(map[string]struct{})
-	survivors := make([]int, 0, len(texts))
-	for i, h := range hashes {
-		if h == "" {
-			survivors = append(survivors, i)
-			continue
-		}
-		if _, dup := seenInBatch[h]; dup {
-			res.droppedCount++
-			continue
-		}
-		seenInBatch[h] = struct{}{}
-		survivors = append(survivors, i)
-	}
-
-	// Cross-file dedup: query DB for hashes already present.
-	if chunkSvc != nil {
-		lookup := make([]string, 0, len(survivors))
-		for _, idx := range survivors {
-			if hashes[idx] != "" {
-				lookup = append(lookup, hashes[idx])
+		h := vector.HashContent(t)
+		if h != "" {
+			if _, dup := seen[h]; dup {
+				res.droppedCount++
+				continue
 			}
+			seen[h] = struct{}{}
 		}
-		existing, err := chunkSvc.GetExistingChunkHashes(ctx, kbID, dimensions, lookup)
-		if err != nil {
-			// Surface the partial in-batch-dedup result so the caller can
-			// fall back without recomputing every hash. We hand back the
-			// raw (texts-aligned) hash slice via a separate field so the
-			// caller can reconstruct an "embed everything" result without
-			// looping vector.HashContent again.
-			res.survivorIdx = survivors
-			res.hashes = make([]string, len(survivors))
-			for i, idx := range survivors {
-				res.hashes[i] = hashes[idx]
-			}
-			res.allHashes = hashes
-			return res, fmt.Errorf("dedup lookup: %w", err)
-		}
-		filtered := survivors[:0]
-		for _, idx := range survivors {
-			if h := hashes[idx]; h != "" {
-				if _, dup := existing[h]; dup {
-					res.droppedCount++
-					continue
-				}
-			}
-			filtered = append(filtered, idx)
-		}
-		survivors = filtered
+		res.survivorIdx = append(res.survivorIdx, i)
+		res.hashes = append(res.hashes, h)
 	}
-
-	res.survivorIdx = survivors
-	res.hashes = make([]string, len(survivors))
-	for i, idx := range survivors {
-		res.hashes[i] = hashes[idx]
-	}
-	return res, nil
-}
-
-// legacyDedupDim is the dimension the cross-file hash lookup used before the
-// KB's real embedding dimension was resolved. Kept only as the fallback for
-// models that declare no output size (ai.Config.EmbeddingDimensions == 0).
-const legacyDedupDim = 1536
-
-// dedupDimensions returns the dim-keyed chunk table the cross-file dedup
-// lookup must query for kbID. Every dim-keyed table carries content_hash +
-// kb_content_hash_idx via the schema.go backfill, so the lookup must target
-// the table the KB's embeddings actually land in — the model's declared
-// dimension. Falls back to legacyDedupDim when the model declares none.
-func (p *Processor) dedupDimensions(ctx context.Context, kbID string) int {
-	if p.aiResolver == nil {
-		return legacyDedupDim
-	}
-	cfg, err := p.aiResolver.Resolve(ctx, kbID)
-	if err != nil || cfg == nil || cfg.EmbeddingDimensions <= 0 {
-		return legacyDedupDim
-	}
-	return cfg.EmbeddingDimensions
+	return res
 }
 
 // ProcessorStore defines the persistence operations required by Processor.
@@ -184,10 +96,9 @@ type ProcessorStore interface {
 	// UpdateFileStageDetail records a human-readable progress detail for
 	// the current stage (e.g. "Blatt 2/3 · 120000 Zeilen"); "" clears it.
 	UpdateFileStageDetail(ctx context.Context, fileID, detail string) error
-	// GetFileOrigin returns files.origin for fileID ("" when the row is
-	// gone). Read by the ingest prompt-injection screen, which only runs
-	// for external sources — see screening.go's screenedOrigins.
-	GetFileOrigin(ctx context.Context, fileID string) (string, error)
+	// GetFileScreeningInfo returns files.origin and the owning KB's
+	// visibility for fileID ("", "" when the row is gone).
+	GetFileScreeningInfo(ctx context.Context, fileID string) (origin, kbVisibility string, err error)
 	// SetInjectionFlag records a screening hit (files.injection_flag +
 	// injection_detail). detail is document-derived, untrusted text —
 	// never log it in full.
@@ -198,6 +109,9 @@ type ProcessorStore interface {
 	// forever, and "screened, clean" stays distinguishable from "never
 	// screened" (a NULL detail).
 	MarkInjectionScreenedClean(ctx context.Context, fileID string, detail []byte) error
+	// SetIndexFingerprint records files.index_fingerprint for a completed
+	// library-backed ingest (P2-R4).
+	SetIndexFingerprint(ctx context.Context, fileID, fp string) error
 }
 
 // SiteConfigReader reads individual site config values.
@@ -296,11 +210,24 @@ type Processor struct {
 	// kgCleaner clears a file's prior KG rows before re-extraction so re-ingest
 	// replaces rather than accumulates. nil → no pre-clean (back-compat).
 	kgCleaner kgDeleter
+
+	// kgCache caches per-chunk KG extractions of library-backed files (P2-R5);
+	// nil disables caching. extractKG is the extractor seam (nil = ai.ExtractKG).
+	kgCache kgCache
+	// Test seams, all nil in production: kgChunks replaces chunkSvc as the
+	// leaf-chunk source, kgPersist replaces the Postgres kgStore, and
+	// kgEffectiveModel replaces the AI-resolver lookup behind the cache key.
+	kgChunks         kgChunkReader
+	kgPersist        kgChunkPersister
+	kgEffectiveModel func(ctx context.Context, kbID, model string) (string, bool)
+	extractKG        func(ctx context.Context, fileName, document, chunk, kbID, lang, model string) (ai.KGExtraction, error)
 	// largeGate bounds how many "large" spreadsheets (per
 	// chat.TabularLargeFileBytes) this process ingests concurrently. nil
 	// (the default) is a no-op — every spreadsheet ingests immediately,
 	// matching pre-gate behavior. Set via SetLargeFileGate.
 	largeGate *LargeFileGate
+	// parseCache serves/stores parses of library-backed files (P2-R1/R2).
+	parseCache *ParseCache
 }
 
 // indexedChunk pairs a chunk's text with its source page number.
@@ -474,6 +401,12 @@ type kgDeleter interface {
 // clearStaleKG is a no-op and re-ingest behaves as before (KG accumulates).
 func (p *Processor) SetKGDeleter(d kgDeleter) { p.kgCleaner = d }
 
+// SetKGCache attaches the library-file KG extraction cache (worker wiring).
+func (p *Processor) SetKGCache(c kgCache) { p.kgCache = c }
+
+// NewKGCache builds the Postgres-backed KG extraction cache for SetKGCache.
+func NewKGCache(main *pgxpool.Pool) kgCache { return newPGKGCache(main) }
+
 // clearStaleKG removes the file's prior KG contribution before re-extraction.
 // Best-effort: a nil deleter or a delete error logs and continues, matching the
 // chunk-cleanup and KG-stage posture (KG is a side channel, never fails the file).
@@ -639,6 +572,21 @@ func spreadsheetStageFlags(isSpreadsheet, enrich, kg, hype, raptor bool) (enrich
 	return enrich, kg, hype, raptor
 }
 
+// ingestFlatTail reports whether an ingest takes the default flat path: the
+// parent-child and late-chunking paths return before the post-embed tail
+// (KG/HyPE/RAPTOR), so none of those stages run under either.
+func ingestFlatTail(ctx context.Context, reader SiteConfigReader) bool {
+	return !chat.ParentChildEnabled(ctx, reader) && !resolveLateChunkingEnabled(ctx, reader)
+}
+
+// ingestRunsKG reports whether an ingest of a (non-spreadsheet) file runs KG
+// extraction: kg_extraction_enabled on the flat path only. processFile's
+// stage plan and copy mode's KG rebuild (IngestRunsKG) both read it, so a
+// copy never builds a graph the ingest would not have built.
+func ingestRunsKG(ctx context.Context, reader SiteConfigReader) bool {
+	return ingestFlatTail(ctx, reader) && resolveKGExtractionEnabled(ctx, reader)
+}
+
 // resolveLateChunkingEnabled gates Jina-style late chunking at ingest:
 // the whole document's chunks are embedded in one call with
 // `late_chunking: true` so each chunk vector carries cross-chunk
@@ -737,7 +685,24 @@ type ProcessFileInput struct {
 	KBID         string
 	ChunkSize    int // 0 → splitter default (512)
 	ChunkOverlap int // 0 → splitter default (100)
+	// UserFileID and OwnerUserID are set only for KB copies of a user-library
+	// file. Together they key the parse cache; empty UserFileID means the
+	// cache is never consulted.
+	UserFileID  string
+	OwnerUserID string
 }
+
+// ProcessOutcome reports facts about a ProcessFile run that callers record
+// (the worker's add-mode metric).
+type ProcessOutcome struct {
+	// ParseCacheHit is true when the parse step was served from the library
+	// parse cache instead of running the parser.
+	ParseCacheHit bool
+}
+
+// SetParseCache attaches the library parse cache. nil (the default) disables
+// it.
+func (p *Processor) SetParseCache(c *ParseCache) { p.parseCache = c }
 
 // setStage records the current ingestion stage for the upload spinner. The
 // stage must be present in plan; if not (indexOf returns 0) the call is skipped
@@ -757,11 +722,28 @@ func (p *Processor) setStage(ctx context.Context, fileID string, plan stagePlan,
 // parse → split → embed (batches of 20) → store chunks → update progress/status.
 // ChunkSize and ChunkOverlap of 0 use the splitter defaults (512 and 100).
 func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error {
+	var out ProcessOutcome
+	return p.processFile(ctx, in, &out)
+}
+
+// ProcessFileWithResult is ProcessFile plus a report of what the run did.
+func (p *Processor) ProcessFileWithResult(ctx context.Context, in ProcessFileInput) (ProcessOutcome, error) {
+	var out ProcessOutcome
+	err := p.processFile(ctx, in, &out)
+	return out, err
+}
+
+func (p *Processor) processFile(ctx context.Context, in ProcessFileInput, outcome *ProcessOutcome) error {
+	ctx = withIngestDegradedFlag(ctx)
 	// Resolve ingestion config through the file's KB so per-KB overrides
 	// (raptor/parent-child/enrichment/kg_extraction) take effect. Reassigning
 	// the receiver routes every downstream p.siteConfigReader read and every
 	// p.<method> call through the overlay-bearing clone.
 	p = p.withKBConfig(ctx, in.KBID)
+	// Index fingerprint snapshot (library files only): taken before parsing so
+	// a mid-ingest config change cannot make the stamp claim more than the
+	// index was built with. Recorded only at the end of a fully completed run.
+	fpSnap := p.snapshotIndexFingerprint(ctx, in)
 	fileID := in.FileID
 	filePath := in.FilePath
 	fileName := in.FileName
@@ -812,9 +794,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// n/x never reaches x/x; spreadsheets exclude them unconditionally.
 	// Cleared on every exit path via the defer below so a file is never
 	// pinned to a stage (and the mindmap spinner clears).
-	parentChild := chat.ParentChildEnabled(ctx, p.siteConfigReader)
-	lateChunking := resolveLateChunkingEnabled(ctx, p.siteConfigReader)
-	flatTail := !parentChild && !lateChunking
+	flatTail := ingestFlatTail(ctx, p.siteConfigReader)
 	// enrichOn/kgOn/hypeOn/raptorOn are computed once here and reused
 	// verbatim at every later real-run gate (enrichmentEnabled below, and
 	// the KG/HyPE/RAPTOR checks post-embed) — spreadsheetStageFlags is the
@@ -823,7 +803,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// disagree.
 	enrichOn, kgOn, hypeOn, raptorOn := spreadsheetStageFlags(isSpreadsheet,
 		resolveEnrichmentEnabled(ctx, p.siteConfigReader),
-		flatTail && resolveKGExtractionEnabled(ctx, p.siteConfigReader),
+		ingestRunsKG(ctx, p.siteConfigReader),
 		flatTail && resolveHyPEEnabled(ctx, p.siteConfigReader),
 		flatTail && chat.RaptorEnabled(ctx, p.siteConfigReader),
 	)
@@ -983,26 +963,10 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		}
 		result = toParseResult(res)
 	} else {
-		par := p.factory.GetParser(mimeType, fileName)
-		if par == nil {
-			_ = p.store.MarkFileError(ctx, fileID, "unsupported_type", "Unsupported file type: "+mimeType)
-			return fmt.Errorf("processor: no parser for mimeType=%s fileName=%s", mimeType, fileName)
-		}
-
-		// For audio files this calls the STT transcriber and can take
-		// minutes; progress stays at 5% during this phase so the frontend
-		// still shows activity.
 		var parseErr error
-		result, parseErr = par.Parse(ctx, parser.ParseContext{
-			FilePath:  filePath,
-			FileName:  fileName,
-			MimeType:  mimeType,
-			KbID:      kbID,
-			ChunkSize: chunkSize,
-		})
+		result, parseErr = p.parseDocument(ctx, in, outcome)
 		if parseErr != nil {
-			_ = p.store.MarkFileError(ctx, fileID, "parse", "The file could not be parsed")
-			return fmt.Errorf("processor: parse file: %w", parseErr)
+			return parseErr
 		}
 	}
 
@@ -1019,7 +983,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// "text" is a generated key:value render of typed cells, and cell text
 	// already gets the equivalent check inside the sheet profiler.
 	if !isSpreadsheet {
-		p.screenIfExternal(ctx, fileID, result.Text)
+		p.screenIfEligible(ctx, fileID, result.Text)
 	}
 
 	// Parsing done — bump progress so the bar visibly advances before
@@ -1050,6 +1014,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 
 	if len(ichunks) == 0 {
 		_ = p.store.UpdateFileStatus(ctx, fileID, "completed")
+		p.recordIndexFingerprint(ctx, in, fpSnap)
 		logctx.From(ctx).Info("processor: no chunks produced", "fileId", fileID)
 		return nil
 	}
@@ -1126,6 +1091,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		groups := splitter.ParentChildSplit(sourceText, parentCfg, childCfg)
 		if len(groups) == 0 {
 			_ = p.store.UpdateFileStatus(ctx, fileID, "completed")
+			p.recordIndexFingerprint(ctx, in, fpSnap)
 			logctx.From(ctx).Info("processor: parent-child split produced 0 groups", "fileId", fileID)
 			return nil
 		}
@@ -1139,6 +1105,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			return err
 		}
 		_ = p.store.UpdateFileStatus(ctx, fileID, "completed")
+		p.recordIndexFingerprint(ctx, in, fpSnap)
 		_ = p.store.UpdateFileProgress(ctx, fileID, 100)
 		return nil
 	}
@@ -1168,6 +1135,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 			return err
 		}
 		_ = p.store.UpdateFileStatus(ctx, fileID, "completed")
+		p.recordIndexFingerprint(ctx, in, fpSnap)
 		return nil
 	}
 
@@ -1306,6 +1274,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 					prefix := ""
 					contextStr, err := ai.GenerateChunkContext(ctx, p.aiResolver, fileName, document, chunkText, kbID, enrichmentModel)
 					if err != nil {
+						markIngestDegraded(ctx)
 						logctx.From(ctx).Warn("processor: chunk enrichment failed, indexing original text only",
 							"fileId", fileID,
 							"chunkIndex", idx,
@@ -1432,7 +1401,6 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	} else if err := p.store.UpdateFileStatus(ctx, fileID, finalStatus); err != nil {
 		return fmt.Errorf("processor: update final status: %w", err)
 	}
-
 	logctx.From(ctx).Info("processor: finished",
 		"fileId", fileID,
 		"status", finalStatus,
@@ -1455,7 +1423,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		// INSIDE the enabled gate (not next to the early chunk cleanup) so a KB
 		// with KG extraction currently disabled keeps its existing graph.
 		p.clearStaleKG(ctx, kbID, fileID)
-		kgErr := p.runKGExtractionStage(ctx, fileID, kbID, fileName, result.Text, rawLang)
+		kgErr := p.runKGExtractionStage(ctx, fileID, kbID, fileName, result.Text, rawLang, in.UserFileID)
 		if kgErr != nil {
 			logctx.From(ctx).Warn("processor: kg extraction stage failed",
 				"fileId", fileID, "error", kgErr)
@@ -1469,6 +1437,7 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 		if hErr := p.runHyPEGenerationStage(ctx, fileID, kbID, fileName, result.Text, rawLang); hErr != nil {
 			logctx.From(ctx).Warn("processor: hype generation stage failed",
 				"fileId", fileID, "error", hErr)
+			markIngestDegraded(ctx)
 		}
 	}
 
@@ -1478,14 +1447,14 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	// over parent-child children would feed structural rows back as
 	// "leaves").
 	if raptorOn {
-		if chat.ParentChildEnabled(ctx, p.siteConfigReader) {
-			observability.RecordRaptorBuild("skipped_parent_child")
-			logctx.From(ctx).Info("raptor.build.skipped",
-				"fileId", fileID, "reason", "parent_child_enabled")
-		} else if lastDimensions > 0 {
-			p.setStage(ctx, fileID, plan, stageRaptor)
-			p.runRaptorBuildStage(ctx, fileID, kbID, fileName, lastDimensions, pgConfig)
-		}
+		p.runRaptorTail(ctx, fileID, kbID, fileName, plan, lastDimensions, pgConfig)
+	}
+
+	// Everything the fingerprint claims is now in place (KG excepted: a KG
+	// failure does not block, because an index copy rebuilds the KG itself
+	// through the extraction cache). Stamp the donor fingerprint last.
+	if finalStatus == "completed" {
+		p.recordIndexFingerprint(ctx, in, fpSnap)
 	}
 
 	// Mindmap live update: the graph data for this KB just changed (KG
@@ -1500,12 +1469,85 @@ func (p *Processor) ProcessFile(ctx context.Context, in ProcessFileInput) error 
 	return nil
 }
 
+// parseDocument is processFile's non-spreadsheet parse step: parser lookup,
+// then the library parse cache (hit → cached result, outcome.ParseCacheHit),
+// else the parser and a cache write for a non-degraded result. On an
+// unsupported type or a parse failure it marks the file errored and returns
+// the error processFile returns verbatim.
+func (p *Processor) parseDocument(ctx context.Context, in ProcessFileInput, outcome *ProcessOutcome) (*parser.ParseResult, error) {
+	fileID, fileName, mimeType := in.FileID, in.FileName, in.MimeType
+	par := p.factory.GetParser(mimeType, fileName)
+	if par == nil {
+		_ = p.store.MarkFileError(ctx, fileID, "unsupported_type", "Unsupported file type: "+mimeType)
+		return nil, fmt.Errorf("processor: no parser for mimeType=%s fileName=%s", mimeType, fileName)
+	}
+
+	// For audio files this calls the STT transcriber and can take
+	// minutes; progress stays at 5% during this phase so the frontend
+	// still shows activity.
+	cacheKey := p.libraryParseCacheKey(ctx, in.OwnerUserID, in.UserFileID, mimeType, fileName)
+	if cacheKey != "" {
+		if cached, ok, gerr := p.parseCache.Get(ctx, cacheKey); gerr != nil {
+			logctx.From(ctx).Warn("processor: parse cache read failed; parsing normally", "fileId", fileID, "error", gerr)
+		} else if ok {
+			outcome.ParseCacheHit = true
+			return cached, nil
+		}
+	}
+	result, parseErr := par.Parse(ctx, parser.ParseContext{
+		FilePath:  in.FilePath,
+		FileName:  fileName,
+		MimeType:  mimeType,
+		KbID:      in.KBID,
+		ChunkSize: in.ChunkSize,
+	})
+	if parseErr != nil {
+		_ = p.store.MarkFileError(ctx, fileID, "parse", "The file could not be parsed")
+		return nil, fmt.Errorf("processor: parse file: %w", parseErr)
+	}
+	// A degraded (fallback) parse is used for this ingest but never
+	// cached under the preferred parser's configuration.
+	if cacheKey != "" && result != nil && !result.Degraded {
+		if perr := p.parseCache.Put(ctx, cacheKey, result); perr != nil {
+			logctx.From(ctx).Warn("processor: parse cache write failed", "fileId", fileID, "error", perr)
+		}
+	}
+	// A degraded parse (the built-in parser answered after the preferred one
+	// failed) also must not be stamped with a fingerprint claiming the
+	// preferred parser — copy mode would propagate the weaker index.
+	if result != nil && result.Degraded {
+		markIngestDegraded(ctx)
+	}
+	return result, nil
+}
+
+// runRaptorTail is processFile's RAPTOR step on the flat path (raptorOn
+// already checked): skipped under parent-child, built when something was
+// embedded, and the run marked degraded when the build fails or there was
+// nothing to build a tree from.
+func (p *Processor) runRaptorTail(ctx context.Context, fileID, kbID, fileName string, plan stagePlan, lastDimensions int, pgConfig string) {
+	switch {
+	case chat.ParentChildEnabled(ctx, p.siteConfigReader):
+		observability.RecordRaptorBuild("skipped_parent_child")
+		logctx.From(ctx).Info("raptor.build.skipped",
+			"fileId", fileID, "reason", "parent_child_enabled")
+	case lastDimensions > 0:
+		p.setStage(ctx, fileID, plan, stageRaptor)
+		if !p.runRaptorBuildStage(ctx, fileID, kbID, fileName, lastDimensions, pgConfig) {
+			markIngestDegraded(ctx)
+		}
+	default:
+		// RAPTOR enabled but nothing was embedded: no tree exists.
+		markIngestDegraded(ctx)
+	}
+}
+
 // runRaptorBuildStage is a thin wrapper around the raptor builder.
 // Factored out of ProcessFile so the hook stays a single condition.
 // Errors are logged + counted but never propagated — RAPTOR is a
 // recall-boost side-channel; an LLM outage during summary generation
 // must not flip a successfully-ingested file into an error state.
-func (p *Processor) runRaptorBuildStage(ctx context.Context, fileID, kbID, fileName string, dimensions int, pgConfig string) {
+func (p *Processor) runRaptorBuildStage(ctx context.Context, fileID, kbID, fileName string, dimensions int, pgConfig string) bool {
 	cfg := raptor.Config{
 		MinChunks:           chat.RaptorMinChunks(ctx, p.siteConfigReader),
 		MaxLevels:           chat.RaptorMaxLevels(ctx, p.siteConfigReader),
@@ -1523,17 +1565,27 @@ func (p *Processor) runRaptorBuildStage(ctx context.Context, fileID, kbID, fileN
 			cfg,
 		)
 	}
-	if _, err := b.Build(ctx, raptor.BuildParams{
+	stats, err := b.Build(ctx, raptor.BuildParams{
 		KbID:       kbID,
 		FileID:     fileID,
 		FileName:   fileName,
 		Dimensions: dimensions,
 		PgConfig:   pgConfig,
-	}); err != nil {
+	})
+	if err != nil {
 		logctx.From(ctx).Warn("processor: raptor build failed",
 			"fileId", fileID, "error", err)
 		observability.RecordRaptorBuild("failed")
+		return false
 	}
+	if stats.FailedClusters > 0 {
+		// Build swallows per-cluster LLM/embed/insert failures; surface them
+		// so the caller can refuse to publish a donor fingerprint.
+		logctx.From(ctx).Warn("processor: raptor tree incomplete",
+			"fileId", fileID, "failedClusters", stats.FailedClusters)
+		return false
+	}
+	return true
 }
 
 // runKGExtractionStage is the AP-C1 post-ingestion pass: read the
@@ -1552,17 +1604,26 @@ func (p *Processor) runRaptorBuildStage(ctx context.Context, fileID, kbID, fileN
 // Dimensions resolution: probe each known dim table for any row of
 // this fileID. The first hit wins. Cheap because ListChunkTableDimensions
 // returns 1-2 entries in practice.
-func (p *Processor) runKGExtractionStage(ctx context.Context, fileID, kbID, fileName, document, lang string) error {
-	if p.mainDB == nil || p.chunkSvc == nil {
+func (p *Processor) runKGExtractionStage(ctx context.Context, fileID, kbID, fileName, document, lang, userFileID string) error {
+	var reader kgChunkReader
+	var store kgChunkPersister
+	switch {
+	case p.kgChunks != nil && p.kgPersist != nil:
+		reader, store = p.kgChunks, p.kgPersist
+	case p.mainDB == nil || p.chunkSvc == nil:
 		return fmt.Errorf("kg extraction: missing dependencies (mainDB / chunkSvc)")
+	default:
+		reader, store = p.chunkSvc, newKGStore(p.mainDB)
 	}
-	dims, err := p.chunkSvc.ListChunkTableDimensions(ctx)
+	dims, err := reader.ListChunkTableDimensions(ctx)
 	if err != nil {
 		return fmt.Errorf("kg extraction: list dims: %w", err)
 	}
+	// Leaves only: in copy mode the RAPTOR summary rows already exist when the
+	// graph is rebuilt, and model-written summaries must not be extracted.
 	var chunks []vector.FileChunkRow
 	for _, d := range dims {
-		rows, err := p.chunkSvc.GetChunksByFileID(ctx, kbID, fileID, d)
+		rows, err := reader.GetLeafChunksByFileID(ctx, kbID, fileID, d)
 		if err != nil {
 			// Non-existent table for this dim is logged but not
 			// fatal — we keep probing.
@@ -1583,7 +1644,59 @@ func (p *Processor) runKGExtractionStage(ctx context.Context, fileID, kbID, file
 	// lang is the KB's raw two-letter code ("de"/"en") passed in by
 	// ProcessFile — the KG prompt branches on those, and the regconfig
 	// form ("german") would silently miss the de branch.
-	store := newKGStore(p.mainDB)
+	p.extractAndPersistKG(ctx, store, chunks, fileID, kbID, fileName, document, lang, model, userFileID)
+	return nil
+}
+
+// kgChunkReader is the leaf-chunk source of the KG stage (*vector.ChunkService
+// in production).
+type kgChunkReader interface {
+	ListChunkTableDimensions(ctx context.Context) ([]int, error)
+	GetLeafChunksByFileID(ctx context.Context, kbID, fileID string, dimensions int) ([]vector.FileChunkRow, error)
+}
+
+// kgChunkPersister is the persistence half of the KG stage (*kgStore in
+// production, a fake in unit tests).
+type kgChunkPersister interface {
+	persistKGExtraction(ctx context.Context, kbID, fileID, chunkID string, ext ai.KGExtraction) (created, deduped, edges int, err error)
+}
+
+// kgCacheModel is the model string the KG extraction cache keys on: the model
+// the completion actually runs (an empty or unknown override falls back to the
+// KB chat model), so two KBs with different effective models never share an
+// entry. ok=false means the effective model cannot be determined and the cache
+// must be bypassed.
+func (p *Processor) kgCacheModel(ctx context.Context, kbID, model string) (string, bool) {
+	if p.kgEffectiveModel != nil {
+		return p.kgEffectiveModel(ctx, kbID, model)
+	}
+	if p.aiResolver == nil {
+		return "", false
+	}
+	rc, err := p.aiResolver.Resolve(ctx, kbID)
+	if err != nil {
+		return "", false
+	}
+	return rc.EffectiveChatModel(model), true
+}
+
+// extractAndPersistKG extracts (cache first, for library files) per chunk in
+// parallel, then persists serially. Best-effort: failures log and skip.
+func (p *Processor) extractAndPersistKG(ctx context.Context, store kgChunkPersister, chunks []vector.FileChunkRow, fileID, kbID, fileName, document, lang, model, userFileID string) {
+	extract := p.extractKG
+	if extract == nil {
+		extract = func(ctx context.Context, fileName, document, chunk, kbID, lang, model string) (ai.KGExtraction, error) {
+			return ai.ExtractKG(ctx, p.aiResolver, fileName, document, chunk, kbID, lang, model)
+		}
+	}
+	// Library-backed files consult/write the per-file extraction cache.
+	var cache kgCache
+	cacheModel := ""
+	if userFileID != "" && p.kgCache != nil {
+		if m, ok := p.kgCacheModel(ctx, kbID, model); ok {
+			cache, cacheModel = p.kgCache, m
+		}
+	}
 
 	// Extract in parallel (LLM-bound, ~all of the stage's wall-clock),
 	// then persist serially below. nil slot = extraction failed/skipped.
@@ -1609,13 +1722,36 @@ extract:
 		safego.GoCtx(ctx, func() {
 			defer extractWg.Done()
 			defer func() { <-sem }()
-			ext, err := ai.ExtractKG(ctx, p.aiResolver, fileName, document, c.Content, kbID, lang, model)
+			hash := ""
+			if cache != nil {
+				hash = vector.HashContent(c.Content)
+			}
+			if hash != "" {
+				cached, hit, cerr := cache.Get(ctx, userFileID, hash, cacheModel, lang)
+				if cerr != nil {
+					logctx.From(ctx).Warn("kg extraction: cache read failed; extracting",
+						"fileId", fileID, "chunkId", c.ID, "error", cerr)
+				} else if hit {
+					observability.RecordKGExtractionCache("hit")
+					exts[i] = cached
+					return
+				} else {
+					observability.RecordKGExtractionCache("miss")
+				}
+			}
+			ext, err := extract(ctx, fileName, document, c.Content, kbID, lang, model)
 			if err != nil {
 				logctx.From(ctx).Warn("kg extraction: chunk extract failed; skipping chunk",
 					"fileId", fileID, "chunkId", c.ID, "error", err)
 				return
 			}
 			exts[i] = &ext
+			if hash != "" {
+				if perr := cache.Put(ctx, userFileID, hash, cacheModel, lang, ext); perr != nil {
+					logctx.From(ctx).Warn("kg extraction: cache write failed",
+						"fileId", fileID, "chunkId", c.ID, "error", perr)
+				}
+			}
 		})
 	}
 	extractWg.Wait()
@@ -1645,7 +1781,27 @@ extract:
 		"entities_deduped", totalDeduped,
 		"edges", totalEdges,
 	)
-	return nil
+}
+
+// RebuildKGForFile runs the KG stage for an already-indexed file (flat-path
+// leaves in the chunk table), consulting/writing the extraction cache. No-op
+// when kg_extraction_enabled is off for kbID (overlay-resolved). documentBody
+// is used only on cache misses (pass the cached parse text if available, else
+// the joined leaf text). Used by copy mode, which skips the ingest KG stage.
+func (p *Processor) RebuildKGForFile(ctx context.Context, kbID, fileID, fileName, userFileID, documentBody string) error {
+	p = p.withKBConfig(ctx, kbID)
+	if !resolveKGExtractionEnabled(ctx, p.siteConfigReader) {
+		return nil
+	}
+	rawLang, _ := p.resolveKBLanguages(ctx, kbID)
+	p.clearStaleKG(ctx, kbID, fileID)
+	err := p.runKGExtractionStage(ctx, fileID, kbID, fileName, documentBody, rawLang, userFileID)
+	if p.kgPub != nil {
+		p.kgPub.PublishGraphChanged(ctx, kbID)
+		active, _ := p.kbHasActiveIngestion(ctx, kbID)
+		p.kgPub.PublishStatus(ctx, kbID, active)
+	}
+	return err
 }
 
 // runHyPEGenerationStage generates + embeds hypothetical questions for
@@ -1663,9 +1819,11 @@ func (p *Processor) runHyPEGenerationStage(ctx context.Context, fileID, kbID, fi
 	}
 	var chunks []vector.FileChunkRow
 	var chunkDim int
+	readFailed := false
 	for _, d := range dims {
 		rows, err := p.chunkSvc.GetChunksByFileID(ctx, kbID, fileID, d)
 		if err != nil {
+			readFailed = true
 			continue
 		}
 		if len(rows) > 0 {
@@ -1675,6 +1833,12 @@ func (p *Processor) runHyPEGenerationStage(ctx context.Context, fileID, kbID, fi
 		}
 	}
 	if len(chunks) == 0 {
+		if readFailed {
+			// Could not read the stored chunks back: that is a failure, not
+			// "nothing to do".
+			markIngestDegraded(ctx)
+			return fmt.Errorf("hype: reading stored chunks failed")
+		}
 		return nil
 	}
 	model := resolveHyPEModel(ctx, p.siteConfigReader)
@@ -1687,6 +1851,7 @@ func (p *Processor) runHyPEGenerationStage(ctx context.Context, fileID, kbID, fi
 		}
 		questions, err := ai.GenerateHypotheticalQuestions(ctx, p.aiResolver, fileName, document, c.Content, kbID, maxQ, lang, model)
 		if err != nil {
+			markIngestDegraded(ctx)
 			logctx.From(ctx).Warn("hype: question generation failed; skipping chunk",
 				"fileId", fileID, "chunkId", c.ID, "error", err)
 			continue
@@ -1696,11 +1861,13 @@ func (p *Processor) runHyPEGenerationStage(ctx context.Context, fileID, kbID, fi
 		}
 		embs, err := ai.GenerateEmbeddings(ctx, p.aiResolver, questions, kbID, p.embeddingCache)
 		if err != nil || len(embs) != len(questions) {
+			markIngestDegraded(ctx)
 			logctx.From(ctx).Warn("hype: question embedding failed; skipping chunk",
 				"fileId", fileID, "chunkId", c.ID, "error", err)
 			continue
 		}
 		if err := p.hype.Insert(ctx, kbID, fileID, c.ID, questions, embs, chunkDim); err != nil {
+			markIngestDegraded(ctx)
 			logctx.From(ctx).Warn("hype: insert failed; skipping chunk",
 				"fileId", fileID, "chunkId", c.ID, "error", err)
 			continue
@@ -1784,6 +1951,7 @@ func (p *Processor) runParentChildIngest(
 			}
 			prefix, err := ai.GenerateChunkContext(ctx, p.aiResolver, fileName, document, g.ParentText, kbID, enrichmentModel)
 			if err != nil {
+				markIngestDegraded(ctx)
 				logctx.From(ctx).Warn("processor: parent enrichment failed, leaving prefix empty",
 					"fileId", fileID, "parentIndex", i, "error", err)
 				continue
@@ -1911,41 +2079,12 @@ func (p *Processor) embedAndStore(
 	fileID, kbID string,
 	pgConfig string,
 ) (dimensions int, failed bool) {
-	// Pre-embed deduplication. Hash on `originals` (the stored content), not on
-	// the prefix-augmented embedding input (which varies per ingestion run
-	// because the LLM-generated prefix is non-deterministic).
-	dedupDim := p.dedupDimensions(ctx, kbID)
-	var hashLookup HashLookup
-	if p.chunkSvc != nil {
-		hashLookup = p.chunkSvc
-	}
-	dedup, dedupErr := dedupBatch(ctx, hashLookup, kbID, dedupDim, originals)
-	if dedupErr != nil {
-		logctx.From(ctx).Warn("processor: dedup query failed; embedding entire batch",
-			"fileId", fileID,
-			"batchStart", startIdx,
-			"error", dedupErr,
-		)
-		// Fall through with no dedup — embed everything as before. The
-		// hashes are already computed inside dedupBatch and surfaced via
-		// dedup.allHashes on the error path, so we reuse them rather than
-		// looping vector.HashContent again per chunk.
-		survivors := make([]int, len(originals))
-		for i := range originals {
-			survivors[i] = i
-		}
-		survivorHashes := dedup.allHashes
-		if survivorHashes == nil {
-			// Defensive: dedupBatch should always populate allHashes on the
-			// error path, but if a future caller route lands here without
-			// it, recompute rather than panic on a nil-indexed insert.
-			survivorHashes = make([]string, len(originals))
-			for i, t := range originals {
-				survivorHashes[i] = vector.HashContent(t)
-			}
-		}
-		dedup = dedupResult{survivorIdx: survivors, hashes: survivorHashes}
-	} else if dedup.droppedCount > 0 {
+	// Pre-embed deduplication, within this batch only (see dedupBatch). Hash
+	// on `originals` (the stored content), not on the prefix-augmented
+	// embedding input, which varies per run because the LLM prefix is
+	// non-deterministic.
+	dedup := dedupBatch(originals)
+	if dedup.droppedCount > 0 {
 		logctx.From(ctx).Info("processor.dedup",
 			"fileId", fileID,
 			"kept", len(dedup.survivorIdx),
@@ -1955,7 +2094,7 @@ func (p *Processor) embedAndStore(
 	}
 
 	if len(dedup.survivorIdx) == 0 {
-		// Every chunk in this batch was already known. Nothing to embed or store.
+		// Nothing to embed or store.
 		return 0, false
 	}
 
@@ -2099,6 +2238,7 @@ func (p *Processor) runLateChunkedIngest(
 				// worker.
 				defer func() {
 					if r := recover(); r != nil {
+						markIngestDegraded(ctx)
 						logctx.From(ctx).Warn("processor: chunk enrichment panicked (late-chunking path)",
 							"fileId", fileID,
 							"chunkIndex", idx,
@@ -2107,6 +2247,7 @@ func (p *Processor) runLateChunkedIngest(
 				}()
 				ctxStr, err := ai.GenerateChunkContext(ctx, p.aiResolver, fileName, document, chunkText, kbID, enrichmentModel)
 				if err != nil {
+					markIngestDegraded(ctx)
 					logctx.From(ctx).Warn("processor: chunk enrichment failed (late-chunking path)",
 						"fileId", fileID,
 						"chunkIndex", idx,
@@ -2124,35 +2265,11 @@ func (p *Processor) runLateChunkedIngest(
 	}
 	_ = p.store.UpdateFileProgress(ctx, fileID, 50)
 
-	// Stage 2: dedup against existing chunks (cross-file). Survivors keep
-	// the original document order; non-survivors are still embedded so the
-	// late-chunking window sees a contiguous document, but their rows are
-	// discarded before insert.
-	dedupDim := p.dedupDimensions(ctx, kbID)
-	var hashLookup HashLookup
-	if p.chunkSvc != nil {
-		hashLookup = p.chunkSvc
-	}
-	dedup, dedupErr := dedupBatch(ctx, hashLookup, kbID, dedupDim, chunks)
-	if dedupErr != nil {
-		logctx.From(ctx).Warn("processor: dedup query failed; embedding entire document",
-			"fileId", fileID,
-			"error", dedupErr,
-		)
-		// Fall through with no dedup — all chunks are survivors.
-		allSurvivors := make([]int, totalChunks)
-		for i := range allSurvivors {
-			allSurvivors[i] = i
-		}
-		allHashes := dedup.allHashes
-		if allHashes == nil {
-			allHashes = make([]string, totalChunks)
-			for i, t := range chunks {
-				allHashes[i] = vector.HashContent(t)
-			}
-		}
-		dedup = dedupResult{survivorIdx: allSurvivors, hashes: allHashes}
-	}
+	// Stage 2: in-batch dedup (see dedupBatch). Survivors keep the original
+	// document order; non-survivors are still embedded so the late-chunking
+	// window sees a contiguous document, but their rows are discarded before
+	// insert.
+	dedup := dedupBatch(chunks)
 	if dedup.droppedCount > 0 {
 		logctx.From(ctx).Info("processor.dedup",
 			"fileId", fileID,

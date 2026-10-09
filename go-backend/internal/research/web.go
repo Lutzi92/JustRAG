@@ -71,26 +71,9 @@ func (w *WebClient) Search(ctx context.Context, query string, limit int, lang st
 		return nil, fmt.Errorf("web client not configured")
 	}
 
-	enabled, err := w.scg.GetSiteConfigValue(ctx, "web_search_enabled")
+	creds, err := websearch.Resolve(ctx, w.scg)
 	if err != nil {
-		return nil, fmt.Errorf("read web_search_enabled: %w", err)
-	}
-	if enabled == nil || *enabled != "true" {
-		return nil, fmt.Errorf("web search is not enabled")
-	}
-	apiKey, err := w.scg.GetSiteConfigValue(ctx, "google_search_api_key")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get google_search_api_key: %w", err)
-	}
-	if apiKey == nil || *apiKey == "" {
-		return nil, fmt.Errorf("google_search_api_key is not configured")
-	}
-	cx, err := w.scg.GetSiteConfigValue(ctx, "google_search_cx")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get google_search_cx: %w", err)
-	}
-	if cx == nil || *cx == "" {
-		return nil, fmt.Errorf("google_search_cx is not configured")
+		return nil, err
 	}
 
 	if limit <= 0 || limit > 10 {
@@ -100,7 +83,7 @@ func (w *WebClient) Search(ctx context.Context, query string, limit int, lang st
 		lang = "en"
 	}
 
-	hits, err := websearch.CallGoogle(ctx, *apiKey, *cx, query, limit, lang)
+	hits, err := websearch.CallGoogle(ctx, creds.APIKey, creds.CX, query, limit, lang)
 	if err != nil {
 		return nil, fmt.Errorf("google search: %w", err)
 	}

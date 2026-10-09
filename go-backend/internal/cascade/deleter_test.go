@@ -440,6 +440,73 @@ func TestDeleteKB_RemovesInviteLinks(t *testing.T) {
 	assertCountZero(t, mainPool, `SELECT count(*) FROM kb_invite_links WHERE kb_id = $1::uuid`, kbID)
 }
 
+// TestDeleteKBAndUser_RemoveTopicFilters: the per-user topic filters
+// (migration 0086) leave with the KB they point at and with the user who
+// owns them. Like TestDeleteKB_RemovesInviteLinks above, this pins the end
+// state and cannot tell the explicit DELETE steps from the FKs' ON DELETE
+// CASCADE — the explicit lines follow this file's enumeration convention.
+// Oracle: raw COUNT(*) queries against rows this test inserted by hand.
+func TestDeleteKBAndUser_RemoveTopicFilters(t *testing.T) {
+	mainPool, vectorPool := openTestPools(t)
+	ctx := context.Background()
+
+	userID, kbID, _ := seedFixture(t, mainPool, false)
+	// A second user who starred and tagged the first user's KB, so the KB
+	// delete has someone else's rows to remove.
+	var fan string
+	if err := mainPool.QueryRow(ctx, `
+		INSERT INTO users (username, password_hash) VALUES ($1, 'x') RETURNING id::text`,
+		fmt.Sprintf("cascade-filters-fan-%d-%d", os.Getpid(), nextSerial())).Scan(&fan); err != nil {
+		t.Fatalf("insert fan: %v", err)
+	}
+	t.Cleanup(func() { _, _ = mainPool.Exec(context.Background(), `DELETE FROM users WHERE id = $1::uuid`, fan) })
+
+	tag := func(user, kb string) {
+		t.Helper()
+		var catID string
+		if err := mainPool.QueryRow(ctx, `
+			INSERT INTO kb_user_categories (user_id, name) VALUES ($1::uuid, $2) RETURNING id::text`,
+			user, "cascade-cat-"+kb).Scan(&catID); err != nil {
+			t.Fatalf("insert category: %v", err)
+		}
+		if _, err := mainPool.Exec(ctx, `INSERT INTO kb_favorites (user_id, kb_id) VALUES ($1::uuid, $2::uuid)`, user, kb); err != nil {
+			t.Fatalf("insert favorite: %v", err)
+		}
+		if _, err := mainPool.Exec(ctx, `
+			INSERT INTO kb_user_category_links (user_id, category_id, kb_id) VALUES ($1::uuid, $2::uuid, $3::uuid)`,
+			user, catID, kb); err != nil {
+			t.Fatalf("insert link: %v", err)
+		}
+	}
+	tag(fan, kbID)
+
+	d := cascade.New(mainPool, vectorPool, localFS(t, mainPool, kbID))
+	if err := d.DeleteKB(ctx, kbID); err != nil {
+		t.Fatalf("DeleteKB: %v", err)
+	}
+	assertCountZero(t, mainPool, `SELECT count(*) FROM kb_favorites WHERE kb_id = $1::uuid`, kbID)
+	assertCountZero(t, mainPool, `SELECT count(*) FROM kb_user_category_links WHERE kb_id = $1::uuid`, kbID)
+	// The fan's category is theirs, not the KB's.
+	assertCountOne(t, mainPool, `SELECT count(*) FROM kb_user_categories WHERE user_id = $1::uuid`, fan)
+
+	// Now the user side: the fan stars a KB of the fixture user, then the fan
+	// is deleted. Their rows must go; the KB must stay.
+	var kb2 string
+	if err := mainPool.QueryRow(ctx, `
+		INSERT INTO knowledge_bases (name, user_id) VALUES ('cascade-filters-kb2', $1::uuid) RETURNING id::text`,
+		userID).Scan(&kb2); err != nil {
+		t.Fatalf("insert kb2: %v", err)
+	}
+	tag(fan, kb2)
+	if err := d.DeleteUser(ctx, fan); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	assertCountZero(t, mainPool, `SELECT count(*) FROM kb_favorites WHERE user_id = $1::uuid`, fan)
+	assertCountZero(t, mainPool, `SELECT count(*) FROM kb_user_category_links WHERE user_id = $1::uuid`, fan)
+	assertCountZero(t, mainPool, `SELECT count(*) FROM kb_user_categories WHERE user_id = $1::uuid`, fan)
+	assertCountOne(t, mainPool, `SELECT count(*) FROM knowledge_bases WHERE id = $1::uuid`, kb2)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

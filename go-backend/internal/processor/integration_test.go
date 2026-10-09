@@ -1,7 +1,7 @@
 //go:build integration
 
 // End-to-end ingestion-path test: parse → split → embed → store, plus the
-// cross-file dedup and re-ingest idempotency behaviors that unit tests can't
+// cross-file independence and re-ingest idempotency behaviors that unit tests can't
 // exercise because they span processor + vector + ai. The embedder is a fake
 // OpenAI-compatible HTTP server returning deterministic embedDim-dim vectors,
 // so the test needs only the vector Postgres (TEST_VECTOR_DSN, same contract
@@ -153,9 +153,9 @@ func (f *fakeFileStore) UpdateFileStageDetail(context.Context, string, string) e
 }
 
 // The three screening methods are inert here: this fake's files always read
-// as origin "upload", which screenIfExternal skips.
-func (f *fakeFileStore) GetFileOrigin(context.Context, string) (string, error) {
-	return "upload", nil
+// as origin "upload", which screenIfEligible skips.
+func (f *fakeFileStore) GetFileScreeningInfo(context.Context, string) (string, string, error) {
+	return "upload", "", nil
 }
 
 func (f *fakeFileStore) SetInjectionFlag(context.Context, string, []byte) error {
@@ -163,6 +163,10 @@ func (f *fakeFileStore) SetInjectionFlag(context.Context, string, []byte) error 
 }
 
 func (f *fakeFileStore) MarkInjectionScreenedClean(context.Context, string, []byte) error {
+	return nil
+}
+
+func (f *fakeFileStore) SetIndexFingerprint(context.Context, string, string) error {
 	return nil
 }
 
@@ -319,10 +323,11 @@ func TestProcessFile_IngestEndToEnd(t *testing.T) {
 		t.Errorf("%d/%d file A rows have content_hash + embedding", hashedAndEmbedded, len(rowsA))
 	}
 
-	// --- Ingest file B with identical content: cross-file dedup ----------
+	// --- Ingest file B with identical content: no cross-file dedup -------
+	// Deleting B later must not take content A relies on (or vice versa), so
+	// B keeps its own copy of every chunk.
 	fileB := uuid.NewString()
 	fileStore.reset()
-	embeddedBefore := embeddedTexts.Load()
 
 	if err := p.ProcessFile(ctx, processor.ProcessFileInput{
 		FileID:   fileB,
@@ -337,15 +342,19 @@ func TestProcessFile_IngestEndToEnd(t *testing.T) {
 	if len(statuses) == 0 || statuses[len(statuses)-1] != "completed" {
 		t.Errorf("file B statuses = %v, want final status completed", statuses)
 	}
-	if got := embeddedTexts.Load(); got != embeddedBefore {
-		t.Errorf("file B triggered %d embedding calls, want 0 (all chunks are cross-file duplicates)", got-embeddedBefore)
-	}
 	rowsB, err := chunkSvc.GetChunksByFileID(ctx, kbID, fileB, embedDim)
 	if err != nil {
 		t.Fatalf("GetChunksByFileID(B): %v", err)
 	}
-	if len(rowsB) != 0 {
-		t.Errorf("file B stored %d chunks, want 0 (dedup drops duplicates instead of re-pointing them)", len(rowsB))
+	if len(rowsB) != len(rowsA) {
+		t.Errorf("file B stored %d chunks, want %d (a chunk another file holds must not be dropped)", len(rowsB), len(rowsA))
+	}
+	rowsAAfterB, err := chunkSvc.GetChunksByFileID(ctx, kbID, fileA, embedDim)
+	if err != nil {
+		t.Fatalf("GetChunksByFileID(A after B): %v", err)
+	}
+	if len(rowsAAfterB) != len(rowsA) {
+		t.Errorf("file A holds %d chunks after B ingest, want %d", len(rowsAAfterB), len(rowsA))
 	}
 
 	// --- Re-ingest file A: idempotency (Asynq retry / user re-ingest) ----

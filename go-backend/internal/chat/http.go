@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 
@@ -66,6 +69,11 @@ type Handler struct {
 	// table queries. Optional — when nil, RunCorpusTableChat falls back
 	// to an error path (guarded by the caller before dispatch).
 	corpusChunks CorpusChunkReader
+	// fileExcerpts feeds the starter questions (WithFileExcerpts). Optional.
+	fileExcerpts FileExcerptReader
+	// starterCache holds generated starter questions (always set by
+	// NewHandler; see starterCache).
+	starterCache *starterCache
 	// attachmentStore persists parsed in-chat comparison attachments
 	// (uploaded documents compared against a KB, never ingested).
 	// Optional — when nil, UploadAttachment guards the call with an
@@ -90,6 +98,12 @@ type Handler struct {
 	// insert; the router's decision is still visible via TabularTrace on
 	// the eval harness and via trajectory events.
 	tabularQueryLog TabularQueryLogger
+	// libraryChats / libraryFiles / libraryText back the KB-less library
+	// chat endpoints (library_http.go, WithLibraryChat). Optional — when any
+	// is nil those endpoints answer 503; the KB paths never touch them.
+	libraryChats LibraryChatStore
+	libraryFiles LibraryFileGetter
+	libraryText  LibraryTextProvider
 }
 
 // TabularQueryLogger is the persistence surface the chat handler uses to
@@ -378,6 +392,7 @@ func NewHandler(store Store, aiResolver *ai.ConfigResolver, searchService vector
 		store:         store,
 		aiResolver:    aiResolver,
 		searchService: searchService,
+		starterCache:  newStarterCache(starterCacheMaxEntries, starterCacheTTL, starterFailureTTL, starterGenerateTimeout),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -500,6 +515,75 @@ func (h *Handler) DeleteChat(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.DeleteChat(r.Context(), chatID); err != nil {
 		logctx.From(r.Context()).Error("chat.delete: delete chat", "error", err, "chat_id", chatID, "user_id", user.ID)
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to delete chat")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /api/chats/{id}
+// ---------------------------------------------------------------------------
+
+// renameChatRequest is the parsed JSON body for PATCH /api/chats/{id}.
+type renameChatRequest struct {
+	Title string `json:"title"`
+}
+
+// maxChatTitleLen caps a user-chosen chat title, in characters (runes);
+// auto-generated titles are far shorter, and the history list truncates
+// anyway.
+const maxChatTitleLen = 200
+
+// RenameChat handles PATCH /api/chats/{id}: sets a user-chosen title on a
+// chat the caller owns. Auth is enforced by middleware; ownership by the
+// store's UPDATE (WHERE id AND user_id), so a malformed id, a missing chat
+// and someone else's chat are all the same 404. The rename leaves updated_at
+// alone and does not reorder the history.
+func (h *Handler) RenameChat(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromContext(r.Context())
+	if user == nil {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	parsed, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusNotFound, "chat not found")
+		return
+	}
+	chatID := parsed.String()
+
+	var body renameChatRequest
+	// The title is at most maxChatTitleLen runes; 4 KiB leaves ample room.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	// A title is one line: collapse every whitespace run (incl. line breaks)
+	// to a single space, then refuse any other control character.
+	title := strings.Join(strings.Fields(body.Title), " ")
+	if strings.IndexFunc(title, isLineBreakOrControl) >= 0 {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "title must not contain control characters")
+		return
+	}
+	if title == "" {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "title is required")
+		return
+	}
+	if utf8.RuneCountInString(title) > maxChatTitleLen {
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest,
+			fmt.Sprintf("title too long (max %d characters)", maxChatTitleLen))
+		return
+	}
+
+	if err := h.store.UpdateChatTitle(r.Context(), chatID, user.ID, title); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusNotFound, "chat not found")
+			return
+		}
+		logctx.From(r.Context()).Error("chat.rename: update title", "error", err, "chat_id", chatID, "user_id", user.ID)
+		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to rename chat")
 		return
 	}
 

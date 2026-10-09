@@ -27,6 +27,14 @@ type CatalogEntry struct {
 	Description *string  `json:"description" db:"description"`
 	Subscribed  bool     `json:"subscribed"  db:"subscribed"`
 	CategoryIDs []string `json:"categoryIds" db:"category_ids"`
+
+	// The caller's own topic filters (migration 0086, internal/kbfilters).
+	// IsFavorite is orthogonal to Subscribed above: Subscribed answers "is
+	// this tile in my overview", IsFavorite "did I star it for the Favoriten
+	// chip". UserCategoryIDs are the caller's private categories, unrelated
+	// to the admin-curated CategoryIDs next to them.
+	IsFavorite      bool     `json:"isFavorite"      db:"is_favorite"`
+	UserCategoryIDs []string `json:"userCategoryIds" db:"user_category_ids"`
 }
 
 // Store is the subscription data layer. PGStore is its only implementation.
@@ -105,7 +113,17 @@ func (s *PGStore) Catalog(ctx context.Context, userID, query string, categoryIDs
 		       COALESCE(
 		         (SELECT array_agg(l.category_id::text) FROM kb_category_links l WHERE l.kb_id = kb.id),
 		         ARRAY[]::text[]
-		       ) AS category_ids
+		       ) AS category_ids,
+		       -- Per-user topic filters, joined here for the same reason the
+		       -- KB list queries join them: the chip row filters one payload
+		       -- client-side, so a follow-up request per card would be an N+1.
+		       EXISTS (SELECT 1 FROM kb_favorites fav
+		               WHERE fav.kb_id = kb.id AND fav.user_id = $1::uuid) AS is_favorite,
+		       COALESCE(
+		         (SELECT array_agg(ucl.category_id::text) FROM kb_user_category_links ucl
+		          WHERE ucl.kb_id = kb.id AND ucl.user_id = $1::uuid),
+		         ARRAY[]::text[]
+		       ) AS user_category_ids
 		FROM knowledge_bases kb
 		WHERE kb.visibility = 'public'
 		  AND (kb.is_published = true OR EXISTS (

@@ -3,7 +3,11 @@ name: Build and Push Docker Image
 on:
   push:
     branches: ["main"]
-    tags: ["v*"]
+    # Only release candidates are built. A release (`vX.Y.Z`) is never
+    # rebuilt: promote-release.yml gives the tested RC image its release
+    # tags by digest, so prod runs exactly the bits staging tested. A plain
+    # `vX.Y.Z` tag pushed by hand therefore builds nothing.
+    tags: ["v*-rc.*"]
 
 env:
   REGISTRY: ghcr.io
@@ -29,10 +33,11 @@ jobs:
           # a hash from GET /version with no error anywhere in the log.
           fetch-depth: 0
 
-      # `git describe` gives a human-legible build id: exactly `v0.1.0` on a
-      # release tag, `v0.1.0-12-gabc1234` on main. Still unique per commit, so
-      # the frontend's useVersionCheck (which only compares for inequality)
-      # keeps working unchanged. `--always` covers the pre-first-tag case.
+      # `git describe` gives a human-legible build id: exactly `v0.1.0-rc.1`
+      # on a release-candidate tag, `v0.1.0-12-gabc1234` on main. A promoted
+      # release keeps reporting the RC it was promoted from — it is the same
+      # binary. Still unique per commit, so the frontend's useVersionCheck
+      # (which only compares for inequality) keeps working unchanged. `--always` covers the pre-first-tag case.
       # No `--dirty`: CI trees are always clean and it would only mislead.
       - name: Compute build version
         id: ver
@@ -61,24 +66,16 @@ jobs:
           # restart. `:edge` replaces it for tip-of-main.
           flavor: |
             latest=false
-          # The `v` prefix keeps image tag == git tag and lets the prune
-          # step below exclude releases with an unambiguous `v*`.
-          #
-          # Templating note: `{{...}}` is resolved by metadata-action itself,
-          # `${{...}}` by GitHub Actions before the action ever runs. Both
-          # forms appear below on purpose — do not "unify" them.
+          # `type=ref,event=tag` publishes the git tag name verbatim, so an
+          # RC image is `:v0.2.0-rc.1` — image tag == git tag, and the prune
+          # step below protects it via `v*`. (`type=semver` would drop the
+          # `v` for any prerelease, whatever `pattern=` says.) `:vX.Y.Z`,
+          # `:vX.Y` and `:stable` are deliberately absent: only
+          # promote-release.yml writes them.
           tags: |
             type=sha,prefix=,enable={{is_default_branch}}
             type=raw,value=edge,enable={{is_default_branch}}
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            # `stable` is the default for every unpinned compose deployment
-            # (`${JUSTRAG_VERSION:-stable}`), so a prerelease must never move
-            # it. `startsWith(refs/tags/v)` alone fires for `v0.2.0-rc.1`;
-            # the `-` check excludes SemVer prereleases. (metadata-action's
-            # own `latest=auto` skips prereleases for free — this hand-rolled
-            # expression does not, hence the asymmetry.)
-            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
+            type=ref,event=tag
 
       # Buildx is required for the SBOM/provenance attestations below — the
       # default docker driver silently ignores them.
@@ -98,7 +95,7 @@ jobs:
           # reports. The frontend polls that endpoint to notice a deployment;
           # without this the ARG keeps its "unknown" default, /version returns
           # the same string for every release, and update detection can never
-          # fire. On a release tag this is exactly the tag (`v0.1.0`).
+          # fire. On an RC tag this is exactly the tag (`v0.1.0-rc.1`).
           # The Dockerfile defaults GOPROXY to goproxy.cn because the local
           # build network blocks Go's default module CDN. GitHub's runners are
           # not blocked, and that mirror is flaky from them (HTTP/2
@@ -156,7 +153,8 @@ jobs:
           # Without this, `keep-n-tagged` deletes release images after ten
           # further main pushes — destroying the exact rollback targets
           # versioning exists to create. `exclude-tags` supports wildcards and
-          # is applied BEFORE keep-n-tagged, so releases are never considered.
+          # is applied BEFORE keep-n-tagged, so releases and release
+          # candidates (both `v*`) are never considered.
           exclude-tags: stable,edge,v*
           keep-n-tagged: 10 # applies only to main's SHA-tagged images now
           token: ${{ secrets.GITHUB_TOKEN }}

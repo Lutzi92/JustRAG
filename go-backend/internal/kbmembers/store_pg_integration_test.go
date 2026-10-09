@@ -320,6 +320,14 @@ func TestLeaveKB_DeletesOwnChatsOnly(t *testing.T) {
 
 	leaverChat := insertChat(t, pool, kbID, leaver)
 	stayerChat := insertChat(t, pool, kbID, stayer)
+	// Agent-chat ADK sessions keyed by the chat id (final review item 4).
+	for _, c := range []struct{ user, chat string }{{leaver, leaverChat}, {stayer, stayerChat}} {
+		mustExec(t, pool, `INSERT INTO adk_sessions (app_name, user_id, id, update_time) VALUES ('agentchat', $1, $2, now())`, c.user, c.chat)
+		mustExec(t, pool, `INSERT INTO adk_events (app_name, user_id, session_id, id, ts, body) VALUES ('agentchat', $1, $2, 'e1', now(), '{}')`, c.user, c.chat)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM adk_sessions WHERE app_name = 'agentchat' AND id = ANY($1)`, []string{leaverChat, stayerChat})
+	})
 
 	deleted, err := store.LeaveKB(context.Background(), kbID, leaver)
 	if err != nil {
@@ -342,6 +350,16 @@ func TestLeaveKB_DeletesOwnChatsOnly(t *testing.T) {
 	}
 	if memberCount != 0 {
 		t.Fatalf("leaver's membership should be deleted, got %d rows", memberCount)
+	}
+	var leaverSessions, leaverEvents, stayerSessions int
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM adk_sessions WHERE id = $1`, leaverChat).Scan(&leaverSessions)
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM adk_events WHERE session_id = $1`, leaverChat).Scan(&leaverEvents)
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM adk_sessions WHERE id = $1`, stayerChat).Scan(&stayerSessions)
+	if leaverSessions != 0 || leaverEvents != 0 {
+		t.Fatalf("leaver's ADK session should be deleted, got %d sessions, %d events", leaverSessions, leaverEvents)
+	}
+	if stayerSessions != 1 {
+		t.Fatalf("stayer's ADK session should survive, got %d rows", stayerSessions)
 	}
 }
 
@@ -488,5 +506,136 @@ func TestLeaveKB_OwnerRefused(t *testing.T) {
 	// Ein abgelehntes Verlassen darf auch keinen Opt-out schreiben.
 	if subCount != 0 {
 		t.Fatalf("refused leave wrote %d kb_subscriptions rows, want 0", subCount)
+	}
+}
+
+// filterRows counts userID's favorite and category-link rows on kbID, plus
+// all of userID's categories.
+func filterRows(t *testing.T, pool *pgxpool.Pool, userID, kbID string) (favs, links, cats int) {
+	t.Helper()
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM kb_favorites WHERE user_id = $1 AND kb_id = $2`,
+		userID, kbID).Scan(&favs)
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM kb_user_category_links WHERE user_id = $1 AND kb_id = $2`,
+		userID, kbID).Scan(&links)
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM kb_user_categories WHERE user_id = $1`,
+		userID).Scan(&cats)
+	return favs, links, cats
+}
+
+// starAndTagKB writes userID's favorite and one category link on kbID by hand
+// and returns the category id.
+func starAndTagKB(t *testing.T, pool *pgxpool.Pool, userID, kbID, catName string) string {
+	t.Helper()
+	var catID string
+	if err := mustQueryRow(t, pool, `
+		INSERT INTO kb_user_categories (user_id, name) VALUES ($1::uuid, $2) RETURNING id::text`,
+		userID, catName).Scan(&catID); err != nil {
+		t.Fatalf("insert kb_user_categories: %v", err)
+	}
+	mustExec(t, pool, `INSERT INTO kb_favorites (user_id, kb_id) VALUES ($1::uuid, $2::uuid)`, userID, kbID)
+	mustExec(t, pool, `INSERT INTO kb_user_category_links (user_id, category_id, kb_id)
+	                   VALUES ($1::uuid, $2::uuid, $3::uuid)`, userID, catID, kbID)
+	return catID
+}
+
+// TestLeaveAndRemove_FiltersFollowVisibility: losing a membership — by
+// leaving or by being removed — drops that user's star and category links on
+// that KB only when they can no longer see it afterwards. Nothing else is
+// touched: their categories survive, their filters on another KB survive, and
+// another member's filters on the same KB survive.
+//
+// Oracle: the access rules as the product states them, written out per arm —
+// a private KB and a staged (unpublished) public KB are gone for an ordinary
+// user once the membership is; a published public KB still grants view; a
+// system admin keeps admin on any public KB — checked with raw COUNT(*)
+// queries against fixture rows this test wrote by hand. The "kept" arms are
+// what fail if the cleanup ignores visibility; the "cleaned" arms fail if it
+// never runs.
+func TestLeaveAndRemove_FiltersFollowVisibility(t *testing.T) {
+	type kbKind struct {
+		name                string
+		isGlobal, published bool
+		leaverSysRole       string
+		wantKept            bool
+	}
+	kinds := []kbKind{
+		{"private", false, false, "user", false},
+		{"public published", true, true, "user", true},
+		{"public staged", true, false, "user", false},
+		{"public staged, system admin", true, false, "admin", true},
+	}
+	acts := []struct {
+		name string
+		act  func(store *kbmembers.PGStore, kbID, userID string) error
+	}{
+		{"LeaveKB", func(s *kbmembers.PGStore, kbID, userID string) error {
+			_, err := s.LeaveKB(context.Background(), kbID, userID)
+			return err
+		}},
+		{"RemoveMember", func(s *kbmembers.PGStore, kbID, userID string) error {
+			return s.RemoveMember(context.Background(), kbID, userID)
+		}},
+	}
+	for _, a := range acts {
+		for _, k := range kinds {
+			t.Run(a.name+"/"+k.name, func(t *testing.T) {
+				pool := testPool(t)
+				store := kbmembers.NewStore(pool)
+
+				suffix := fmt.Sprintf("%s-%t-%t-%s", a.name, k.isGlobal, k.published, k.leaverSysRole)
+				owner := insertUser(t, pool, "forget-owner-"+suffix)
+				leaver := insertUser(t, pool, "forget-leaver-"+suffix)
+				mustExec(t, pool, `UPDATE users SET role = $1 WHERE id = $2::uuid`, k.leaverSysRole, leaver)
+				kbID := insertKB(t, pool, owner, k.isGlobal, k.published)
+				otherKB := insertKB(t, pool, owner, false, false)
+				mustExec(t, pool, `INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1, $2, 'view')`, kbID, leaver)
+				mustExec(t, pool, `INSERT INTO kb_members (kb_id, user_id, role) VALUES ($1, $2, 'view')`, otherKB, leaver)
+
+				starAndTagKB(t, pool, leaver, kbID, "forget-cat-here")
+				starAndTagKB(t, pool, leaver, otherKB, "forget-cat-there")
+				starAndTagKB(t, pool, owner, kbID, "forget-cat-owner")
+
+				if err := a.act(store, kbID, leaver); err != nil {
+					t.Fatalf("%s: %v", a.name, err)
+				}
+
+				want := 0
+				if k.wantKept {
+					want = 1
+				}
+				if favs, links, cats := filterRows(t, pool, leaver, kbID); favs != want || links != want || cats != 2 {
+					t.Errorf("leaver on this KB: favorites=%d links=%d categories=%d, want %d/%d/2",
+						favs, links, cats, want, want)
+				}
+				if favs, links, _ := filterRows(t, pool, leaver, otherKB); favs != 1 || links != 1 {
+					t.Errorf("leaver on another KB: favorites=%d links=%d, want 1/1 untouched", favs, links)
+				}
+				if favs, links, _ := filterRows(t, pool, owner, kbID); favs != 1 || links != 1 {
+					t.Errorf("another member on the same KB: favorites=%d links=%d, want 1/1 untouched", favs, links)
+				}
+			})
+		}
+	}
+}
+
+// TestRefusedLeaveOrRemoveKeepsFilters: the owner can neither leave nor be
+// removed, and a refused attempt must not have touched their filters — the
+// cleanup runs only after the guarded membership DELETE succeeded.
+func TestRefusedLeaveOrRemoveKeepsFilters(t *testing.T) {
+	pool := testPool(t)
+	store := kbmembers.NewStore(pool)
+
+	owner := insertUser(t, pool, "forget-refused-owner")
+	kbID := insertKB(t, pool, owner, false, false)
+	starAndTagKB(t, pool, owner, kbID, "forget-refused-cat")
+
+	if _, err := store.LeaveKB(context.Background(), kbID, owner); !errors.Is(err, kbmembers.ErrOwnerImmutable) {
+		t.Fatalf("LeaveKB(owner) = %v, want ErrOwnerImmutable", err)
+	}
+	if err := store.RemoveMember(context.Background(), kbID, owner); !errors.Is(err, kbmembers.ErrOwnerImmutable) {
+		t.Fatalf("RemoveMember(owner) = %v, want ErrOwnerImmutable", err)
+	}
+	if favs, links, _ := filterRows(t, pool, owner, kbID); favs != 1 || links != 1 {
+		t.Errorf("owner after refused leave/remove: favorites=%d links=%d, want 1/1", favs, links)
 	}
 }

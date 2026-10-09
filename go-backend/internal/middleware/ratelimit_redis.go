@@ -89,15 +89,42 @@ type RedisRateLimitConfig struct {
 	// briefly skipping the cap — but it does mean operators must watch the
 	// fallback metric to notice an outage.
 	FailClosed bool
+
+	// Key derives the client key a request is counted under. nil (the
+	// default) keys on the client IP, which is what every limiter that runs
+	// before authentication needs. A limiter placed after Authenticate can
+	// key on the user instead (e.g. the user id from the auth claims), so
+	// users behind one NAT or VPN egress do not share a budget. An empty
+	// return value falls back to the client IP for that request. The value
+	// becomes part of a Redis key ("rl:<category>:<key>"), so it must not be
+	// a secret. The rejection log line still records the client IP.
+	Key func(r *http.Request) string
 }
 
+// keyedRateLimitBody is the 429 body of a limiter with a custom Key: the
+// default body names the IP, which would be wrong for a per-user budget.
+var keyedRateLimitBody = []byte(`{"error":"Too many requests, please try again later."}`)
+
 // RedisRateLimiter implements fixed-window rate limiting backed by Redis.
-// Each (category, IP) pair gets its own counter key with an expiring window.
+// Each (category, client key) pair gets its own counter key with an expiring
+// window; the client key is the IP unless RedisRateLimitConfig.Key says
+// otherwise.
 // Note: this is a fixed-window counter, not a true sliding window — requests
 // near a window boundary may see up to 2x the limit in a short burst.
 type RedisRateLimiter struct {
 	rdb    redis.Cmdable
 	config RedisRateLimitConfig
+}
+
+// clientKey is the key r is counted under: config.Key's value, or the client
+// IP when Key is nil or returns "".
+func (rl *RedisRateLimiter) clientKey(r *http.Request) string {
+	if rl.config.Key != nil {
+		if k := rl.config.Key(r); k != "" {
+			return k
+		}
+	}
+	return extractIP(r)
 }
 
 // NewRedisRateLimiter creates a rate limiter. If rdb is nil, behaviour depends
@@ -124,8 +151,8 @@ func (rl *RedisRateLimiter) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		ip := extractIP(r)
-		key := "rl:" + rl.config.Category + ":" + ip
+		client := rl.clientKey(r)
+		key := "rl:" + rl.config.Category + ":" + client
 
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -144,7 +171,7 @@ func (rl *RedisRateLimiter) Middleware(next http.Handler) http.Handler {
 		}
 
 		if int(count) > rl.config.Max {
-			logRateLimitRejection(r, ip, "redis:"+rl.config.Category, int(count), rl.config.Max)
+			logRateLimitRejection(r, extractIP(r), "redis:"+rl.config.Category, int(count), rl.config.Max)
 			rl.writeRetryAfter(w, r, key, window)
 			return
 		}
@@ -183,8 +210,8 @@ func (rl *RedisRateLimiter) CheckOnly(next http.Handler) http.Handler {
 			return
 		}
 
-		ip := extractIP(r)
-		key := "rl:" + rl.config.Category + ":" + ip
+		client := rl.clientKey(r)
+		key := "rl:" + rl.config.Category + ":" + client
 
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -211,7 +238,7 @@ func (rl *RedisRateLimiter) CheckOnly(next http.Handler) http.Handler {
 		}
 
 		if int(count) >= rl.config.Max {
-			logRateLimitRejection(r, ip, "redis_check_only:"+rl.config.Category, int(count), rl.config.Max)
+			logRateLimitRejection(r, extractIP(r), "redis_check_only:"+rl.config.Category, int(count), rl.config.Max)
 			rl.writeRetryAfter(w, r, key, window)
 			return
 		}
@@ -220,7 +247,8 @@ func (rl *RedisRateLimiter) CheckOnly(next http.Handler) http.Handler {
 	})
 }
 
-// RecordFailure increments the rate-limit counter for the given request's IP.
+// RecordFailure increments the rate-limit counter for the given request's
+// client key (the IP unless RedisRateLimitConfig.Key is set).
 // Call this after a failed login attempt rather than on every request.
 //
 // Sliding-window mode appends a unique sorted-set member per attempt and
@@ -232,8 +260,8 @@ func (rl *RedisRateLimiter) RecordFailure(r *http.Request) {
 		return
 	}
 	window := rl.config.Window
-	ip := extractIP(r)
-	key := "rl:" + rl.config.Category + ":" + ip
+	client := rl.clientKey(r)
+	key := "rl:" + rl.config.Category + ":" + client
 
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
@@ -278,5 +306,9 @@ func (rl *RedisRateLimiter) writeRetryAfter(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Retry-After", strconv.Itoa(retrySec))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusTooManyRequests)
+	if rl.config.Key != nil {
+		_, _ = w.Write(keyedRateLimitBody)
+		return
+	}
 	_, _ = w.Write(rateLimitBody)
 }

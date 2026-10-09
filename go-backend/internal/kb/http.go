@@ -49,10 +49,10 @@ type KBRow struct {
 	OwnerLastName  *string `json:"ownerLastName,omitempty"  db:"owner_last_name"`
 	OwnerUsername  *string `json:"ownerUsername,omitempty"  db:"owner_username"`
 
-	// Card information-scent metadata — populated only by the list queries
-	// (ListKnowledgeBases / ListGlobalKnowledgeBases) via cheap per-row LATERAL
-	// aggregates, so the Home KB cards can show size + freshness without an
-	// N+1 fetch. Zero/omitted on single-row fetches (create / get-by-id).
+	// Card information-scent metadata — populated by the list queries and
+	// GetKnowledgeBase via cheap per-row LATERAL aggregates, so the Home KB
+	// cards can show size + freshness without an N+1 fetch. Zero/omitted on
+	// the create and update RETURNING rows.
 	FileCount           int        `json:"fileCount"`
 	FailedFileCount     int        `json:"failedFileCount"`
 	ProcessingFileCount int        `json:"processingFileCount"`
@@ -61,18 +61,60 @@ type KBRow struct {
 	// OldestFileAt is MIN(COALESCE(published_at, created_at)) over the KB's
 	// files — how far back the corpus reaches, so a card can say "covers
 	// documents since 2019" next to the file count. Nil for an empty KB and
-	// on single-row fetches, like the other card metadata above.
+	// on the RETURNING rows, like the other card metadata above.
 	OldestFileAt *time.Time `json:"oldestFileAt,omitempty"`
+	// LastIngestedAt is when content was last successfully ingested into the
+	// KB: MAX(COALESCE(progress_updated_at, created_at)) over files whose
+	// status is 'completed' or 'partial'. It backs the card's „Aktualisiert"
+	// line, which means "last ingest", not "newest document date" — so
+	// published_at plays no part, and failed, pending and still-processing
+	// files are ignored. progress_updated_at is the worker's last heartbeat on
+	// the file, written by every processing run (internal/files
+	// UpdateFileProgress/UpdateFileStage), which is what moves the date on a
+	// retry or re-embed that keeps the row — created_at would not move. A
+	// re-synced git/Confluence document is deleted and re-created, so it is a
+	// fresh row either way. created_at is only the fallback for a row the
+	// worker never stamped (rows older than migration 0009). Nil when no file
+	// has been ingested.
+	LastIngestedAt *time.Time `json:"lastIngestedAt,omitempty"`
 
 	// MyRole is the caller's own kb_members.role for this KB, and MemberCount
-	// the KB's total member count — populated only by the same two list
-	// queries as the card metadata above, via correlated subqueries. MyRole
+	// the KB's total member count — populated by the same queries as the
+	// card metadata above, via correlated subqueries. MyRole
 	// is null when the caller has no kb_members row (a published global KB
 	// grants an implicit 'view' role to any authenticated user without one);
 	// the frontend must treat a null MyRole as an implicit viewer, never as
-	// owner. Zero/nil on single-row fetches (create / get-by-id).
+	// owner. Zero/nil on the create and update RETURNING rows.
 	MyRole      *string `json:"myRole"`
 	MemberCount int     `json:"memberCount"`
+
+	// UserFilters carries the caller's own topic filters for the shell's chip
+	// row (migration 0086, owned by internal/kbfilters). Embedded as a
+	// pointer so encoding/json flattens isFavorite/userCategoryIds into the
+	// row when it is set and omits both keys when it is nil.
+	//
+	// Set only by the session-facing reads — ListKnowledgeBasesWithUserFilters,
+	// ListGlobalKnowledgeBasesWithUserFilters and GetKnowledgeBase — and on
+	// CreateKnowledgeBase's result (a KB that did not exist a moment ago has
+	// no filters yet). Nil on everything an API key reaches: the plain
+	// ListKnowledgeBases/ListGlobalKnowledgeBases behind GET /api/v1/kb,
+	// /openai/v1/models and the KB router never run the per-user subqueries,
+	// so personal display state does not leak into integrations.
+	*UserFilters
+}
+
+// UserFilters is the caller's per-user state on one KB. Both fields are the
+// caller's own and say nothing about anyone else's.
+type UserFilters struct {
+	// IsFavorite is true when the caller starred this KB (a kb_favorites
+	// row exists). Distinct from a subscription: it pins any topic to the
+	// "Favoriten" chip, while subscribing decides whether a global topic is
+	// in the overview at all.
+	IsFavorite bool `json:"isFavorite"`
+	// UserCategoryIDs are the ids of the caller's own categories this KB is
+	// tagged with. Never nil when UserFilters is set — the query COALESCEs
+	// to an empty array — so the JSON is [] rather than null.
+	UserCategoryIDs []string `json:"userCategoryIds"`
 }
 
 // ---------------------------------------------------------------------------
@@ -80,9 +122,15 @@ type KBRow struct {
 // ---------------------------------------------------------------------------
 
 // Store is the persistence interface required by Handler.
+//
+// The two list methods are the *WithUserFilters variants on purpose: this
+// handler serves the session UI, which needs the caller's favorite and
+// category state on every card. The plain ListKnowledgeBases /
+// ListGlobalKnowledgeBases on PGStore are the API-key surface and leave
+// UserFilters nil.
 type Store interface {
-	ListKnowledgeBases(ctx context.Context, userID string, limit, offset int) ([]KBRow, error)
-	ListGlobalKnowledgeBases(ctx context.Context, userID string, isAdmin bool) ([]KBRow, error)
+	ListKnowledgeBasesWithUserFilters(ctx context.Context, userID string, limit, offset int) ([]KBRow, error)
+	ListGlobalKnowledgeBasesWithUserFilters(ctx context.Context, userID string, isAdmin bool) ([]KBRow, error)
 	GetKnowledgeBase(ctx context.Context, kbID, userID string) (*KBRow, error)
 	CreateKnowledgeBase(ctx context.Context, name string, description *string, userID string, systemPrompt *string) (*KBRow, error)
 
@@ -132,8 +180,11 @@ func NewHandler(store Store) *Handler {
 // Endpoint handlers
 // ---------------------------------------------------------------------------
 
-// ListKnowledgeBases handles GET /api/kb.
-// Returns all KBs the authenticated user can access: owned, shared, and global published.
+// ListKnowledgeBases handles GET /api/kb: one page of the caller's private
+// KBs (owned or shared with them; global KBs come from GET /api/kb/global).
+// Paged by ?limit= (default 50, values above 100 are clamped to 100,
+// non-positive or non-numeric values fall back to the default) and ?offset=
+// (default 0).
 func (h *Handler) ListKnowledgeBases(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
@@ -158,7 +209,7 @@ func (h *Handler) ListKnowledgeBases(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	kbs, err := h.store.ListKnowledgeBases(r.Context(), user.ID, limit, offset)
+	kbs, err := h.store.ListKnowledgeBasesWithUserFilters(r.Context(), user.ID, limit, offset)
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to fetch knowledge bases")
 		return
@@ -189,7 +240,7 @@ func (h *Handler) ListGlobalKnowledgeBases(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	kbs, err := h.store.ListGlobalKnowledgeBases(r.Context(), user.ID, false)
+	kbs, err := h.store.ListGlobalKnowledgeBasesWithUserFilters(r.Context(), user.ID, false)
 	if err != nil {
 		httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "failed to fetch global knowledge bases")
 		return

@@ -122,7 +122,8 @@ func (s *PGStore) Publish(ctx context.Context, kbID string) error {
 //
 // Subscriptions are deleted rather than kept: the KB is no longer discoverable
 // and the rows would be unreachable clutter. Chats are deliberately NOT
-// deleted — losing access is not the same as asking to be removed.
+// deleted — losing access is not the same as asking to be removed. The
+// topic filters (favorites, category links) of users who lose access go.
 func (s *PGStore) Unpublish(ctx context.Context, kbID, newOwnerID string) error {
 	return pgxutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
@@ -159,6 +160,22 @@ func (s *PGStore) Unpublish(ctx context.Context, kbID, newOwnerID string) error 
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM kb_subscriptions WHERE kb_id = $1::uuid`, kbID); err != nil {
 			return fmt.Errorf("Unpublish: drop subscriptions: %w", err)
+		}
+
+		// Per-user topic filters (migration 0086) of everyone who loses view:
+		// a private KB is reachable only through a kb_members row or the
+		// superadmin rule of kbaccess.EffectiveRole. Without this, a former
+		// reader's star and category chips would come back on a re-publish.
+		for _, table := range []string{"kb_favorites", "kb_user_category_links"} {
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM `+table+` f
+				WHERE f.kb_id = $1::uuid
+				  AND NOT EXISTS (SELECT 1 FROM kb_members m
+				                  WHERE m.kb_id = f.kb_id AND m.user_id = f.user_id)
+				  AND NOT EXISTS (SELECT 1 FROM users u
+				                  WHERE u.id = f.user_id AND u.role = 'superadmin')`, kbID); err != nil {
+				return fmt.Errorf("Unpublish: drop %s of users without access: %w", table, err)
+			}
 		}
 		return nil
 	})

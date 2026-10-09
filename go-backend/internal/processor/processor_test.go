@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/justrag/go-backend/internal/ai"
 	"github.com/justrag/go-backend/internal/observability"
 	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/tabular"
@@ -45,13 +45,26 @@ type mockStore struct {
 
 	// Ingest prompt-injection screening (W5-R8). origins is the seeded
 	// files.origin per file id (default "upload" for an unseeded id, the
-	// production default); the rest record what screenIfExternal did.
+	// production default); the rest record what screenIfEligible did.
 	origins          map[string]string
+	visibilities     map[string]string
 	originCalls      int
 	injectionDetails map[string][]byte
 	// injectionClean records the screened-clean detail written per file id
 	// (a {"screened_at": …} payload), in call order.
 	injectionClean []cleanScreenCall
+	// fingerprints records SetIndexFingerprint calls per file id.
+	fingerprints map[string]string
+	fpCalls      int
+}
+
+func (m *mockStore) SetIndexFingerprint(_ context.Context, fileID, fp string) error {
+	if m.fingerprints == nil {
+		m.fingerprints = make(map[string]string)
+	}
+	m.fingerprints[fileID] = fp
+	m.fpCalls++
+	return nil
 }
 
 // cleanScreenCall is one MarkInjectionScreenedClean call.
@@ -105,12 +118,13 @@ func (m *mockStore) UpdateFileStageDetail(_ context.Context, fileID, detail stri
 	return nil
 }
 
-func (m *mockStore) GetFileOrigin(_ context.Context, fileID string) (string, error) {
+func (m *mockStore) GetFileScreeningInfo(_ context.Context, fileID string) (string, string, error) {
 	m.originCalls++
+	origin := "upload"
 	if o, ok := m.origins[fileID]; ok {
-		return o, nil
+		origin = o
 	}
-	return "upload", nil
+	return origin, m.visibilities[fileID], nil
 }
 
 func (m *mockStore) SetInjectionFlag(_ context.Context, fileID string, detail []byte) error {
@@ -160,8 +174,8 @@ func (s *contextCapturingStore) UpdateFileStageDetail(context.Context, string, s
 	return nil
 }
 
-func (s *contextCapturingStore) GetFileOrigin(context.Context, string) (string, error) {
-	return "upload", nil
+func (s *contextCapturingStore) GetFileScreeningInfo(context.Context, string) (string, string, error) {
+	return "upload", "", nil
 }
 
 func (s *contextCapturingStore) SetInjectionFlag(context.Context, string, []byte) error {
@@ -169,6 +183,10 @@ func (s *contextCapturingStore) SetInjectionFlag(context.Context, string, []byte
 }
 
 func (s *contextCapturingStore) MarkInjectionScreenedClean(context.Context, string, []byte) error {
+	return nil
+}
+
+func (s *contextCapturingStore) SetIndexFingerprint(context.Context, string, string) error {
 	return nil
 }
 
@@ -460,38 +478,15 @@ func TestMarkTerminalErrorUsesLiveContext(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// fakeHashLookup
-// ---------------------------------------------------------------------------
-
-type fakeHashLookup struct {
-	existing map[string]struct{}
-	calls    int
-}
-
-func (f *fakeHashLookup) GetExistingChunkHashes(_ context.Context, _ string, _ int, hashes []string) (map[string]struct{}, error) {
-	f.calls++
-	out := make(map[string]struct{})
-	for _, h := range hashes {
-		if _, ok := f.existing[h]; ok {
-			out[h] = struct{}{}
-		}
-	}
-	return out, nil
-}
-
-// ---------------------------------------------------------------------------
 // dedupBatch tests
 // ---------------------------------------------------------------------------
 
 func TestDedupBatch_InBatchDuplicates(t *testing.T) {
-	res, err := dedupBatch(context.Background(), nil, "kb", 1536, []string{
+	res := dedupBatch([]string{
 		"Hello World",
 		"Hello world",
 		"Different content",
 	})
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
 	if len(res.survivorIdx) != 2 {
 		t.Errorf("expected 2 survivors, got %d", len(res.survivorIdx))
 	}
@@ -500,29 +495,24 @@ func TestDedupBatch_InBatchDuplicates(t *testing.T) {
 	}
 }
 
-func TestDedupBatch_CrossFileDuplicates(t *testing.T) {
-	existingHash := vector.HashContent("Existing Chunk")
-	lookup := &fakeHashLookup{existing: map[string]struct{}{existingHash: {}}}
-	res, err := dedupBatch(context.Background(), lookup, "kb", 1536, []string{
-		"New chunk",
-		"Existing chunk",
-	})
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if len(res.survivorIdx) != 1 {
-		t.Errorf("expected 1 survivor (cross-file dup filtered), got %d", len(res.survivorIdx))
+// A chunk whose text another FILE already stored must survive: dropping it
+// ties this file's content to the other file's lifecycle (delete B -> A
+// silently loses the chunk). Only same-batch repeats - same file - collapse.
+func TestDedupBatch_NeverConsultsOtherFiles(t *testing.T) {
+	res := dedupBatch([]string{"shared boilerplate", "unique", "shared boilerplate"})
+	if got, want := res.survivorIdx, []int{0, 1}; !slices.Equal(got, want) {
+		t.Fatalf("survivors = %v, want %v (in-batch repeat dropped, nothing else)", got, want)
 	}
 	if res.droppedCount != 1 {
-		t.Errorf("expected 1 dropped, got %d", res.droppedCount)
+		t.Fatalf("droppedCount = %d, want 1", res.droppedCount)
 	}
-	if lookup.calls != 1 {
-		t.Errorf("expected 1 lookup call, got %d", lookup.calls)
+	if len(res.hashes) != 2 || res.hashes[0] != vector.HashContent("shared boilerplate") {
+		t.Fatalf("hashes = %v, want parallel to survivors", res.hashes)
 	}
 }
 
 func TestDedupBatch_EmptyTextsNotDeduped(t *testing.T) {
-	res, _ := dedupBatch(context.Background(), nil, "kb", 1536, []string{
+	res := dedupBatch([]string{
 		"",
 		"  ",
 		"\n\t",
@@ -532,16 +522,8 @@ func TestDedupBatch_EmptyTextsNotDeduped(t *testing.T) {
 	}
 }
 
-func TestDedupBatch_NilLookupOnlyInBatch(t *testing.T) {
-	res, _ := dedupBatch(context.Background(), nil, "kb", 1536, []string{"A", "B", "A"})
-	if len(res.survivorIdx) != 2 {
-		t.Errorf("expected 2 survivors with nil lookup, got %d", len(res.survivorIdx))
-	}
-}
-
 func TestDedupBatch_AllNew(t *testing.T) {
-	lookup := &fakeHashLookup{existing: map[string]struct{}{}}
-	res, _ := dedupBatch(context.Background(), lookup, "kb", 1536, []string{"x", "y", "z"})
+	res := dedupBatch([]string{"x", "y", "z"})
 	if len(res.survivorIdx) != 3 {
 		t.Errorf("expected 3 survivors, got %d", len(res.survivorIdx))
 	}
@@ -977,8 +959,8 @@ func (s *gateTestStore) SetFileParseReport(context.Context, string, []byte) erro
 
 // The large-file gate test only ingests spreadsheets, which never reach the
 // screening hook — these three exist to satisfy ProcessorStore.
-func (s *gateTestStore) GetFileOrigin(context.Context, string) (string, error) {
-	return "upload", nil
+func (s *gateTestStore) GetFileScreeningInfo(context.Context, string) (string, string, error) {
+	return "upload", "", nil
 }
 func (s *gateTestStore) SetInjectionFlag(context.Context, string, []byte) error { return nil }
 func (s *gateTestStore) MarkInjectionScreenedClean(context.Context, string, []byte) error {
@@ -1003,6 +985,8 @@ func (s *gateTestStore) StageDetail(fileID string) string {
 	defer s.mu.Unlock()
 	return s.detail[fileID]
 }
+
+func (s *gateTestStore) SetIndexFingerprint(context.Context, string, string) error { return nil }
 
 var _ ProcessorStore = (*gateTestStore)(nil)
 
@@ -1196,49 +1180,5 @@ func TestWaitingIsVisibleInStageDetail(t *testing.T) {
 
 	if got := store.StageDetail("f1"); got != "" {
 		t.Errorf("stage detail after completion = %q, want cleared", got)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// dedupDimensions
-// ---------------------------------------------------------------------------
-
-// fakeDedupConfigStore is a minimal ai.ConfigStore that declares a single
-// embedding model with a caller-chosen Dimensions value, for exercising
-// dedupDimensions' resolver-backed path without a real AI provider.
-type fakeDedupConfigStore struct {
-	dims int
-}
-
-func (f *fakeDedupConfigStore) GetActiveAIProvider(ctx context.Context) (*ai.AIProviderInfo, error) {
-	return &ai.AIProviderInfo{ID: "test-provider", Name: "test", APIKey: "test-key", BaseURL: "http://example.invalid"}, nil
-}
-
-func (f *fakeDedupConfigStore) GetAIProviderByID(ctx context.Context, id string) (*ai.AIProviderInfo, error) {
-	return f.GetActiveAIProvider(ctx)
-}
-
-func (f *fakeDedupConfigStore) GetAIModelsByProvider(ctx context.Context, providerID string) ([]ai.AIModelInfo, error) {
-	return []ai.AIModelInfo{
-		{Name: "fake-embed", IsEmbedding: true, Dimensions: f.dims},
-	}, nil
-}
-
-func (f *fakeDedupConfigStore) GetKBModelOverrides(ctx context.Context, kbID string) (*ai.KBModelOverrides, error) {
-	return nil, nil
-}
-
-func TestDedupDimensions_FallsBackToLegacyWithoutResolver(t *testing.T) {
-	p := &Processor{}
-	if got := p.dedupDimensions(context.Background(), "kb"); got != legacyDedupDim {
-		t.Fatalf("nil resolver: want %d, got %d", legacyDedupDim, got)
-	}
-}
-
-func TestDedupDimensions_UsesDeclaredEmbeddingDimension(t *testing.T) {
-	resolver := ai.NewConfigResolver(&fakeDedupConfigStore{dims: 4096})
-	p := NewProcessor(nil, resolver, nil, &mockStore{})
-	if got := p.dedupDimensions(context.Background(), "kb"); got != 4096 {
-		t.Fatalf("declared 4096: want 4096, got %d", got)
 	}
 }

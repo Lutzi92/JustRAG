@@ -57,6 +57,9 @@ func TestQuestionRowsAreOnlyInsertedThroughTheSeam(t *testing.T) {
 				if !ok || !isAddMessageParams(lit) || roleOf(lit) != "user" {
 					continue
 				}
+				if questionInsertExempt[file] {
+					continue
+				}
 				questionInserts++
 				if calleeName(call) != seam {
 					offenders = append(offenders,
@@ -68,7 +71,8 @@ func TestQuestionRowsAreOnlyInsertedThroughTheSeam(t *testing.T) {
 	}
 
 	// Without this, deleting every question insert — or renaming the params
-	// struct — would leave the test passing over nothing.
+	// struct — would leave the test passing over nothing. Exempt files do
+	// not count: they alone must not satisfy it.
 	if questionInserts == 0 {
 		t.Fatal(`found no AddMessageParams{Role: "user"} anywhere — this guard no longer matches the code it protects`)
 	}
@@ -76,6 +80,13 @@ func TestQuestionRowsAreOnlyInsertedThroughTheSeam(t *testing.T) {
 		t.Errorf("question rows are built for a callee other than %s at %v; route them through %s instead, "+
 			"or a regenerate will persist a second copy of the user's question", seam, offenders, seam)
 	}
+}
+
+// questionInsertExempt lists files whose question inserts serve another
+// endpoint with no regenerate: the agent chat (POST /api/kb/{id}/agui/chat)
+// stores each new AG-UI user message once, and a resume stores none.
+var questionInsertExempt = map[string]bool{
+	"agentchat_hooks.go": true,
 }
 
 func isAddMessageParams(lit *ast.CompositeLit) bool {
