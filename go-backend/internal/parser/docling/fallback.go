@@ -51,5 +51,9 @@ func (p *FallbackParser) Parse(ctx context.Context, pctx parser.ParseContext) (*
 	if p.Fallback == nil {
 		return nil, err
 	}
-	return p.Fallback.Parse(ctx, pctx)
+	fres, ferr := p.Fallback.Parse(ctx, pctx)
+	if ferr == nil && fres != nil {
+		fres.Degraded = true
+	}
+	return fres, ferr
 }

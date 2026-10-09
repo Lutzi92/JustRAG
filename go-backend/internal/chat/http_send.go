@@ -69,6 +69,9 @@ type sendMessageRequest struct {
 	// Mutually exclusive; TeamID wins if both are set.
 	TeamID  string `json:"teamId"`
 	AgentID string `json:"agentId"`
+	// FileIDs selects the user-library files of a KB-less library chat turn
+	// (POST /api/library/chat, P3-R4). The KB send path ignores it.
+	FileIDs []string `json:"fileIds"`
 }
 
 // SanitizeParentMessageID returns a pointer to id when it is a valid UUID, and
@@ -269,7 +272,8 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// SQLSTATE 22P02 on both the ancestor lookup and the message insert, which
 	// silently drops the whole conversation history. Treating it as absent falls
 	// back to full-chat history instead.
-	parentMsgID := SanitizeParentMessageID(body.ParentMessageID)
+	// A parent from another chat is dropped the same way (cross-chat history).
+	parentMsgID := h.parentInChat(ctx, chatID, SanitizeParentMessageID(body.ParentMessageID))
 
 	// "Antwort neu generieren": no new question is written, the answer becomes
 	// a sibling of the one being replaced, and the turn re-answers the STORED

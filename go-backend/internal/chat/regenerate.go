@@ -110,6 +110,40 @@ type turnAnchor struct {
 	Regenerate *regenerateTurn
 }
 
+// messageChatChecker is the optional store surface parentInChat uses.
+// Satisfied by *PGStore.
+type messageChatChecker interface {
+	MessageInChat(ctx context.Context, messageID, chatID string) (bool, error)
+}
+
+// parentInChat drops a client-supplied parent message id that does not belong
+// to chatID, so the turn falls back to the chat's linear history instead of
+// walking (or storing a link into) another chat's conversation. Shared by the
+// KB and library send paths. A store without the check keeps the id; the
+// store itself still never walks or stores a cross-chat parent (AddMessage /
+// GetMessageAncestors are chat-scoped). A lookup error drops the id too.
+func (h *Handler) parentInChat(ctx context.Context, chatID string, parent *string) *string {
+	if parent == nil {
+		return nil
+	}
+	checker, ok := h.store.(messageChatChecker)
+	if !ok {
+		return parent
+	}
+	in, err := checker.MessageInChat(ctx, *parent, chatID)
+	if err != nil {
+		logctx.From(ctx).Warn("chat.send: parent message check failed; using linear history",
+			"chat_id", chatID, "error", err)
+		return nil
+	}
+	if !in {
+		logctx.From(ctx).Warn("chat.send: parent message is not in this chat; using linear history",
+			"chat_id", chatID)
+		return nil
+	}
+	return parent
+}
+
 // resolveTurnUserMessage returns the user message this turn's answer hangs
 // under. It is the single seam every answer path inserts questions through:
 // a regenerate reuses the stored row, any other turn inserts a new one.

@@ -26,6 +26,11 @@ e2e/.auth/
 !/docs/observability/
 /docs/observability/*
 !/docs/observability/docling.md
+# The frontend developer builds against these API contracts.
+!/docs/api-contracts/
+/docs/api-contracts/*
+!/docs/api-contracts/user-file-library.md
+!/docs/api-contracts/agent-chat.md
 !/docs/runbooks/
 /docs/runbooks/*
 !/docs/runbooks/hnsw-reindex.md

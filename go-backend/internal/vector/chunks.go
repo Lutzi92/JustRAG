@@ -312,6 +312,48 @@ type FileChunkRow struct {
 	ContextualPrefix string
 }
 
+// GetFileLeafTextAllDims returns a file's leaf chunks' content joined by a
+// blank line, in chunk order, from whichever dim-keyed table holds them.
+// "" when no table has chunks for the file. RAPTOR summaries
+// (node_kind='summary') are excluded: they are model-written, not document
+// text. Used by publish-time screening, which has no parsed text to read.
+func (s *ChunkService) GetFileLeafTextAllDims(ctx context.Context, kbID, fileID string) (string, error) {
+	dims, err := s.ListChunkTableDimensions(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, d := range dims {
+		table := GetVectorTableName(d)
+		// table comes from GetVectorTableName, never request data.
+		query := fmt.Sprintf(`
+			SELECT content
+			  FROM "%s"
+			 WHERE kb_id = $1::uuid AND file_id = $2::uuid AND node_kind = 'leaf'
+			 ORDER BY (metadata->>'chunkIndex')::int NULLS LAST, created_at`, table)
+		rows, err := s.vectorDB.Query(ctx, query, kbID, fileID)
+		if err != nil {
+			return "", fmt.Errorf("leaf text for file %s from %q: %w", fileID, table, err)
+		}
+		var parts []string
+		for rows.Next() {
+			var c string
+			if err := rows.Scan(&c); err != nil {
+				rows.Close()
+				return "", fmt.Errorf("scan leaf text: %w", err)
+			}
+			parts = append(parts, c)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return "", fmt.Errorf("iterate leaf text: %w", err)
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n\n"), nil
+		}
+	}
+	return "", nil
+}
+
 // GetChunksByFileID returns every chunk for the given (kb_id, file_id),
 // ordered by created_at ASC (insertion order). Used by the KG
 // extraction stage after AddDocumentChunks completes — the inserter
@@ -347,6 +389,37 @@ func (s *ChunkService) GetChunksByFileID(ctx context.Context, kbID, fileID strin
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate chunk rows: %w", err)
+	}
+	return out, nil
+}
+
+// GetLeafChunksByFileID is GetChunksByFileID restricted to node_kind='leaf'.
+// The KG stage reads through it so RAPTOR summary rows (model-written text,
+// present in an index copy before the graph is rebuilt) are never extracted.
+func (s *ChunkService) GetLeafChunksByFileID(ctx context.Context, kbID, fileID string, dimensions int) ([]FileChunkRow, error) {
+	table := GetVectorTableName(dimensions)
+	// table comes from GetVectorTableName, never request data.
+	query := fmt.Sprintf(`
+		SELECT id::text, content, COALESCE(contextual_prefix, '')
+		  FROM "%s"
+		 WHERE kb_id = $1::uuid AND file_id = $2::uuid AND node_kind = 'leaf'
+		 ORDER BY created_at ASC
+	`, table)
+	rows, err := s.vectorDB.Query(ctx, query, kbID, fileID)
+	if err != nil {
+		return nil, fmt.Errorf("get leaf chunks for file %s from %q: %w", fileID, table, err)
+	}
+	defer rows.Close()
+	out := make([]FileChunkRow, 0, 256)
+	for rows.Next() {
+		var r FileChunkRow
+		if err := rows.Scan(&r.ID, &r.Content, &r.ContextualPrefix); err != nil {
+			return nil, fmt.Errorf("scan leaf chunk row: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate leaf chunk rows: %w", err)
 	}
 	return out, nil
 }

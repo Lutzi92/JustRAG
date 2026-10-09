@@ -106,12 +106,15 @@ type ChatContextParams struct {
 
 // ChatSource represents a single source document surfaced in a chat response.
 type ChatSource struct {
-	Index    int     `json:"index"`
-	FileName string  `json:"fileName"`
-	FileID   string  `json:"fileId"`
-	Content  string  `json:"content"`
-	Score    float64 `json:"score"`
-	Pages    []int   `json:"pages"`
+	Index    int    `json:"index"`
+	FileName string `json:"fileName"`
+	FileID   string `json:"fileId"`
+	// UserFileID identifies the cited user-library file in a KB-less library
+	// chat (FileID stays empty there). Omitted for KB chats.
+	UserFileID string  `json:"userFileId,omitempty"`
+	Content    string  `json:"content"`
+	Score      float64 `json:"score"`
+	Pages      []int   `json:"pages"`
 	// ChunkID is the original chunk row id (UUID text). Populated by
 	// every orchestrator when the source is built. Not serialised to
 	// the frontend (the user only sees Content) — used internally by

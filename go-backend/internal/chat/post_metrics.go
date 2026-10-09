@@ -81,6 +81,10 @@ func agentOutcomeFromEvents(events []map[string]any) (outcome string, hops int, 
 // only populate the buffer `if streamMode`, so outcome falls back to
 // "answered" on every non-streaming standard-path turn regardless of mode.
 func (h *Handler) recordStandardPathDecision(ctx context.Context, p chatResponseParams, events []map[string]any) {
+	// agent_decisions is KB-scoped: a library turn never writes a row (P3-R5).
+	if p.library {
+		return
+	}
 	outcome, _, _ := agentOutcomeFromEvents(events)
 	if outcome == "" {
 		outcome = "answered"

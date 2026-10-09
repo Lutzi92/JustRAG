@@ -7,6 +7,9 @@ type FileProcessingPayload struct {
 	FilePath     string `json:"filePath"`
 	OriginalName string `json:"originalName"`
 	MimeType     string `json:"mimetype"`
+	// UserFileID is set only by the library enqueue paths (add-from-library,
+	// upload re-route); empty for every other producer and for retries.
+	UserFileID string `json:"userFileId,omitempty"`
 }
 
 // TextProcessingPayload is the JSON payload for a text-processing job.
@@ -99,4 +102,11 @@ type KGCommunitiesBuildPayload struct {
 // hands off to TypeEvalRun.
 type EvalScheduledPayload struct {
 	GoldenSetID string `json:"golden_set_id"`
+}
+
+// KBScreeningPayload is the TypeKBScreening task body: screen a KB's
+// never-screened user-added files after it was published (user file
+// library spec §11.2).
+type KBScreeningPayload struct {
+	KbID string `json:"kbId"`
 }

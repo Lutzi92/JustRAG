@@ -59,6 +59,12 @@ type Stats struct {
 	SummariesAdded int
 	LLMCalls       int
 	DurationMs     int64
+	// FailedClusters counts clusters whose summary was dropped (summariser,
+	// embedder or insert failure, cancellation) plus levels abandoned because
+	// clustering failed. Non-zero means the tree is incomplete relative to
+	// what the config promises; a below-MinChunks skip leaves it 0 (no tree
+	// by design).
+	FailedClusters int
 }
 
 // BuilderInterface is the seam the processor uses to inject a
@@ -157,12 +163,14 @@ func (b *Builder) Build(ctx context.Context, p BuildParams) (Stats, error) {
 			logctx.From(ctx).Warn("raptor.build.cluster_failed",
 				"fileId", p.FileID, "level", level, "err", cErr,
 				"algorithm", b.cfg.ClusteringAlgorithm)
+			stats.FailedClusters++
 			break
 		}
 
 		levelSummaries, levelCalls := b.summariseLevel(ctx, p, level, clusters, contentByID)
 		stats.LLMCalls += levelCalls
 		stats.SummariesAdded += len(levelSummaries)
+		stats.FailedClusters += len(clusters) - len(levelSummaries)
 		stats.LevelsBuilt = level
 
 		logctx.From(ctx).Info("raptor.build.level",

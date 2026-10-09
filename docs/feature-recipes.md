@@ -33,6 +33,8 @@ chat_answer_tools_max_rounds     = 5           # valid range [1,10]
 
 Migration **0043**. Composable with `chat_plan_execute_tool_aware`. KB chat model MUST support native `tools` + `tool_calls` (verified on gemma-4-26b-A4B-it). **Known limit:** models emitting `<think>` inline (vs `reasoning_content`) leak reasoning into the answer.
 
+**Security note — `sql_query` is not user-scoped (pre-existing).** When `JUSTRAG_DB_URL_READONLY` is set, the `sql_query` tool is in the answer-time catalog and its default allowlist covers `messages` and `chats` with no per-user or per-KB filter: any chat user's model can run an ad-hoc `SELECT … FROM messages` and read other users' answers and `messages.sources`. Since user-file-library phase 3 those sources include **library chats' private file text** (each source's `content`, capped to 600 runes). On a multi-user deployment that uses library chat, either leave `sql_query` unavailable (no read-only DSN, or exclude it per route with `chat_answer_tools_by_route`) or `REVOKE SELECT ON messages, chats` from the read-only role. Library chat turns themselves never get answer tools.
+
 ## Per-user long-term memory + Self-RAG
 
 ```
@@ -794,9 +796,9 @@ ingest_screening_enabled     = true    # kill switch; default ON — it is a FLA
 ingest_screening_window_runes = 600    # [100,5000]; sliding window, step = window/2
 ```
 
-Migration **0072** (`files.injection_flag`, `files.injection_detail`). One `promptsafety.ScreenText` pass over the parsed text of every externally sourced file, **before chunking**. Screened origins: `rss`, `confluence`, `git`, `crawl`. **Not** screened: user uploads (their own content) and spreadsheets (row records are not prose — an explicit guard, not a parse-branch accident, since a spreadsheet with no tabular ingester wired falls through the same branch a PDF takes).
+Migration **0072** (`files.injection_flag`, `files.injection_detail`). One `promptsafety.ScreenText` pass over the parsed text of every externally sourced file, **before chunking**. Screened origins: `rss`, `confluence`, `git`, `crawl` (always), plus the user-added `upload`, `text`, `url`, `research` (academic import) **only when the owning KB is public** (`processor.ShouldScreen`; user file library phase 0). **Not** screened: user files in a private KB (their own content) and spreadsheets (row records are not prose — an explicit guard, not a parse-branch accident, since a spreadsheet with no tabular ingester wired falls through the same branch a PDF takes).
 
-It changes nothing about the corpus: ingestion, chunking, embedding and retrieval are byte-for-byte identical whether the screen fires or not, and answer-time spotlighting is unchanged. The kill switch is checked **before** the origin lookup, so `false` costs exactly zero store calls.
+It changes nothing about the corpus: ingestion, chunking, embedding and retrieval are byte-for-byte identical whether the screen fires or not, and answer-time spotlighting is unchanged. The kill switch is checked **before** the origin lookup, so `false` costs exactly zero store calls. Publishing a KB (`POST /api/admin/kb/{id}/publish`) enqueues a `kb-screening` task (batch queue, 30 min timeout) that screens the KB's never-screened `upload`/`text`/`url`/`research` files (status completed/partial) from their stored leaf-chunk text, without re-parsing; spreadsheets and chunk-less files are skipped, and `position` in those details is an offset into the joined chunk text.
 
 **The rule set is not `LooksLikeInstruction`.** That heuristic carries an `https?://` alternative; an external document without a single URL barely exists, so inheriting it would flag essentially everything, which is informationally identical to flagging nothing. Screening therefore uses its own `screenRules` — the same alternatives **minus the URL one** — and `LooksLikeInstruction` plus its existing callers are untouched. The rule names are a **persisted contract** (they land in the column and the UI reads them): `ignore_previous`, `disregard`, `system_prompt`, `role_override`, `assistant_turn`, `chat_template`, `do_not_follow`, `new_instructions`. First hit in a window wins.
 

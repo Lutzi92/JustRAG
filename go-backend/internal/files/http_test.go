@@ -31,6 +31,7 @@ var (
 )
 
 type mockStore struct {
+	created         []files.CreateFileData
 	file            *files.FileInfo
 	fileErr         error
 	kb              *kbaccess.KnowledgeBase
@@ -50,6 +51,12 @@ type mockStore struct {
 	errorFiles      []*files.FileInfo
 	markedStage     string
 	markedMsg       string
+	copies          map[string]string // userFileID -> existing files row id (GetKBCopy)
+	copyErr         error
+}
+
+func (m *mockStore) GetKBCopy(_ context.Context, _, userFileID string) (string, error) {
+	return m.copies[userFileID], m.copyErr
 }
 
 func (m *mockStore) ResetFileForRetry(_ context.Context, _ string) (bool, error) {
@@ -96,6 +103,7 @@ func (m *mockStore) GetKBFileLimits(_ context.Context, _ string) (*files.KBFileL
 }
 
 func (m *mockStore) CreateFile(_ context.Context, data files.CreateFileData) (*files.FileRecord, error) {
+	m.created = append(m.created, data)
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
@@ -114,6 +122,7 @@ func (m *mockStore) CreateFile(_ context.Context, data files.CreateFileData) (*f
 		Progress:    0,
 		Origin:      data.Origin,
 		StoragePath: &sp,
+		UserFileID:  data.UserFileID,
 		CreatedAt:   time.Now(),
 	}, nil
 }
@@ -136,11 +145,12 @@ func (m *mockStorage) ReadFile(_ context.Context, _ string) ([]byte, error) { re
 func (m *mockStorage) ReadFileStream(_ context.Context, _ string) (io.ReadCloser, error) {
 	return m.stream, m.streamErr
 }
-func (m *mockStorage) DeleteFile(_ context.Context, _ string) error         { return m.deleteErr }
-func (m *mockStorage) DeleteFiles(_ context.Context, _ []string) error      { return m.deleteErr }
-func (m *mockStorage) DeleteDirectory(_ context.Context, _ string) error    { return nil }
-func (m *mockStorage) FileExists(_ context.Context, _ string) (bool, error) { return true, nil }
-func (m *mockStorage) IsS3() bool                                           { return false }
+func (m *mockStorage) DeleteFile(_ context.Context, _ string) error               { return m.deleteErr }
+func (m *mockStorage) DeleteFiles(_ context.Context, _ []string) error            { return m.deleteErr }
+func (m *mockStorage) DeleteDirectory(_ context.Context, _ string) error          { return nil }
+func (m *mockStorage) FileExists(_ context.Context, _ string) (bool, error)       { return true, nil }
+func (m *mockStorage) IsS3() bool                                                 { return false }
+func (m *mockStorage) List(context.Context, string) ([]storage.ObjectInfo, error) { return nil, nil }
 
 // ---------------------------------------------------------------------------
 // Mock ChunkDeleter
@@ -734,5 +744,25 @@ func TestUploadMaxBytesErrorIs413(t *testing.T) {
 
 	if rr.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413 (was 400 before)", rr.Code)
+	}
+}
+
+// Every user-initiated ingest path must record who added the file — the
+// user file library (phase 1) and the uploadedBy column both key on it.
+func TestUpload_RecordsUploader(t *testing.T) {
+	ownerID := "user-1"
+	kb := &kbaccess.KnowledgeBase{ID: "kb-1", UserID: &ownerID}
+	store := &mockStore{}
+	h := files.NewHandler(store, &mockStorage{}, noopChunks())
+
+	req := withKBAccess(withUser(buildMultipartRequest(t, "document.pdf", []byte("PDF content")), ownerUser()), kb)
+	rr := httptest.NewRecorder()
+	h.Upload(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if len(store.created) != 1 || store.created[0].UploadedBy != ownerUser().ID {
+		t.Fatalf("CreateFile got %+v, want UploadedBy=%q", store.created, ownerUser().ID)
 	}
 }

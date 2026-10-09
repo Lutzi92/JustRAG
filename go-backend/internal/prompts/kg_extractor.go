@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+// KGPromptVersion keys the per-library-file KG extraction cache. Bump it on
+// ANY change to the KG extractor prompts so stale cached extractions miss.
+const KGPromptVersion = 1
+
 // KGExtractorSystemPrompt is the AP-C1 entity + relation extractor.
 // Asks the LLM to walk one chunk and emit named entities (people,
 // orgs, projects, documents, concepts) plus the relations between

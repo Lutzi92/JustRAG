@@ -45,6 +45,7 @@ func (nopStorage) DeleteFiles(context.Context, []string) error                  
 func (nopStorage) DeleteDirectory(context.Context, string) error                 { return nil }
 func (nopStorage) FileExists(context.Context, string) (bool, error)              { return false, nil }
 func (nopStorage) IsS3() bool                                                    { return false }
+func (nopStorage) List(context.Context, string) ([]storage.ObjectInfo, error)    { return nil, nil }
 
 // unreachableAsynqClient points at a closed port: every Enqueue fails fast and
 // the sync path only logs enqueue failures, so these tests need no Redis.

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -22,8 +21,9 @@ import (
 	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/logctx"
-	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/storage"
+	"github.com/justrag/go-backend/internal/uploadcheck"
+	"github.com/justrag/go-backend/internal/userfiles"
 )
 
 // ---------------------------------------------------------------------------
@@ -53,6 +53,17 @@ type CreateFileData struct {
 	// it — the RSS poller, from the feed item's PublishedParsed (W3-R9);
 	// everything else leaves it nil and the column stays NULL.
 	PublishedAt *time.Time
+	// UploadedBy is the users.id of the person who added the file (user file
+	// library, phase 0, migration 0075). Set by every user-initiated ingest
+	// path (upload, text, url, crawl, research/academic import); empty for
+	// source-owned origins (rss, confluence, git), which the store writes
+	// as NULL.
+	UploadedBy string
+	// UserFileID links the row to the uploader's library file
+	// (files.user_file_id, migration 0076); empty writes NULL. A linked row
+	// shares the library's blob, so its storage_path is never deleted by a
+	// files-row cleanup.
+	UserFileID string
 }
 
 // FileRecord is the full file row returned after creation.
@@ -66,6 +77,7 @@ type FileRecord struct {
 	Progress    int       `json:"progress"`
 	Origin      string    `json:"origin"`
 	StoragePath *string   `json:"-"` // not exposed to clients
+	UserFileID  string    `json:"userFileId,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
@@ -87,6 +99,9 @@ type Store interface {
 	GetKBRole(ctx context.Context, kbID, userID string) (string, error)
 	CreateFile(ctx context.Context, data CreateFileData) (*FileRecord, error)
 	GetKBFileLimits(ctx context.Context, kbID string) (*KBFileLimits, error)
+	// GetKBCopy returns the id of kbID's files row backed by library file
+	// userFileID, or "" when there is none.
+	GetKBCopy(ctx context.Context, kbID, userFileID string) (string, error)
 	// Retry support (see http_retry.go).
 	ResetFileForRetry(ctx context.Context, fileID string) (bool, error)
 	ListErrorFiles(ctx context.Context, kbID string) ([]*FileInfo, error)
@@ -127,8 +142,22 @@ type Handler struct {
 	queryCache   QueryCacheInvalidator
 	kgEvents     kgFileEventer
 	tableDropper TableDropper
+	fileDeleter  FileDeleter
 	uploadLimits UploadLimits
+	library      Library
+	adopter      FileAdopter
 }
+
+// Library is the userfiles surface the files handler needs.
+type Library interface {
+	Ingest(ctx context.Context, ownerID string, up *uploadcheck.Upload) (*userfiles.UserFile, bool, error)
+	Get(ctx context.Context, ownerID, id string) (*userfiles.UserFile, error)
+}
+
+// SetLibrary routes KB uploads through the user's file library and enables
+// AddFromLibrary. When nil, Upload keeps its pre-library behaviour (blob
+// stored per KB).
+func (h *Handler) SetLibrary(lib Library) { h.library = lib }
 
 // UploadLimits resolves ingest/upload sizing knobs for the upload handler.
 // Narrow by design: internal/files must not import internal/chat (the
@@ -137,12 +166,9 @@ type Handler struct {
 // shared chat.SiteConfigReader and calls chat.TabularMaxFileBytes. Optional
 // — when nil (or when TabularMaxFileBytes returns <= 0), Upload skips the
 // spreadsheet-specific size check entirely; the transport-wide
-// http.MaxBytesReader cap (maxUploadSize) still applies to every file.
-type UploadLimits interface {
-	// TabularMaxFileBytes returns the configured maximum size, in bytes, for
-	// an uploaded spreadsheet.
-	TabularMaxFileBytes(ctx context.Context) int
-}
+// http.MaxBytesReader cap (uploadcheck.MaxUploadSize) still applies to every
+// file. The interface itself lives in internal/uploadcheck.
+type UploadLimits = uploadcheck.Limits
 
 // SetUploadLimits injects the upload/ingest sizing-knob resolver so Upload
 // can reject an oversize spreadsheet with a 413 naming the configured
@@ -189,6 +215,16 @@ type kgFileEventer interface {
 // SetKGFileEventer injects the KG cleanup + mindmap-notify hook for file
 // deletes. Optional.
 func (h *Handler) SetKGFileEventer(e kgFileEventer) { h.kgEvents = e }
+
+// FileDeleter removes files rows and everything indexed for them.
+// *cascade.Deleter satisfies it.
+type FileDeleter interface {
+	DeleteFiles(ctx context.Context, fileIDs []string) error
+}
+
+// SetFileDeleter injects the shared per-file cleanup. When set, Delete
+// delegates to it after its auth checks; when nil the inline path is used.
+func (h *Handler) SetFileDeleter(d FileDeleter) { h.fileDeleter = d }
 
 // SetTableDropper injects the spreadsheet table cleanup hook for file
 // deletes. Optional — nil leaves materialised tables in place.
@@ -260,43 +296,10 @@ func NewHandlerWithEnqueuer(store Store, stor storage.Storage, chunkSvc ChunkDel
 // Upload helpers
 // ---------------------------------------------------------------------------
 
-// maxUploadSize is the hard transport cap http.MaxBytesReader enforces
-// against every upload, regardless of file type — a package var (not a
-// const) so a test can shrink it via SetMaxUploadSizeForTest (export_test.go)
-// without a 500 MB request body. Production code never mutates it; it keeps
-// its 500 MB default for the life of the process.
-var maxUploadSize int64 = 500 << 20 // 500 MB
-
-// humanBytes renders n as a human-readable KB/MB/GB size with one decimal
-// place, trimming a trailing ".0" (500.0 MB -> "500 MB") so exact values
-// read cleanly. Values under 1 KB render as whole bytes.
-func humanBytes(n int64) string {
-	const (
-		kb = 1 << 10
-		mb = 1 << 20
-		gb = 1 << 30
-	)
-	var unit string
-	var div float64
-	switch {
-	case n >= gb:
-		unit, div = "GB", gb
-	case n >= mb:
-		unit, div = "MB", mb
-	case n >= kb:
-		unit, div = "KB", kb
-	default:
-		return fmt.Sprintf("%d B", n)
-	}
-	s := strconv.FormatFloat(float64(n)/div, 'f', 1, 64)
-	s = strings.TrimSuffix(s, ".0")
-	return s + " " + unit
-}
-
 // maxFileNameBytes bounds the user-supplied file name / text-source title.
 // Matches the files.name varchar(255) column so over-long values are rejected
 // with a 400 rather than failing as a DB constraint violation (500).
-const maxFileNameBytes = 255
+const maxFileNameBytes = uploadcheck.MaxFileNameBytes
 
 // sanitizeContentDispositionFilename strips double-quotes and control
 // characters from a stored file name before it is interpolated into the
@@ -316,22 +319,6 @@ const (
 	maxFilesPerGlobalKB = 1000
 	maxTotalSizePerKB   = 500 << 20 // 500 MB
 )
-
-// dangerousExtensions is the set of file extensions that are rejected on upload.
-// Matches the Node.js blocklist to prevent XSS and code execution via uploaded files.
-var dangerousExtensions = map[string]bool{
-	// Executables & scripts
-	".exe": true, ".bat": true, ".cmd": true, ".com": true,
-	".sh": true, ".bash": true, ".ps1": true, ".psm1": true, ".psd1": true,
-	".vbs": true, ".msi": true, ".dll": true, ".scr": true, ".hta": true,
-	".wsf": true, ".wsh": true, ".jar": true,
-	// Web / scripting languages
-	".js": true, ".mjs": true, ".cjs": true, ".ts": true,
-	".html": true, ".htm": true, ".xhtml": true, ".phtml": true,
-	".xml": true, ".svg": true,
-	".php": true, ".pl": true, ".py": true, ".rb": true,
-	".asp": true, ".aspx": true, ".jsp": true, ".jspx": true,
-}
 
 // safeFilenameRe matches characters that are allowed in a sanitized filename.
 var safeFilenameRe = regexp.MustCompile(`[^a-zA-Z0-9 .\-_]`)
@@ -508,6 +495,17 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Production path: the shared cascade cleanup (chunks, parents, HyPE,
+	// tabular, guarded blob delete, row, KG hook, query cache).
+	if h.fileDeleter != nil {
+		if err := h.fileDeleter.DeleteFiles(r.Context(), []string{fileID}); err != nil {
+			httputil.WriteErrorCtx(r.Context(), w, http.StatusInternalServerError, "Failed to delete file record")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	// Delete vector chunks across every existing chunk table (best effort).
 	_ = h.chunkService.DeleteChunksByFileIDAllDims(r.Context(), fileID)
 
@@ -551,96 +549,20 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Enforce hard 500 MB request body limit, then parse multipart form.
-	// MaxBytesReader rejects bodies exceeding the cap (ParseMultipartForm's
-	// argument only controls the in-memory buffering threshold, not the total size).
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
-	if err := r.ParseMultipartForm(32 << 20); err != nil { // 32 MB in-memory threshold
-		logctx.From(r.Context()).Warn("upload: parse multipart form failed", "error", err)
-		// Ruling R70: the transport-wide body cap is a 413 for EVERY upload,
-		// not a 400 — the previous "File too large or invalid multipart
-		// form" message conflated the two and always answered 400, even
-		// when the body was rejected purely for size by MaxBytesReader.
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusRequestEntityTooLarge,
-				fmt.Sprintf("File too large: the upload limit is %s", humanBytes(mbe.Limit)))
-			return
-		}
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "Invalid multipart form")
-		return
-	}
-
-	// 2. Get the file from the form.
-	uploadedFile, header, err := r.FormFile("file")
+	// 1-3d. Parse the multipart form and run every content check (size cap,
+	// empty, extension, filename length, spreadsheet gate).
+	up, err := uploadcheck.Parse(w, r, h.uploadLimits)
 	if err != nil {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "File field is required")
-		return
-	}
-	defer uploadedFile.Close()
-
-	// 3a. Reject empty files.
-	if header.Size == 0 {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "File must not be empty")
-		return
-	}
-
-	// 3b. Reject dangerous extensions.
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if dangerousExtensions[ext] {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, "File type not allowed")
-		return
-	}
-
-	// 3b-ii. Reject unsupported file types up front. Without this, an
-	// unsupported binary (e.g. a legacy .doc) passes the blocklist and is
-	// queued for ingestion, where it either fails to parse — leaving a file
-	// stuck in the KB with an error — or falls through to the text catch-all
-	// parser and is indexed as garbage. Rejecting here keeps the KB clean.
-	if !parser.IsSupportedExtension(header.Filename) {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest,
-			fmt.Sprintf("File type not supported (%s)", ext))
-		return
-	}
-
-	// 3c. Reject over-long names up front. files.name is varchar(255); without
-	// this check an over-long filename surfaces as a DB constraint violation
-	// (HTTP 500) instead of a clean validation error.
-	if len(header.Filename) > maxFileNameBytes {
-		httputil.WriteErrorCtx(r.Context(), w, http.StatusBadRequest, fmt.Sprintf("Filename must not exceed %d bytes", maxFileNameBytes))
-		return
-	}
-
-	// Detect MIME type from extension (fall back to octet-stream). Computed
-	// here — before the spreadsheet size gate below — and reused verbatim at
-	// the storage step further down, so the gate and the processor's later
-	// CanParse(mimeType, fileName) call (internal/processor/processor.go)
-	// agree on the same predicate. Previously this gate called
-	// CanParse("", header.Filename) (extension only) while the processor
-	// called CanParse(mimeType, fileName); on a host whose MIME database maps
-	// a legacy extension like .xlt/.xlm/.xla/.xlc/.xlw to
-	// "application/vnd.ms-excel" (in parser.spreadsheetMIMEs), CanParse
-	// matches only via the MIME argument — the extension switch does not
-	// include those — so such a file skipped this 413 check but was still
-	// routed into tabular/ingest by the processor.
-	mimeType := mime.TypeByExtension(ext)
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-
-	// 3d. Reject oversize spreadsheets against the tabular_max_file_bytes
-	// knob. Spreadsheet-specific: the materializer, not the generic
-	// chunk/embed ingest path, is what an oversize spreadsheet would blow up
-	// (memory-buffered parsing), so this does NOT apply to other file
-	// types — those stay governed only by maxUploadSize / maxTotalSizePerKB.
-	if h.uploadLimits != nil && (&parser.SpreadsheetParser{}).CanParse(mimeType, header.Filename) {
-		if limit := h.uploadLimits.TabularMaxFileBytes(r.Context()); limit > 0 && header.Size > int64(limit) {
-			httputil.WriteErrorCtx(r.Context(), w, http.StatusRequestEntityTooLarge,
-				fmt.Sprintf("Spreadsheet too large (%s): the limit is %s (tabular_max_file_bytes)",
-					humanBytes(header.Size), humanBytes(int64(limit))))
+		var ve *uploadcheck.Error
+		if errors.As(err, &ve) {
+			httputil.WriteErrorCtx(r.Context(), w, ve.Status, ve.Message)
 			return
 		}
+		httputil.WriteInternalErrorCtx(r.Context(), w, err)
+		return
 	}
+	defer up.File.Close()
+	uploadedFile, header, mimeType := up.File, up.Header, up.MimeType
 
 	// 4. Get KB ID from kbaccess context.
 	kbID := r.PathValue("id")
@@ -675,6 +597,11 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.library != nil {
+		h.uploadViaLibrary(w, r, user, kbID, up)
+		return
+	}
+
 	// 5. Get username from auth context.
 	username := user.Username
 
@@ -694,6 +621,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	fileSize := int(header.Size)
 	fileRecord, err := h.store.CreateFile(r.Context(), CreateFileData{
 		KbID:        kbID,
+		UploadedBy:  user.ID,
 		Name:        header.Filename,
 		Type:        mimeType,
 		Size:        fileSize,

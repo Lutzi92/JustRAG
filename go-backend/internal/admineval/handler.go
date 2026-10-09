@@ -174,6 +174,7 @@ var snapshotConfigKeys = []string{
 	"step_back_enabled",
 	"chat_condense_keep_raw_enabled",
 	"adaptive_routing_enabled",
+	"chat_agent_chat_enabled",
 	"chat_supervisor_enabled",
 	"chat_plan_execute_enabled",
 	"chat_agentic_enabled",

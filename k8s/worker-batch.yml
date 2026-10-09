@@ -24,12 +24,15 @@ spec:
       # - name: ghcr-secret
       containers:
       - name: worker
-        # Literal pin: k8s manifests have no variable interpolation. Bump
-        # this to deploy; revert it to roll back. imagePullPolicy is
-        # explicit because k8s defaults to Always for floating tags, which
-        # is how a node eviction used to move prod forward on its own.
-        image: ghcr.io/lutzi92/justrag:v0.11.1
-        imagePullPolicy: IfNotPresent
+        # `:stable` moves only when a release candidate that passed staging is
+        # promoted (.github/workflows/promote-release.yml), and the runbook runs
+        # the migrations BEFORE promoting — so a pod that restarts on its own
+        # can only land on a tested release whose schema is already in place.
+        # `Always` is required: with IfNotPresent a node that has an older
+        # `:stable` cached keeps running it, and pods end up on different
+        # releases. Deploy = `kubectl rollout restart` after promoting.
+        image: ghcr.io/ki4jlu/justrag:stable
+        imagePullPolicy: Always
         command: ["/app/worker"]
         envFrom:
         - configMapRef:

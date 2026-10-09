@@ -21,7 +21,7 @@ func Open(path, fileName string) (Source, error) {
 	case ".ods":
 		return OpenODS(path)
 	case ".csv", ".tsv":
-		return OpenCSV(path)
+		return OpenCSVNamed(path, fileName)
 	}
 	return nil, ErrUnsupported
 }

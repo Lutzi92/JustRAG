@@ -31,7 +31,7 @@ COPY web/ ./web/
 RUN cd web && npm run build
 
 # ── Stage 2: Build the Go binaries ───────────────────────────────────────────
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.9-alpine AS builder
 WORKDIR /build
 
 # Default to a mirror that serves module zips directly. Networks here block

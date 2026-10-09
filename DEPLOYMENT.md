@@ -38,7 +38,7 @@ The overlay disables the default `go-worker` service and scales dedicated worker
 ## Quick Start
 
 ```bash
-git clone https://github.com/Lutzi92/JustRAG.git
+git clone https://github.com/KI4JLU/JustRAG.git
 cd JustRAG
 cp .env.docker .env
 docker compose up -d

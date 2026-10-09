@@ -320,6 +320,14 @@ func TestLeaveKB_DeletesOwnChatsOnly(t *testing.T) {
 
 	leaverChat := insertChat(t, pool, kbID, leaver)
 	stayerChat := insertChat(t, pool, kbID, stayer)
+	// Agent-chat ADK sessions keyed by the chat id (final review item 4).
+	for _, c := range []struct{ user, chat string }{{leaver, leaverChat}, {stayer, stayerChat}} {
+		mustExec(t, pool, `INSERT INTO adk_sessions (app_name, user_id, id, update_time) VALUES ('agentchat', $1, $2, now())`, c.user, c.chat)
+		mustExec(t, pool, `INSERT INTO adk_events (app_name, user_id, session_id, id, ts, body) VALUES ('agentchat', $1, $2, 'e1', now(), '{}')`, c.user, c.chat)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM adk_sessions WHERE app_name = 'agentchat' AND id = ANY($1)`, []string{leaverChat, stayerChat})
+	})
 
 	deleted, err := store.LeaveKB(context.Background(), kbID, leaver)
 	if err != nil {
@@ -342,6 +350,16 @@ func TestLeaveKB_DeletesOwnChatsOnly(t *testing.T) {
 	}
 	if memberCount != 0 {
 		t.Fatalf("leaver's membership should be deleted, got %d rows", memberCount)
+	}
+	var leaverSessions, leaverEvents, stayerSessions int
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM adk_sessions WHERE id = $1`, leaverChat).Scan(&leaverSessions)
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM adk_events WHERE session_id = $1`, leaverChat).Scan(&leaverEvents)
+	mustQueryRow(t, pool, `SELECT COUNT(*) FROM adk_sessions WHERE id = $1`, stayerChat).Scan(&stayerSessions)
+	if leaverSessions != 0 || leaverEvents != 0 {
+		t.Fatalf("leaver's ADK session should be deleted, got %d sessions, %d events", leaverSessions, leaverEvents)
+	}
+	if stayerSessions != 1 {
+		t.Fatalf("stayer's ADK session should survive, got %d rows", stayerSessions)
 	}
 }
 

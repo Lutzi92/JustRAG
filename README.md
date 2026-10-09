@@ -1,7 +1,7 @@
 # JustRAG
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Docker Build](https://github.com/Lutzi92/JustRAG/actions/workflows/docker-image.yml/badge.svg)](https://github.com/Lutzi92/JustRAG/actions/workflows/docker-image.yml)
+[![Docker Build](https://github.com/KI4JLU/JustRAG/actions/workflows/docker-image.yml/badge.svg)](https://github.com/KI4JLU/JustRAG/actions/workflows/docker-image.yml)
 
 Self-hosted retrieval-augmented generation for teams that need searchable knowledge bases, branching chat, research workflows, and generated study material.
 
@@ -57,7 +57,7 @@ The default Compose stack runs:
 - `minio`
 
 ```bash
-git clone https://github.com/Lutzi92/JustRAG.git
+git clone https://github.com/KI4JLU/JustRAG.git
 cd JustRAG
 cp .env.docker .env
 docker compose up -d

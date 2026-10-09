@@ -18,6 +18,7 @@ import (
 	"github.com/justrag/go-backend/internal/fetcher"
 	"github.com/justrag/go-backend/internal/files"
 	"github.com/justrag/go-backend/internal/kbaccess"
+	"github.com/justrag/go-backend/internal/storage"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,6 +26,7 @@ import (
 // ---------------------------------------------------------------------------
 
 type stubStore struct {
+	created    []files.CreateFileData
 	siteConfig map[string]string
 	createErr  error
 	fileErr    error
@@ -70,6 +72,7 @@ func (s *stubStore) CreateResearchSession(_ context.Context, kbID, userID, goal,
 }
 
 func (s *stubStore) CreateFile(_ context.Context, data files.CreateFileData) (*files.FileRecord, error) {
+	s.created = append(s.created, data)
 	if s.fileErr != nil {
 		return nil, s.fileErr
 	}
@@ -142,6 +145,9 @@ func (s *stubStorage) FileExists(_ context.Context, path string) (bool, error) {
 	return ok, nil
 }
 func (s *stubStorage) IsS3() bool { return false }
+func (s *stubStorage) List(context.Context, string) ([]storage.ObjectInfo, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // Helper: inject a fake user into request context.
