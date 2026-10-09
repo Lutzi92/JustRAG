@@ -218,3 +218,14 @@ func (h *HyPEStore) DeleteByFileIDsAllDims(ctx context.Context, fileIDs []string
 	}
 	return nil
 }
+
+// DeleteHyPEByFileIDAllDims removes fileID's HyPE rows from the HyPE table of
+// every existing chunk-table dimension (a missing HyPE table is ignored).
+// Used by the worker's copy-failure cleanup.
+func (s *ChunkService) DeleteHyPEByFileIDAllDims(ctx context.Context, fileID string) error {
+	dims, err := s.ListChunkTableDimensions(ctx)
+	if err != nil {
+		return err
+	}
+	return NewHyPEStore(s.vectorDB).DeleteByFileIDsAllDims(ctx, []string{fileID}, dims)
+}

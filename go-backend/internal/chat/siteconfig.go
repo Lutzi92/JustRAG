@@ -688,6 +688,15 @@ func ChatLongContextMaxTokens(ctx context.Context, reader SiteConfigReader) int 
 	return readInt(ctx, reader, "chat_longcontext_max_tokens", 100_000, 10_000, 500_000)
 }
 
+// ChatLibraryFulltextMaxTokens is the total-token ceiling under which a
+// KB-less library chat injects the selected files' full text. Above it (and
+// up to ChatLongContextMaxTokens) the map_reduce consumer is used. The value must leave room for the chat
+// history and the answer below the answer model's context window. Global-only
+// ("chat_library_fulltext_max_tokens"), default 60000, range [4000, 200000].
+func ChatLibraryFulltextMaxTokens(ctx context.Context, reader SiteConfigReader) int {
+	return readInt(ctx, reader, "chat_library_fulltext_max_tokens", 60_000, 4_000, 200_000)
+}
+
 // ChatLongContextTopK is the chunk-pool size Search() returns on the
 // long-context route. Default 200 (the historical constant), range [50, 500].
 // Wave-3's map-reduce consumer tunes this against the token budget. Tunable
@@ -774,6 +783,12 @@ func ChatCommunitySearchTopK(ctx context.Context, reader SiteConfigReader) int {
 // Default off.
 func ChatDriftEnabled(ctx context.Context, reader SiteConfigReader) bool {
 	return readBool(ctx, reader, "chat_drift_enabled", false)
+}
+
+// ChatAgentChatEnabled gates the agentic chat endpoint
+// (POST /api/kb/{id}/agui/chat) for a KB. Default off.
+func ChatAgentChatEnabled(ctx context.Context, r SiteConfigReader) bool {
+	return readBool(ctx, r, "chat_agent_chat_enabled", false)
 }
 
 // ChatDriftMaxFollowups caps how many follow-up sub-questions DRIFT
@@ -1292,6 +1307,20 @@ func ChatAnswerToolsMaxRounds(ctx context.Context, reader SiteConfigReader) int 
 	return readInt(ctx, reader, "chat_answer_tools_max_rounds", 5, 1, 10)
 }
 
+// ChatWebSearchEnabled is the admin gate for the per-turn web-search opt-in
+// (the chat request's webSearch field). GLOBAL-ONLY: it has no
+// kbConfigRegistry row, so a per-KB or per-agent overlay can never switch it
+// on. Default off. web_search is a privileged tool (mcp.PrivilegedTools) and
+// injected KB content in the answer prompt is the threat model, so a user's
+// request alone never enables it: this flag is what the web-search-only
+// dispatcher's allowPrivileged comes from (baseAnswerTools), and a turn
+// asking for web search while it is off is refused with a 422 before any
+// side effect (refuseWebSearchTurn). It also needs web_search_enabled and
+// the Google credentials (websearch.Resolve).
+func ChatWebSearchEnabled(ctx context.Context, reader SiteConfigReader) bool {
+	return readBool(ctx, reader, "chat_web_search_enabled", false)
+}
+
 // ChatAnswerTemperature is the sampling temperature for user-facing answer
 // generation (streaming chat + answer-tools paths). Default 0.3 — a moderate
 // value that keeps answers grounded while avoiding the long-context coherence
@@ -1731,6 +1760,29 @@ func TabularColumnValuesMaxDistinct(ctx context.Context, reader SiteConfigReader
 // accordingly).
 func TabularMaxFileBytes(ctx context.Context, reader SiteConfigReader) int {
 	return readInt(ctx, reader, "tabular_max_file_bytes", 524_288_000, 1_048_576, 2_147_483_647)
+}
+
+// UserFileQuotaMax is the upper clamp of UserFileQuotaBytes (1 TiB).
+const UserFileQuotaMax int64 = 1_099_511_627_776
+
+// UserFileQuotaBytes is the global default per-user library quota in bytes
+// ("user_file_quota_bytes", GLOBAL-ONLY, no per-KB registry entry). 0 (the
+// default) means unlimited; a negative, non-numeric or above-1-TiB value
+// reads as 0. A per-user override on users overrides it. int64 so the 1 TiB
+// ceiling is representable on 32-bit platforms too.
+func UserFileQuotaBytes(ctx context.Context, reader SiteConfigReader) int64 {
+	if reader == nil {
+		return 0
+	}
+	v, err := reader.GetSiteConfigValue(ctx, "user_file_quota_bytes")
+	if err != nil || v == nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(*v), 10, 64)
+	if err != nil || n < 0 || n > UserFileQuotaMax {
+		return 0
+	}
+	return n
 }
 
 // TabularLargeFileBytes is the size threshold above which an ingested

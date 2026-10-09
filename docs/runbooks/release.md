@@ -13,56 +13,92 @@ forget to bump.
 independent of the **API** version — `/api/v1/*`, the OpenAI-compat layer, MCP
 `ask_kb`, and the ILIAS shim are path-versioned as `v1` and stay that way.
 
+## The flow at a glance
+
+```
+release-prep commit ──tag vX.Y.Z-rc.1──▶ CI builds :vX.Y.Z-rc.1 ──▶ staging (compose)
+        ▲                                                              │
+        └──── fix on main / release branch, tag vX.Y.Z-rc.2 ◀── broken ┤
+                                                                       │ good
+promote-release.yml (rc_tag = vX.Y.Z-rc.N) ◀───────────────────────────┘
+   └─▶ same digest tagged :vX.Y.Z, :vX.Y, :stable  +  git tag vX.Y.Z on the RC's commit
+         └─▶ prod (:stable): kubectl rollout restart
+```
+
+**Build once, promote by digest.** A release is never rebuilt: the image
+staging tested is the image prod runs. A rebuild from the same commit would
+not be the same bits (base-image layers, OS packages and build time all
+drift), so a rebuilt release would make the staging round meaningless.
+
 ## What CI publishes
 
 | Trigger | Image tags |
 |---|---|
 | push to `main` | `:<sha>`, `:edge` |
-| push tag `v*` | `:vX.Y.Z`, `:vX.Y`, `:stable` |
-| push tag `v*-rc.N` (prerelease) | `:X.Y.Z-rc.N` only — **no `v` prefix, no `:vX.Y` companion, no `:stable`** |
+| push tag `vX.Y.Z-rc.N` | `:vX.Y.Z-rc.N` (exactly the git tag) |
+| **Promote Release Candidate** workflow (manual) | `:vX.Y.Z`, `:vX.Y`, and `:stable` — added to the RC's existing image, nothing is built |
+| push tag `vX.Y.Z` by hand | **nothing** — use the promote workflow |
 
-> **Prerelease tags lose their `v` prefix.** `docker/metadata-action`'s
-> `procSemver` discards the configured `pattern=` for any tag with a semver
-> prerelease component and substitutes a hardcoded `{{version}}`, which never
-> carries the `v` — so tag `v0.2.0-rc.1` publishes exactly one image tag,
-> `:0.2.0-rc.1`, not `:v0.2.0-rc.1`. Two consequences: an operator setting
-> `JUSTRAG_VERSION=v0.2.0-rc.1` would reference a nonexistent manifest — the
-> correct value is `0.2.0-rc.1`. And the prune step's
-> `exclude-tags: stable,edge,v*` does not match a tag with no `v`, so
-> prerelease images are **not** retention-protected — they age out under
-> `keep-n-tagged: 10` like `main`'s SHA images. No amount of tweaking
-> `exclude-tags` fixes this; the published tag genuinely has no `v` to match.
+`:stable` is the default for every unpinned compose deployment
+(`${JUSTRAG_VERSION:-stable}`), so it only moves forward: promoting a hotfix
+on an older line (`v0.11.3` while `v0.12.0` is out) tags `:v0.11.3` and
+`:v0.11` but leaves `:stable` alone.
 
-`:stable` is deliberately withheld from prereleases: it is the default for
-every unpinned compose deployment (`${JUSTRAG_VERSION:-stable}`), so moving it
-to an RC would ship the RC to everyone who never set the variable.
+**Prod runs `:stable`** (workers and `go-server`, with `imagePullPolicy:
+Always`). That is safe only because `:stable` now moves exclusively through a
+promotion — after staging, and after the release's migrations have run (see
+"Deploying a release"). The flip side: **promoting is deploying.** From that
+moment any prod pod that restarts, for whatever reason, comes up on the new
+release, so never promote before the migrations are in. Going back is the
+**Roll Back Stable** workflow (see "Rolling back").
 
 `:latest` is not published. It was the mechanism by which production drifted
 forward on unrelated pod restarts. What suppresses it is the `flavor:
 latest=false` input on the workflow's metadata step — `docker/metadata-action`
-defaults to `latest=auto`, which generates `:latest` for `type=semver` all on
-its own, so simply not listing `latest` under `tags:` is **not** enough. Do not
-remove that input.
+defaults to `latest=auto`, which generates `:latest` for tag-based rules all
+on its own, so simply not listing `latest` under `tags:` is **not** enough. Do
+not remove that input.
 
-`GET /version` reports `git describe --tags --always`: exactly `v0.1.0` on a
-release, `v0.1.0-12-gabc1234` on a main build.
+`GET /version` reports `git describe --tags --always` of the build:
+`v0.1.0-rc.2` on a release candidate, `v0.1.0-12-gabc1234` on a main build.
+**A promoted release keeps reporting the RC it came from** — prod on
+`v0.12.0` answers `{"version":"v0.12.0-rc.2"}`, because it is that binary.
+That is the honest answer, not a bug: it tells you which candidate was
+promoted. The frontend's update check only compares for inequality, so it is
+unaffected.
+
+The promote workflow refuses to run unless the RC is release-ready: the RC's
+tree must carry a `## vX.Y.Z` section in `CHANGELOG.md` and `package.json` at
+`X.Y.Z`. It also never
+re-points an existing release: a git tag or image tag `vX.Y.Z` that already
+exists elsewhere fails the run (re-running a promotion that already
+succeeded is harmless).
 
 ## Prerequisites
 
 - **git-cliff** is not installed by anything in this repo and is not a
-  `package.json` dependency. `npx --yes git-cliff@2 …` runs it without
+  `package.json` dependency. `npx --yes git-cliff@2.13.1 …` runs it without
   installing; substitute that for `git cliff` below if you have no binary.
-- **`docker login ghcr.io`** — the `imagetools inspect` check in step 7 reads
-  the registry and fails with an auth error otherwise. A GitHub PAT with
-  `read:packages` as the password works.
-- **`kubectl`** context pointing at the cluster, for the k8s deploy path.
+- **`docker login ghcr.io`** on your machine and on the staging server — the
+  package is private. A GitHub PAT with `read:packages` as the password works.
+- **`kubectl`** context pointing at the cluster, for the prod deploy.
+- The promote workflow pushes a git tag with `GITHUB_TOKEN`. If a tag ruleset
+  protects `v*`, allow GitHub Actions to bypass it.
 
 ## Cutting a release
 
-1. **Be on a clean `main`, in sync with origin.**
+1. **Pick the base.** A normal release is cut from `main`:
 
    ```bash
    git checkout main && git pull && git status --short   # must be empty
+   ```
+
+   A **hotfix** for the current release while `main` already holds unreleased
+   features is cut from a release branch instead, so the features stay out:
+
+   ```bash
+   git checkout -b release/0.11 v0.11.2      # once per minor line; reuse it afterwards
+   git cherry-pick <fix-sha>                 # the fix lands on main first
    ```
 
 2. **Generate the new release's changelog section incrementally.** Use
@@ -78,6 +114,8 @@ release, `v0.1.0-12-gabc1234` on a main build.
    ```bash
    git cliff --unreleased --tag vX.Y.Z --prepend CHANGELOG.md
    ```
+
+   Use the **release** version here, not the RC: the section is what ships.
 
    > **Do not reword the preamble at the top of `CHANGELOG.md` on its own.**
    > `--prepend` keeps the file to a single preamble by stripping
@@ -104,44 +142,90 @@ release, `v0.1.0-12-gabc1234` on a main build.
 
    If none apply, write "No upgrade actions required." — do not omit the block.
 
-4. **Bump `package.json`** to the same version (nothing reads it, but a
-   fictional version is worse than none).
+4. **Bump `package.json`** to the release version (nothing reads it at
+   runtime, but the promote workflow checks it):
+   `npm version X.Y.Z --no-git-tag-version --workspaces-update=false`.
 
-5. **Bump the k8s image pin** in `k8s/worker-quick.yml`,
-   `k8s/worker-heavy.yml`, and `k8s/worker-batch.yml` to `:vX.Y.Z`.
-
-   This belongs in the **tagged commit**, not in the deploy step. Otherwise
-   the tree at tag `vX.Y.Z` ships manifests still pinned to the previous
-   release while `CHANGELOG.md` beside them says `vX.Y.Z`, and
-   `git checkout vX.Y.Z && kubectl apply -f k8s/` deploys the wrong workers
-   — permanently, since the tag is immutable. It also contradicts the rule
-   at the top of this document: the tag is the sole source of truth, so
-   everything the tag describes must be inside it.
-
-   That the image does not exist yet at tag time is harmless — nothing pulls
-   it until "Deploying a release" below, which you only start once step 7 has
-   confirmed the build.
-
-6. **Commit, tag, push.**
+5. **Commit, tag the first release candidate, push.**
 
    ```bash
-   git add CHANGELOG.md package.json \
-           k8s/worker-quick.yml k8s/worker-heavy.yml k8s/worker-batch.yml
-   git commit -m "docs: changelog and version pins for vX.Y.Z"
-   git tag -a vX.Y.Z -m "vX.Y.Z"
-   git push origin main
-   git push origin vX.Y.Z
+   git add CHANGELOG.md package.json package-lock.json
+   git commit -m "docs: changelog and version for vX.Y.Z"
+   git tag -a vX.Y.Z-rc.1 -m "vX.Y.Z-rc.1"
+   git push origin HEAD            # main, or release/X.Y for a hotfix
+   git push origin vX.Y.Z-rc.1
    ```
 
    The tag must be **annotated** (`-a`) — `git describe` prefers annotated
    tags, and a lightweight tag produces a different build id.
 
-7. **Watch the build.** Confirm the workflow pushed `:vX.Y.Z`, `:vX.Y`, and
-   `:stable` (needs `docker login ghcr.io`, see Prerequisites):
+6. **Wait for the RC build** (Actions → *Build and Push Docker Image*) and
+   confirm the image exists:
 
    ```bash
-   docker buildx imagetools inspect ghcr.io/lutzi92/justrag:vX.Y.Z
+   docker buildx imagetools inspect ghcr.io/ki4jlu/justrag:vX.Y.Z-rc.1
    ```
+
+7. **Deploy the RC to staging and test it** (see "Staging" below).
+
+   If staging finds a problem: fix it on the same branch, amend the changelog
+   section if the fix belongs in it, and tag `vX.Y.Z-rc.2` on the new commit —
+   steps 5–7 again. Never move an existing RC tag; every candidate gets its
+   own number, so it is always clear which build staging tested.
+
+8. **Run the release's migrations on prod** with the RC image — "Deploying a
+   release", step 1. Skip only if the upgrade notes list no migration.
+   Until step 10 the **previous** release keeps running against the new
+   schema, so a release's migrations must be additive (new tables, nullable
+   or defaulted columns, `CONCURRENTLY` indexes). A migration that renames
+   or drops something the previous release still reads needs a two-release
+   split: the release that stops reading it first, the removal after.
+
+9. **Promote.** Actions → **Promote Release Candidate** → *Run workflow*,
+   `rc_tag` = the RC that passed (e.g. `vX.Y.Z-rc.2`). It adds `:vX.Y.Z`,
+   `:vX.Y` and (if newest) `:stable` to that exact image and pushes the git
+   tag `vX.Y.Z` on the RC's commit. Then `git fetch --tags`.
+
+10. **Restart prod** onto the new `:stable` — "Deploying a release", step 3.
+
+11. **After a hotfix:** make sure every fix on `release/X.Y` is also on
+    `main`, and fold the hotfix's changelog section into `main`'s
+    `CHANGELOG.md` so the next release's `--prepend` does not lose it. A
+    hotfix on an **older** line does not move `:stable`, so prod (on
+    `:stable`) does not get it — that is only for installs pinned to `:vX.Y`.
+
+## Staging
+
+Staging is a compose server for developers to test release candidates on; it
+does not need the worker split of prod. It runs **exactly one pinned RC** —
+never `:stable` or `:edge`, so what is on staging is always a known
+candidate.
+
+On the staging server, check out the RC's tree (so the compose files are the
+candidate's too) and pin the image to it:
+
+```bash
+git fetch --tags && git checkout vX.Y.Z-rc.N
+# .env
+JUSTRAG_VERSION=vX.Y.Z-rc.N
+docker compose -f docker-compose.yml -f docker-compose.production.yml pull
+docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
+docker compose logs migrate       # confirm the goose run finished cleanly
+curl -s https://<staging-host>/version   # expect {"version":"vX.Y.Z-rc.N"}
+```
+
+Compose applies migrations automatically, so staging is also where a
+release's migrations run first. Two consequences:
+
+- **Staging's schema moves ahead of prod** with every RC that carries a
+  migration, and `cmd/migrate` is up-only. To go back (an abandoned RC, or to
+  re-test an upgrade from the current prod version), restore staging's
+  database from a snapshot rather than migrating down. Take a snapshot before
+  deploying an RC with a migration.
+- How long a migration takes depends on the data. If staging's database is
+  much smaller than prod's, a `CREATE INDEX CONCURRENTLY` or a backfill that
+  is instant on staging can still hit `/app/migrate`'s 5-minute cap on prod —
+  read the release's upgrade notes for those.
 
 ## Deploying a release
 
@@ -166,7 +250,9 @@ self-migrates: `cmd/server` never invokes goose, and the worker only calls
 migration set. Applying the Deployments first runs new binaries against the
 old schema.
 
-Run `/app/migrate` out of the **release image** as a one-shot pod, reusing the
+**Do this before promoting.** Run `/app/migrate` out of the **RC image** you
+are about to promote (`:vX.Y.Z-rc.N` — the same digest the release will be)
+as a one-shot pod, reusing the
 workers' existing config and secrets — `worker-config` carries `DB_*` /
 `VECTOR_DB_*` and `worker-secrets` carries the passwords plus `JWT_SECRET`.
 That covers what the migrate pod itself touches, but `config.Load()` also
@@ -174,26 +260,26 @@ hard-fails startup without `ALLOWED_ORIGINS` once `NODE_ENV=production`
 (set in `k8s/configmap.yml`) — neither `worker-config` nor `worker-secrets`
 sets that var here, so if the cluster's real `worker-config` doesn't carry it
 either, this pod dies with a CORS-shaped error, not an obviously
-migration-related one. Substitute the real version in the
-pod name using dashes (`migrate-v0-2-0`); dots are not valid there. If your
+migration-related one. Substitute the real RC in the
+pod name using dashes (`migrate-v0-2-0-rc-1`); dots are not valid there. If your
 GHCR package is private, add
 `"imagePullSecrets":[{"name":"ghcr-secret"}]` inside `spec` in the override,
 the same way the worker manifests do.
 
 ```bash
-kubectl -n justrag run migrate-vX-Y-Z \
-  --image=ghcr.io/lutzi92/justrag:vX.Y.Z \
+kubectl -n justrag run migrate-vX-Y-Z-rc-N \
+  --image=ghcr.io/ki4jlu/justrag:vX.Y.Z-rc.N \
   --restart=Never --attach --rm \
-  --overrides='{"spec":{"containers":[{"name":"migrate","image":"ghcr.io/lutzi92/justrag:vX.Y.Z","command":["/app/migrate"],"envFrom":[{"configMapRef":{"name":"worker-config"}},{"secretRef":{"name":"worker-secrets"}}]}]}}'
+  --overrides='{"spec":{"containers":[{"name":"migrate","image":"ghcr.io/ki4jlu/justrag:vX.Y.Z-rc.N","command":["/app/migrate"],"envFrom":[{"configMapRef":{"name":"worker-config"}},{"secretRef":{"name":"worker-secrets"}}]}]}}'
 ```
 
 Then confirm the schema is where the release expects it:
 
 ```bash
-kubectl -n justrag run migrate-status-vX-Y-Z \
-  --image=ghcr.io/lutzi92/justrag:vX.Y.Z \
+kubectl -n justrag run migrate-status-vX-Y-Z-rc-N \
+  --image=ghcr.io/ki4jlu/justrag:vX.Y.Z-rc.N \
   --restart=Never --attach --rm \
-  --overrides='{"spec":{"containers":[{"name":"migrate","image":"ghcr.io/lutzi92/justrag:vX.Y.Z","command":["/app/migrate","--status"],"envFrom":[{"configMapRef":{"name":"worker-config"}},{"secretRef":{"name":"worker-secrets"}}]}]}}'
+  --overrides='{"spec":{"containers":[{"name":"migrate","image":"ghcr.io/ki4jlu/justrag:vX.Y.Z-rc.N","command":["/app/migrate","--status"],"envFrom":[{"configMapRef":{"name":"worker-config"}},{"secretRef":{"name":"worker-secrets"}}]}]}}'
 ```
 
 `--status` prints one `migration status db=main version=NNNN` line per database
@@ -215,31 +301,36 @@ Two things worth knowing about `/app/migrate`:
   in [`migration-rollback.md`](./migration-rollback.md) before assuming the
   schema is intact.
 
-**Step 2 — apply the manifests.** The pins are already correct in the tagged
-tree (step 5), so there is nothing to edit and nothing to commit here:
+**Step 2 — promote** the RC (Actions → **Promote Release Candidate**). This
+moves `:stable`; from here on any restarting pod comes up on the release.
+
+**Step 3 — restart everything that pulls `:stable`**, so all pods move now
+and together instead of one by one as they happen to restart:
 
 ```bash
-kubectl -n justrag apply -f k8s/worker-quick.yml -f k8s/worker-heavy.yml -f k8s/worker-batch.yml
-for w in quick heavy batch; do
-  kubectl -n justrag rollout status deploy/worker-$w --timeout=5m
+kubectl -n justrag rollout restart deploy/worker-quick deploy/worker-heavy deploy/worker-batch deploy/<go-server>
+for d in worker-quick worker-heavy worker-batch <go-server>; do
+  kubectl -n justrag rollout status deploy/$d --timeout=5m
 done
 ```
 
-> **The `go-server` / nginx Deployment is not in this repository.** `k8s/`
-> contains only the three workers plus docling. Pin the server deployment to
-> the same version wherever its manifest lives — this is a manual step, and
-> skipping it leaves the server on whatever tag it was pinned to while the
-> workers move. Bringing that manifest in-repo is a known follow-up.
+The worker manifests in `k8s/` do not change between releases (they pull
+`:stable`), so there is nothing to `kubectl apply` unless the manifests
+themselves changed in this release — then apply them first.
 
-> **`imagePullPolicy: IfNotPresent`** means a node that already has the tag
-> cached will not re-pull it. That is the point for immutable release tags,
-> but if a tag is ever overwritten in GHCR, force the new image with
-> `kubectl -n justrag rollout restart deploy/worker-{quick,heavy,batch}`.
+> **The `go-server` / nginx Deployment is not in this repository.** `k8s/`
+> contains only the three workers plus docling. Its manifest, wherever it
+> lives, must use `:stable` **with `imagePullPolicy: Always`** like the
+> workers. Kubernetes only defaults to `Always` for `:latest` or an untagged
+> image, so `:stable` without the explicit policy means `IfNotPresent`: a
+> node with an older `:stable` cached keeps running it, and server pods end
+> up on different releases. Bringing that manifest in-repo is a known
+> follow-up.
 
 Confirm what is actually running:
 
 ```bash
-curl -s https://<host>/version   # expect {"version":"vX.Y.Z"}
+curl -s https://<host>/version   # expect {"version":"vX.Y.Z-rc.N"} — the promoted RC
 ```
 
 ## Rolling back
@@ -257,28 +348,14 @@ curl -s https://<host>/version   # expect {"version":"vX.Y.Z"}
 For a release with **no** migration:
 
 - **Compose:** set `JUSTRAG_VERSION` to the previous version, `up -d`.
-- **k8s:** revert the pin in the three worker manifests **on `main`** and
-  commit it, then apply. The pin is tracked in git, so an unreverted `main`
-  plus a rolled-back cluster is exactly the git/cluster divergence the next
-  person will trip over.
+- **k8s (prod on `:stable`):** run Actions → **Roll Back Stable** with
+  `release` = the version to go back to (e.g. `v0.11.2`), then restart as in
+  "Deploying a release", step 3. Nothing is built and no git tag changes;
+  `:stable` is pointed at that release's existing image. The workflow refuses
+  if any later release added a migration, unless `accept_newer_schema` is
+  ticked — read the box above first. A later promotion moves `:stable`
+  forward again as usual.
 
-  `vPREV` below is the release you are rolling back *to*; its tagged tree
-  already carries the right pins, so take them straight from it:
-
-  ```bash
-  git checkout main
-  git checkout vPREV -- k8s/worker-quick.yml k8s/worker-heavy.yml k8s/worker-batch.yml
-  git commit -m "chore: roll workers back to vPREV"
-  git push origin main
-  kubectl -n justrag apply -f k8s/worker-quick.yml -f k8s/worker-heavy.yml -f k8s/worker-batch.yml
-  for w in quick heavy batch; do
-    kubectl -n justrag rollout status deploy/worker-$w --timeout=5m
-  done
-  ```
-
-  Do not use `kubectl rollout undo` — it reverts to the previous ReplicaSet,
-  which may not match what the manifests say, leaving git and the cluster
-  disagreeing.
-
-Release images are retained indefinitely: the GHCR prune step excludes
-`stable,edge,v*`, so `keep-n-tagged: 10` only ages out `main`'s SHA images.
+Release and release-candidate images are retained indefinitely: the GHCR
+prune step excludes `stable,edge,v*`, so `keep-n-tagged: 10` only ages out
+`main`'s SHA images.

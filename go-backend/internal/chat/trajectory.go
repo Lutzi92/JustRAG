@@ -53,6 +53,13 @@ const trajectoryChunkPreview = 5
 //	                   post-filter catalog size (Reason explains a 0). Not
 //	                   emitted when the document has no entry for this turn's
 //	                   route, so its absence means "no route restriction".
+//	web_search        — the user asked for web search on this turn
+//	                   (webSearch: true) and the turn cannot provide it;
+//	                   Decision is "skipped", Reason a fixed generic
+//	                   sentence — the cause (e.g. the route allowlist above
+//	                   dropped web_search) reaches the client nowhere and is
+//	                   logged as chat.web_search.skipped. Emitted by
+//	                   answerToolsForTurn (web_search_turn.go).
 type TrajectoryEvent struct {
 	Stage    string         `json:"stage"`
 	Step     int            `json:"step,omitempty"`

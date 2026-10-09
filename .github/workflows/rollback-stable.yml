@@ -1,0 +1,118 @@
+name: Roll Back Stable
+
+# Points `:stable` back at an EARLIER release, e.g. after a promotion that
+# turned out bad in prod. promote-release.yml only ever moves `:stable`
+# forward, so going back is this separate, deliberate step. Nothing is built
+# and no git tag is touched: the release's own `:vX.Y.Z` image is re-used.
+# After it runs, `kubectl rollout restart` the deployments that pull `:stable`.
+#
+# Rolling back the image does NOT roll back the database. If any migration
+# was added between the target and the newest release, the old binary runs
+# against a newer schema; the run refuses that unless
+# `accept_newer_schema` is ticked (see docs/runbooks/release.md,
+# "Rolling back").
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Release to point :stable at, e.g. v0.11.2"
+        required: true
+        type: string
+      accept_newer_schema:
+        description: "Roll back even though newer releases added migrations"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: promote-release # never interleave with a promotion
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # move the :stable tag
+
+    steps:
+      - name: Parse the release
+        id: v
+        env:
+          RELEASE: ${{ inputs.release }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          if [[ ! "$RELEASE" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release must look like v0.11.2, got '$RELEASE'"
+            exit 1
+          fi
+          {
+            echo "release=$RELEASE"
+            echo "image=${IMAGE,,}" # GHCR image names are lowercase
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0 # all tags, for the checks below
+
+      - name: Check for migrations newer than the target
+        env:
+          RELEASE: ${{ steps.v.outputs.release }}
+          ACCEPT: ${{ inputs.accept_newer_schema }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          git rev-parse -q --verify "refs/tags/$RELEASE" >/dev/null \
+            || fail "$RELEASE is not a release (no such git tag)"
+
+          newest=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          added=$(git diff --name-only --diff-filter=A "$RELEASE" "$newest" -- go-backend/migrations/ || true)
+          if [[ -n "$added" ]]; then
+            echo "Migrations added between $RELEASE and $newest:"
+            echo "$added"
+            [[ "$ACCEPT" == "true" ]] \
+              || fail "releases after $RELEASE added migrations; the old binary would run against a newer schema. Read the runbook's 'Rolling back' section, then re-run with accept_newer_schema."
+            echo "::warning::rolling back across migrations (accepted): $(echo "$added" | tr '\n' ' ')"
+          fi
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Point :stable at the release
+        env:
+          IMAGE: ${{ steps.v.outputs.image }}
+          RELEASE: ${{ steps.v.outputs.release }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          digest_of() {
+            docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest
+          }
+
+          target=$(digest_of "$IMAGE:$RELEASE") || true
+          [[ "$target" == sha256:* ]] || fail "image $IMAGE:$RELEASE not found"
+          before=$(digest_of "$IMAGE:stable") || true
+
+          docker buildx imagetools create -t "$IMAGE:stable" "$IMAGE@$target"
+
+          got=$(digest_of "$IMAGE:stable")
+          [[ "$got" == "$target" ]] || fail "$IMAGE:stable resolves to $got, expected $target"
+
+          {
+            echo "### :stable → $RELEASE"
+            echo ""
+            echo "Was \`${before:-none}\`, now \`$target\`."
+            echo "Next: \`kubectl rollout restart\` everything that pulls \`:stable\`."
+          } >> "$GITHUB_STEP_SUMMARY"

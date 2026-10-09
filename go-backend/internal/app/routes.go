@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/justrag/go-backend/internal/academic"
+	"github.com/justrag/go-backend/internal/adkbridge"
 	"github.com/justrag/go-backend/internal/adminagentmetrics"
 	"github.com/justrag/go-backend/internal/adminconfigs"
 	"github.com/justrag/go-backend/internal/admineval"
@@ -49,6 +51,7 @@ import (
 	"github.com/justrag/go-backend/internal/gitrepo"
 	"github.com/justrag/go-backend/internal/health"
 	"github.com/justrag/go-backend/internal/httputil"
+	"github.com/justrag/go-backend/internal/jobs"
 	"github.com/justrag/go-backend/internal/kb"
 	"github.com/justrag/go-backend/internal/kbaccess"
 	"github.com/justrag/go-backend/internal/kbcategories"
@@ -68,6 +71,7 @@ import (
 	"github.com/justrag/go-backend/internal/middleware"
 	"github.com/justrag/go-backend/internal/misc"
 	"github.com/justrag/go-backend/internal/openaicompat"
+	"github.com/justrag/go-backend/internal/parser"
 	"github.com/justrag/go-backend/internal/pipeline"
 	"github.com/justrag/go-backend/internal/prompts"
 	"github.com/justrag/go-backend/internal/proxy"
@@ -85,6 +89,7 @@ import (
 	"github.com/justrag/go-backend/internal/tabular/rematerialize"
 	"github.com/justrag/go-backend/internal/tabular/sqlexec"
 	"github.com/justrag/go-backend/internal/usage"
+	"github.com/justrag/go-backend/internal/userfiles"
 	"github.com/justrag/go-backend/internal/users"
 	"github.com/justrag/go-backend/internal/vector"
 	"github.com/justrag/go-backend/internal/websearch"
@@ -237,7 +242,12 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	filesHandler.SetQueryCacheInvalidator(searchService)
 	// Wire the KG file-eventer so file-delete handlers clean up KG data and
 	// notify mindmap subscribers via Redis pub/sub.
-	filesHandler.SetKGFileEventer(kgevents.NewFileHook(kgevents.NewPublisher(infra.rdb.Client), kgStore))
+	kgFileHook := kgevents.NewFileHook(kgevents.NewPublisher(infra.rdb.Client), kgStore)
+	filesHandler.SetKGFileEventer(kgFileHook)
+	// The shared per-file cleanup carries the same KG hook, and the files
+	// handler's Delete delegates to it.
+	cascadeDeleter.SetKGFileHook(kgFileHook)
+	filesHandler.SetFileDeleter(cascadeDeleter)
 	// Wire the spreadsheet table dropper so deleting a file also removes the
 	// `tabular.sheet_*` tables it materialised. Without it the tabular_catalog
 	// row (keyed on the file id) goes with the files row and the physical
@@ -364,6 +374,13 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	generateRL := middleware.NewRedisRateLimiter(infra.rdb.Client, middleware.RedisRateLimitConfig{
 		Max: 10, Window: time.Minute, Category: "generate",
 	})
+	// Starter questions get their own budget instead of sharing generate's:
+	// the UI fetches them on every chat open (cache hits count too, since the
+	// limiter runs before the handler), so behind one campus NAT address they
+	// would drain the 10/min generate budget and block real content generation.
+	starterRL := middleware.NewRedisRateLimiter(infra.rdb.Client, middleware.RedisRateLimitConfig{
+		Max: 30, Window: time.Minute, Category: "starter_questions",
+	})
 	apiRL := middleware.NewRedisRateLimiter(infra.rdb.Client, middleware.RedisRateLimitConfig{
 		Max: 100, Window: time.Minute, Category: "api",
 	})
@@ -380,9 +397,10 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 	loginLimiter := registerAuthRoutes(ctx, rc, loginRL)
 	registerAdminRoutes(rc)
 	registerKBRoutes(rc, inviteRL)
-	registerChatRoutes(ctx, rc, chatRL)
+	registerChatRoutes(ctx, rc, chatRL, starterRL)
 	registerAgentTeamRoutes(rc)
 	registerFileRoutes(rc)
+	registerLibraryRoutes(rc)
 	registerContentGenRoutes(rc, generateRL)
 	registerResearchRoutes(rc, researchRL)
 	registerPublicAPIRoutes(rc, apiRL)
@@ -391,7 +409,7 @@ func setupRoutes(ctx context.Context, mux *http.ServeMux, infra *serverInfra, cf
 
 	// Only the in-memory loginLimiter (returned from registerAuthRoutes) owns
 	// a background goroutine and needs an explicit Shutdown. The Redis-backed
-	// limiters above (chatRL, researchRL, generateRL, apiRL, loginRL) keep no
+	// limiters above (chatRL, researchRL, generateRL, starterRL, apiRL, loginRL) keep no
 	// long-lived state — they call INCR/EXPIRE per request — so there is
 	// nothing to stop. The standalone in-memory apiLimiter created in
 	// RunServer is shut down via its own defer there.
@@ -550,6 +568,19 @@ func registerAdminRoutes(rc *routeCtx) {
 	// System-, keine KB-Entscheidung.
 	kbVisibilityHandler := kbvisibility.NewHandler(
 		kbvisibility.NewStore(rc.infra.db.Main), kbOverviewStore)
+	kbVisibilityHandler.SetScreeningEnqueuer(func(ctx context.Context, kbID string) error {
+		payload, err := json.Marshal(jobs.KBScreeningPayload{KbID: kbID})
+		if err != nil {
+			return err
+		}
+		_, err = rc.infra.asynqClient.EnqueueContext(ctx,
+			asynq.NewTask(jobs.TypeKBScreening, payload),
+			asynq.Queue(jobs.QueueBatch),
+			asynq.Timeout(jobs.TimeoutFor(jobs.TypeKBScreening)),
+			asynq.MaxRetry(1),
+		)
+		return err
+	})
 	rc.mux.Handle("POST /api/admin/kb/{id}/publish", rc.adminChain(kbVisibilityHandler.Publish))
 	rc.mux.Handle("POST /api/admin/kb/{id}/unpublish", rc.adminChain(kbVisibilityHandler.Unpublish))
 	rc.mux.Handle("GET /api/admin/kb/{id}/unpublish-impact", rc.adminChain(kbVisibilityHandler.UnpublishImpact))
@@ -722,6 +753,46 @@ type tabularUploadLimits struct{ reader chat.SiteConfigReader }
 
 func (a tabularUploadLimits) TabularMaxFileBytes(ctx context.Context) int {
 	return chat.TabularMaxFileBytes(ctx, a.reader)
+}
+
+// userFileQuota adapts chat.UserFileQuotaBytes to userfiles.QuotaReader.
+type userFileQuota struct{ reader chat.SiteConfigReader }
+
+func (a userFileQuota) GlobalQuotaBytes(ctx context.Context) int64 {
+	return chat.UserFileQuotaBytes(ctx, a.reader)
+}
+
+// registerLibraryRoutes wires the per-user file library API. Owner-only:
+// authentication is the only gate, ownership is enforced per id in the store.
+func registerLibraryRoutes(rc *routeCtx) {
+	store := userfiles.NewStore(rc.infra.db.Main)
+	quota := userFileQuota{reader: rc.chatStore}
+	ingester := userfiles.NewIngester(store, rc.infra.stor, quota)
+	h := userfiles.NewHandler(store, ingester, rc.infra.stor, tabularUploadLimits{reader: rc.chatStore}, quota)
+	h.SetDeleter(rc.cascadeDeleter)
+	// KB uploads and add-from-library go through the same library.
+	rc.filesHandler.SetLibrary(libraryAdapter{Ingester: ingester, store: store})
+	rc.filesHandler.SetAdopter(userfiles.NewAdopter(userfiles.NewAdoptStore(rc.infra.db.Main), store, rc.infra.stor, quota))
+	wrap := func(f http.HandlerFunc) http.Handler { return rc.authMw.Authenticate(f) }
+	rc.mux.Handle("GET /api/library/files", wrap(h.List))
+	rc.mux.Handle("POST /api/library/files", wrap(h.Upload))
+	rc.mux.Handle("GET /api/library/files/{id}", wrap(h.Get))
+	rc.mux.Handle("PATCH /api/library/files/{id}", wrap(h.Rename))
+	rc.mux.Handle("DELETE /api/library/files/{id}", wrap(h.Delete))
+	rc.mux.Handle("GET /api/library/files/{id}/download", wrap(h.Download))
+	rc.mux.Handle("GET /api/library/files/{id}/usage", wrap(h.Usage))
+	rc.mux.Handle("GET /api/library/quota", wrap(h.Quota))
+}
+
+// libraryAdapter combines the userfiles ingester and store into the
+// files.Library surface the KB file handlers need.
+type libraryAdapter struct {
+	*userfiles.Ingester
+	store userfiles.Store
+}
+
+func (a libraryAdapter) Get(ctx context.Context, ownerID, id string) (*userfiles.UserFile, error) {
+	return a.store.Get(ctx, ownerID, id)
 }
 
 func registerKBRoutes(rc *routeCtx, inviteRL *middleware.RedisRateLimiter) {
@@ -938,7 +1009,7 @@ func registerKBRoutes(rc *routeCtx, inviteRL *middleware.RedisRateLimiter) {
 	rc.mux.Handle("GET /api/kb/{id}/crawl/status/{jobId}", rc.kbViewChain(crawlerHandler.GetCrawlStatus))
 }
 
-func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.RedisRateLimiter) {
+func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL, starterRL *middleware.RedisRateLimiter) {
 	// Phase 2 §2.1: build the MCP registry and register the in-process
 	// built-in tools (kb_search, web_search). Per-KB remote MCP servers
 	// (if any) are added via Registry.Configure on demand from the chat
@@ -1121,6 +1192,7 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 		// via GetChunksByFileID — used by RunCorpusTableChat to assemble
 		// full per-file text for comparison queries.
 		chat.WithCorpusChunks(rc.chunkService),
+		chat.WithFileExcerpts(rc.chunkService),
 		// In-chat document comparison: Redis-backed store for parsed
 		// uploaded attachments (compared against a KB, never ingested).
 		// Reuses the shared Redis client. TTL is read once at startup from
@@ -1148,11 +1220,40 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 		// created_at/published_at lookup per turn, stamped onto the
 		// sources before they are streamed and persisted.
 		chat.WithFileDates(&fileDatesAdapter{store: rc.filesStore}),
+		// KB-less library chat (user file library, phase 3): the chat store
+		// holds the library chats + file refs, the userfiles store resolves
+		// files owner-scoped, and the text source parses with the same
+		// built-in factory the comparison-attachment upload falls back to
+		// (KbID "" → global provider; no transcriber on the server).
+		chat.WithLibraryChat(
+			rc.chatStore,
+			userfiles.NewStore(rc.infra.db.Main),
+			chat.NewLibraryTextSource(rc.infra.stor, parser.DefaultFactoryWith(nil)),
+		),
 	}
 	if rc.agentDecisionStore != nil {
 		chatOpts = append(chatOpts, chat.WithDecisionRecorder(&decisionRecorderAdapter{store: rc.agentDecisionStore}))
 	}
 	chatHandler := chat.NewHandler(rc.chatStore, rc.aiResolver, rc.searchService, chatOpts...)
+	agentChatConfluence := confluence.NewStore(rc.infra.db.Main)
+	agentChat := chat.NewAgentChatHandler(chat.AgentChatDeps{
+		Store:         rc.chatStore,
+		SiteConfig:    rc.chatStore,
+		KBConfig:      rc.kbConfigStore,
+		AI:            rc.aiResolver,
+		Search:        rc.searchService,
+		Registry:      mcpRegistry,
+		Sessions:      adkbridge.NewPGSessionService(rc.infra.db.Main),
+		Runs:          adkbridge.NewRunStore(rc.infra.db.Main, 24*time.Hour),
+		Usage:         usage.NewRecorder(rc.infra.db.Main),
+		SessionMemory: sessionMemoryStore,
+		// Bridge-only write tools (never registered in mcpRegistry).
+		Importer:        confluence.NewImporter(agentChatConfluence, rc.infra.asynqClient),
+		ConfluenceConns: agentChatConfluence,
+		Library:         rc.filesHandler,
+		Files:           rc.filesStore,
+		FileDates:       &fileDatesAdapter{store: rc.filesStore},
+	})
 
 	// Phase 2 admin UI: load configured remote MCP servers from
 	// site_configs at startup and expose status / reload endpoints so
@@ -1179,19 +1280,36 @@ func registerChatRoutes(ctx context.Context, rc *routeCtx, chatRL *middleware.Re
 
 	// Chat — listing
 	rc.mux.Handle("GET /api/kb/{id}/chats", rc.kbViewChain(chatHandler.ListChats))
+	// Starter questions for an empty chat, generated from the KB's documents
+	// by an LLM call — behind their own "starter_questions" limiter (see
+	// starterRL), wrapped outside the auth chain like the generate routes.
+	rc.mux.Handle("GET /api/kb/{id}/starter-questions", starterRL.Middleware(rc.kbViewChain(chatHandler.StarterQuestions)))
 
 	// Chat — messages and deletion (auth only, ownership checked in handler)
+	rc.mux.Handle("GET /api/chat/rag-system-prompt", rc.authMw.Authenticate(http.HandlerFunc(chatHandler.RAGSystemPrompt)))
 	rc.mux.Handle("GET /api/chats/{id}/messages", rc.authMw.Authenticate(http.HandlerFunc(chatHandler.GetMessages)))
 	rc.mux.Handle("DELETE /api/chats/{id}", rc.authMw.Authenticate(http.HandlerFunc(chatHandler.DeleteChat)))
+	rc.mux.Handle("PATCH /api/chats/{id}", rc.authMw.Authenticate(http.HandlerFunc(chatHandler.RenameChat)))
 
 	// Chat — send message (KB view permission). The rate limiter wraps the
 	// auth chain from the outside so unauthenticated requests don't consume
 	// quota — matching the pattern used by registerContentGenRoutes.
 	rc.mux.Handle("POST /api/kb/{id}/chat", chatRL.Middleware(rc.kbViewChain(chatHandler.SendMessage)))
+	// Agentic chat (AG-UI). 404 unless chat_agent_chat_enabled is on for the
+	// KB; same auth + KB-view chain and "chat" rate limiter as the route above.
+	rc.mux.Handle("POST /api/kb/{id}/agui/chat", chatRL.Middleware(rc.kbViewChain(agentChat.ServeHTTP)))
 	// In-chat document comparison: upload a document to compare against the KB.
 	// Same auth + KB-view ACL chain and "chat" rate limiter as the chat send route —
 	// the upload triggers synchronous parsing + a Redis write, so it must be metered.
 	rc.mux.Handle("POST /api/kb/{id}/chat/attachment", chatRL.Middleware(rc.kbViewChain(chatHandler.UploadAttachment)))
+
+	// KB-less library chat (owner-only; ownership checked in the handler).
+	// The send route shares the KB chat rate limiter, wrapped outside auth.
+	// Messages and deletion reuse GET /api/chats/{id}/messages and
+	// DELETE /api/chats/{id} above.
+	rc.mux.Handle("POST /api/library/chat", chatRL.Middleware(rc.authMw.Authenticate(http.HandlerFunc(chatHandler.SendLibraryMessage))))
+	rc.mux.Handle("GET /api/library/chats", rc.authMw.Authenticate(http.HandlerFunc(chatHandler.ListLibraryChats)))
+	rc.mux.Handle("GET /api/library/chats/{id}", rc.authMw.Authenticate(http.HandlerFunc(chatHandler.GetLibraryChat)))
 
 	// Chat — feedback
 	rc.mux.Handle("POST /api/kb/{id}/chats/{chatId}/messages/{messageId}/feedback", rc.kbViewChain(chatHandler.SubmitFeedback))
@@ -1233,7 +1351,10 @@ func registerFileRoutes(rc *routeCtx) {
 	rc.mux.Handle("DELETE /api/files/{id}", rc.authMw.Authenticate(http.HandlerFunc(rc.filesHandler.Delete)))
 	rc.mux.Handle("POST /api/files/{id}/retry", rc.authMw.Authenticate(http.HandlerFunc(rc.filesHandler.Retry)))
 	rc.mux.Handle("POST /api/kb/{id}/files", rc.kbEditChain(rc.filesHandler.Upload))
+	rc.mux.Handle("POST /api/kb/{id}/files/from-library", rc.kbEditChain(rc.filesHandler.AddFromLibrary))
 	rc.mux.Handle("POST /api/kb/{id}/files/retry-failed", rc.kbEditChain(rc.filesHandler.RetryFailed))
+	// Owner/system-admin check is stricter than the chain; done in the handler.
+	rc.mux.Handle("POST /api/kb/{id}/files/adopt", rc.kbAdminChain(rc.filesHandler.AdoptLegacy))
 
 	// Generated content — CRUD + download + stream (auth required)
 	genContentHandler := gencontent.NewHandler(rc.genContentStore)

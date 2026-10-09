@@ -539,7 +539,12 @@ type fileDBRow struct {
 	// a payload carrying "rule" = the finding behind a true flag.
 	InjectionFlag   bool            `db:"injection_flag"`
 	InjectionDetail json.RawMessage `db:"injection_detail"`
-	TotalCount      int             `db:"total_count"`
+	// Uploader identity (migration 0075), both NULL when the file has no
+	// uploader or the user row is gone (ON DELETE SET NULL).
+	UploaderID          *string `db:"uploader_id"`
+	UploaderDisplayName *string `db:"uploader_display_name"`
+	UserFileID          *string `db:"user_file_id"`
+	TotalCount          int     `db:"total_count"`
 }
 
 // ListFiles returns a paginated slice of files for kbID, ordered by created_at DESC,
@@ -549,14 +554,18 @@ type fileDBRow struct {
 // disagree under concurrent inserts/deletes.
 func (s *PGStore) ListFiles(ctx context.Context, kbID string, limit, offset int) ([]FileRow, int, error) {
 	const listSQL = `
-		SELECT id, name, type, size, status, progress, origin,
-		       error_stage, error_message, current_stage, stage_index, stage_total, stage_detail,
-		       rss_feed_id, confluence_source_id, created_at,
-		       injection_flag, injection_detail,
+		SELECT f.id, f.name, f.type, f.size, f.status, f.progress, f.origin,
+		       f.error_stage, f.error_message, f.current_stage, f.stage_index, f.stage_total, f.stage_detail,
+		       f.rss_feed_id, f.confluence_source_id, f.created_at,
+		       f.injection_flag, f.injection_detail,
+		       u.id::text AS uploader_id,
+		       COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username) AS uploader_display_name,
+		       f.user_file_id::text AS user_file_id,
 		       COUNT(*) OVER ()::int AS total_count
-		FROM files
-		WHERE kb_id = $1
-		ORDER BY created_at DESC
+		FROM files f
+		LEFT JOIN users u ON u.id = f.uploaded_by
+		WHERE f.kb_id = $1
+		ORDER BY f.created_at DESC
 		LIMIT $2 OFFSET $3`
 
 	rows, err := pgxutil.QueryRows[fileDBRow](ctx, s.pool, listSQL, kbID, limit, offset)
@@ -599,6 +608,10 @@ func (s *PGStore) ListFiles(ctx context.Context, kbID string, limit, offset int)
 			CreatedAt:          r.CreatedAt,
 			InjectionFlag:      r.InjectionFlag,
 			InjectionDetail:    r.InjectionDetail,
+			UserFileID:         r.UserFileID,
+		}
+		if r.UploaderID != nil && r.UploaderDisplayName != nil {
+			result[i].UploadedBy = &FileUploader{ID: *r.UploaderID, DisplayName: *r.UploaderDisplayName}
 		}
 	}
 	return result, rows[0].TotalCount, nil

@@ -555,6 +555,24 @@ func TestRecordTabularIngest_OutcomeAndDuration(t *testing.T) {
 	}
 }
 
+// TestRecordUserFileAdd asserts known add modes count under their own label
+// and an unknown mode normalises to "ingest".
+func TestRecordUserFileAdd(t *testing.T) {
+	c := UserFileAddTotalForTest()
+	beforeCopy := testutil.ToFloat64(c.WithLabelValues("copy"))
+	beforeIngest := testutil.ToFloat64(c.WithLabelValues("ingest"))
+
+	RecordUserFileAdd("copy")
+	RecordUserFileAdd("bogus")
+
+	if got := testutil.ToFloat64(c.WithLabelValues("copy")) - beforeCopy; got != 1 {
+		t.Errorf("copy delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues("ingest")) - beforeIngest; got != 1 {
+		t.Errorf("ingest delta = %v, want 1 (normalised bogus)", got)
+	}
+}
+
 // TestRecordTabularRouterNormalisesOutcomes asserts the router-metric
 // outcome normalisation: a known "skipped_<reason>" value collapses to the
 // shared "skipped" label, a known verbatim outcome passes through

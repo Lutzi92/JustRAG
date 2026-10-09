@@ -36,7 +36,7 @@ services:
     # used in docker-compose.production.yml and docker-compose.k8s.yml so
     # overlay combinations cannot run server and workers on different
     # versions. Deliberately NOT `latest` — see docs/runbooks/release.md.
-    image: ghcr.io/lutzi92/justrag:${JUSTRAG_VERSION:-stable}
+    image: ghcr.io/ki4jlu/justrag:${JUSTRAG_VERSION:-stable}
     command: ["/app/migrate"]
     env_file:
       - .env
@@ -47,7 +47,7 @@ services:
         condition: service_healthy
 
   go-server:
-    image: ghcr.io/lutzi92/justrag:${JUSTRAG_VERSION:-stable}
+    image: ghcr.io/ki4jlu/justrag:${JUSTRAG_VERSION:-stable}
     restart: unless-stopped
     expose:
       - "3000"
@@ -82,7 +82,7 @@ services:
         condition: service_healthy
 
   go-worker:
-    image: ghcr.io/lutzi92/justrag:${JUSTRAG_VERSION:-stable}
+    image: ghcr.io/ki4jlu/justrag:${JUSTRAG_VERSION:-stable}
     restart: unless-stopped
     command: ["/app/worker"]
     env_file:
@@ -207,7 +207,7 @@ services:
       - rag-redis-data:/data
 
   minio:
-    image: minio/minio:latest
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z  # community fork; minio/minio was removed from Docker Hub
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:

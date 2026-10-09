@@ -235,6 +235,18 @@ func (s *PGStore) LeaveKB(ctx context.Context, kbID, userID string) (int, error)
 			}
 			return ErrOwnerImmutable
 		}
+		// The agent chat's ADK sessions and runs (app 'agentchat', id /
+		// thread_id = chat id, no FK to chats) go with the chats.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM adk_sessions WHERE app_name = 'agentchat' AND id IN
+			   (SELECT id::text FROM chats WHERE kb_id = $1::uuid AND user_id = $2::uuid)`, kbID, userID); err != nil {
+			return fmt.Errorf("LeaveKB: delete agent sessions: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM agent_runs WHERE app_name = 'agentchat' AND thread_id IN
+			   (SELECT id::text FROM chats WHERE kb_id = $1::uuid AND user_id = $2::uuid)`, kbID, userID); err != nil {
+			return fmt.Errorf("LeaveKB: delete agent runs: %w", err)
+		}
 		chatTag, err := tx.Exec(ctx,
 			`DELETE FROM chats WHERE kb_id = $1::uuid AND user_id = $2::uuid`, kbID, userID)
 		if err != nil {

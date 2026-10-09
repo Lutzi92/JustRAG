@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/justrag/go-backend/internal/adkbridge"
 	"github.com/justrag/go-backend/internal/admineval"
 	"github.com/justrag/go-backend/internal/agentteams"
 	"github.com/justrag/go-backend/internal/ai"
@@ -49,10 +50,16 @@ import (
 	"github.com/justrag/go-backend/internal/storage"
 	"github.com/justrag/go-backend/internal/tabular"
 	"github.com/justrag/go-backend/internal/tabular/ingest"
+	"github.com/justrag/go-backend/internal/userfiles"
 	"github.com/justrag/go-backend/internal/vector"
 	"github.com/justrag/go-backend/internal/widcert"
 	"github.com/justrag/go-backend/internal/worker"
 )
+
+// The worker reaches CurrentStoragePath through an optional interface; pin the
+// production store to it so dropping the method is a build error, not a
+// silent return to stale payload paths.
+var _ worker.CurrentPathLookup = (*files.PGStore)(nil)
 
 // sttTranscriber adapts ai.ConfigResolver to the parser.Transcriber interface
 // so the audio parser can transcribe files via the configured STT model
@@ -131,7 +138,9 @@ func RunWorker(cfg *config.Config) error {
 	chatStore := chat.NewStore(db.Main)
 	chunkService := vector.NewChunkService(db.Vector)
 	var doclingFront []parser.Parser
+	parseIdentity := "builtin"
 	if dc := buildDoclingClient(ctx, chatStore, aiResolver); dc != nil {
+		parseIdentity = "docling:" + dc.BaseURL()
 		doclingFront = append(doclingFront,
 			&docling.FallbackParser{
 				Primary:  &docling.DoclingPDFParser{Client: dc},
@@ -246,7 +255,24 @@ func RunWorker(cfg *config.Config) error {
 	// rationale.
 	tableDropper := tabular.NewMaterializer(db.Main)
 	confStore := confluence.NewStore(db.Main)
-	fileHandler := worker.NewFileProcessingHandler(proc, kbStore, searchService, stor)
+	// Copy mode (user file library phase 2): a library file whose index
+	// another KB copy already built under the same fingerprint is copied
+	// server-side instead of re-ingested. Only TypeFileProcessing gets it;
+	// re-embeds always run the full ingest. Both read the library link from
+	// the files row (Links), not the payload.
+	fileHandler := worker.NewFileProcessingHandlerWithDeps(worker.FileProcessingDeps{
+		Proc:       proc,
+		KBStore:    kbStore,
+		QueryCache: searchService,
+		Links:      filesStore,
+		Storage:    stor,
+		Copy: &worker.CopyDeps{
+			Proc:   proc,
+			Store:  filesStore,
+			Index:  chunkService,
+			Reader: chatStore,
+		},
+	})
 	fileHandler = worker.MarkErrorOnExhaustion(fileHandler, filesStore)
 	mux.HandleFunc(jobs.TypeFileProcessing, worker.Instrument(func(ctx context.Context, task *asynq.Task) error {
 		err := fileHandler(ctx, task)
@@ -269,6 +295,7 @@ func RunWorker(cfg *config.Config) error {
 		TableDropper: tableDropper,
 	})))
 	proc.SetSiteConfigReader(chatStore)
+	proc.SetParseCache(processor.NewParseCache(stor, parseIdentity))
 	proc.SetKBOverrideLister(kbconfig.NewStore(db.Main))
 	proc.SetMainDB(db.Main)
 	proc.SetVectorPool(db.Vector)
@@ -280,6 +307,7 @@ func RunWorker(cfg *config.Config) error {
 	proc.SetLargeFileGate(processor.NewLargeFileGate(chat.TabularLargeFileConcurrency(ctx, chatStore)))
 	proc.SetKGEventPublisher(kgevents.NewPublisher(rdb.Client))
 	proc.SetKGDeleter(kg.NewPgStore(db.Main))
+	proc.SetKGCache(processor.NewKGCache(db.Main))
 	mux.HandleFunc(jobs.TypeResearchExecution, worker.Instrument(worker.NewResearchExecutionHandler(aiResolver, searchService, rdb.Client, chatStore, sharedFetcher)))
 	mux.HandleFunc(jobs.TypeAcademicResearchExecution, worker.Instrument(worker.NewAcademicResearchHandler(aiResolver, rdb.Client, chatStore, sharedFetcher)))
 	// RAGAS sampling persists each judged sample to ragas_samples (migration
@@ -295,6 +323,13 @@ func RunWorker(cfg *config.Config) error {
 		Redis:   rdb.Client,
 	})))
 
+	reembedFileHandler := worker.NewFileProcessingHandlerWithDeps(worker.FileProcessingDeps{
+		Proc:       proc,
+		KBStore:    kbStore,
+		QueryCache: searchService,
+		Links:      filesStore,
+		Storage:    stor,
+	})
 	// Re-embedding: delete old chunks first, then re-process the file.
 	// Wrapped in MarkErrorOnExhaustion like file-processing so a failed
 	// retry surfaces as status='error' with a reason instead of sitting in
@@ -305,6 +340,23 @@ func RunWorker(cfg *config.Config) error {
 			return fmt.Errorf("unmarshal re-embedding payload: %w", err)
 		}
 		slog.Info("re-embedding file", "fileId", payload.FileID, "kbId", payload.KbID)
+
+		// A missing blob must never destroy a working index: verify it exists
+		// (at its CURRENT path) before anything is flipped or deleted.
+		if err := worker.PreflightReembed(ctx, filesStore, stor, payload); err != nil {
+			return err
+		}
+
+		// Flip to 'processing' BEFORE deleting the old index: the transition
+		// clears index_fingerprint, so no NEW copy picks this file as a donor
+		// while its chunks disappear, and bumps progress_updated_at, the
+		// donor generation token. A copy already reading this file is caught
+		// by that token in the worker's post-copy recheck — not by the
+		// fingerprint, which this re-embed re-stamps unchanged when settings
+		// are unchanged — and by CopyFileIndex's row-count check.
+		if err := filesStore.UpdateFileStatus(ctx, payload.FileID, "processing"); err != nil {
+			return fmt.Errorf("re-embedding: mark file %s processing: %w", payload.FileID, err)
+		}
 
 		// Delete old chunks from every existing chunk table before re-processing.
 		// Using the dynamic table list (not a hardcoded dim slice) guarantees we
@@ -328,9 +380,18 @@ func RunWorker(cfg *config.Config) error {
 		// The "file_added" reason on success is shared with new ingestion;
 		// the explicit chunk-deletion above also justifies an immediate
 		// invalidation, but this is captured by the post-ProcessFile hook.
-		return worker.NewFileProcessingHandler(proc, kbStore, searchService, stor)(ctx, task)
+		// Re-embed and retry payloads carry no UserFileID: Links resolves a
+		// library copy's link from the files row, so the ingest re-stamps
+		// its fingerprint and uses the parse/KG caches. No copy mode here
+		// (P2-R6: a re-embed always ingests).
+		return reembedFileHandler(ctx, task)
 	})
 	mux.HandleFunc(jobs.TypeReEmbedding, worker.Instrument(worker.MarkErrorOnExhaustion(reembedHandler, filesStore)))
+	mux.HandleFunc(jobs.TypeKBScreening, worker.Instrument(worker.NewKBScreeningHandler(worker.KBScreeningDeps{
+		Files:  filesStore,
+		Text:   chunkService.GetFileLeafTextAllDims,
+		Reader: chatStore,
+	})))
 
 	// Confluence sync: fetch pages, convert to markdown, enqueue file processing.
 	mux.HandleFunc(jobs.TypeConfluenceSync, worker.Instrument(confluence.NewSyncHandler(confluence.SyncDeps{
@@ -510,12 +571,14 @@ func RunWorker(cfg *config.Config) error {
 		bm25Refresher := vector.NewBM25StatsRefresher(db.Vector, db.Main)
 		bm25Refresher.ModeEnabled = bm25ScoringModeEnabledAnywhere(db.Main)
 		stopMaintenance = worker.StartMaintenance(ctx, worker.MaintenanceConfig{
-			MainDB:               db.Main,
-			VectorDB:             db.Vector,
-			StuckFileTimeout:     cfg.StuckFileTimeout,
-			TabularOrphanSweeper: tabular.NewOrphanSweeper(db.Main),
-			BM25StatsRefresher:   bm25Refresher,
-			RagasStore:           ragasStore,
+			MainDB:                db.Main,
+			VectorDB:              db.Vector,
+			StuckFileTimeout:      cfg.StuckFileTimeout,
+			TabularOrphanSweeper:  tabular.NewOrphanSweeper(db.Main),
+			UserFileOrphanSweeper: userfiles.NewOrphanSweeper(userfiles.NewOrphanStore(db.Main), stor),
+			AgentRunExpirer:       adkbridge.NewRunStore(db.Main, 24*time.Hour),
+			BM25StatsRefresher:    bm25Refresher,
+			RagasStore:            ragasStore,
 			// Read per pass, not once here: retention is a knob an operator
 			// may want to lower after noticing the table's size, and a
 			// worker restart should not be the price of that.

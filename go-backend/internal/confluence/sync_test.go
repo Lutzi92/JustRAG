@@ -87,6 +87,7 @@ func (fakeStorage) DeleteFiles(context.Context, []string) error                 
 func (fakeStorage) DeleteDirectory(context.Context, string) error                 { return nil }
 func (fakeStorage) FileExists(context.Context, string) (bool, error)              { return false, nil }
 func (fakeStorage) IsS3() bool                                                    { return false }
+func (fakeStorage) List(context.Context, string) ([]storage.ObjectInfo, error)    { return nil, nil }
 
 // fakeChunkDeleter implements ChunkDeleter as a no-op.
 type fakeChunkDeleter struct{}

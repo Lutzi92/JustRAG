@@ -101,6 +101,22 @@ type FileRow struct {
 	// re-sent to a model.
 	InjectionFlag   bool            `json:"injectionFlag"             db:"injection_flag"`
 	InjectionDetail json.RawMessage `json:"injectionDetail,omitempty" db:"injection_detail"`
+	// UploadedBy is who added the file (migration 0075). Nil for
+	// source-owned origins and for rows that predate the column; the
+	// handler also nils it for callers below KB role "edit", so the key is
+	// absent rather than null in both cases.
+	UploadedBy *FileUploader `json:"uploadedBy,omitempty" db:"-"`
+	// UserFileID links a KB copy back to its user-library file (migration
+	// 0076); nil for non-library files, so the key is omitted.
+	UserFileID *string `json:"userFileId,omitempty" db:"-"`
+}
+
+// FileUploader is the display identity behind FileRow.UploadedBy — the same
+// identity the KB member list shows (first + last name, falling back to the
+// username), never the email.
+type FileUploader struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +311,14 @@ func (h *UpdateHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	if files == nil {
 		files = []FileRow{}
+	}
+
+	// uploadedBy is an editor-facing field: a KB viewer learns nothing about
+	// who curates the corpus. Missing access info fails closed.
+	if access := kbaccess.AccessFromContext(ctx); access == nil || !kbaccess.AtLeast(access.Role, kbaccess.RoleEdit) {
+		for i := range files {
+			files[i].UploadedBy = nil
+		}
 	}
 
 	// Return flat array to match the Node.js API contract.

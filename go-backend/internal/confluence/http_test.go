@@ -40,6 +40,15 @@ type mockStore struct {
 	lastUpdate          confluence.ConfluenceSourceUpdate
 	filesForSource      []confluence.ConfluenceFileRow // returned by GetFilesByConfluenceSourceID
 	events              *[]string                      // shared event-order log; nil = untracked
+	createSourceCalls   []createSourceArgs             // every CreateConfluenceSource call
+}
+
+// createSourceArgs records one CreateConfluenceSource call.
+type createSourceArgs struct {
+	kbID, connectionID, spaceKey string
+	rootPageID, rootPageTitle    *string
+	includeAttachments           bool
+	syncSchedule                 string
 }
 
 func (m *mockStore) GetConfluenceConnectionByUserID(_ context.Context, _ string) (*confluence.ConfluenceConnectionRow, error) {
@@ -62,6 +71,11 @@ func (m *mockStore) UpdateConfluenceConnection(_ context.Context, _ string, u co
 
 func (m *mockStore) CreateConfluenceSource(_ context.Context, kbID, connectionID, spaceKey string, rootPageID, rootPageTitle *string, includeAttachments bool, syncSchedule string) (*confluence.ConfluenceSourceRow, error) {
 	m.lastCreatedSchedule = syncSchedule
+	m.createSourceCalls = append(m.createSourceCalls, createSourceArgs{
+		kbID: kbID, connectionID: connectionID, spaceKey: spaceKey,
+		rootPageID: rootPageID, rootPageTitle: rootPageTitle,
+		includeAttachments: includeAttachments, syncSchedule: syncSchedule,
+	})
 	if m.sourceErr != nil {
 		return nil, m.sourceErr
 	}

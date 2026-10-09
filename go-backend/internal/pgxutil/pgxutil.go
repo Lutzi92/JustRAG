@@ -211,6 +211,13 @@ func IsUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
+// IsForeignKeyViolation reports whether err is a PostgreSQL foreign-key
+// violation (SQLSTATE 23503), e.g. a row referencing one deleted concurrently.
+func IsForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
 // IsSerializationFailure reports whether err is a PostgreSQL serialization
 // failure (SQLSTATE 40001) or deadlock (SQLSTATE 40P01). Both are transient
 // by definition and safe to retry once the conflicting transaction has

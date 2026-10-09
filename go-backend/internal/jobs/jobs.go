@@ -20,6 +20,7 @@ const (
 	TypeURLProcessing             = "url-processing"
 	TypeRSSPoll                   = "rss-poll"
 	TypeReEmbedding               = "re-embedding"
+	TypeKBScreening               = "kb-screening"
 	TypeResearchExecution         = "research-execution"
 	TypeAcademicResearchExecution = "academic-research-execution"
 	TypeContentGeneration         = "content-generation"
@@ -46,8 +47,9 @@ var taskTimeouts = map[string]time.Duration{
 	TypeTextProcessing:            1 * time.Hour,
 	TypeURLProcessing:             30 * time.Minute,
 	TypeRSSPoll:                   30 * time.Minute,
-	TypeReEmbedding:               2 * time.Hour, // same pipeline as file-processing
-	TypeResearchExecution:         2 * time.Hour, // multi-iteration agent loops
+	TypeReEmbedding:               2 * time.Hour,    // same pipeline as file-processing
+	TypeKBScreening:               30 * time.Minute, // regex over stored chunk text per file; no LLM, no parse
+	TypeResearchExecution:         2 * time.Hour,    // multi-iteration agent loops
 	TypeAcademicResearchExecution: 2 * time.Hour,
 	TypeContentGeneration:         1 * time.Hour,
 	TypeConfluenceSync:            4 * time.Hour, // full-space crawls

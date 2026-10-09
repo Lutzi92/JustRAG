@@ -82,10 +82,16 @@ func sniffDelimiter(head []byte) rune {
 type CSVSource struct {
 	path  string
 	delim rune
+	name  string // sheet name: the original file name's stem, not the storage path's
 	enc   string // reflects only the 64 KiB sniff sample; ReadSheet re-decides on the full file
 }
 
-func OpenCSV(path string) (src *CSVSource, err error) {
+func OpenCSV(path string) (src *CSVSource, err error) { return OpenCSVNamed(path, "") }
+
+// OpenCSVNamed is OpenCSV with the sheet named after fileName (the original
+// upload name) instead of path's basename: library-backed files on local
+// storage live under an opaque blob path. Empty fileName falls back to path.
+func OpenCSVNamed(path, fileName string) (src *CSVSource, err error) {
 	defer recoverToErr(&err, "OpenCSV")
 	f, err := os.Open(path)
 	if err != nil {
@@ -95,14 +101,17 @@ func OpenCSV(path string) (src *CSVSource, err error) {
 	head := make([]byte, 64*1024)
 	n, _ := io.ReadFull(f, head)
 	decoded, enc := decodeCSVBytes(head[:n])
-	return &CSVSource{path: path, delim: sniffDelimiter(decoded), enc: enc}, nil
+	if fileName == "" {
+		fileName = path
+	}
+	name := strings.TrimSuffix(filepath.Base(fileName), filepath.Ext(fileName))
+	return &CSVSource{path: path, name: name, delim: sniffDelimiter(decoded), enc: enc}, nil
 }
 
 func (s *CSVSource) Close() error { return nil }
 
 func (s *CSVSource) Sheets() []SheetInfo {
-	name := strings.TrimSuffix(filepath.Base(s.path), filepath.Ext(s.path))
-	return []SheetInfo{{Index: 0, Name: name}}
+	return []SheetInfo{{Index: 0, Name: s.name}}
 }
 
 func (s *CSVSource) ReadSheet(index int, fn RowFunc) (ex SheetExtras, err error) {

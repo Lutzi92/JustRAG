@@ -119,11 +119,15 @@ func TestProcessFile_ScreensExternalOriginAndFlags(t *testing.T) {
 	}
 }
 
-// Mutation guard for the origin gate: a user upload with the very same text
-// is never screened. Dropping screenedOrigins (or defaulting it to "screen
-// everything") fails here.
-func TestProcessFile_UploadOriginIsNeverScreened(t *testing.T) {
-	store := &mockStore{origins: map[string]string{"f-up": "upload"}}
+// Mutation guard for the origin gate: a user upload into a PRIVATE KB with
+// the very same text is never screened. Dropping the publicOnlyOrigins /
+// KB-visibility check in ShouldScreen (or defaulting to "screen everything")
+// fails here.
+func TestProcessFile_UploadIntoPrivateKBIsNeverScreened(t *testing.T) {
+	store := &mockStore{
+		origins:      map[string]string{"f-up": "upload"},
+		visibilities: map[string]string{"f-up": "private"},
+	}
 	p := newScreeningProcessor(store, nil)
 
 	runProcessFile(t, p, "f-up", writeTempText(t, injectionText))
@@ -136,10 +140,14 @@ func TestProcessFile_UploadOriginIsNeverScreened(t *testing.T) {
 	}
 }
 
-// The other non-screened origins behave like uploads.
+// Origins outside both sets (websearch, which no ingest path writes, and the
+// empty origin) stay unscreened even in a public KB.
 func TestProcessFile_NonExternalOriginsAreNeverScreened(t *testing.T) {
-	for _, origin := range []string{"upload", "websearch", "research", ""} {
-		store := &mockStore{origins: map[string]string{"f": origin}}
+	for _, origin := range []string{"websearch", ""} {
+		store := &mockStore{
+			origins:      map[string]string{"f": origin},
+			visibilities: map[string]string{"f": "public"},
+		}
 		p := newScreeningProcessor(store, nil)
 		runProcessFile(t, p, "f", writeTempText(t, injectionText))
 		if len(store.injectionDetails) != 0 {
@@ -303,5 +311,55 @@ func TestPreviewRunes(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Errorf("a truncated preview must be marked, got %q", got)
+	}
+}
+
+// User-added content in a PUBLIC KB is third-party content for everyone else
+// reading that KB, so it is screened like an external source (spec §11.2).
+func TestProcessFile_UserAddedOriginsInPublicKBAreScreened(t *testing.T) {
+	for _, origin := range []string{"upload", "text", "url", "research"} {
+		store := &mockStore{
+			origins:      map[string]string{"f": origin},
+			visibilities: map[string]string{"f": "public"},
+		}
+		p := newScreeningProcessor(store, nil)
+		runProcessFile(t, p, "f", writeTempText(t, injectionText))
+		if _, ok := store.injectionDetails["f"]; !ok {
+			t.Errorf("origin %q in a public KB: must be screened and flagged", origin)
+		}
+	}
+}
+
+// The same origins in a private KB stay unscreened — the positive and the
+// negative half together catch a gate that ignores visibility either way.
+func TestProcessFile_UserAddedOriginsInPrivateKBAreNotScreened(t *testing.T) {
+	for _, origin := range []string{"upload", "text", "url", "research"} {
+		store := &mockStore{
+			origins:      map[string]string{"f": origin},
+			visibilities: map[string]string{"f": "private"},
+		}
+		p := newScreeningProcessor(store, nil)
+		runProcessFile(t, p, "f", writeTempText(t, injectionText))
+		if len(store.injectionDetails)+len(store.injectionClean) != 0 {
+			t.Errorf("origin %q in a private KB: must not be screened", origin)
+		}
+	}
+}
+
+// External origins are screened regardless of visibility (unchanged).
+func TestShouldScreen(t *testing.T) {
+	for _, tc := range []struct {
+		origin, vis string
+		want        bool
+	}{
+		{"rss", "private", true}, {"rss", "public", true},
+		{"confluence", "", true}, {"git", "private", true}, {"crawl", "private", true},
+		{"upload", "public", true}, {"text", "public", true}, {"url", "public", true},
+		{"upload", "private", false}, {"upload", "", false},
+		{"research", "public", true}, {"research", "private", false}, {"websearch", "public", false}, {"", "public", false},
+	} {
+		if got := ShouldScreen(tc.origin, tc.vis); got != tc.want {
+			t.Errorf("ShouldScreen(%q, %q) = %v, want %v", tc.origin, tc.vis, got, tc.want)
+		}
 	}
 }
